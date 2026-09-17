@@ -1,0 +1,9 @@
+.DS_Store
+.npm-cache/
+.local-tools/
+separation-service/venv/
+separation-service/__pycache__/
+separation-service/*.pyc
+storage/
+.claude/
+**/.claude/
