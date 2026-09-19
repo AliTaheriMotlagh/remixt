@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { upload } from "@vercel/blob/client";
 import Waveform from "./Waveform";
 import { useStudioStore } from "@/lib/client/studioStore";
 
@@ -61,18 +60,42 @@ export default function UploadManager() {
     setUploadProgress(0);
 
     try {
-      const blob = await upload(file.name, file, {
-        access: "public",
-        handleUploadUrl: "/api/tracks/upload",
-        multipart: true,
-        onUploadProgress: ({ percentage }) => setUploadProgress(Math.round(percentage)),
+      // XHR rather than fetch: it reports upload progress, which fetch still
+      // can't do. The file goes up as the raw request body; the server
+      // streams it straight to local storage.
+      const key = await new Promise<string>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open(
+          "POST",
+          `/api/tracks/upload?filename=${encodeURIComponent(file.name)}`
+        );
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            setUploadProgress(Math.round((e.loaded / e.total) * 100));
+          }
+        };
+        xhr.onload = () => {
+          let data: { key?: string; error?: string } = {};
+          try {
+            data = JSON.parse(xhr.responseText);
+          } catch {
+            /* fall through to the generic error below */
+          }
+          if (xhr.status >= 200 && xhr.status < 300 && data.key) {
+            resolve(data.key);
+          } else {
+            reject(new Error(data.error ?? `Upload failed (${xhr.status})`));
+          }
+        };
+        xhr.onerror = () => reject(new Error("Upload failed"));
+        xhr.send(file);
       });
 
       const res = await fetch("/api/tracks/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          url: blob.url,
+          key,
           filename: file.name,
           title: file.name.replace(/\.[^/.]+$/, ""),
         }),

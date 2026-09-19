@@ -49,8 +49,21 @@ def load_and_encode(src_path: Path) -> tuple[float, list[float], np.ndarray, int
     mono = data.mean(axis=1) if data.ndim > 1 else data
     duration = len(mono) / sr
 
-    with tempfile.NamedTemporaryFile(suffix=".wav") as tmp:
-        sf.write(tmp.name, data, sr, subtype="PCM_16")
+    # Stems get shipped as base64 over JSON and then re-uploaded to Blob
+    # storage, so encoding to mp3 here (vs. raw PCM wav) cuts that transfer
+    # by ~85-90% — the dominant cost once a track is more than a minute or
+    # two long.
+    with tempfile.NamedTemporaryFile(suffix=".mp3") as tmp:
+        env = os.environ.copy()
+        env["PATH"] = FFMPEG_DIR + os.pathsep + env.get("PATH", "")
+        result = subprocess.run(
+            [FFMPEG_EXE, "-y", "-i", str(src_path), "-b:a", "192k", tmp.name],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"ffmpeg mp3 encode failed: {result.stderr[-2000:]}")
         tmp.seek(0)
         encoded = base64.b64encode(tmp.read()).decode("ascii")
 
@@ -135,8 +148,8 @@ def separate(req: SeparateRequest):
         "status": "ok",
         "duration": duration,
         "bpm": bpm,
-        "vocals_wav_base64": vocals_b64,
-        "beat_wav_base64": beat_b64,
+        "vocals_mp3_base64": vocals_b64,
+        "beat_mp3_base64": beat_b64,
         "vocals_peaks": vocals_peaks,
         "beat_peaks": beat_peaks,
     }

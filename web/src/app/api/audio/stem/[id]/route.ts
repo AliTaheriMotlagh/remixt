@@ -1,15 +1,20 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { getStemById } from "@/lib/models";
+import { serveStorageFile } from "@/lib/storage";
 
-// Stems are stored in Vercel Blob, whose CDN already serves Range requests
-// correctly for seeking/scrubbing — we just point the browser at it.
+// Stems live on local disk; stream them with Range support so the player can
+// seek. Rows written by an older cloud-storage build hold an absolute URL
+// instead of a storage key — redirect those rather than 404.
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
   const stem = await getStemById(id);
-  if (!stem) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!stem) return Response.json({ error: "Not found" }, { status: 404 });
 
-  return NextResponse.redirect(stem.file_url, { status: 302 });
+  if (/^https?:\/\//.test(stem.file_url)) {
+    return Response.redirect(stem.file_url, 302);
+  }
+  return serveStorageFile(stem.file_url, req.headers.get("range"));
 }

@@ -35,6 +35,18 @@ export async function getTrackById(id: string): Promise<TrackRow | undefined> {
 }
 
 export async function getTracksByOwner(ownerId: string): Promise<TrackRow[]> {
+  // Separation runs as a fire-and-forget background job (see startSeparation)
+  // with no persisted job state, so a dev-server restart or a crashed
+  // separation service leaves the row in 'processing' forever with nothing
+  // left to flip it. Sweep those out here, on every read, instead of
+  // building out job tracking for what's still a single-process local app.
+  await sql`
+    UPDATE tracks
+    SET status = 'failed',
+        error = 'Splitting timed out or was interrupted — please try uploading again.'
+    WHERE owner_id = ${ownerId} AND status = 'processing'
+      AND created_at < now() - interval '20 minutes'
+  `;
   return sql<TrackRow[]>`
     SELECT * FROM tracks WHERE owner_id = ${ownerId} ORDER BY created_at DESC
   `;
