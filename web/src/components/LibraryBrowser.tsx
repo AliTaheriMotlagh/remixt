@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Waveform from "./Waveform";
+import { previewPlayer, usePreviewState } from "@/lib/client/previewPlayer";
 import { useStudioStore } from "@/lib/client/studioStore";
 
 type StemWithTrack = {
@@ -34,11 +35,10 @@ export default function LibraryBrowser({
 }) {
   const [tab, setTab] = useState<"vocals" | "beat">("vocals");
   const [query, setQuery] = useState("");
-  const [playingId, setPlayingId] = useState<string | null>(null);
-  const [previewProgress, setPreviewProgress] = useState(0);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const preview = usePreviewState();
   const router = useRouter();
   const addStem = useStudioStore((s) => s.addStem);
+
 
   const stems = tab === "vocals" ? initialVocals : initialBeats;
   const filtered = useMemo(() => {
@@ -52,31 +52,16 @@ export default function LibraryBrowser({
   }, [stems, query]);
 
   function togglePreview(stem: StemWithTrack) {
-    if (!audioRef.current) audioRef.current = new Audio();
-    const audio = audioRef.current;
-
-    if (playingId === stem.id) {
-      audio.pause();
-      setPlayingId(null);
-      return;
-    }
-
-    audio.src = `/api/audio/stem/${stem.id}`;
-    audio.currentTime = 0;
-    audio.play();
-    setPlayingId(stem.id);
-    setPreviewProgress(0);
-
-    audio.ontimeupdate = () => {
-      if (audio.duration) setPreviewProgress(audio.currentTime / audio.duration);
-    };
-    audio.onended = () => {
-      setPlayingId(null);
-      setPreviewProgress(0);
-    };
+    void previewPlayer.toggle({
+      stemId: stem.id,
+      title: stem.track_title,
+      artist: stem.artist_name,
+      kind: stem.kind,
+    });
   }
 
   function handleAddToStudio(stem: StemWithTrack) {
+    previewPlayer.stop();
     addStem({
       id: stem.id,
       kind: stem.kind,
@@ -120,7 +105,8 @@ export default function LibraryBrowser({
         <div className="mt-6 grid gap-3 sm:grid-cols-2">
           {filtered.map((stem) => {
             const peaks: number[] = JSON.parse(stem.peaks_json || "[]");
-            const isPlaying = playingId === stem.id;
+            const isCurrent = preview.current?.stemId === stem.id;
+            const isPlaying = isCurrent && preview.playing;
             return (
               <div
                 key={stem.id}
@@ -145,7 +131,7 @@ export default function LibraryBrowser({
                 <div className="mt-3 flex items-center gap-2">
                   <button
                     onClick={() => togglePreview(stem)}
-                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white"
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white transition-transform hover:scale-105"
                     style={{ background: accent }}
                     aria-label={isPlaying ? "Pause preview" : "Play preview"}
                   >
@@ -155,7 +141,7 @@ export default function LibraryBrowser({
                     peaks={peaks}
                     color={`${accent}55`}
                     progressColor={accent}
-                    progress={isPlaying ? previewProgress : 0}
+                    progress={isCurrent ? preview.progress : 0}
                     height={36}
                     className="flex-1"
                   />

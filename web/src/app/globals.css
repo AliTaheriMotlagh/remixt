@@ -94,3 +94,17 @@ body {
 .animate-pulse-glow {
   animation: pulse-glow 1.6s ease-in-out infinite;
 }
+
+/* Small stepper buttons used by the lane timing controls. */
+.nudge {
+  border-radius: 0.25rem;
+  border: 1px solid var(--border);
+  padding: 0.125rem 0.375rem;
+  font-size: 10px;
+  color: var(--muted);
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.nudge:hover {
+  color: var(--foreground);
+  border-color: var(--brand);
+}

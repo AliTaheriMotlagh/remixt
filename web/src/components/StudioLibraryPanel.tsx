@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Waveform from "./Waveform";
+import { previewPlayer, usePreviewState } from "@/lib/client/previewPlayer";
 import { useStudioStore } from "@/lib/client/studioStore";
 
 type StemWithTrack = {
@@ -21,6 +22,7 @@ export default function StudioLibraryPanel() {
   const [query, setQuery] = useState("");
   const addStem = useStudioStore((s) => s.addStem);
   const lanes = useStudioStore((s) => s.lanes);
+  const preview = usePreviewState();
 
   useEffect(() => {
     let cancelled = false;
@@ -93,37 +95,68 @@ export default function StudioLibraryPanel() {
           {filtered.map((stem) => {
             const peaks: number[] = JSON.parse(stem.peaks_json || "[]");
             const added = addedStemIds.has(stem.id);
+            const previewing = preview.current?.stemId === stem.id;
             return (
-              <button
+              <div
                 key={stem.id}
-                disabled={added}
-                onClick={() =>
-                  addStem({
-                    id: stem.id,
-                    kind: stem.kind,
-                    track_title: stem.track_title,
-                    artist_name: stem.artist_name,
-                    peaks_json: stem.peaks_json,
-                    track_duration: stem.track_duration,
-                    track_bpm: stem.track_bpm,
-                  })
-                }
-                className={`w-full rounded-lg border p-2 text-left transition-colors ${
-                  added
-                    ? "cursor-default border-border bg-surface-raised opacity-50"
-                    : "border-border hover:border-brand/50 hover:bg-surface-hover"
+                className={`rounded-lg border p-2 transition-colors ${
+                  previewing
+                    ? "border-brand bg-surface-hover"
+                    : added
+                      ? "border-border bg-surface-raised"
+                      : "border-border hover:border-brand/50 hover:bg-surface-hover"
                 }`}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-xs font-medium">{stem.track_title}</span>
-                  {added && <span className="shrink-0 text-[10px] text-success">added</span>}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() =>
+                      previewPlayer.toggle({
+                        stemId: stem.id,
+                        title: stem.track_title,
+                        artist: stem.artist_name,
+                        kind: stem.kind,
+                      })
+                    }
+                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] text-white"
+                    style={{ background: accent }}
+                    title={previewing && preview.playing ? "Pause preview" : "Preview"}
+                  >
+                    {previewing && preview.playing ? "⏸" : "▶"}
+                  </button>
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                    {stem.track_title}
+                  </span>
+                  <button
+                    disabled={added}
+                    onClick={() =>
+                      addStem({
+                        id: stem.id,
+                        kind: stem.kind,
+                        track_title: stem.track_title,
+                        artist_name: stem.artist_name,
+                        peaks_json: stem.peaks_json,
+                        track_duration: stem.track_duration,
+                        track_bpm: stem.track_bpm,
+                      })
+                    }
+                    className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted transition-colors hover:border-brand/60 hover:text-foreground disabled:border-transparent disabled:text-success"
+                  >
+                    {added ? "added" : "+ add"}
+                  </button>
                 </div>
-                <p className="truncate text-[11px] text-muted">
+                <p className="mt-0.5 truncate pl-8 text-[11px] text-muted">
                   {stem.artist_name}
-                  {stem.track_bpm ? ` · ${stem.track_bpm} BPM` : ""}
+                  {stem.track_bpm ? ` · ${stem.track_bpm.toFixed(0)} BPM` : ""}
                 </p>
-                <Waveform peaks={peaks} color={accent} height={20} className="mt-1" />
-              </button>
+                <Waveform
+                  peaks={peaks}
+                  color={previewing ? `${accent}55` : accent}
+                  progressColor={accent}
+                  progress={previewing ? preview.progress : 0}
+                  height={20}
+                  className="mt-1"
+                />
+              </div>
             );
           })}
         </div>

@@ -4,19 +4,49 @@ import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import sql from "@/lib/db";
 
+// The lane effect rack and the project mix settings are stored as JSON
+// blobs (remix_lanes.settings_json / remixes.project_json) rather than a
+// column per knob. They're validated loosely on purpose: an older remix
+// saved before a control existed just falls back to that control's
+// default when the Studio loads it.
+const laneSettingsSchema = z
+  .object({
+    fx: z.record(z.string(), z.union([z.number(), z.boolean(), z.string()])).optional(),
+    bpm: z.number().positive().max(400).nullable().optional(),
+  })
+  .default({});
+
 const laneSchema = z.object({
   stemId: z.string(),
   volume: z.number().min(0).max(1.5).default(1),
   muted: z.boolean().default(false),
-  offsetSeconds: z.number().min(0).default(0),
+  offsetSeconds: z.number().min(0).max(3600).default(0),
   pitchSemitones: z.number().min(-24).max(24).default(0),
   tempoRatio: z.number().min(0.25).max(4).default(1),
+  settings: laneSettingsSchema,
 });
+
+const projectSchema = z
+  .object({
+    projectBpm: z.number().min(20).max(300).default(120),
+    masterVolume: z.number().min(0).max(1.5).default(1),
+    loopEnabled: z.boolean().default(false),
+    loopStart: z.number().min(0).default(0),
+    loopEnd: z.number().min(0).default(0),
+  })
+  .default({
+    projectBpm: 120,
+    masterVolume: 1,
+    loopEnabled: false,
+    loopStart: 0,
+    loopEnd: 0,
+  });
 
 const createSchema = z.object({
   title: z.string().min(1).max(100),
   published: z.boolean().default(false),
   lanes: z.array(laneSchema).min(1, "Add at least one stem to save a remix"),
+  project: projectSchema,
 });
 
 export async function GET(req: NextRequest) {
@@ -61,7 +91,7 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
-  const { title, published, lanes } = parsed.data;
+  const { title, published, lanes, project } = parsed.data;
 
   const stemIds = lanes.map((l) => l.stemId);
   const found = await sql<{ id: string }[]>`
@@ -74,17 +104,19 @@ export async function POST(req: NextRequest) {
   const remixId = randomUUID();
   await sql.begin(async (tx) => {
     await tx`
-      INSERT INTO remixes (id, owner_id, title, published)
-      VALUES (${remixId}, ${user.id}, ${title}, ${published})
+      INSERT INTO remixes (id, owner_id, title, published, project_json)
+      VALUES (${remixId}, ${user.id}, ${title}, ${published}, ${JSON.stringify(project)})
     `;
 
     for (const [index, lane] of lanes.entries()) {
       await tx`
         INSERT INTO remix_lanes
-          (id, remix_id, stem_id, lane_order, volume, muted, offset_seconds, pitch_semitones, tempo_ratio)
+          (id, remix_id, stem_id, lane_order, volume, muted, offset_seconds,
+           pitch_semitones, tempo_ratio, settings_json)
         VALUES
           (${randomUUID()}, ${remixId}, ${lane.stemId}, ${index}, ${lane.volume},
-           ${lane.muted}, ${lane.offsetSeconds}, ${lane.pitchSemitones}, ${lane.tempoRatio})
+           ${lane.muted}, ${lane.offsetSeconds}, ${lane.pitchSemitones}, ${lane.tempoRatio},
+           ${JSON.stringify(lane.settings ?? {})})
       `;
     }
   });

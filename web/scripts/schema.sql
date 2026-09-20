@@ -55,3 +55,10 @@ CREATE INDEX IF NOT EXISTS idx_tracks_owner ON tracks(owner_id);
 CREATE INDEX IF NOT EXISTS idx_stems_track ON stems(track_id);
 CREATE INDEX IF NOT EXISTS idx_remixes_owner ON remixes(owner_id);
 CREATE INDEX IF NOT EXISTS idx_lanes_remix ON remix_lanes(remix_id);
+
+-- Added with the Studio mixing/FX update: lanes carry an effect rack and a
+-- BPM override, and a remix carries its project tempo, master level and
+-- loop region. Stored as JSON so the mixer can grow without a migration
+-- per knob. These ALTERs are idempotent, so re-running this file is safe.
+ALTER TABLE remix_lanes ADD COLUMN IF NOT EXISTS settings_json TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE remixes ADD COLUMN IF NOT EXISTS project_json TEXT NOT NULL DEFAULT '{}';

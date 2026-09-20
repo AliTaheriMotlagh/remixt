@@ -86,6 +86,38 @@ above:
 | `SEPARATION_SERVICE_URL` | the separation service's URL |
 | `SESSION_SECRET` | signs session cookies |
 
+## The Studio
+
+Everything below the transport is a project on one timeline, measured
+against a project tempo you set (type it, or tap it in).
+
+- **Timing** — each lane has its own start position on the timeline. Drag
+  the clip, nudge it by a beat or a bar, or drop it at the playhead; with
+  Snap on, everything lands on the beat grid.
+- **Tempo & key** — per-lane BPM (editable, since detection sometimes
+  halves or doubles), "Match" to stretch one lane to the project tempo,
+  "Match all lanes" for the whole project, plus pitch in semitones and a
+  free speed control.
+- **Mixing** — volume, mute, solo, pan, stereo width, a 3-band EQ, high-
+  and low-pass filters, saturation, fades in/out, and a master fader that
+  runs into a safety limiter.
+- **Effects** — per-lane reverb (adjustable room size) and a delay that
+  locks to the project tempo (1/2 through 1/16, dotted included), with
+  feedback. One-click presets per lane type: Air, Hall, Slapback, Dub
+  throw, Radio and Wide double for vocals; Punch, Lo-fi and Underbed for
+  beats. Vocal presets also switch on a levelling compressor and a
+  high-pass, which is what a raw separated vocal usually needs.
+- **Transport** — play/pause (space), stop (Esc), a loop region you drag
+  across the ruler (L toggles it), and a metronome click.
+- **Export** — "Export WAV" bounces the project through the same graph you
+  just heard into a 16-bit stereo WAV, including the reverb/delay tails;
+  with a loop set you can export just that region, and each lane has its
+  own export button for pulling out a single treated acapella or beat.
+
+Previews (the ▶ buttons in the library) all run through one shared player,
+so only one thing plays at a time and the bar along the bottom of the
+window always has a stop button for it.
+
 ## Notes
 
 - Separation runs on CPU. A ~3-4 minute song takes roughly 1-3 minutes to
@@ -98,6 +130,10 @@ above:
   sidesteps it and isn't required elsewhere.
 - Sessions are a signed JWT in an HTTP-only cookie.
 - Max upload size is 60MB, audio formats: mp3, wav, m4a, flac, ogg, aac.
+- Remix lanes persist their effect rack and BPM override in
+  `remix_lanes.settings_json`, and the project tempo, master level and loop
+  region live in `remixes.project_json` — JSON columns so the mixer can
+  grow without a migration per knob. Older remixes fall back to defaults.
 - Pitch and BPM-matching run client-side (SoundTouch, offline-rendered —
   not a live audio-worklet) — changing a lane's pitch or tempo re-renders
   that stem's buffer once, like a DAW "freeze" operation, then plays back

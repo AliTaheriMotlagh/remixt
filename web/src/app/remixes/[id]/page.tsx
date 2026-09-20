@@ -52,7 +52,7 @@ export default async function RemixDetailPage({
         )}
       </div>
 
-      <RemixDetailPlayer remixId={remix.id} user={user} />
+      <RemixDetailPlayer remixId={remix.id} title={remix.title} user={user} />
     </div>
   );
 }

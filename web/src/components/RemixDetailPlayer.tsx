@@ -3,30 +3,21 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import StudioTransport from "./StudioTransport";
+import StudioTimeline from "./StudioTimeline";
 import StudioLaneRow from "./StudioLaneRow";
 import BpmSyncPanel from "./BpmSyncPanel";
-import { useStudioStore, type StudioLane } from "@/lib/client/studioStore";
+import { audioEngine } from "@/lib/client/audioEngine";
+import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/remixLanes";
+import { useStudioStore } from "@/lib/client/studioStore";
 import type { User } from "@/lib/auth";
-
-type RemixLaneApi = {
-  stem_id: string;
-  kind: "vocals" | "beat";
-  peaks_json: string;
-  volume: number;
-  muted: boolean;
-  pitch_semitones: number;
-  tempo_ratio: number;
-  track_title: string;
-  track_duration: number | null;
-  track_bpm: number | null;
-  stem_artist_name: string;
-};
 
 export default function RemixDetailPlayer({
   remixId,
+  title,
   user,
 }: {
   remixId: string;
+  title: string;
   user: User | null;
 }) {
   const lanes = useStudioStore((s) => s.lanes);
@@ -39,29 +30,10 @@ export default function RemixDetailPlayer({
       .then((res) => res.json())
       .then((data) => {
         if (cancelled) return;
-        const studioLanes: StudioLane[] = (data.lanes as RemixLaneApi[]).map(
-          (lane) => {
-            const originalDuration = lane.track_duration ?? 0;
-            const tempoRatio = lane.tempo_ratio || 1;
-            return {
-              laneId: crypto.randomUUID(),
-              stemId: lane.stem_id,
-              kind: lane.kind,
-              trackTitle: lane.track_title,
-              artistName: lane.stem_artist_name,
-              volume: lane.volume,
-              muted: lane.muted,
-              solo: false,
-              peaks: JSON.parse(lane.peaks_json || "[]"),
-              originalDuration,
-              duration: originalDuration / tempoRatio,
-              bpm: lane.track_bpm,
-              pitchSemitones: lane.pitch_semitones || 0,
-              tempoRatio,
-            };
-          }
+        loadRemix(
+          (data.lanes as RemixLaneApi[]).map(laneFromApi),
+          projectFromApi(data.remix)
         );
-        loadRemix(studioLanes);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -71,6 +43,8 @@ export default function RemixDetailPlayer({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [remixId]);
+
+  useEffect(() => () => audioEngine.stop(), []);
 
   if (loading) {
     return (
@@ -82,8 +56,9 @@ export default function RemixDetailPlayer({
 
   return (
     <div className="mt-6 flex flex-col gap-4">
-      <StudioTransport user={user} remixId={remixId} />
+      <StudioTransport user={user} remixId={remixId} defaultTitle={title} />
       <BpmSyncPanel />
+      <StudioTimeline />
 
       <div className="flex flex-col gap-3">
         {lanes.map((lane) => (
