@@ -7,3 +7,6 @@ separation-service/*.pyc
 storage/
 .claude/
 **/.claude/
+
+# Cloudflare tunnel credentials for ./share.sh — never commit.
+.share.env
