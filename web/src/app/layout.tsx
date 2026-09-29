@@ -17,10 +17,22 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const description =
+  "Upload a song, auto-split it into vocals and beat stems, and remix them with other tracks in a browser-based studio.";
+
 export const metadata: Metadata = {
+  // Absolute URLs for link previews. On Vercel, Next works this out
+  // itself; elsewhere set PUBLIC_BASE_URL (e.g. https://remix.example.com).
+  metadataBase: process.env.PUBLIC_BASE_URL ? new URL(process.env.PUBLIC_BASE_URL) : undefined,
   title: "Remixt — remix vocals and beats from any song",
-  description:
-    "Upload a song, auto-split it into vocals and beat stems, and remix them with other tracks in a browser-based studio.",
+  description,
+  openGraph: {
+    siteName: "Remixt",
+    title: "Remixt — remix vocals and beats from any song",
+    description,
+    type: "website",
+  },
+  twitter: { card: "summary_large_image" },
 };
 
 export default async function RootLayout({

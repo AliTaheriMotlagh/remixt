@@ -11,6 +11,7 @@ import { audioEngine } from "@/lib/client/audioEngine";
 import { detectMissingKeys } from "@/lib/client/autoMatch";
 import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/remixLanes";
 import { useStudioStore } from "@/lib/client/studioStore";
+import { redo, resetHistory, undo } from "@/lib/client/studioHistory";
 import type { User } from "@/lib/auth";
 
 export default function Studio({ user }: { user: User | null }) {
@@ -36,6 +37,8 @@ export default function Studio({ user }: { user: User | null }) {
           (data.lanes as RemixLaneApi[]).map(laneFromApi),
           projectFromApi(data.remix)
         );
+        // A different project: nothing to undo back into.
+        resetHistory();
       } finally {
         if (!cancelled) setLoadingRemix(false);
       }
@@ -58,6 +61,22 @@ export default function Studio({ user }: { user: User | null }) {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
+
+      // Undo/redo — except while typing, where the text box has its own.
+      if ((event.metaKey || event.ctrlKey) && !event.altKey) {
+        const key = event.key.toLowerCase();
+        const typing =
+          target?.isContentEditable ||
+          target?.tagName === "TEXTAREA" ||
+          (target instanceof HTMLInputElement && !["range", "checkbox", "button"].includes(target.type));
+        if (!typing && (key === "z" || key === "y")) {
+          event.preventDefault();
+          if (key === "y" || event.shiftKey) redo();
+          else undo();
+          return;
+        }
+      }
+
       if (
         target &&
         (target.tagName === "INPUT" ||
@@ -100,7 +119,7 @@ export default function Studio({ user }: { user: User | null }) {
           </p>
         </div>
         <p className="hidden text-right text-[11px] leading-relaxed text-muted lg:block">
-          Space play/pause · Esc stop · L loop<br />
+          Space play/pause · Esc stop · L loop · ⌘/Ctrl+Z undo<br />
           Drag a clip to move it in time
         </p>
       </div>

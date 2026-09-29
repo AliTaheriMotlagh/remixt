@@ -4,6 +4,7 @@ import sql from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { getTracksByOwner, getStemsByTrack } from "@/lib/models";
 import ArtistBioEditor from "@/components/ArtistBioEditor";
+import type { Metadata } from "next";
 
 type ArtistRow = {
   id: string;
@@ -12,6 +13,24 @@ type ArtistRow = {
   avatar_color: string;
   created_at: string;
 };
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}): Promise<Metadata> {
+  const { id } = await params;
+  const [artist] = await sql<{ artist_name: string; bio: string }[]>`
+    SELECT artist_name, bio FROM users WHERE id = ${id}
+  `;
+  if (!artist) return { title: "Artist — Remixt" };
+  const description = artist.bio?.trim() || `Songs and remixes by ${artist.artist_name} on Remixt.`;
+  return {
+    title: `${artist.artist_name} · Remixt`,
+    description,
+    openGraph: { title: artist.artist_name, description, siteName: "Remixt", type: "profile" },
+  };
+}
 
 export default async function ArtistPage({
   params,

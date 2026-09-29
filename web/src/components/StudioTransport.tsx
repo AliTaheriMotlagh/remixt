@@ -6,6 +6,7 @@ import { audioEngine } from "@/lib/client/audioEngine";
 import { exportMixdown } from "@/lib/client/mixdown";
 import { lanesToPayload } from "@/lib/client/remixLanes";
 import { useStudioStore } from "@/lib/client/studioStore";
+import { redo, undo, useStudioHistory } from "@/lib/client/studioHistory";
 import type { User } from "@/lib/auth";
 
 function formatTime(seconds: number) {
@@ -80,6 +81,9 @@ export default function StudioTransport({
   const toggleSnap = useStudioStore((s) => s.toggleSnap);
   const setLoop = useStudioStore((s) => s.setLoop);
 
+  const canUndo = useStudioHistory((h) => h.past.length > 0);
+  const canRedo = useStudioHistory((h) => h.future.length > 0);
+  const [starting, setStarting] = useState(false);
   const [showSave, setShowSave] = useState(false);
   const [title, setTitle] = useState(defaultTitle ?? "");
   const [publish, setPublish] = useState(true);
@@ -93,11 +97,18 @@ export default function StudioTransport({
   const hasLoop = loopEnd > loopStart;
 
   async function handlePlayPause() {
-    if (lanes.length === 0) return;
+    if (lanes.length === 0 || starting) return;
     if (isPlaying) {
       audioEngine.pause();
-    } else {
+      return;
+    }
+    // Play waits for any lane still loading or re-rendering its
+    // pitch/tempo; say so rather than look like the click did nothing.
+    setStarting(true);
+    try {
       await audioEngine.play();
+    } finally {
+      setStarting(false);
     }
   }
 
@@ -165,9 +176,16 @@ export default function StudioTransport({
           onClick={handlePlayPause}
           disabled={empty}
           className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand text-lg text-white transition-transform hover:scale-105 disabled:opacity-40 disabled:hover:scale-100"
-          title={isPlaying ? "Pause (space)" : "Play (space)"}
+          title={starting ? "Preparing the audio…" : isPlaying ? "Pause (space)" : "Play (space)"}
+          aria-busy={starting}
         >
-          {isPlaying ? "⏸" : "▶"}
+          {starting ? (
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+          ) : isPlaying ? (
+            "⏸"
+          ) : (
+            "▶"
+          )}
         </button>
 
         <button
@@ -180,6 +198,27 @@ export default function StudioTransport({
         </button>
 
         <TransportPosition empty={empty} />
+
+        <div className="flex items-center gap-1">
+          <button
+            onClick={undo}
+            disabled={!canUndo}
+            className="rounded-lg border border-border px-2.5 py-2 text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40"
+            title="Undo (⌘/Ctrl+Z)"
+            aria-label="Undo"
+          >
+            ↶
+          </button>
+          <button
+            onClick={redo}
+            disabled={!canRedo}
+            className="rounded-lg border border-border px-2.5 py-2 text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40"
+            title="Redo (⇧⌘Z / Ctrl+Y)"
+            aria-label="Redo"
+          >
+            ↷
+          </button>
+        </div>
 
         <button
           onClick={() => setLoop({ enabled: !loopEnabled, start: hasLoop ? loopStart : 0, end: hasLoop ? loopEnd : Math.min(duration, 16) })}

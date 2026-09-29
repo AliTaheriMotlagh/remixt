@@ -3,6 +3,7 @@
 import { analyzeStem, beatPhase, type StemAnalysis } from "./analysis";
 import { audioEngine } from "./audioEngine";
 import { bestKeyShift, camelotCode, keyLabel, transposeKey } from "./musicKey";
+import { withoutHistory } from "./studioHistory";
 import {
   DEFAULT_FX,
   FX_PRESETS,
@@ -41,7 +42,10 @@ export async function detectMissingKeys() {
       const analysis = await analyzeLane(lane);
       const current = useStudioStore.getState().lanes.find((l) => l.laneId === lane.laneId);
       if (analysis && current && !current.musicalKey) {
-        useStudioStore.getState().setLaneKey(lane.laneId, analysis.key);
+        // Detected, not chosen — so not something to undo.
+        withoutHistory(lane.laneId, { musicalKey: analysis.key }, () =>
+          useStudioStore.getState().setLaneKey(lane.laneId, analysis.key)
+        );
       }
     } catch {
       // Leave it unknown; the key can still be picked by hand.

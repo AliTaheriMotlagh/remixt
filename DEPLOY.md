@@ -370,6 +370,7 @@ docker save remixt | gzip | ssh root@your-server 'gunzip | docker load'
 | `R2_*` | *(unset)* | Store stems in R2 instead of the volume (see the free setup). |
 | `COOKIE_SECURE` | `true` | `false` only to try it over plain HTTP. Sign-in fails otherwise. |
 | `ADMIN_EMAILS` | *(unset)* | Comma-separated emails of accounts that get the Admin page (`/admin`). |
+| `PUBLIC_BASE_URL` | *(unset)* | The site's address, e.g. `https://remix.example.com`, so shared links show their preview image. Not needed on Vercel. |
 
 ### Updating and backups
 

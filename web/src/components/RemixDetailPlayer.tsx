@@ -9,6 +9,7 @@ import BpmSyncPanel from "./BpmSyncPanel";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/remixLanes";
 import { useStudioStore } from "@/lib/client/studioStore";
+import { resetHistory } from "@/lib/client/studioHistory";
 import type { User } from "@/lib/auth";
 
 export default function RemixDetailPlayer({
@@ -34,6 +35,7 @@ export default function RemixDetailPlayer({
           (data.lanes as RemixLaneApi[]).map(laneFromApi),
           projectFromApi(data.remix)
         );
+        resetHistory();
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

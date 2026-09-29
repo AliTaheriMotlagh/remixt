@@ -1,3 +1,4 @@
+import { cache } from "react";
 import sql from "./db";
 
 export type TrackRow = {
@@ -122,3 +123,36 @@ export async function getRemixStats(remixId: string, userId: string | null): Pro
   `;
   return rows[0] ?? { plays: 0, likes: 0, liked: false };
 }
+
+export type RemixCard = {
+  id: string;
+  title: string;
+  published: boolean;
+  owner_id: string;
+  artist_name: string;
+  source_titles: string[];
+  plays: number;
+  likes: number;
+};
+
+/**
+ * What a shared link needs to describe a remix — its title, artist, the
+ * songs it's built from and its numbers. Cached per request, since the
+ * page, its metadata and its share image all ask.
+ */
+export const getRemixCard = cache(async (id: string): Promise<RemixCard | undefined> => {
+  await ensureRemixStats();
+  const rows = await sql<(Omit<RemixCard, "source_titles"> & { source_titles: string | null })[]>`
+    SELECT remixes.id, remixes.title, remixes.published, remixes.owner_id, users.artist_name,
+           remixes.play_count AS plays,
+           (SELECT COUNT(*) FROM remix_likes WHERE remix_likes.remix_id = remixes.id)::int AS likes,
+           (SELECT STRING_AGG(DISTINCT tracks.title, '\u0001') FROM remix_lanes
+              JOIN stems ON stems.id = remix_lanes.stem_id
+              JOIN tracks ON tracks.id = stems.track_id
+             WHERE remix_lanes.remix_id = remixes.id) AS source_titles
+    FROM remixes JOIN users ON users.id = remixes.owner_id
+    WHERE remixes.id = ${id}
+  `;
+  const row = rows[0];
+  return row && { ...row, source_titles: row.source_titles ? row.source_titles.split("\u0001") : [] };
+});

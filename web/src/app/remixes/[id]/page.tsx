@@ -5,7 +5,8 @@ import { getCurrentUser } from "@/lib/auth";
 import RemixDetailPlayer from "@/components/RemixDetailPlayer";
 import RemixOwnerControls from "@/components/RemixOwnerControls";
 import RemixStatsBar from "@/components/RemixStatsBar";
-import { getRemixStats } from "@/lib/models";
+import { getRemixCard, getRemixStats } from "@/lib/models";
+import type { Metadata } from "next";
 
 type RemixRow = {
   id: string;
@@ -16,6 +17,23 @@ type RemixRow = {
   artist_name: string;
   artist_id: string;
 };
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}): Promise<Metadata> {
+  const remix = await getRemixCard((await params).id);
+  if (!remix?.published) return { title: "Remix — Remixt" };
+  const from = remix.source_titles.length ? ` Built from ${remix.source_titles.slice(0, 3).join(" + ")}.` : "";
+  const description = `Listen to “${remix.title}”, a remix by ${remix.artist_name} on Remixt.${from}`;
+  return {
+    title: `${remix.title} — remix by ${remix.artist_name} · Remixt`,
+    description,
+    openGraph: { title: remix.title, description, type: "music.song", siteName: "Remixt" },
+    twitter: { card: "summary_large_image", title: remix.title, description },
+  };
+}
 
 export default async function RemixDetailPage({
   params,
