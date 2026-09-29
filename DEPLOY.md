@@ -110,6 +110,7 @@ git push -u origin main
    | Name | Value |
    | --- | --- |
    | `SESSION_SECRET` | a long random string (run `openssl rand -base64 48` in Terminal) |
+   | `AI_KEY_SECRET` | optional — encrypts users' ChatGPT/Claude keys; if unset, derived from `SESSION_SECRET`. Don't change it later, or saved keys stop working |
    | `NEXT_PUBLIC_STEM_BITRATE` | `128` (stretches the 1 GB free storage; `192` is the default) |
    | `ADMIN_EMAILS` | your email (comma-separate several). These accounts get the **Admin** page for managing users, songs and remixes |
 

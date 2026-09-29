@@ -89,7 +89,8 @@ cd web && node scripts/migrate.mjs
 | Variable | Meaning |
 | --- | --- |
 | `DATABASE_URL` | Postgres connection string |
-| `SESSION_SECRET` | signs session cookies |
+| `SESSION_SECRET` | signs session cookies (and, unless `AI_KEY_SECRET` is set, encrypts users' AI keys) |
+| `AI_KEY_SECRET` | optional: its own secret for encrypting users' ChatGPT/Claude keys. Changing it (or `SESSION_SECRET` without it) makes saved keys unreadable — users re-enter them |
 | `STORAGE_DIR` | where stems go when R2 isn't configured (`../storage`) |
 | `BLOB_READ_WRITE_TOKEN` | store stems in Vercel Blob (Vercel sets it when a Blob store is connected) |
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_PUBLIC_URL` | store stems in Cloudflare R2 instead (see DEPLOY.md) |
@@ -137,21 +138,23 @@ against a project tempo you set (type it, or tap it in).
   breath every couple of bars so they stay locked too, and the report
   warns when it couldn't tell which beat is the "one" (the lane's ±½bar
   nudges fix that in one click).
-- **✨ AI on each lane** — pairs a vocal with a beat (or a beat with a
-  vocal) using a language model: Claude or ChatGPT, with the user's own
-  API key, set in the panel's AI settings. The key is kept in the browser
-  (localStorage) and requests go straight from the page to Anthropic or
-  OpenAI — never through Remixt. The model can't hear audio, so it gets
-  the studio's analysis: both tempos and keys, the beat's bars with a
-  loudness digit per bar, its intro, ending and level changes, and the
-  vocal cut into ~8-bar blocks with their length, loudness and which ones
-  share their notes (a returning chorus). It answers with a plan in a
-  fixed JSON shape — which block goes on which bar (repeats and omissions
-  allowed), which song keeps its tempo, a downbeat correction, vocal
-  level and FX presets — plus the user's own wishes ("chorus first"), and
-  the same engine as AI Match carries it out. Pitch is never changed.
-  Code: `web/src/lib/client/aiMatch.ts`, `aiSettings.ts`,
-  `components/LaneAiPanel.tsx`.
+- **✨ AI producer** — a chat in the Studio's sidebar (and a ✨ AI
+  button on every lane that drafts a request for it) where the user's own
+  model — Claude or ChatGPT — edits the open remix. Each user saves their
+  API key in AI settings; it's stored in their account encrypted with
+  AES-256-GCM (`user_ai_settings`, `lib/aiKeys.ts`) and never sent back to
+  the browser. `/api/ai/chat` makes one model call per turn with that key;
+  the browser runs the loop, carrying out the model's tool calls on the
+  live project (`lib/client/aiAgent.ts`) and sending back the results
+  until it's done. The tools (`lib/aiTools.ts`) let it read the project,
+  hear a vocal/beat pair through the studio's analysis (it can't hear
+  audio: it gets tempos, keys, the beat's bars with a loudness digit per
+  bar, its intro, level changes and ending, and the vocal in ~8-bar
+  sections with which ones repeat), arrange a vocal section by section on
+  the beat (`lib/client/aiMatch.ts`, through the same engine as AI Match),
+  run AI Match, set levels and effects, move lanes, split/move/delete/
+  duplicate clips, cut silences and set a loop. It never changes pitch.
+  Every turn can be undone in one click.
 - **Editing** — a lane can be cut into clips: split at the playhead, "cut
   silences" (every phrase becomes a clip, left where it was), drag a clip
   to move it, drag its edges to trim, duplicate or delete the selected

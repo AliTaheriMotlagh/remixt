@@ -75,3 +75,16 @@ CREATE TABLE IF NOT EXISTS remix_likes (
   PRIMARY KEY (remix_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_remix_likes_user ON remix_likes(user_id);
+
+-- AI producer: each user's own ChatGPT / Claude API key, encrypted with a
+-- key derived from AI_KEY_SECRET (or SESSION_SECRET). lib/aiKeys.ts also
+-- creates this on first use.
+CREATE TABLE IF NOT EXISTS user_ai_settings (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL DEFAULT 'anthropic',
+  anthropic_model TEXT NOT NULL DEFAULT '',
+  openai_model TEXT NOT NULL DEFAULT '',
+  anthropic_key TEXT NOT NULL DEFAULT '',
+  openai_key TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

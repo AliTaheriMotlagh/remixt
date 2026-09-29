@@ -7,6 +7,8 @@ import StudioTimeline from "./StudioTimeline";
 import StudioLaneRow from "./StudioLaneRow";
 import StudioLibraryPanel from "./StudioLibraryPanel";
 import BpmSyncPanel from "./BpmSyncPanel";
+import StudioAiChat from "./StudioAiChat";
+import { useAiChat } from "@/lib/client/aiAgent";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { detectMissingKeys } from "@/lib/client/autoMatch";
 import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/remixLanes";
@@ -22,6 +24,8 @@ export default function Studio({ user }: { user: User | null }) {
   const setLoop = useStudioStore((s) => s.setLoop);
   const [loadingRemix, setLoadingRemix] = useState(!!remixId);
   const [remixTitle, setRemixTitle] = useState<string | null>(null);
+  const chatOpen = useAiChat((s) => s.open);
+  const setChatOpen = useAiChat((s) => s.setOpen);
 
   useEffect(() => {
     if (!remixId) return;
@@ -154,8 +158,30 @@ export default function Studio({ user }: { user: User | null }) {
           )}
         </div>
 
-        <div className="h-[420px] lg:h-[calc(100vh-220px)] lg:sticky lg:top-40">
-          <StudioLibraryPanel />
+        <div className="flex h-[520px] flex-col lg:sticky lg:top-40 lg:h-[calc(100vh-220px)]">
+          <div className="mb-2 flex gap-1 rounded-lg border border-border bg-surface p-1 text-xs">
+            <button
+              onClick={() => setChatOpen(false)}
+              className={`flex-1 rounded-md px-2 py-1 font-medium ${!chatOpen ? "bg-surface-raised text-foreground" : "text-muted hover:text-foreground"}`}
+            >
+              Library
+            </button>
+            <button
+              onClick={() => setChatOpen(true)}
+              className={`flex-1 rounded-md px-2 py-1 font-medium ${chatOpen ? "bg-surface-raised text-foreground" : "text-muted hover:text-foreground"}`}
+            >
+              ✨ AI producer
+            </button>
+          </div>
+          <div className="min-h-0 flex-1">
+            {chatOpen ? (
+              <div className="h-full overflow-hidden rounded-xl border border-border bg-surface">
+                <StudioAiChat signedIn={!!user} />
+              </div>
+            ) : (
+              <StudioLibraryPanel />
+            )}
+          </div>
         </div>
       </div>
     </div>

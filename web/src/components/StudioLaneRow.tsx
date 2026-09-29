@@ -3,9 +3,9 @@
 import { useMemo, useRef, useState } from "react";
 import Waveform from "./Waveform";
 import LaneFxPanel from "./LaneFxPanel";
-import LaneAiPanel from "./LaneAiPanel";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { cutSilences } from "@/lib/client/autoMatch";
+import { useAiChat } from "@/lib/client/aiAgent";
 import { exportLane } from "@/lib/client/mixdown";
 import { previewPlayer } from "@/lib/client/previewPlayer";
 import { ALL_KEYS, camelotCode, keyId, keyLabel, parseKeyId } from "@/lib/client/musicKey";
@@ -103,7 +103,6 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
   const keyReference = useStudioStore((s) => referenceLane(s.lanes, (l) => !!l.musicalKey));
 
   const [showFx, setShowFx] = useState(false);
-  const [showAi, setShowAi] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [selectedClip, setSelectedClip] = useState<number | null>(null);
   const [cutting, setCutting] = useState(false);
@@ -229,6 +228,21 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
     const playhead = useStudioStore.getState().playhead;
     const done = splitAt(lane.laneId, playhead);
     setEditNote(done ? null : "Put the playhead over this lane's audio to split there");
+  }
+
+  // Opens the AI producer with a request about this lane, ready to send or edit.
+  function askAi() {
+    const lanes = useStudioStore.getState().lanes;
+    const name = (l: StudioLane) => `L${lanes.indexOf(l) + 1} (“${l.trackTitle}”)`;
+    const partner = lanes.find((l) => l.kind !== lane.kind);
+    const [vocal, beat] = lane.kind === "vocals" ? [lane, partner] : [partner, lane];
+    const chat = useAiChat.getState();
+    chat.setDraft(
+      vocal && beat
+        ? `Match the vocal ${name(vocal)} with the beat ${name(beat)} and arrange it like a real song.`
+        : `Help me with ${name(lane)} — which ${lane.kind === "vocals" ? "beat" : "vocal"} should I add to it?`
+    );
+    chat.setOpen(true);
   }
 
   async function handleCutSilences() {
@@ -461,15 +475,11 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
               FX {showFx ? "▾" : "▸"}
             </button>
             <button
-              onClick={() => setShowAi((v) => !v)}
-              className={`flex-1 rounded border px-1.5 py-1 text-[10px] font-semibold transition-colors ${
-                showAi
-                  ? "border-brand bg-brand/15 text-foreground"
-                  : "border-border text-muted hover:text-foreground"
-              }`}
-              title={`Match this ${lane.kind === "vocals" ? "vocal with a beat" : "beat with a vocal"} using Claude or ChatGPT`}
+              onClick={askAi}
+              className="flex-1 rounded border border-border px-1.5 py-1 text-[10px] font-semibold text-muted transition-colors hover:border-brand/60 hover:text-foreground"
+              title={`Ask the AI producer to match this ${lane.kind === "vocals" ? "vocal with a beat" : "beat with a vocal"}`}
             >
-              ✨ AI {showAi ? "▾" : "▸"}
+              ✨ AI
             </button>
             <button
               onClick={() => duplicateLane(lane.laneId)}
@@ -666,7 +676,6 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
       </div>
 
       {showFx && <LaneFxPanel lane={lane} />}
-      {showAi && <LaneAiPanel lane={lane} />}
     </div>
   );
 }
