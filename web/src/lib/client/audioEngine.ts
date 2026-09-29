@@ -41,6 +41,13 @@ function stopSources(sources: AudioBufferSourceNode[], when?: number) {
   }
 }
 
+/** The phone didn't let audio start (iOS kept the session interrupted). */
+export class PlaybackBlockedError extends Error {
+  constructor() {
+    super("The phone didn't let the audio start. Tap play again.");
+  }
+}
+
 class AudioEngine {
   private ctx: AudioContext | null = null;
   private master: { input: AudioNode; gain: GainNode } | null = null;
@@ -52,6 +59,10 @@ class AudioEngine {
   private rafId: number | null = null;
   private metronomeTimer: ReturnType<typeof setInterval> | null = null;
   private nextClickBeat = 0;
+  /** Bumped by every play, pause and stop, so a play still loading knows it was overtaken. */
+  private playRequest = 0;
+  /** Set when resume() never came through; the next tap starts on a fresh context. */
+  private staleContext = false;
 
   private getContext(): AudioContext {
     if (!this.ctx) {
@@ -65,6 +76,7 @@ class AudioEngine {
       // and the play button reflect what's actually heard; the next tap
       // on play resumes from there.
       ctx.addEventListener("statechange", () => {
+        if (this.ctx !== ctx) return;
         if (ctx.state !== "running" && useStudioStore.getState().isPlaying) this.pause();
       });
     }
@@ -72,10 +84,48 @@ class AudioEngine {
   }
 
   /**
+   * Swaps in a new AudioContext, rebuilding the master bus and every lane's
+   * FX chain on it. Decoded and rendered buffers aren't tied to a context,
+   * so they carry over and nothing is downloaded or rendered again.
+   */
+  private resetContext(): AudioContext {
+    const old = this.ctx;
+    this.stopAllSources();
+    this.stopMetronome();
+    for (const entry of this.lanes.values()) entry.chain.disconnect();
+    this.ctx = null;
+    this.master = null;
+    this.staleContext = false;
+    void old?.close().catch(() => {});
+
+    const ctx = this.getContext();
+    const { lanes, projectBpm } = useStudioStore.getState();
+    for (const [laneId, entry] of this.lanes) {
+      const lane = lanes.find((l) => l.laneId === laneId);
+      if (!lane) {
+        this.lanes.delete(laneId);
+        continue;
+      }
+      entry.chain = createLaneChain(ctx, lane, projectBpm, this.master!.input);
+    }
+    return ctx;
+  }
+
+  /**
    * Mobile Safari only lets audio start from inside a tap, so this must
    * run synchronously in the gesture, before anything is awaited.
    */
-  private unlock(ctx: AudioContext) {
+  private unlock(): Promise<AudioContext> {
+    // After a call, Siri, backgrounding or another player (including our
+    // own library preview) iOS can leave the context "interrupted" with
+    // resume() never settling — play then did nothing until a reload. A
+    // context made inside this tap starts cleanly.
+    const state = this.ctx?.state as string | undefined;
+    const ctx =
+      this.staleContext || state === "interrupted" || state === "closed"
+        ? this.resetContext()
+        : this.getContext();
+
     // Web Audio on iOS follows the ringer switch unless the page asks for
     // media playback, which is why the mix could be silent while library
     // previews (an <audio> element) were not. Safari 16.4+.
@@ -97,7 +147,7 @@ class AudioEngine {
     return Promise.race([
       resumed.catch(() => {}),
       new Promise<void>((resolve) => setTimeout(resolve, 1000)),
-    ]);
+    ]).then(() => ctx);
   }
 
   async ensureLane(laneId: string, stemId: string) {
@@ -105,15 +155,15 @@ class AudioEngine {
       await this.loading.get(laneId);
       return;
     }
-    const ctx = this.getContext();
     const { projectBpm } = useStudioStore.getState();
 
     const promise = fetchStem(stemId)
-      .then((arrayBuffer) => ctx.decodeAudioData(arrayBuffer))
+      .then((arrayBuffer) => this.getContext().decodeAudioData(arrayBuffer))
       .then((buffer) => {
         const lane = useStudioStore.getState().lanes.find((l) => l.laneId === laneId);
         if (!lane) return;
-        const chain = createLaneChain(ctx, lane, projectBpm, this.master!.input);
+        // The context may have been replaced while this downloaded.
+        const chain = createLaneChain(this.getContext(), lane, projectBpm, this.master!.input);
         this.lanes.set(laneId, {
           rawBuffer: buffer,
           processedBuffer: buffer,
@@ -309,23 +359,34 @@ class AudioEngine {
   }
 
   async play() {
+    const request = ++this.playRequest;
     // Only one thing plays at a time: starting the transport stops any
     // library preview that's still running. Done before resuming, since on
     // iOS a playing <audio> element can hold the context interrupted.
     previewPlayer.stop();
 
-    const ctx = this.getContext();
-    await this.unlock(ctx);
+    const ctx = await this.unlock();
+    if (request !== this.playRequest) return;
+    if (ctx.state !== "running") {
+      // Scheduling now would show the transport as playing with a frozen
+      // clock and no sound. Fail instead; the next tap gets a new context.
+      this.staleContext = true;
+      throw new PlaybackBlockedError();
+    }
 
     const state = useStudioStore.getState();
     const { lanes } = state;
     let playhead = state.playhead;
+    // At (or seeked past) the end, play would stop again on the first frame.
+    if (state.duration > 0 && playhead >= state.duration) playhead = 0;
     if (state.loopEnabled && (playhead < state.loopStart || playhead >= state.loopEnd)) {
       playhead = state.loopStart;
     }
 
     await Promise.all(lanes.map((l) => this.ensureLane(l.laneId, l.stemId)));
     await Promise.all(lanes.map((l) => this.ensureTransform(l.laneId)));
+    // Paused, stopped or a preview started while the stems loaded.
+    if (request !== this.playRequest || this.ctx !== ctx) return;
 
     const audible = getAudibleLaneIds(lanes);
     const startTime = ctx.currentTime + 0.08;
@@ -357,6 +418,7 @@ class AudioEngine {
   }
 
   pause() {
+    this.playRequest++;
     const ctx = this.ctx;
     const elapsed = ctx
       ? Math.max(0, ctx.currentTime - this.startedAtContextTime)
@@ -375,6 +437,7 @@ class AudioEngine {
 
   /** Stop: silence everything and return the playhead to the start. */
   stop() {
+    this.playRequest++;
     this.stopAllSources();
     this.stopMetronome();
     if (this.rafId !== null) {
@@ -456,7 +519,7 @@ class AudioEngine {
     if (wasPlaying) this.pause();
     const clamped = Math.max(0, seconds);
     useStudioStore.getState()._setPlaybackState(false, clamped);
-    if (wasPlaying) void this.play();
+    if (wasPlaying) void this.play().catch(() => {});
   }
 
   private startMetronome(fromPlayhead: number) {
@@ -520,7 +583,7 @@ class AudioEngine {
     if (loopEnabled && loopEnd > loopStart && playhead >= loopEnd) {
       useStudioStore.getState()._setPlaybackState(true, loopStart);
       this.stopAllSources();
-      void this.play();
+      void this.play().catch(() => this.pause());
       return;
     }
 
@@ -535,6 +598,10 @@ class AudioEngine {
 }
 
 export const audioEngine = new AudioEngine();
+
+// ...and the other way round: a library preview pauses the mix (or cancels
+// a play that's still loading) instead of playing over it.
+previewPlayer.onStart(() => audioEngine.pause());
 
 if (typeof window !== "undefined") {
   const lastTransforms = new Map<string, { tempo: number; pitch: number }>();

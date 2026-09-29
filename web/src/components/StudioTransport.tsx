@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { audioEngine } from "@/lib/client/audioEngine";
+import { audioEngine, PlaybackBlockedError } from "@/lib/client/audioEngine";
 import { exportMixdown } from "@/lib/client/mixdown";
 import { lanesToPayload } from "@/lib/client/remixLanes";
 import { useStudioStore } from "@/lib/client/studioStore";
@@ -84,6 +84,7 @@ export default function StudioTransport({
   const canUndo = useStudioHistory((h) => h.past.length > 0);
   const canRedo = useStudioHistory((h) => h.future.length > 0);
   const [starting, setStarting] = useState(false);
+  const playAttempt = useRef(0);
   const [playError, setPlayError] = useState<string | null>(null);
   const [showSave, setShowSave] = useState(false);
   const [title, setTitle] = useState(defaultTitle ?? "");
@@ -98,23 +99,33 @@ export default function StudioTransport({
   const hasLoop = loopEnd > loopStart;
 
   async function handlePlayPause() {
-    if (lanes.length === 0 || starting) return;
-    if (isPlaying) {
+    if (lanes.length === 0) return;
+    if (isPlaying || starting) {
+      // A tap while it's still loading cancels, rather than being ignored
+      // until a slow download on a phone finishes.
+      playAttempt.current++;
       audioEngine.pause();
+      setStarting(false);
       return;
     }
     // Play waits for any lane still loading or re-rendering its
     // pitch/tempo; say so rather than look like the click did nothing.
+    const attempt = ++playAttempt.current;
     setStarting(true);
     setPlayError(null);
     try {
       await audioEngine.play();
-    } catch {
-      // Usually a stem that didn't download — easy on a flaky mobile
-      // connection. Tapping play again retries it.
-      setPlayError("Couldn't load the audio. Check your connection and tap play again.");
+    } catch (error) {
+      if (attempt !== playAttempt.current) return;
+      setPlayError(
+        error instanceof PlaybackBlockedError
+          ? error.message
+          : // Usually a stem that didn't download — easy on a flaky mobile
+            // connection. Tapping play again retries it.
+            "Couldn't load the audio. Check your connection and tap play again."
+      );
     } finally {
-      setStarting(false);
+      if (attempt === playAttempt.current) setStarting(false);
     }
   }
 
@@ -182,7 +193,7 @@ export default function StudioTransport({
           onClick={handlePlayPause}
           disabled={empty}
           className="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-full bg-brand text-lg text-white transition-transform hover:scale-105 disabled:opacity-40 disabled:hover:scale-100"
-          title={starting ? "Preparing the audio…" : isPlaying ? "Pause (space)" : "Play (space)"}
+          title={starting ? "Preparing the audio… (tap to cancel)" : isPlaying ? "Pause (space)" : "Play (space)"}
           aria-busy={starting}
         >
           {starting ? (

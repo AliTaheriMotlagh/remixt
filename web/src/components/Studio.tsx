@@ -91,7 +91,7 @@ export default function Studio({ user }: { user: User | null }) {
         event.preventDefault();
         if (state.lanes.length === 0) return;
         if (state.isPlaying) audioEngine.pause();
-        else void audioEngine.play();
+        else void audioEngine.play().catch(() => {});
       } else if (event.code === "Escape") {
         audioEngine.stop();
       } else if (event.key === "l" || event.key === "L") {

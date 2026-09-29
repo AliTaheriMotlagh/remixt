@@ -30,6 +30,7 @@ type Listener = (state: PreviewState) => void;
 class PreviewPlayer {
   private audio: HTMLAudioElement | null = null;
   private listeners = new Set<Listener>();
+  private startListeners = new Set<() => void>();
   private state: PreviewState = {
     current: null,
     playing: false,
@@ -80,6 +81,21 @@ class PreviewPlayer {
     for (const listener of this.listeners) listener(this.state);
   }
 
+  /**
+   * Called just before a preview starts, so whatever else is playing (the
+   * Studio mix) can stop first — only one thing plays at a time.
+   */
+  onStart(listener: () => void): () => void {
+    this.startListeners.add(listener);
+    return () => {
+      this.startListeners.delete(listener);
+    };
+  }
+
+  private claim() {
+    for (const listener of this.startListeners) listener();
+  }
+
   isPlaying(stemId: string) {
     return this.state.playing && this.state.current?.stemId === stemId;
   }
@@ -89,6 +105,7 @@ class PreviewPlayer {
       if (this.state.playing) {
         this.getAudio().pause();
       } else {
+        this.claim();
         await this.getAudio().play().catch(() => this.stop());
       }
       return;
@@ -97,6 +114,7 @@ class PreviewPlayer {
   }
 
   async play(track: PreviewTrack) {
+    this.claim();
     const audio = this.getAudio();
     audio.src = `/api/audio/stem/${track.stemId}`;
     audio.currentTime = 0;
