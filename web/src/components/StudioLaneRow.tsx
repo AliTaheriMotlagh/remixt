@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import Waveform from "./Waveform";
 import LaneFxPanel from "./LaneFxPanel";
+import LaneAiPanel from "./LaneAiPanel";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { cutSilences } from "@/lib/client/autoMatch";
 import { exportLane } from "@/lib/client/mixdown";
@@ -10,6 +11,7 @@ import { previewPlayer } from "@/lib/client/previewPlayer";
 import { ALL_KEYS, camelotCode, keyId, keyLabel, parseKeyId } from "@/lib/client/musicKey";
 import {
   beatLength,
+  clipSpan,
   clipStart,
   clipsOf,
   effectiveKey,
@@ -101,6 +103,7 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
   const keyReference = useStudioStore((s) => referenceLane(s.lanes, (l) => !!l.musicalKey));
 
   const [showFx, setShowFx] = useState(false);
+  const [showAi, setShowAi] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [selectedClip, setSelectedClip] = useState<number | null>(null);
   const [cutting, setCutting] = useState(false);
@@ -182,7 +185,7 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
       mode,
       index,
       startX: e.clientX,
-      startPosition: mode === "trim-end" ? start + (clip.to - clip.from) / lane.tempoRatio : start,
+      startPosition: mode === "trim-end" ? start + clipSpan(clip) / lane.tempoRatio : start,
       width: trackRef.current.clientWidth,
       span,
       moved: false,
@@ -458,6 +461,17 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
               FX {showFx ? "▾" : "▸"}
             </button>
             <button
+              onClick={() => setShowAi((v) => !v)}
+              className={`flex-1 rounded border px-1.5 py-1 text-[10px] font-semibold transition-colors ${
+                showAi
+                  ? "border-brand bg-brand/15 text-foreground"
+                  : "border-border text-muted hover:text-foreground"
+              }`}
+              title={`Match this ${lane.kind === "vocals" ? "vocal with a beat" : "beat with a vocal"} using Claude or ChatGPT`}
+            >
+              ✨ AI {showAi ? "▾" : "▸"}
+            </button>
+            <button
               onClick={() => duplicateLane(lane.laneId)}
               className="rounded border border-border px-1.5 py-1 text-[10px] text-muted transition-colors hover:text-foreground"
               title="Duplicate this lane"
@@ -497,11 +511,25 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
             <button onClick={() => nudgeOffset(lane.laneId, -bar)} className="nudge" title="Back one bar">
               −bar
             </button>
+            <button
+              onClick={() => nudgeOffset(lane.laneId, -2 * beat)}
+              className="nudge"
+              title="Back half a bar — when the phrasing lands on the 3 instead of the 1"
+            >
+              −½bar
+            </button>
             <button onClick={() => nudgeOffset(lane.laneId, -beat)} className="nudge" title="Back one beat">
               −beat
             </button>
             <button onClick={() => nudgeOffset(lane.laneId, beat)} className="nudge" title="Forward one beat">
               +beat
+            </button>
+            <button
+              onClick={() => nudgeOffset(lane.laneId, 2 * beat)}
+              className="nudge"
+              title="Forward half a bar — when the phrasing lands on the 3 instead of the 1"
+            >
+              +½bar
             </button>
             <button onClick={() => nudgeOffset(lane.laneId, bar)} className="nudge" title="Forward one bar">
               +bar
@@ -604,7 +632,7 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
                 }`}
                 style={{
                   left: `${(clipStart(lane, clip) / span) * 100}%`,
-                  width: `${((clip.to - clip.from) / lane.tempoRatio / span) * 100}%`,
+                  width: `${(clipSpan(clip) / lane.tempoRatio / span) * 100}%`,
                   borderColor: accent,
                   background: `color-mix(in srgb, ${accent} 14%, transparent)`,
                 }}
@@ -638,6 +666,7 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
       </div>
 
       {showFx && <LaneFxPanel lane={lane} />}
+      {showAi && <LaneAiPanel lane={lane} />}
     </div>
   );
 }

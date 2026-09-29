@@ -67,6 +67,7 @@ export async function renderMixdown({
       startTime: 0,
       playhead: start,
       until: useLoop ? end - start : undefined,
+      clipBuffer: audioEngine.clipLookup(lane.laneId),
     });
   }
 
@@ -168,7 +169,15 @@ export async function exportLane(lane: StudioLane, title: string) {
   const master = createMasterChain(ctx, ctx.destination);
   const chain = createLaneChain(ctx, lane, state.projectBpm, master.input);
   chain.volumeGain.gain.value = lane.volume;
-  scheduleLane({ ctx, lane, buffer, chain, startTime: 0, playhead: lane.offsetSeconds });
+  scheduleLane({
+    ctx,
+    lane,
+    buffer,
+    chain,
+    startTime: 0,
+    playhead: lane.offsetSeconds,
+    clipBuffer: audioEngine.clipLookup(lane.laneId),
+  });
 
   const rendered = await ctx.startRendering();
   downloadBlob(encodeWav(rendered), `${safeFilename(title)}-${lane.kind}.wav`);

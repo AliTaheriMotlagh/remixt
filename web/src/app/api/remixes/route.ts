@@ -19,7 +19,14 @@ const laneSettingsSchema = z
       .optional(),
     // A lane arranged into phrases (see LaneClip in the Studio store).
     clips: z
-      .array(z.object({ from: z.number().min(0), to: z.number().min(0), at: z.number().min(0) }))
+      .array(
+        z.object({
+          from: z.number().min(0),
+          to: z.number().min(0),
+          at: z.number().min(0),
+          stretch: z.number().min(0.5).max(2).optional(),
+        })
+      )
       .max(2000)
       .nullable()
       .optional(),

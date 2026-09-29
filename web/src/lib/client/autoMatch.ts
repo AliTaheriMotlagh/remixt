@@ -28,7 +28,7 @@ import {
 // in the browser (see analysis.ts), deterministic and explainable; the
 // report lists each decision so the user can see what changed and undo it.
 
-async function analyzeLane(lane: StudioLane): Promise<StemAnalysis | null> {
+export async function analyzeLane(lane: StudioLane): Promise<StemAnalysis | null> {
   await audioEngine.ensureLane(lane.laneId, lane.stemId);
   const buffer = audioEngine.getRawBuffer(lane.laneId);
   return buffer ? analyzeStem(lane.stemId, buffer) : null;
@@ -41,7 +41,7 @@ const guideCache = new Map<string, Promise<StemAnalysis | null>>();
  * analysed. Its hits say exactly where the singer's bars fall, which the
  * voice alone can't. Null when that beat isn't in the library any more.
  */
-function analyzeGuide(lane: StudioLane): Promise<StemAnalysis | null> {
+export function analyzeGuide(lane: StudioLane): Promise<StemAnalysis | null> {
   const cached = guideCache.get(lane.stemId);
   if (cached) return cached;
   const promise = (async () => {
@@ -106,7 +106,9 @@ export async function cutSilences(laneId: string): Promise<number> {
     for (const p of phrases) {
       const from = Math.max(clip.from, p.start - PRE_ROLL);
       const to = Math.min(clip.to, p.end + TAIL);
-      if (to - from > 0.05) clips.push({ from, to, at: clip.at + (from - clip.from) });
+      if (to - from > 0.05) {
+        clips.push({ ...clip, from, to, at: clip.at + (from - clip.from) / (clip.stretch ?? 1) });
+      }
     }
   }
   if (clips.length === 0) return 0;

@@ -32,6 +32,14 @@ export type StemAnalysis = {
   loudness: number;
   /** Tempo estimated from the onsets — a fallback when no BPM is stored. */
   bpmEstimate: number | null;
+  /**
+   * Pitch-class profile over time: 12 values per frame, each frame summing
+   * to 1 (all zero where it's silent). Says which parts of a song share
+   * their notes — a chorus that comes back, say.
+   */
+  chroma: Float32Array;
+  /** Frames per second of `chroma`. */
+  chromaRate: number;
 };
 
 const cache = new Map<string, Promise<StemAnalysis>>();
@@ -51,7 +59,7 @@ async function runAnalysis(buffer: AudioBuffer): Promise<StemAnalysis> {
   const mono = await downmix(buffer);
   const { energy, onsets } = envelopes(mono);
   const lowOnsets = envelopes(lowPass(mono)).onsets;
-  const { key, confidence } = await detectKey(mono);
+  const { key, confidence, frames } = await detectKey(mono);
   const onsetRate = RATE / BLOCK;
   return {
     key,
@@ -63,6 +71,8 @@ async function runAnalysis(buffer: AudioBuffer): Promise<StemAnalysis> {
     entry: findEntry(energy) / onsetRate,
     loudness: activeLoudness(energy),
     bpmEstimate: estimateBpm(onsets, onsetRate),
+    chroma: frames,
+    chromaRate: RATE / FFT_HOP,
   };
 }
 
@@ -434,8 +444,10 @@ export function estimateTempoDecimated(decimated: Float32Array, rate: number): n
 const MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88];
 const MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.6, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
 
-async function detectKey(mono: Float32Array): Promise<{ key: MusicalKey; confidence: number }> {
-  const chroma = await chromagram(mono);
+async function detectKey(
+  mono: Float32Array
+): Promise<{ key: MusicalKey; confidence: number; frames: Float32Array }> {
+  const { total: chroma, frames } = await chromagram(mono);
 
   const scores: { key: MusicalKey; score: number }[] = [];
   for (let tonic = 0; tonic < 12; tonic++) {
@@ -445,7 +457,7 @@ async function detectKey(mono: Float32Array): Promise<{ key: MusicalKey; confide
   }
   scores.sort((a, b) => b.score - a.score);
   const confidence = Math.max(0, Math.min(1, (scores[0].score - scores[1].score) * 5));
-  return { key: scores[0].key, confidence };
+  return { key: scores[0].key, confidence, frames };
 }
 
 function correlation(a: number[], b: number[]) {
@@ -462,8 +474,8 @@ function correlation(a: number[], b: number[]) {
   return denA > 0 && denB > 0 ? num / Math.sqrt(denA * denB) : 0;
 }
 
-/** Average pitch-class profile over the whole stem. */
-async function chromagram(mono: Float32Array): Promise<number[]> {
+/** Pitch-class profile of every frame, and its sum over the whole stem. */
+async function chromagram(mono: Float32Array): Promise<{ total: number[]; frames: Float32Array }> {
   // Which pitch class each FFT bin belongs to; bins outside ~A1–B6 (where
   // bass rumble and hi-hat noise live) are left out.
   const binClass = new Int8Array(FFT_SIZE / 2).fill(-1);
@@ -481,9 +493,11 @@ async function chromagram(mono: Float32Array): Promise<number[]> {
   const im = new Float64Array(FFT_SIZE);
   const total = new Array(12).fill(0);
   const frame = new Array(12).fill(0);
+  const frameCount = Math.max(0, Math.floor((mono.length - FFT_SIZE) / FFT_HOP) + 1);
+  const perFrame = new Float32Array(frameCount * 12);
   let frames = 0;
 
-  for (let start = 0; start + FFT_SIZE <= mono.length; start += FFT_HOP) {
+  for (let start = 0, index = 0; start + FFT_SIZE <= mono.length; start += FFT_HOP, index++) {
     let energy = 0;
     for (let i = 0; i < FFT_SIZE; i++) {
       const sample = mono[start + i];
@@ -501,11 +515,16 @@ async function chromagram(mono: Float32Array): Promise<number[]> {
     }
     // Normalise each frame so loud sections don't outvote the rest.
     const sum = frame.reduce((s, v) => s + v, 0);
-    if (sum > 0) for (let pc = 0; pc < 12; pc++) total[pc] += frame[pc] / sum;
+    if (sum > 0) {
+      for (let pc = 0; pc < 12; pc++) {
+        total[pc] += frame[pc] / sum;
+        perFrame[index * 12 + pc] = frame[pc] / sum;
+      }
+    }
 
     if (++frames % 64 === 0) await yieldToUI();
   }
-  return total;
+  return { total, frames: perFrame };
 }
 
 /** In-place iterative radix-2 FFT. */

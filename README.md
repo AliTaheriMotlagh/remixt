@@ -132,6 +132,26 @@ against a project tempo you set (type it, or tap it in).
   Levels and a starting FX chain round it off. It lists every change and
   can be undone. It's signal analysis (`web/src/lib/client/analysis.ts`,
   `arrange.ts`), not a remote model — nothing leaves the browser.
+  Each phrase is also stretched a little (up to 8%, pitch unchanged) to
+  follow a beat whose tempo drifts, long unbroken phrases are cut at a
+  breath every couple of bars so they stay locked too, and the report
+  warns when it couldn't tell which beat is the "one" (the lane's ±½bar
+  nudges fix that in one click).
+- **✨ AI on each lane** — pairs a vocal with a beat (or a beat with a
+  vocal) using a language model: Claude or ChatGPT, with the user's own
+  API key, set in the panel's AI settings. The key is kept in the browser
+  (localStorage) and requests go straight from the page to Anthropic or
+  OpenAI — never through Remixt. The model can't hear audio, so it gets
+  the studio's analysis: both tempos and keys, the beat's bars with a
+  loudness digit per bar, its intro, ending and level changes, and the
+  vocal cut into ~8-bar blocks with their length, loudness and which ones
+  share their notes (a returning chorus). It answers with a plan in a
+  fixed JSON shape — which block goes on which bar (repeats and omissions
+  allowed), which song keeps its tempo, a downbeat correction, vocal
+  level and FX presets — plus the user's own wishes ("chorus first"), and
+  the same engine as AI Match carries it out. Pitch is never changed.
+  Code: `web/src/lib/client/aiMatch.ts`, `aiSettings.ts`,
+  `components/LaneAiPanel.tsx`.
 - **Editing** — a lane can be cut into clips: split at the playhead, "cut
   silences" (every phrase becomes a clip, left where it was), drag a clip
   to move it, drag its edges to trim, duplicate or delete the selected

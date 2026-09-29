@@ -1,11 +1,18 @@
 "use client";
 
-import { createLaneChain, createMasterChain, scheduleLane, type LaneChain } from "./audioGraph";
+import {
+  createLaneChain,
+  createMasterChain,
+  hasOwnStretch,
+  scheduleLane,
+  type ClipBufferLookup,
+  type LaneChain,
+} from "./audioGraph";
 import { renderPitchTempo } from "./pitchTempo";
 import { previewPlayer } from "./previewPlayer";
 import { keepScreenOn } from "./wakeLock";
 import { fetchStem } from "./stemFetch";
-import { beatLength, getAudibleLaneIds, useStudioStore, type StudioLane } from "./studioStore";
+import { beatLength, getAudibleLaneIds, useStudioStore, type LaneClip, type StudioLane } from "./studioStore";
 
 type LoadedLane = {
   rawBuffer: AudioBuffer;
@@ -15,7 +22,14 @@ type LoadedLane = {
   chain: LaneChain;
   /** One per clip while playing (just one for a lane that isn't arranged). */
   sources: AudioBufferSourceNode[];
+  /** Clips with a speed of their own, each rendered separately (see clipKey). */
+  clipBuffers: Map<string, AudioBuffer>;
 };
+
+/** Identifies one clip render: its slice of the stem and the speed and pitch it was rendered at. */
+function clipKey(lane: StudioLane, clip: LaneClip) {
+  return `${clip.from}|${clip.to}|${(lane.tempoRatio * (clip.stretch ?? 1)).toFixed(5)}|${lane.pitchSemitones}`;
+}
 
 function stopSources(sources: AudioBufferSourceNode[], when?: number) {
   for (const source of sources) {
@@ -107,6 +121,7 @@ class AudioEngine {
           appliedPitch: 0,
           chain,
           sources: [],
+          clipBuffers: new Map(),
         });
       })
       .finally(() => {
@@ -122,6 +137,73 @@ class AudioEngine {
     const { lanes } = useStudioStore.getState();
     await Promise.all(lanes.map((l) => this.ensureLane(l.laneId, l.stemId)));
     await Promise.all(lanes.map((l) => this.ensureTransform(l.laneId)));
+    await Promise.all(lanes.map((l) => this.ensureClips(l.laneId)));
+  }
+
+  /** Where a lane's separately rendered clips are, for scheduling it. */
+  clipLookup(laneId: string): ClipBufferLookup {
+    return (clip) => {
+      const lane = useStudioStore.getState().lanes.find((l) => l.laneId === laneId);
+      return lane ? this.lanes.get(laneId)?.clipBuffers.get(clipKey(lane, clip)) : undefined;
+    };
+  }
+
+  private clipRendering = new Map<string, Promise<void>>();
+
+  /**
+   * Renders every clip of the lane that plays at a speed of its own, and
+   * drops renders no clip uses any more. Until a clip's render is ready it
+   * plays from the lane's buffer at the lane's speed, so nothing waits on
+   * this; once done, a running transport picks the new renders up.
+   */
+  async ensureClips(laneId: string): Promise<void> {
+    const running = this.clipRendering.get(laneId);
+    if (running) {
+      await running;
+      return this.ensureClips(laneId);
+    }
+    const lane = useStudioStore.getState().lanes.find((l) => l.laneId === laneId);
+    const entry = this.lanes.get(laneId);
+    if (!lane || !entry) return;
+
+    const wanted = new Map<string, LaneClip>();
+    for (const clip of lane.clips ?? []) if (hasOwnStretch(clip)) wanted.set(clipKey(lane, clip), clip);
+    for (const key of entry.clipBuffers.keys()) if (!wanted.has(key)) entry.clipBuffers.delete(key);
+    const missing = [...wanted].filter(([key]) => !entry.clipBuffers.has(key));
+    if (missing.length === 0) return;
+
+    const ctx = this.getContext();
+    const promise = (async () => {
+      useStudioStore.getState()._setLaneRendering(laneId, true);
+      try {
+        const raw = entry.rawBuffer;
+        // A few at a time: each render is a worker of its own.
+        for (let i = 0; i < missing.length; i += 4) {
+          await Promise.all(
+            missing.slice(i, i + 4).map(async ([key, clip]) => {
+              const start = Math.floor(clip.from * raw.sampleRate);
+              const end = Math.min(raw.length, Math.ceil(clip.to * raw.sampleRate));
+              if (end - start < 16) return;
+              const slice = ctx.createBuffer(raw.numberOfChannels, end - start, raw.sampleRate);
+              for (let c = 0; c < raw.numberOfChannels; c++) {
+                slice.copyToChannel(raw.getChannelData(c).subarray(start, end), c);
+              }
+              const rendered = await renderPitchTempo(ctx, slice, {
+                tempo: lane.tempoRatio * (clip.stretch ?? 1),
+                pitchSemitones: lane.pitchSemitones,
+              });
+              this.lanes.get(laneId)?.clipBuffers.set(key, rendered);
+            })
+          );
+        }
+        if (useStudioStore.getState().isPlaying) this.rescheduleLane(laneId);
+      } finally {
+        useStudioStore.getState()._setLaneRendering(laneId, false);
+        this.clipRendering.delete(laneId);
+      }
+    })();
+    this.clipRendering.set(laneId, promise);
+    return promise;
   }
 
   getProcessedBuffer(laneId: string): AudioBuffer | null {
@@ -263,6 +345,7 @@ class AudioEngine {
         chain: entry.chain,
         startTime,
         playhead,
+        clipBuffer: this.clipLookup(lane.laneId),
       });
     }
 
@@ -345,6 +428,7 @@ class AudioEngine {
       chain: entry.chain,
       startTime,
       playhead,
+      clipBuffer: this.clipLookup(laneId),
     });
   }
 
@@ -357,6 +441,7 @@ class AudioEngine {
     try {
       await this.ensureLane(laneId, stemId);
       await this.ensureTransform(laneId);
+      void this.ensureClips(laneId);
     } catch {
       // Play retries the load and surfaces the failure then.
       return;
@@ -503,8 +588,9 @@ if (typeof window !== "undefined") {
       const moved = lastPlaced && (lastPlaced.key !== placement.key || lastPlaced.clips !== placement.clips);
       if (lastPlaced === undefined) {
         void audioEngine.prefetchLane(lane.laneId, lane.stemId);
-      } else if (moved && state.isPlaying && audioEngine.isReady(lane.laneId)) {
-        queueReschedule(lane.laneId);
+      } else if (moved && audioEngine.isReady(lane.laneId)) {
+        if (lastPlaced.clips !== placement.clips) void audioEngine.ensureClips(lane.laneId);
+        if (state.isPlaying) queueReschedule(lane.laneId);
       }
     }
 
@@ -520,7 +606,8 @@ if (typeof window !== "undefined") {
           pitch: lane.pitchSemitones,
         });
         if (audioEngine.isReady(lane.laneId)) {
-          void audioEngine.ensureTransform(lane.laneId);
+          const laneId = lane.laneId;
+          void audioEngine.ensureTransform(laneId).then(() => audioEngine.ensureClips(laneId));
         }
       }
     }

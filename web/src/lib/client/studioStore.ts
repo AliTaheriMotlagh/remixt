@@ -81,7 +81,21 @@ export type StudioLane = {
  * own (unstretched) seconds, and `at` counts from the lane's start, so an
  * arrangement stretches along with the lane when its tempo changes.
  */
-export type LaneClip = { from: number; to: number; at: number };
+export type LaneClip = {
+  from: number;
+  to: number;
+  at: number;
+  /**
+   * Extra speed for this clip on top of the lane's tempo (1 or missing =
+   * none). AI Match sets it so a phrase follows a beat whose tempo drifts.
+   */
+  stretch?: number;
+};
+
+/** How long a clip plays, in the lane's (unstretched) seconds. */
+export function clipSpan(clip: LaneClip) {
+  return (clip.to - clip.from) / (clip.stretch ?? 1);
+}
 
 /** The fields a bulk edit (auto-match, or undoing one) may change. */
 export type LanePatch = Partial<
@@ -260,7 +274,7 @@ function recomputeDuration(lanes: StudioLane[]) {
 /** How much of the stem's own time the lane spans, start to end. */
 function sourceSpan(lane: StudioLane) {
   if (!lane.clips?.length) return lane.originalDuration;
-  return lane.clips.reduce((max, c) => Math.max(max, c.at + c.to - c.from), 0);
+  return lane.clips.reduce((max, c) => Math.max(max, c.at + clipSpan(c)), 0);
 }
 
 function withEffectiveDuration(lane: StudioLane): StudioLane {
@@ -585,14 +599,14 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     if (!lane) return false;
     const clips = clipsOf(lane);
     const at = (timelineSeconds - lane.offsetSeconds) * lane.tempoRatio;
-    const index = clips.findIndex((c) => at > c.at + MIN_CLIP && at < c.at + (c.to - c.from) - MIN_CLIP);
+    const index = clips.findIndex((c) => at > c.at + MIN_CLIP && at < c.at + clipSpan(c) - MIN_CLIP);
     if (index < 0) return false;
     const clip = clips[index];
-    const cut = clip.from + (at - clip.at);
+    const cut = clip.from + (at - clip.at) * (clip.stretch ?? 1);
     const next = [
       ...clips.slice(0, index),
-      { from: clip.from, to: cut, at: clip.at },
-      { from: cut, to: clip.to, at },
+      { ...clip, to: cut },
+      { ...clip, from: cut, at },
       ...clips.slice(index + 1),
     ];
     get().setClips(laneId, next);
@@ -604,11 +618,13 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     const clips = lane && clipsOf(lane);
     const clip = clips?.[index];
     if (!lane || !clips || !clip) return;
-    const moved = (timelineSeconds - clipStart(lane, clip)) * lane.tempoRatio;
+    const stretch = clip.stretch ?? 1;
+    // How far the edge moved, in the stem's own seconds.
+    const moved = (timelineSeconds - clipStart(lane, clip)) * lane.tempoRatio * stretch;
     let next: LaneClip;
     if (edge === "start") {
       const delta = Math.min(clip.to - clip.from - MIN_CLIP, Math.max(-clip.from, moved));
-      next = { from: clip.from + delta, to: clip.to, at: clip.at + delta };
+      next = { ...clip, from: clip.from + delta, at: clip.at + delta / stretch };
     } else {
       const to = Math.min(lane.originalDuration, Math.max(clip.from + MIN_CLIP, clip.from + moved));
       next = { ...clip, to };
@@ -627,7 +643,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     const clips = lane && clipsOf(lane);
     const clip = clips?.[index];
     if (!clips || !clip) return;
-    const copy = { ...clip, at: clip.at + (clip.to - clip.from) };
+    const copy = { ...clip, at: clip.at + clipSpan(clip) };
     get().setClips(laneId, [...clips.slice(0, index + 1), copy, ...clips.slice(index + 1)]);
   },
 

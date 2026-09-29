@@ -2,6 +2,7 @@
 
 import {
   resolveDelayTime,
+  type LaneClip,
   type LaneFx,
   type StudioLane,
 } from "./studioStore";
@@ -254,20 +255,34 @@ export function createMasterChain(ctx: BaseAudioContext, destination: AudioNode)
 const CLIP_FADE_IN = 0.008;
 const CLIP_FADE_OUT = 0.03;
 
+/** A clip rendered on its own at its own speed — see LaneClip.stretch. */
+export type ClipBufferLookup = (clip: LaneClip) => AudioBuffer | undefined;
+
+/** Whether a clip plays at a speed of its own (and so from its own buffer). */
+export function hasOwnStretch(clip: LaneClip) {
+  return clip.stretch !== undefined && Math.abs(clip.stretch - 1) > 0.0005;
+}
+
 /**
- * Where each piece of a lane sounds, in timeline seconds, and where in the
- * processed (already stretched) buffer it's read from. A lane without an
- * arrangement is one piece: the whole buffer.
+ * Where each piece of a lane sounds, in timeline seconds, and where in
+ * which buffer it's read from: the lane's processed (already stretched)
+ * buffer, or a clip's own render. A lane without an arrangement is one
+ * piece: the whole buffer.
  */
-function laneSegments(lane: StudioLane, buffer: AudioBuffer) {
+function laneSegments(lane: StudioLane, buffer: AudioBuffer, clipBuffer?: ClipBufferLookup) {
   if (!lane.clips?.length) {
-    return [{ start: lane.offsetSeconds, from: 0, length: buffer.duration, fades: false }];
+    return [{ buffer, start: lane.offsetSeconds, from: 0, length: buffer.duration, fades: false }];
   }
   const ratio = lane.tempoRatio;
   return lane.clips.map((clip) => {
+    const start = lane.offsetSeconds + clip.at / ratio;
+    const own = hasOwnStretch(clip) ? clipBuffer?.(clip) : undefined;
+    if (own) return { buffer: own, start, from: 0, length: own.duration, fades: true };
+    // Not rendered yet (or no stretch of its own): read it from the lane's buffer.
     const from = Math.min(buffer.duration, clip.from / ratio);
     return {
-      start: lane.offsetSeconds + clip.at / ratio,
+      buffer,
+      start,
       from,
       length: Math.max(0, Math.min(buffer.duration, clip.to / ratio) - from),
       fades: true,
@@ -292,6 +307,7 @@ export function scheduleLane({
   startTime,
   playhead,
   until,
+  clipBuffer,
 }: {
   ctx: BaseAudioContext;
   lane: StudioLane;
@@ -300,8 +316,9 @@ export function scheduleLane({
   startTime: number;
   playhead: number;
   until?: number;
+  clipBuffer?: ClipBufferLookup;
 }): AudioBufferSourceNode[] {
-  const segments = laneSegments(lane, buffer);
+  const segments = laneSegments(lane, buffer, clipBuffer);
   const laneEnd = Math.max(...segments.map((s) => s.start + s.length));
   if (playhead >= laneEnd) return [];
 
@@ -336,7 +353,7 @@ export function scheduleLane({
     const remaining = segment.length - offset;
 
     const source = ctx.createBufferSource();
-    source.buffer = buffer;
+    source.buffer = segment.buffer;
     if (segment.fades) {
       const gain = ctx.createGain();
       const g = gain.gain;

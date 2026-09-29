@@ -45,7 +45,12 @@ function isClipList(value: unknown): value is LaneClip[] {
     value.length > 0 &&
     value.every(
       (c) =>
-        c && typeof c.from === "number" && typeof c.to === "number" && typeof c.at === "number" && c.to > c.from
+        c &&
+        typeof c.from === "number" &&
+        typeof c.to === "number" &&
+        typeof c.at === "number" &&
+        c.to > c.from &&
+        (c.stretch === undefined || (typeof c.stretch === "number" && c.stretch >= 0.5 && c.stretch <= 2))
     )
   );
 }
@@ -106,7 +111,13 @@ export function lanesToPayload(lanes: StudioLane[]) {
       bpm: lane.bpm,
       key: lane.musicalKey,
       // Milliseconds are plenty, and keep a long arrangement's JSON small.
-      clips: lane.clips?.map((c) => ({ from: ms(c.from), to: ms(c.to), at: ms(c.at) })) ?? null,
+      clips:
+        lane.clips?.map((c) => ({
+          from: ms(c.from),
+          to: ms(c.to),
+          at: ms(c.at),
+          ...(c.stretch && c.stretch !== 1 ? { stretch: Math.round(c.stretch * 10000) / 10000 } : {}),
+        })) ?? null,
     },
   }));
 }
