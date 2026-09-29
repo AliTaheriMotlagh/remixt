@@ -14,9 +14,21 @@ function formatTime(seconds: number) {
  * The project ruler: bar/beat grid at the project tempo, a draggable
  * playhead, and a loop region you set by dragging across the ruler.
  */
+/** Follows playback on its own, so the ruler's grid isn't re-rendered every frame. */
+function RulerPlayhead({ duration }: { duration: number }) {
+  const playhead = useStudioStore((s) => s.playhead);
+  return (
+    <div
+      className="pointer-events-none absolute inset-y-0 w-0.5 bg-foreground"
+      style={{ left: `${(playhead / duration) * 100}%` }}
+    >
+      <span className="absolute -top-0 -left-[3px] h-1.5 w-1.5 rounded-full bg-foreground" />
+    </div>
+  );
+}
+
 export default function StudioTimeline() {
   const projectDuration = useStudioStore((s) => s.duration);
-  const playhead = useStudioStore((s) => s.playhead);
   const projectBpm = useStudioStore((s) => s.projectBpm);
   const loopEnabled = useStudioStore((s) => s.loopEnabled);
   const loopStart = useStudioStore((s) => s.loopStart);
@@ -123,12 +135,7 @@ export default function StudioTimeline() {
           );
         })}
 
-        <div
-          className="pointer-events-none absolute inset-y-0 w-0.5 bg-foreground"
-          style={{ left: `${(playhead / duration) * 100}%` }}
-        >
-          <span className="absolute -top-0 -left-[3px] h-1.5 w-1.5 rounded-full bg-foreground" />
-        </div>
+        <RulerPlayhead duration={duration} />
 
         <span className="pointer-events-none absolute bottom-0.5 right-1.5 font-mono text-[9px] text-muted">
           {formatTime(duration)}

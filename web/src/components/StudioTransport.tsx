@@ -14,6 +14,48 @@ function formatTime(seconds: number) {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+/** Clock and progress bar — the only parts of the transport that follow playback. */
+function TransportPosition({ empty }: { empty: boolean }) {
+  const playhead = useStudioStore((s) => s.playhead);
+  const duration = useStudioStore((s) => s.duration);
+  const loopEnabled = useStudioStore((s) => s.loopEnabled);
+  const loopStart = useStudioStore((s) => s.loopStart);
+  const loopEnd = useStudioStore((s) => s.loopEnd);
+  const hasLoop = loopEnd > loopStart;
+
+  return (
+    <>
+      <div className="font-mono text-sm text-muted tabular-nums">
+        {formatTime(playhead)} / {formatTime(duration)}
+      </div>
+
+      <div
+        className="group relative h-2 flex-1 min-w-[120px] cursor-pointer overflow-hidden rounded-full bg-surface-raised"
+        onClick={(e) => {
+          if (empty) return;
+          const rect = e.currentTarget.getBoundingClientRect();
+          audioEngine.seek(((e.clientX - rect.left) / rect.width) * duration);
+        }}
+        title="Click to seek"
+      >
+        {hasLoop && duration > 0 && (
+          <div
+            className={`absolute inset-y-0 ${loopEnabled ? "bg-brand/30" : "bg-surface-hover"}`}
+            style={{
+              left: `${(loopStart / duration) * 100}%`,
+              width: `${((loopEnd - loopStart) / duration) * 100}%`,
+            }}
+          />
+        )}
+        <div
+          className="relative h-full bg-gradient-to-r from-vocals to-beat"
+          style={{ width: duration > 0 ? `${(playhead / duration) * 100}%` : "0%" }}
+        />
+      </div>
+    </>
+  );
+}
+
 export default function StudioTransport({
   user,
   remixId,
@@ -24,7 +66,6 @@ export default function StudioTransport({
   defaultTitle?: string;
 }) {
   const isPlaying = useStudioStore((s) => s.isPlaying);
-  const playhead = useStudioStore((s) => s.playhead);
   const duration = useStudioStore((s) => s.duration);
   const lanes = useStudioStore((s) => s.lanes);
   const masterVolume = useStudioStore((s) => s.masterVolume);
@@ -138,33 +179,7 @@ export default function StudioTransport({
           ■
         </button>
 
-        <div className="font-mono text-sm text-muted tabular-nums">
-          {formatTime(playhead)} / {formatTime(duration)}
-        </div>
-
-        <div
-          className="group relative h-2 flex-1 min-w-[120px] cursor-pointer overflow-hidden rounded-full bg-surface-raised"
-          onClick={(e) => {
-            if (empty) return;
-            const rect = e.currentTarget.getBoundingClientRect();
-            audioEngine.seek(((e.clientX - rect.left) / rect.width) * duration);
-          }}
-          title="Click to seek"
-        >
-          {hasLoop && duration > 0 && (
-            <div
-              className={`absolute inset-y-0 ${loopEnabled ? "bg-brand/30" : "bg-surface-hover"}`}
-              style={{
-                left: `${(loopStart / duration) * 100}%`,
-                width: `${((loopEnd - loopStart) / duration) * 100}%`,
-              }}
-            />
-          )}
-          <div
-            className="relative h-full bg-gradient-to-r from-vocals to-beat"
-            style={{ width: duration > 0 ? `${(playhead / duration) * 100}%` : "0%" }}
-          />
-        </div>
+        <TransportPosition empty={empty} />
 
         <button
           onClick={() => setLoop({ enabled: !loopEnabled, start: hasLoop ? loopStart : 0, end: hasLoop ? loopEnd : Math.min(duration, 16) })}

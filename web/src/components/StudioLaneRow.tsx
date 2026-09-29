@@ -24,8 +24,39 @@ function formatOffset(seconds: number) {
   return `${sign}${m}:${s}`;
 }
 
-export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
+/**
+ * The parts of a lane that follow the playhead. They subscribe to it on
+ * their own, so playback re-renders these few elements each frame rather
+ * than the whole lane with all its controls.
+ */
+function LaneWaveform({ lane, accent }: { lane: StudioLane; accent: string }) {
   const playhead = useStudioStore((s) => s.playhead);
+  const progress =
+    lane.duration > 0
+      ? Math.min(1, Math.max(0, (playhead - lane.offsetSeconds) / lane.duration))
+      : 0;
+  return (
+    <Waveform
+      peaks={lane.peaks}
+      color={`${accent}99`}
+      progressColor={accent}
+      progress={progress}
+      height={66}
+    />
+  );
+}
+
+function LanePlayhead({ span }: { span: number }) {
+  const playhead = useStudioStore((s) => s.playhead);
+  return (
+    <div
+      className="pointer-events-none absolute inset-y-0 w-px bg-foreground/70"
+      style={{ left: `${(playhead / span) * 100}%` }}
+    />
+  );
+}
+
+export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
   const projectDuration = useStudioStore((s) => s.duration);
   const projectBpm = useStudioStore((s) => s.projectBpm);
   const snapToGrid = useStudioStore((s) => s.snapToGrid);
@@ -102,10 +133,6 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
   const isStretched = Math.abs(lane.tempoRatio - 1) > 0.001;
   const soundingKey = effectiveKey(lane);
   const isReference = keyReference?.laneId === lane.laneId;
-  const laneProgress =
-    lane.duration > 0
-      ? Math.min(1, Math.max(0, (playhead - lane.offsetSeconds) / lane.duration))
-      : 0;
 
   function snap(seconds: number) {
     return snapToGrid ? Math.round(seconds / beat) * beat : seconds;
@@ -413,7 +440,7 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
               +bar
             </button>
             <button
-              onClick={() => setOffset(lane.laneId, snap(playhead))}
+              onClick={() => setOffset(lane.laneId, snap(useStudioStore.getState().playhead))}
               className="nudge"
               title="Move this lane's start to the playhead"
             >
@@ -453,19 +480,10 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
               }}
               title="Drag to move this lane in time · click to seek"
             >
-              <Waveform
-                peaks={lane.peaks}
-                color={`${accent}99`}
-                progressColor={accent}
-                progress={laneProgress}
-                height={66}
-              />
+              <LaneWaveform lane={lane} accent={accent} />
             </div>
 
-            <div
-              className="pointer-events-none absolute inset-y-0 w-px bg-foreground/70"
-              style={{ left: `${(playhead / span) * 100}%` }}
-            />
+            <LanePlayhead span={span} />
           </div>
         </div>
       </div>

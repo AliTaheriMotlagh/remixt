@@ -443,6 +443,19 @@ if (typeof window !== "undefined") {
   }
 
   useStudioStore.subscribe((state, prevState) => {
+    // The playhead moves every frame while playing; none of what follows
+    // depends on it. Re-applying every lane's settings 60 times a second
+    // piles automation events onto each AudioParam, which slowly bogs the
+    // audio thread (and the page) down the longer the mix plays.
+    if (
+      state.lanes === prevState.lanes &&
+      state.masterVolume === prevState.masterVolume &&
+      state.projectBpm === prevState.projectBpm &&
+      state.isPlaying === prevState.isPlaying
+    ) {
+      return;
+    }
+
     if (state.lanes !== prevState.lanes) {
       const currentIds = new Set(state.lanes.map((l) => l.laneId));
       for (const laneId of audioEngine.getLoadedLaneIds()) {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import { isConstrainedDevice, splitter, useSplitter } from "@/lib/client/splitter";
 
 export function formatMB(bytes: number) {
@@ -17,6 +18,11 @@ export function formatMB(bytes: number) {
 export default function SplitterStatus({ signedIn }: { signedIn: boolean }) {
   const state = useSplitter();
   const [justFinished, setJustFinished] = useState(false);
+  const pathname = usePathname();
+  // Starting the model reads ~200 MB and busies the GPU for a few seconds;
+  // on the pages that play audio that's heard as stutter, so wait for
+  // another page (or the upload itself).
+  const playsAudio = pathname.startsWith("/studio") || pathname.startsWith("/remixes/");
 
   useEffect(() => {
     if (!signedIn) return;
@@ -28,8 +34,9 @@ export default function SplitterStatus({ signedIn }: { signedIn: boolean }) {
     // the tab killed (iOS reloads it, e.g. while the file picker is open),
     // so there it only loads for an actual upload.
     if (isConstrainedDevice()) return;
+    if (playsAudio) return;
     void splitter.load();
-  }, [signedIn]);
+  }, [signedIn, playsAudio]);
 
   // After a real download (not a cache hit), say so briefly.
   const downloadedFresh = state.status === "ready" && !state.fromCache;
