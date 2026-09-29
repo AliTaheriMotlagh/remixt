@@ -3,7 +3,7 @@ import { stat, mkdir } from "fs/promises";
 import path from "path";
 import { Readable } from "stream";
 import { AwsClient } from "aws4fetch";
-import { head } from "@vercel/blob";
+import { head, put } from "@vercel/blob";
 import { generateClientTokenFromReadWriteToken } from "@vercel/blob/client";
 
 // Where stems live. Three backends, picked by environment:
@@ -41,6 +41,37 @@ const blobToken = process.env.R2_BUCKET ? undefined : findBlobToken();
 export function storageProblem(): string | null {
   if (blobToken || r2 || !process.env.VERCEL) return null;
   return "File storage isn't set up: connect a Vercel Blob store to this project (Storage tab), then redeploy.";
+}
+
+type BlobAccess = "public" | "private";
+let blobAccessCheck: Promise<BlobAccess> | null = null;
+
+/**
+ * Whether the connected Blob store is public or private. It's fixed when
+ * the store is created, the two need different handling, and uploading
+ * with the wrong one is rejected — so find out by writing a tiny marker
+ * file once per server instance rather than trusting a setting.
+ */
+function blobAccess(): Promise<BlobAccess> {
+  blobAccessCheck ??= (async () => {
+    const probe = (access: BlobAccess) =>
+      put(".remixt/access-check.txt", "ok", {
+        access,
+        token: blobToken,
+        addRandomSuffix: false,
+        allowOverwrite: true,
+        contentType: "text/plain",
+      });
+    try {
+      await probe("private");
+      return "private";
+    } catch {
+      await probe("public");
+      return "public";
+    }
+  })();
+  blobAccessCheck.catch(() => (blobAccessCheck = null));
+  return blobAccessCheck;
 }
 
 /** Largest stem accepted: 20 minutes of 192 kbps MP3 is ~29 MB. */
@@ -92,7 +123,7 @@ function objectUrl(key: string) {
 
 export type UploadTarget =
   | { type: "put"; url: string; headers: Record<string, string> }
-  | { type: "blob"; pathname: string; token: string; contentType: string };
+  | { type: "blob"; pathname: string; token: string; contentType: string; access: BlobAccess };
 
 /**
  * How the browser should upload the file for `key`. With Blob that's a
@@ -112,7 +143,7 @@ export async function createUploadTarget(key: string, localPath: string): Promis
       validUntil: Date.now() + 60 * 60 * 1000,
       addRandomSuffix: false,
     });
-    return { type: "blob", pathname: key, token, contentType };
+    return { type: "blob", pathname: key, token, contentType, access: await blobAccess() };
   }
   const headers = { "Content-Type": contentType };
   if (!r2) return { type: "put", url: localPath, headers };
@@ -125,14 +156,17 @@ export async function createUploadTarget(key: string, localPath: string): Promis
 }
 
 /**
- * A stored object's size, and its public URL when the store assigns one
- * (Blob); null if it isn't there.
+ * A stored object's size, and its public URL when it has one (a public
+ * Blob store); null if it isn't there.
  */
 export async function storedObject(key: string): Promise<{ size: number; url: string | null } | null> {
   if (blobToken) {
     try {
       const blob = await head(key, { token: blobToken });
-      return { size: blob.size, url: blob.url };
+      // A private store's URLs need the secret token, so they're useless
+      // to a browser — those stems are served by serveBlobRange instead.
+      const isPublic = (await blobAccess()) === "public";
+      return { size: blob.size, url: isPublic ? blob.url : null };
     } catch {
       return null;
     }
@@ -155,6 +189,56 @@ async function storedSize(key: string): Promise<number | null> {
   } catch {
     return null;
   }
+}
+
+/** True when stems live in Blob and have to be served through this app. */
+export function servesThroughApp(key: string): boolean {
+  return !!blobToken && !/^https?:\/\//.test(key);
+}
+
+/**
+ * Vercel caps a function's response at 4.5 MB, and a stem is bigger, so a
+ * private Blob stem is served a slice at a time: every response is a 206
+ * of at most this much, and players (and lib/client/stemFetch.ts) ask for
+ * the next slice themselves.
+ */
+const MAX_SLICE = 4 * 1024 * 1024;
+
+export async function serveBlobRange(key: string, rangeHeader: string | null): Promise<Response> {
+  let blob;
+  try {
+    blob = await head(key, { token: blobToken });
+  } catch {
+    return new Response("Not found", { status: 404 });
+  }
+  const size = blob.size;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader ?? "bytes=0-");
+  const start = match?.[1] ? parseInt(match[1], 10) : 0;
+  const wanted = match?.[2] ? parseInt(match[2], 10) : size - 1;
+  if (!match || start >= size || start > wanted) {
+    return new Response("Range not satisfiable", {
+      status: 416,
+      headers: { "Content-Range": `bytes */${size}` },
+    });
+  }
+  const end = Math.min(wanted, size - 1, start + MAX_SLICE - 1);
+
+  const upstream = await fetch(blob.url, {
+    headers: { Authorization: `Bearer ${blobToken}`, Range: `bytes=${start}-${end}` },
+  });
+  if (!upstream.ok || !upstream.body) {
+    return new Response("Couldn't read the stem", { status: 502 });
+  }
+  return new Response(upstream.body, {
+    status: 206,
+    headers: {
+      "Content-Type": blob.contentType || contentTypeFor(key),
+      "Content-Length": String(end - start + 1),
+      "Content-Range": `bytes ${start}-${end}/${size}`,
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "private, max-age=86400",
+    },
+  });
 }
 
 /** Public URL for a stored object when the backend has one (R2). */

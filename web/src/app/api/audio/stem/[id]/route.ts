@@ -1,12 +1,11 @@
 import { NextRequest } from "next/server";
 import { getStemById } from "@/lib/models";
-import { publicUrl, serveStorageFile } from "@/lib/storage";
+import { publicUrl, serveBlobRange, servesThroughApp, serveStorageFile } from "@/lib/storage";
 
-// Plays a stem. With R2 the browser is sent to the bucket's public URL, so
-// the audio streams from Cloudflare rather than through this server; on
-// local disk it's streamed here with Range support so the player can seek.
-// Rows from an older cloud-storage build hold an absolute URL — redirect
-// those too.
+// Plays a stem. Stems with a public URL (a public Blob store, R2, rows from
+// older builds) redirect there, so the audio streams from the CDN rather
+// than through this server. A private Blob store's stems are proxied here
+// in slices; local-disk stems are streamed with Range support.
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -20,5 +19,8 @@ export async function GET(
   }
   const remote = publicUrl(stem.file_url);
   if (remote) return Response.redirect(remote, 302);
+  if (servesThroughApp(stem.file_url)) {
+    return serveBlobRange(stem.file_url, req.headers.get("range"));
+  }
   return serveStorageFile(stem.file_url, req.headers.get("range"));
 }

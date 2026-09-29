@@ -98,10 +98,14 @@ git push -u origin main
 
 ### 4. Add stem storage (Vercel Blob)
 
-1. **Storage** tab → **Create Database** → **Blob**. Name it `stems`, and set
-   access to **Public** so the Studio can stream the stems.
-2. **Connect** it to the project. Vercel adds `BLOB_READ_WRITE_TOKEN`; the
-   app sees it and stores stems there automatically.
+1. **Storage** tab → **Create Database** → **Blob**. Name it `stems`.
+   Either access mode works. **Public** is a little more efficient, because
+   players stream straight from Blob's CDN. With **Private**, the app
+   streams stems itself, 4 MB at a time, and nobody can fetch them without
+   going through the app.
+2. **Connect** it to the project, with Production, Preview and Development
+   ticked. Vercel adds `BLOB_READ_WRITE_TOKEN`; the app sees it, works out
+   whether the store is public or private, and stores stems there.
 
 ### 5. Redeploy and finish
 

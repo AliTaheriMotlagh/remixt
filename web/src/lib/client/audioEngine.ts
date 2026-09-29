@@ -3,6 +3,7 @@
 import { createLaneChain, createMasterChain, scheduleLane, type LaneChain } from "./audioGraph";
 import { renderPitchTempo } from "./pitchTempo";
 import { previewPlayer } from "./previewPlayer";
+import { fetchStem } from "./stemFetch";
 import { beatLength, getAudibleLaneIds, useStudioStore } from "./studioStore";
 
 type LoadedLane = {
@@ -43,8 +44,7 @@ class AudioEngine {
     const ctx = this.getContext();
     const { projectBpm } = useStudioStore.getState();
 
-    const promise = fetch(`/api/audio/stem/${stemId}`)
-      .then((res) => res.arrayBuffer())
+    const promise = fetchStem(stemId)
       .then((arrayBuffer) => ctx.decodeAudioData(arrayBuffer))
       .then((buffer) => {
         const lane = useStudioStore.getState().lanes.find((l) => l.laneId === laneId);

@@ -205,7 +205,13 @@ export type UploadStage =
 
 type UploadTarget =
   | { type: "put"; url: string; headers: Record<string, string> }
-  | { type: "blob"; pathname: string; token: string; contentType: string };
+  | {
+      type: "blob";
+      pathname: string;
+      token: string;
+      contentType: string;
+      access: "public" | "private";
+    };
 
 /** Uploads one stem wherever the server said to (see lib/storage.ts). */
 async function upload(target: UploadTarget, body: Uint8Array, onProgress: (loaded: number) => void) {
@@ -214,7 +220,7 @@ async function upload(target: UploadTarget, body: Uint8Array, onProgress: (loade
     // the server scoped to exactly this file.
     const { put } = await import("@vercel/blob/client");
     await put(target.pathname, new Blob([body as BlobPart], { type: target.contentType }), {
-      access: "public",
+      access: target.access,
       token: target.token,
       contentType: target.contentType,
       // Bigger stems go up in parallel parts that retry on their own —
