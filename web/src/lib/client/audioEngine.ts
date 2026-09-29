@@ -30,11 +30,49 @@ class AudioEngine {
 
   private getContext(): AudioContext {
     if (!this.ctx) {
-      this.ctx = new AudioContext();
-      this.master = createMasterChain(this.ctx, this.ctx.destination);
+      const ctx = new AudioContext();
+      this.ctx = ctx;
+      this.master = createMasterChain(ctx, ctx.destination);
       this.master.gain.gain.value = useStudioStore.getState().masterVolume;
+      // iOS stops the audio clock when the page is backgrounded, a call
+      // comes in or another app takes the audio (state "interrupted" or
+      // "suspended"). Pause the transport at that point so the playhead
+      // and the play button reflect what's actually heard; the next tap
+      // on play resumes from there.
+      ctx.addEventListener("statechange", () => {
+        if (ctx.state !== "running" && useStudioStore.getState().isPlaying) this.pause();
+      });
     }
     return this.ctx;
+  }
+
+  /**
+   * Mobile Safari only lets audio start from inside a tap, so this must
+   * run synchronously in the gesture, before anything is awaited.
+   */
+  private unlock(ctx: AudioContext) {
+    // Web Audio on iOS follows the ringer switch unless the page asks for
+    // media playback, which is why the mix could be silent while library
+    // previews (an <audio> element) were not. Safari 16.4+.
+    const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+    if (session && session.type !== "playback") session.type = "playback";
+
+    // Besides "suspended", iOS has a non-standard "interrupted" state
+    // that also needs resuming.
+    const resumed = ctx.state === "running" ? Promise.resolve() : ctx.resume();
+
+    // Older iOS only fully unlocks once a sound starts within the gesture.
+    const silence = ctx.createBufferSource();
+    silence.buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
+    silence.connect(ctx.destination);
+    silence.start();
+
+    // resume() can stay pending while iOS keeps the session interrupted;
+    // don't leave the play button spinning on it forever.
+    return Promise.race([
+      resumed.catch(() => {}),
+      new Promise<void>((resolve) => setTimeout(resolve, 1000)),
+    ]);
   }
 
   async ensureLane(laneId: string, stemId: string) {
@@ -184,12 +222,13 @@ class AudioEngine {
   }
 
   async play() {
-    const ctx = this.getContext();
-    if (ctx.state === "suspended") await ctx.resume();
-
     // Only one thing plays at a time: starting the transport stops any
-    // library preview that's still running.
+    // library preview that's still running. Done before resuming, since on
+    // iOS a playing <audio> element can hold the context interrupted.
     previewPlayer.stop();
+
+    const ctx = this.getContext();
+    await this.unlock(ctx);
 
     const state = useStudioStore.getState();
     const { lanes } = state;

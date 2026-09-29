@@ -84,6 +84,7 @@ export default function StudioTransport({
   const canUndo = useStudioHistory((h) => h.past.length > 0);
   const canRedo = useStudioHistory((h) => h.future.length > 0);
   const [starting, setStarting] = useState(false);
+  const [playError, setPlayError] = useState<string | null>(null);
   const [showSave, setShowSave] = useState(false);
   const [title, setTitle] = useState(defaultTitle ?? "");
   const [publish, setPublish] = useState(true);
@@ -105,8 +106,13 @@ export default function StudioTransport({
     // Play waits for any lane still loading or re-rendering its
     // pitch/tempo; say so rather than look like the click did nothing.
     setStarting(true);
+    setPlayError(null);
     try {
       await audioEngine.play();
+    } catch {
+      // Usually a stem that didn't download — easy on a flaky mobile
+      // connection. Tapping play again retries it.
+      setPlayError("Couldn't load the audio. Check your connection and tap play again.");
     } finally {
       setStarting(false);
     }
@@ -175,7 +181,7 @@ export default function StudioTransport({
         <button
           onClick={handlePlayPause}
           disabled={empty}
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand text-lg text-white transition-transform hover:scale-105 disabled:opacity-40 disabled:hover:scale-100"
+          className="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-full bg-brand text-lg text-white transition-transform hover:scale-105 disabled:opacity-40 disabled:hover:scale-100"
           title={starting ? "Preparing the audio…" : isPlaying ? "Pause (space)" : "Play (space)"}
           aria-busy={starting}
         >
@@ -304,6 +310,10 @@ export default function StudioTransport({
           {remixId ? "Save as new remix" : "Save remix"}
         </button>
       </div>
+
+      {playError && (
+        <p className="border-t border-border px-4 py-2 text-sm text-danger">{playError}</p>
+      )}
 
       {exportError && (
         <p className="border-t border-border px-4 py-2 text-sm text-danger">{exportError}</p>
