@@ -1,5 +1,7 @@
 import { cache } from "react";
 import sql from "./db";
+import type { StemKind } from "./stemKinds";
+import { ensureSchema } from "./schema";
 
 export type TrackRow = {
   id: string;
@@ -12,18 +14,21 @@ export type TrackRow = {
   bpm: number | null;
   original_url: string;
   created_at: Date;
+  /** Added by lib/schema.ts; missing on a database that predates it. */
+  tags?: string[];
 };
 
 export type StemRow = {
   id: string;
   track_id: string;
-  kind: "vocals" | "beat";
+  kind: StemKind;
   file_url: string;
   peaks_json: string;
 };
 
 export type StemWithTrack = StemRow & {
   track_title: string;
+  track_tags: string[];
   track_duration: number | null;
   track_bpm: number | null;
   artist_name: string;
@@ -57,10 +62,11 @@ export async function getStemsByTrack(trackId: string): Promise<StemRow[]> {
 }
 
 export async function getStemsByKindWithArtist(
-  kind: "vocals" | "beat"
+  kind: StemKind
 ): Promise<StemWithTrack[]> {
+  await ensureSchema();
   return sql<StemWithTrack[]>`
-    SELECT stems.*, tracks.title as track_title, tracks.duration as track_duration,
+    SELECT stems.*, tracks.title as track_title, tracks.tags as track_tags, tracks.duration as track_duration,
            tracks.bpm as track_bpm, users.artist_name, users.id as artist_id
     FROM stems
     JOIN tracks ON tracks.id = stems.track_id
@@ -70,9 +76,23 @@ export async function getStemsByKindWithArtist(
   `;
 }
 
+/** Every stem of every ready song, for the Library. */
+export async function getLibraryStems(): Promise<StemWithTrack[]> {
+  await ensureSchema();
+  return sql<StemWithTrack[]>`
+    SELECT stems.*, tracks.title as track_title, tracks.tags as track_tags, tracks.duration as track_duration,
+           tracks.bpm as track_bpm, users.artist_name, users.id as artist_id
+    FROM stems
+    JOIN tracks ON tracks.id = stems.track_id
+    JOIN users ON users.id = tracks.owner_id
+    WHERE tracks.status = 'ready'
+    ORDER BY tracks.created_at DESC
+  `;
+}
+
 export async function getStemById(id: string): Promise<StemWithTrack | undefined> {
   const rows = await sql<StemWithTrack[]>`
-    SELECT stems.*, tracks.title as track_title, tracks.duration as track_duration,
+    SELECT stems.*, tracks.title as track_title, '{}'::text[] as track_tags, tracks.duration as track_duration,
            tracks.bpm as track_bpm, users.artist_name, users.id as artist_id
     FROM stems
     JOIN tracks ON tracks.id = stems.track_id

@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useStudioStore } from "@/lib/client/studioStore";
+import { shortPath } from "@/lib/shareLinks";
+import ShareMenu from "./ShareMenu";
 import type { RemixStats } from "@/lib/models";
 
 /** Seconds of listening before a play counts. */
@@ -37,6 +39,7 @@ export default function RemixStatsBar({
   const [stats, setStats] = useState(initial);
   const [liking, setLiking] = useState(false);
   const [shared, setShared] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const isPlaying = useStudioStore((s) => s.isPlaying);
   const router = useRouter();
 
@@ -81,7 +84,7 @@ export default function RemixStatsBar({
   }
 
   async function share() {
-    const url = window.location.href;
+    const url = `${window.location.origin}${shortPath(remixId)}`;
     // The phone's own share sheet where there is one, else copy the link.
     if (navigator.share) {
       try {
@@ -123,12 +126,23 @@ export default function RemixStatsBar({
         <span className={stats.liked ? "text-vocals" : ""}>{stats.liked ? "♥" : "♡"}</span>
         <span className="tabular-nums">{formatCount(stats.likes)}</span>
       </button>
-      <button
-        onClick={share}
-        className="flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-muted transition-colors hover:text-foreground"
-      >
-        ↗ Share
-      </button>
+      <span className="relative flex">
+        <button
+          onClick={share}
+          className="flex items-center gap-1.5 rounded-l-full border border-border px-3 py-1.5 text-muted transition-colors hover:text-foreground"
+        >
+          ↗ Share
+        </button>
+        <button
+          onClick={() => setMenuOpen((v) => !v)}
+          aria-expanded={menuOpen}
+          className="rounded-r-full border border-l-0 border-border px-2.5 py-1.5 text-muted transition-colors hover:text-foreground"
+          title="Short link, QR code and embed code"
+        >
+          ⋯
+        </button>
+        {menuOpen && <ShareMenu remixId={remixId} title={title} onClose={() => setMenuOpen(false)} />}
+      </span>
       {shared && <span className="text-xs text-success">{shared}</span>}
     </div>
   );

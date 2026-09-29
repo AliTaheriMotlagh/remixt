@@ -11,7 +11,7 @@ import { CONSTANTS } from "demucs-web/constants";
 import { prepareModelInput, standaloneIspec, standaloneMask } from "demucs-web/processor";
 import { createMp3Encoder } from "wasm-media-encoders";
 import { estimateTempoDecimated, tempoDecimation } from "./analysis";
-import type { SplitterRequest, SplitterResponse, StemBitrate } from "./splitterProtocol";
+import type { SplitOutput, SplitResult, SplitterRequest, SplitterResponse, StemBitrate } from "./splitterProtocol";
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -276,19 +276,27 @@ async function streamingMp3(sampleRate: number, bitrate: StemBitrate) {
 }
 
 const { TRAINING_SAMPLES, MODEL_SPEC_BINS, MODEL_SPEC_FRAMES, SEGMENT_OVERLAP } = CONSTANTS;
-/** demucs-web's track order. Everything but the voice is the beat. */
-const VOCALS = CONSTANTS.TRACKS.indexOf("vocals");
+/** demucs-web's track order: drums, bass, other, vocals. Everything but the voice is the beat. */
+const TRACKS = CONSTANTS.TRACKS as readonly string[];
+
+type Stereo = { left: Float32Array; right: Float32Array };
+
+function stereo(samples: number): Stereo {
+  return { left: new Float32Array(samples), right: new Float32Array(samples) };
+}
 
 /**
  * Runs the model over one ~7.8 s segment, the way demucs-web's `separate`
  * does: the time-domain and spectrogram branches' outputs, summed. Returns
- * the vocals and the beat (the other three stems added together).
+ * the vocals, the beat (the other three stems added together) and, when
+ * `parts` is set, those three on their own too.
  */
 async function separateSegment(
   session: NonNullable<DemucsProcessor["session"]>,
   ort: { Tensor: new (type: string, data: Float32Array, dims: number[]) => unknown },
   segLeft: Float32Array,
-  segRight: Float32Array
+  segRight: Float32Array,
+  outputs: readonly SplitOutput[]
 ) {
   const input = prepareModelInput(segLeft, segRight);
   const feeds: Record<string, unknown> = {
@@ -315,19 +323,25 @@ async function separateSegment(
 
   const [, tracks, channels, samples] = time.dims;
   const specs = freq ? standaloneMask(freq) : null;
-  const vocals = { left: new Float32Array(samples), right: new Float32Array(samples) };
-  const beat = { left: new Float32Array(samples), right: new Float32Array(samples) };
+  const out = Object.fromEntries(outputs.map((o) => [o, stereo(samples)])) as Record<SplitOutput, Stereo>;
   for (let t = 0; t < tracks; t++) {
-    const out = t === VOCALS ? vocals : beat;
+    const name = TRACKS[t] as SplitOutput;
+    // Every track lands in its own output (if kept) and, unless it's the
+    // voice, in the beat as well.
+    const targets = [out[name], name === "vocals" ? undefined : out.beat].filter(Boolean) as Stereo[];
     const fromFreq = specs ? standaloneIspec(specs[t], TRAINING_SAMPLES) : null;
     const leftBase = (t * channels + 0) * samples;
     const rightBase = (t * channels + 1) * samples;
     for (let i = 0; i < samples; i++) {
-      out.left[i] += time.data[leftBase + i] + (fromFreq?.left[i] || 0);
-      out.right[i] += time.data[rightBase + i] + (fromFreq?.right[i] || 0);
+      const l = time.data[leftBase + i] + (fromFreq?.left[i] || 0);
+      const r = time.data[rightBase + i] + (fromFreq?.right[i] || 0);
+      for (const target of targets) {
+        target.left[i] += l;
+        target.right[i] += r;
+      }
     }
   }
-  return { vocals, beat };
+  return out;
 }
 
 /**
@@ -339,10 +353,11 @@ async function separateSegment(
  * only ever holds one segment's worth.
  */
 async function split(request: Extract<SplitterRequest, { type: "split" }>) {
-  const { jobId, left, right, sampleRate, bitrate } = request;
+  const { jobId, left, right, sampleRate, bitrate, parts } = request;
   const session = processor?.session;
   if (!session) throw new Error("The splitter isn't loaded yet");
   const ort = (processor as unknown as { ort: Parameters<typeof separateSegment>[1] }).ort;
+  const outputs: SplitOutput[] = parts ? ["vocals", "beat", "drums", "bass", "other"] : ["vocals", "beat"];
 
   const total = left.length;
   const stride = Math.floor(TRAINING_SAMPLES * (1 - SEGMENT_OVERLAP));
@@ -350,18 +365,15 @@ async function split(request: Extract<SplitterRequest, { type: "split" }>) {
 
   // Output that isn't final yet, from the current segment's start on: the
   // running cross-faded sums and the fade weights they get divided by.
-  const pending = {
-    vocalsLeft: new Float32Array(TRAINING_SAMPLES),
-    vocalsRight: new Float32Array(TRAINING_SAMPLES),
-    beatLeft: new Float32Array(TRAINING_SAMPLES),
-    beatRight: new Float32Array(TRAINING_SAMPLES),
-    weights: new Float32Array(TRAINING_SAMPLES),
-  };
+  const pending = Object.fromEntries(outputs.map((o) => [o, stereo(TRAINING_SAMPLES)])) as Record<SplitOutput, Stereo>;
+  const weights = new Float32Array(TRAINING_SAMPLES);
 
-  const vocalsMp3 = await streamingMp3(sampleRate, bitrate);
-  const beatMp3 = await streamingMp3(sampleRate, bitrate);
-  const vocalsPeaks = new PeakMeter(total);
-  const beatPeaks = new PeakMeter(total);
+  const encoders = {} as Record<SplitOutput, Awaited<ReturnType<typeof streamingMp3>>>;
+  const meters = {} as Record<SplitOutput, PeakMeter>;
+  for (const o of outputs) {
+    encoders[o] = await streamingMp3(sampleRate, bitrate);
+    meters[o] = new PeakMeter(total);
+  }
   const factor = tempoDecimation(sampleRate);
   const tempo = new Float32Array(Math.floor(total / factor));
   let tempoSum = 0;
@@ -370,37 +382,34 @@ async function split(request: Extract<SplitterRequest, { type: "split" }>) {
 
   /** Passes on the first `count` pending samples, which are final. */
   const flush = (count: number) => {
-    const w = pending.weights;
-    const out = {
-      vocalsLeft: new Float32Array(count),
-      vocalsRight: new Float32Array(count),
-      beatLeft: new Float32Array(count),
-      beatRight: new Float32Array(count),
-    };
-    for (let i = 0; i < count; i++) {
-      const weight = w[i] > 0 ? w[i] : 1;
-      out.vocalsLeft[i] = pending.vocalsLeft[i] / weight;
-      out.vocalsRight[i] = pending.vocalsRight[i] / weight;
-      out.beatLeft[i] = pending.beatLeft[i] / weight;
-      out.beatRight[i] = pending.beatRight[i] / weight;
-
-      tempoSum += (out.beatLeft[i] + out.beatRight[i]) / 2;
-      if (++tempoCount === factor) {
-        if (tempoLength < tempo.length) tempo[tempoLength++] = tempoSum / factor;
-        tempoSum = 0;
-        tempoCount = 0;
+    for (const o of outputs) {
+      const out = stereo(count);
+      const buffer = pending[o];
+      for (let i = 0; i < count; i++) {
+        const weight = weights[i] > 0 ? weights[i] : 1;
+        out.left[i] = buffer.left[i] / weight;
+        out.right[i] = buffer.right[i] / weight;
+      }
+      if (o === "beat") {
+        for (let i = 0; i < count; i++) {
+          tempoSum += (out.left[i] + out.right[i]) / 2;
+          if (++tempoCount === factor) {
+            if (tempoLength < tempo.length) tempo[tempoLength++] = tempoSum / factor;
+            tempoSum = 0;
+            tempoCount = 0;
+          }
+        }
+      }
+      encoders[o].add(out.left, out.right);
+      meters[o].add(out.left, out.right);
+      // Slide the window along.
+      for (const channel of [buffer.left, buffer.right]) {
+        channel.copyWithin(0, count);
+        channel.fill(0, channel.length - count);
       }
     }
-    vocalsMp3.add(out.vocalsLeft, out.vocalsRight);
-    beatMp3.add(out.beatLeft, out.beatRight);
-    vocalsPeaks.add(out.vocalsLeft, out.vocalsRight);
-    beatPeaks.add(out.beatLeft, out.beatRight);
-
-    // Slide the window along.
-    for (const buffer of Object.values(pending)) {
-      buffer.copyWithin(0, count);
-      buffer.fill(0, buffer.length - count);
-    }
+    weights.copyWithin(0, count);
+    weights.fill(0, weights.length - count);
   };
 
   const segLeft = new Float32Array(TRAINING_SAMPLES);
@@ -413,16 +422,16 @@ async function split(request: Extract<SplitterRequest, { type: "split" }>) {
     segLeft.set(left.subarray(start, start + length));
     segRight.set(right.subarray(start, start + length));
 
-    const { vocals, beat } = await separateSegment(session, ort, segLeft, segRight);
+    const separated = await separateSegment(session, ort, segLeft, segRight, outputs);
 
     const fade = stride * 0.5;
     for (let i = 0; i < length; i++) {
       const weight = Math.min(Math.min(i / fade, 1), Math.min((length - i) / fade, 1));
-      pending.vocalsLeft[i] += vocals.left[i] * weight;
-      pending.vocalsRight[i] += vocals.right[i] * weight;
-      pending.beatLeft[i] += beat.left[i] * weight;
-      pending.beatRight[i] += beat.right[i] * weight;
-      pending.weights[i] += weight;
+      for (const o of outputs) {
+        pending[o].left[i] += separated[o].left[i] * weight;
+        pending[o].right[i] += separated[o].right[i] * weight;
+      }
+      weights[i] += weight;
     }
 
     // The next segment starts `stride` further on, so everything before
@@ -435,20 +444,22 @@ async function split(request: Extract<SplitterRequest, { type: "split" }>) {
   }
 
   post({ type: "progress", jobId, stage: "encoding", value: 1 });
-  const vocalsBytes = vocalsMp3.finish();
-  const beatBytes = beatMp3.finish();
+  const mp3 = {} as SplitResult["mp3"];
+  const peaks = {} as SplitResult["peaks"];
+  for (const o of outputs) {
+    mp3[o] = encoders[o].finish();
+    peaks[o] = meters[o].result();
+  }
 
   post(
     {
       type: "result",
       jobId,
-      vocalsMp3: vocalsBytes,
-      beatMp3: beatBytes,
-      vocalsPeaks: vocalsPeaks.result(),
-      beatPeaks: beatPeaks.result(),
+      mp3,
+      peaks,
       bpm: estimateTempoDecimated(tempo.subarray(0, tempoLength), sampleRate / factor),
     },
-    [vocalsBytes.buffer, beatBytes.buffer]
+    Object.values(mp3).map((bytes) => bytes!.buffer)
   );
 }
 

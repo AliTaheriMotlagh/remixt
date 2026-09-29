@@ -1,6 +1,7 @@
 "use client";
 
 import { refineTempo, type StemAnalysis } from "./analysis";
+import { isBacking } from "@/lib/stemKinds";
 import {
   beatStructure,
   hearVocal,
@@ -146,7 +147,7 @@ export async function preparePair(vocalLaneId: string, beatLaneId: string): Prom
   const vocalLane = lanes.find((l) => l.laneId === vocalLaneId);
   const beatLane = lanes.find((l) => l.laneId === beatLaneId);
   if (!vocalLane || !beatLane) throw new Error("One of those lanes doesn't exist.");
-  if (vocalLane.kind !== "vocals" || beatLane.kind !== "beat") throw new Error("Give one vocal lane and one beat lane.");
+  if (vocalLane.kind !== "vocals" || !isBacking(beatLane.kind)) throw new Error("Give one vocal lane and one beat lane.");
 
   const [vocalAnalysis, beatAnalysis, guide] = await Promise.all([
     analyzeLane(vocalLane),

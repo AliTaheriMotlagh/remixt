@@ -5,6 +5,9 @@ import { getCurrentUser } from "@/lib/auth";
 import sql from "@/lib/db";
 import { getTracksByOwner, getStemsByTrack } from "@/lib/models";
 import { createUploadTarget, storageProblem } from "@/lib/storage";
+import { ensureSchema } from "@/lib/schema";
+import { normaliseTags } from "@/lib/tags";
+import { STEM_KINDS, type StemKind } from "@/lib/stemKinds";
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -29,7 +32,19 @@ const createSchema = z.object({
   duration: z.number().positive().max(20 * 60),
   bpm: z.number().min(20).max(300).nullable(),
   vocalsPeaks: peaksSchema,
-  beatPeaks: peaksSchema,
+  /** Missing for a vocal recorded in the Studio, which has no beat. */
+  beatPeaks: peaksSchema.optional(),
+  /** A vocal recorded in the Studio rather than a song split into stems. */
+  recording: z.boolean().default(false),
+  /** The beat's drums, bass and other parts, when the browser split them out too. */
+  partPeaks: z
+    .object({ drums: peaksSchema.optional(), bass: peaksSchema.optional(), other: peaksSchema.optional() })
+    .default({}),
+  tags: z.array(z.string().max(40)).max(20).default([]),
+  // The uploader's statement that they're allowed to share this song.
+  rightsConfirmed: z.literal(true, {
+    error: "Confirm you have the right to upload this song",
+  }),
 });
 
 // Songs are split in the browser (see lib/client/separator.ts), so a track
@@ -52,30 +67,38 @@ export async function POST(req: NextRequest) {
     );
   }
   const { title, filename, duration, bpm, vocalsPeaks, beatPeaks } = parsed.data;
+  await ensureSchema();
+  const tags = normaliseTags(parsed.data.tags);
 
   const trackId = randomUUID();
-  const keys = {
-    vocals: `stems/${trackId}/vocals.mp3`,
-    beat: `stems/${trackId}/beat.mp3`,
-  };
+  if (!parsed.data.recording && !beatPeaks) {
+    return NextResponse.json({ error: "A split song needs its beat" }, { status: 400 });
+  }
+  const peaks: Partial<Record<StemKind, number[]>> = parsed.data.recording
+    ? { vocals: vocalsPeaks }
+    : { vocals: vocalsPeaks, beat: beatPeaks, ...parsed.data.partPeaks };
+  const kinds = STEM_KINDS.filter((kind) => peaks[kind]);
 
   await sql.begin(async (tx) => {
     // original_url stays empty: the original never leaves the browser.
     await tx`
-      INSERT INTO tracks (id, owner_id, title, original_filename, status, duration, bpm, original_url)
-      VALUES (${trackId}, ${user.id}, ${title}, ${filename}, 'processing', ${duration}, ${bpm}, '')
+      INSERT INTO tracks (id, owner_id, title, original_filename, status, duration, bpm, original_url,
+                          tags, rights_confirmed_at)
+      VALUES (${trackId}, ${user.id}, ${title}, ${filename}, 'processing', ${duration}, ${bpm}, '',
+              ${tags}, now())
     `;
-    await tx`
-      INSERT INTO stems (id, track_id, kind, file_url, peaks_json) VALUES
-        (${randomUUID()}, ${trackId}, 'vocals', ${keys.vocals}, ${JSON.stringify(vocalsPeaks)}),
-        (${randomUUID()}, ${trackId}, 'beat', ${keys.beat}, ${JSON.stringify(beatPeaks)})
-    `;
+    for (const kind of kinds) {
+      await tx`
+        INSERT INTO stems (id, track_id, kind, file_url, peaks_json)
+        VALUES (${randomUUID()}, ${trackId}, ${kind}, ${`stems/${trackId}/${kind}.mp3`}, ${JSON.stringify(peaks[kind])})
+      `;
+    }
   });
 
-  const [vocals, beat] = await Promise.all([
-    createUploadTarget(keys.vocals, `/api/tracks/${trackId}/stems/vocals`),
-    createUploadTarget(keys.beat, `/api/tracks/${trackId}/stems/beat`),
-  ]);
+  const targets = await Promise.all(
+    kinds.map((kind) => createUploadTarget(`stems/${trackId}/${kind}.mp3`, `/api/tracks/${trackId}/stems/${kind}`))
+  );
+  const uploads = Object.fromEntries(kinds.map((kind, i) => [kind, targets[i]]));
 
-  return NextResponse.json({ id: trackId, uploads: { vocals, beat } });
+  return NextResponse.json({ id: trackId, uploads });
 }

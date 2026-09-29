@@ -1,8 +1,12 @@
 "use client";
 
 import { isMusicalKey, type MusicalKey } from "./musicKey";
+import type { StemKind } from "@/lib/stemKinds";
 import {
   DEFAULT_FX,
+  PROJECT_DEFAULTS,
+  type AutoPoint,
+  type LaneAutomation,
   type LaneClip,
   type LaneFx,
   type ProjectSettings,
@@ -11,7 +15,7 @@ import {
 
 export type RemixLaneApi = {
   stem_id: string;
-  kind: "vocals" | "beat";
+  kind: StemKind;
   peaks_json: string;
   volume: number;
   muted: boolean;
@@ -37,7 +41,23 @@ type LaneSettings = {
   bpm?: number | null;
   key?: MusicalKey | null;
   clips?: LaneClip[] | null;
+  xfade?: "a" | "b" | null;
+  automation?: LaneAutomation;
 };
+
+function isPointList(value: unknown): value is AutoPoint[] {
+  return (
+    Array.isArray(value) &&
+    value.every((p) => p && typeof p.t === "number" && typeof p.v === "number" && p.v >= 0 && p.v <= 1)
+  );
+}
+
+function automationFrom(value: LaneAutomation | undefined): LaneAutomation {
+  const out: LaneAutomation = {};
+  if (isPointList(value?.volume) && value.volume.length) out.volume = value.volume;
+  if (isPointList(value?.filter) && value.filter.length) out.filter = value.filter;
+  return out;
+}
 
 function isClipList(value: unknown): value is LaneClip[] {
   return (
@@ -50,7 +70,8 @@ function isClipList(value: unknown): value is LaneClip[] {
         typeof c.to === "number" &&
         typeof c.at === "number" &&
         c.to > c.from &&
-        (c.stretch === undefined || (typeof c.stretch === "number" && c.stretch >= 0.5 && c.stretch <= 2))
+        (c.stretch === undefined || (typeof c.stretch === "number" && c.stretch >= 0.25 && c.stretch <= 4)) &&
+        (c.reverse === undefined || typeof c.reverse === "boolean")
     )
   );
 }
@@ -88,11 +109,31 @@ export function laneFromApi(lane: RemixLaneApi): StudioLane {
     tempoRatio,
     fx: { ...DEFAULT_FX, ...(settings.fx ?? {}) },
     clips: isClipList(settings.clips) ? settings.clips : null,
+    xfade: settings.xfade === "a" || settings.xfade === "b" ? settings.xfade : null,
+    automation: automationFrom(settings.automation),
   };
 }
 
 export function projectFromApi(remix: RemixApi | undefined): Partial<ProjectSettings> {
-  return parseJson<Partial<ProjectSettings>>(remix?.project_json, {});
+  const project = parseJson<Partial<ProjectSettings>>(remix?.project_json, {});
+  return {
+    ...project,
+    markers: Array.isArray(project.markers) ? project.markers : PROJECT_DEFAULTS.markers,
+    pads: Array.isArray(project.pads) ? project.pads : PROJECT_DEFAULTS.pads,
+    crossfader: typeof project.crossfader === "number" ? project.crossfader : PROJECT_DEFAULTS.crossfader,
+  };
+}
+
+const round = (n: number, places: number) => Math.round(n * 10 ** places) / 10 ** places;
+
+/** Serialises the project-level settings for POST /api/remixes. */
+export function projectToPayload(state: ProjectSettings): ProjectSettings {
+  const { projectBpm, masterVolume, loopEnabled, loopStart, loopEnd, markers, crossfader, pads } = state;
+  return { projectBpm, masterVolume, loopEnabled, loopStart, loopEnd, markers, crossfader, pads };
+}
+
+function pointsToPayload(points: AutoPoint[] | undefined) {
+  return points?.map((p) => ({ t: round(p.t, 3), v: round(p.v, 3) }));
 }
 
 const ms = (seconds: number) => Math.round(seconds * 1000) / 1000;
@@ -117,7 +158,13 @@ export function lanesToPayload(lanes: StudioLane[]) {
           to: ms(c.to),
           at: ms(c.at),
           ...(c.stretch && c.stretch !== 1 ? { stretch: Math.round(c.stretch * 10000) / 10000 } : {}),
+          ...(c.reverse ? { reverse: true } : {}),
         })) ?? null,
+      xfade: lane.xfade,
+      automation: {
+        ...(lane.automation.volume?.length ? { volume: pointsToPayload(lane.automation.volume) } : {}),
+        ...(lane.automation.filter?.length ? { filter: pointsToPayload(lane.automation.filter) } : {}),
+      },
     },
   }));
 }

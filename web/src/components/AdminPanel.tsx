@@ -51,7 +51,21 @@ type AdminRemix = {
   email: string;
 };
 
-type Tab = "users" | "songs" | "remixes" | "cleanup";
+type AdminReport = {
+  id: string;
+  kind: "remix" | "comment" | "track" | "takedown";
+  target_id: string | null;
+  reason: string;
+  details: string;
+  status: "open" | "resolved" | "dismissed";
+  created_at: string;
+  reporter_name: string | null;
+  reporter_email: string | null;
+  target_label: string | null;
+  target_href: string | null;
+};
+
+type Tab = "reports" | "users" | "songs" | "remixes" | "challenges" | "cleanup";
 
 function formatDate(value: string) {
   return new Date(value).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
@@ -84,7 +98,7 @@ function useList<T>(url: string, key: string, q: string) {
 }
 
 export default function AdminPanel({ adminId }: { adminId: string }) {
-  const [tab, setTab] = useState<Tab>("users");
+  const [tab, setTab] = useState<Tab>("reports");
   const [overview, setOverview] = useState<Overview | null>(null);
   const [overviewVersion, setOverviewVersion] = useState(0);
   const refreshOverview = useCallback(() => setOverviewVersion((v) => v + 1), []);
@@ -101,9 +115,11 @@ export default function AdminPanel({ adminId }: { adminId: string }) {
   }, [overviewVersion]);
 
   const tabs: { id: Tab; label: string }[] = [
+    { id: "reports", label: "Reports" },
     { id: "users", label: "Users" },
     { id: "songs", label: "Songs" },
     { id: "remixes", label: "Remixes" },
+    { id: "challenges", label: "Challenges" },
     { id: "cleanup", label: "Clean up" },
   ];
 
@@ -139,9 +155,11 @@ export default function AdminPanel({ adminId }: { adminId: string }) {
       </div>
 
       <div className="mt-4">
+        {tab === "reports" && <ReportsTab onChange={refreshOverview} />}
         {tab === "users" && <UsersTab adminId={adminId} onChange={refreshOverview} />}
         {tab === "songs" && <SongsTab onChange={refreshOverview} />}
         {tab === "remixes" && <RemixesTab onChange={refreshOverview} />}
+        {tab === "challenges" && <ChallengesTab />}
         {tab === "cleanup" && <CleanupTab onChange={refreshOverview} />}
       </div>
     </div>
@@ -377,6 +395,238 @@ function RemixesTab({ onChange }: { onChange: () => void }) {
                 Delete
               </button>
             </div>
+          </Row>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const REPORT_LABELS: Record<string, string> = {
+  spam: "Spam",
+  abuse: "Harassment / hate",
+  explicit: "Sexual / violent",
+  copyright: "Copyright",
+  other: "Other",
+};
+
+function ReportsTab({ onChange }: { onChange: () => void }) {
+  const [status, setStatus] = useState<"open" | "all">("open");
+  const { items, reload } = useList<AdminReport>(`/api/admin/reports?status=${status}`, "reports", "");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function close(report: AdminReport, action: "resolve" | "dismiss" | "remove") {
+    if (
+      action === "remove" &&
+      !confirm(
+        report.kind === "comment"
+          ? "Delete this comment?"
+          : `Delete “${report.target_label ?? "this"}”? A song is removed with its stems and every remix lane using them. This can't be undone.`
+      )
+    ) {
+      return;
+    }
+    setBusy(report.id);
+    setError(
+      await send(`/api/admin/reports/${report.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      })
+    );
+    setBusy(null);
+    reload();
+    onChange();
+  }
+
+  return (
+    <div>
+      <div className="mb-3 flex gap-1">
+        {(["open", "all"] as const).map((s) => (
+          <button
+            key={s}
+            onClick={() => setStatus(s)}
+            className={`rounded-full px-3 py-1 text-xs ${status === s ? "bg-brand text-white" : "border border-border text-muted"}`}
+          >
+            {s === "open" ? "Open" : "All"}
+          </button>
+        ))}
+      </div>
+      {error && <p className="mb-2 text-sm text-danger">{error}</p>}
+      <Empty items={items} />
+      <div className="flex flex-col gap-2">
+        {items?.map((report) => (
+          <Row key={report.id}>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm">
+                <span className="mr-2 rounded-full bg-danger/15 px-2 py-0.5 text-[10px] font-semibold uppercase text-danger">
+                  {report.kind === "takedown" ? "Takedown" : REPORT_LABELS[report.reason] ?? report.reason}
+                </span>
+                {report.kind !== "takedown" && <span className="mr-1 text-xs text-muted">{report.kind}:</span>}
+                {report.target_href ? (
+                  <Link href={report.target_href} className="font-medium hover:underline" target="_blank">
+                    {report.target_label ?? "(open)"}
+                  </Link>
+                ) : (
+                  <span className="text-muted">{report.target_id ? "(already removed)" : "(no matching item found — check the link)"}</span>
+                )}
+                {report.status !== "open" && (
+                  <span className="ml-2 text-[10px] uppercase text-muted">{report.status}</span>
+                )}
+              </p>
+              {report.details && (
+                <p className="mt-1 whitespace-pre-wrap text-xs text-muted">{report.details}</p>
+              )}
+              <p className="mt-1 text-[11px] text-muted">
+                {report.reporter_name ?? "Signed out"}
+                {report.reporter_email ? ` · ${report.reporter_email}` : ""} · {formatDate(report.created_at)}
+              </p>
+            </div>
+            {report.status === "open" && (
+              <div className="flex shrink-0 flex-wrap gap-2">
+                {report.target_href && (
+                  <button onClick={() => close(report, "remove")} disabled={busy === report.id} className={dangerButton}>
+                    Remove it
+                  </button>
+                )}
+                <button onClick={() => close(report, "resolve")} disabled={busy === report.id} className={plainButton}>
+                  Handled
+                </button>
+                <button onClick={() => close(report, "dismiss")} disabled={busy === report.id} className={plainButton}>
+                  Dismiss
+                </button>
+              </div>
+            )}
+          </Row>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+type PickStem = { id: string; kind: string; track_title: string; artist_name: string };
+type AdminChallenge = {
+  id: string;
+  title: string;
+  status: "upcoming" | "running" | "ended";
+  starts_at: string;
+  ends_at: string;
+  entries: number;
+  vocal: PickStem | null;
+  beat: PickStem | null;
+};
+
+function localInput(date: Date) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function ChallengesTab() {
+  const { items, reload } = useList<AdminChallenge>("/api/admin/challenges", "challenges", "");
+  const [stems, setStems] = useState<PickStem[]>([]);
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [vocal, setVocal] = useState("");
+  const [beat, setBeat] = useState("");
+  const [startsAt, setStartsAt] = useState(() => localInput(new Date()));
+  const [endsAt, setEndsAt] = useState(() => localInput(new Date(Date.now() + 7 * 86_400_000)));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/stems")
+      .then((res) => res.json())
+      .then((data) => setStems(data.stems ?? []))
+      .catch(() => {});
+  }, []);
+
+  async function create(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(
+      await send("/api/admin/challenges", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          description,
+          vocalStemId: vocal,
+          beatStemId: beat,
+          startsAt: new Date(startsAt).toISOString(),
+          endsAt: new Date(endsAt).toISOString(),
+        }),
+      })
+    );
+    setBusy(false);
+    setTitle("");
+    setDescription("");
+    reload();
+  }
+
+  async function remove(challenge: AdminChallenge) {
+    if (!confirm(`Delete the challenge “${challenge.title}”? Its entries stay up as normal remixes.`)) return;
+    setError(await send(`/api/admin/challenges/${challenge.id}`, { method: "DELETE" }));
+    reload();
+  }
+
+  const label = (s: PickStem) => `${s.track_title} — ${s.artist_name}${s.kind === "vocals" ? "" : ` (${s.kind})`}`;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <form onSubmit={create} className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
+        <p className="text-sm font-semibold">New challenge</p>
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title, e.g. “Late-night flip”" className="input" required minLength={3} />
+        <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What should people go for? (optional)" rows={2} className="input" />
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="flex flex-col gap-1 text-xs text-muted">
+            Vocal
+            <select value={vocal} onChange={(e) => setVocal(e.target.value)} className="input" required>
+              <option value="">Pick a vocal…</option>
+              {stems.filter((s) => s.kind === "vocals").map((s) => (
+                <option key={s.id} value={s.id}>{label(s)}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-muted">
+            Beat
+            <select value={beat} onChange={(e) => setBeat(e.target.value)} className="input" required>
+              <option value="">Pick a beat…</option>
+              {stems.filter((s) => s.kind !== "vocals").map((s) => (
+                <option key={s.id} value={s.id}>{label(s)}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-muted">
+            Starts
+            <input type="datetime-local" value={startsAt} onChange={(e) => setStartsAt(e.target.value)} className="input" required />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-muted">
+            Ends
+            <input type="datetime-local" value={endsAt} onChange={(e) => setEndsAt(e.target.value)} className="input" required />
+          </label>
+        </div>
+        {error && <p className="text-sm text-danger">{error}</p>}
+        <button type="submit" disabled={busy} className="self-start rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+          {busy ? "Creating…" : "Create challenge"}
+        </button>
+      </form>
+
+      <Empty items={items} />
+      <div className="flex flex-col gap-2">
+        {items?.map((c) => (
+          <Row key={c.id}>
+            <div className="min-w-0">
+              <p className="truncate font-medium">
+                <Link href={`/challenges?id=${c.id}`} className="hover:underline">{c.title}</Link>
+                <span className="ml-2 rounded-full bg-surface-raised px-2 py-0.5 text-[10px] text-muted">{c.status}</span>
+              </p>
+              <p className="truncate text-xs text-muted">
+                {formatDate(c.starts_at)} → {formatDate(c.ends_at)} · {c.entries} entries ·{" "}
+                {c.vocal?.track_title ?? "(vocal removed)"} + {c.beat?.track_title ?? "(beat removed)"}
+              </p>
+            </div>
+            <button onClick={() => remove(c)} className={dangerButton}>Delete</button>
           </Row>
         ))}
       </div>

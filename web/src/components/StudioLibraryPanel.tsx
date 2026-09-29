@@ -4,10 +4,12 @@ import { useEffect, useState } from "react";
 import Waveform from "./Waveform";
 import { previewPlayer, usePreviewState } from "@/lib/client/previewPlayer";
 import { useStudioStore } from "@/lib/client/studioStore";
+import { KIND_INFO, STEM_KINDS, type StemKind } from "@/lib/stemKinds";
 
 type StemWithTrack = {
   id: string;
-  kind: "vocals" | "beat";
+  kind: StemKind;
+  track_tags?: string[] | null;
   peaks_json: string;
   track_title: string;
   track_duration: number | null;
@@ -15,15 +17,15 @@ type StemWithTrack = {
   artist_name: string;
 };
 
-type Kind = StemWithTrack["kind"];
+type Kind = StemKind;
 type ListedStem = StemWithTrack & { peaks: number[] };
 
-// Both lists, kept for the whole visit: switching tabs (or coming back to
-// the Studio) shows them at once, while a fresh copy loads behind.
-const listCache: Partial<Record<Kind, ListedStem[]>> = {};
+// The whole list, kept for the visit: coming back to the Studio shows it
+// at once, while a fresh copy loads behind.
+let listCache: ListedStem[] | null = null;
 
-async function fetchKind(kind: Kind): Promise<ListedStem[]> {
-  const res = await fetch(`/api/stems?kind=${kind}`);
+async function fetchAll(): Promise<ListedStem[]> {
+  const res = await fetch(`/api/stems`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data: { stems: StemWithTrack[] } = await res.json();
   // Parsed once here: a fresh array each render would make every
@@ -33,7 +35,7 @@ async function fetchKind(kind: Kind): Promise<ListedStem[]> {
 
 export default function StudioLibraryPanel() {
   const [tab, setTab] = useState<Kind>("vocals");
-  const [lists, setLists] = useState<Partial<Record<Kind, ListedStem[]>>>(() => ({ ...listCache }));
+  const [all, setAll] = useState<ListedStem[] | null>(() => listCache);
   const [query, setQuery] = useState("");
   const addStem = useStudioStore((s) => s.addStem);
   const lanes = useStudioStore((s) => s.lanes);
@@ -41,60 +43,53 @@ export default function StudioLibraryPanel() {
 
   useEffect(() => {
     let cancelled = false;
-    for (const kind of ["vocals", "beat"] as const) {
-      fetchKind(kind)
-        .then((stems) => {
-          listCache[kind] = stems;
-          if (!cancelled) setLists((current) => ({ ...current, [kind]: stems }));
-        })
-        .catch(() => {
-          // Keep whatever was cached; the list just isn't refreshed.
-          if (!cancelled) setLists((current) => ({ ...current, [kind]: current[kind] ?? [] }));
-        });
-    }
+    fetchAll()
+      .then((stems) => {
+        listCache = stems;
+        if (!cancelled) setAll(stems);
+      })
+      .catch(() => {
+        // Keep whatever was cached; the list just isn't refreshed.
+        if (!cancelled) setAll((current) => current ?? []);
+      });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const stems = lists[tab] ?? [];
-  const loading = lists[tab] === undefined;
+  const stems = (all ?? []).filter((s) => s.kind === tab);
+  const loading = all === null;
+  const kinds = STEM_KINDS.filter((k) => k === "vocals" || k === "beat" || all?.some((s) => s.kind === k));
 
-  const accent = tab === "vocals" ? "var(--vocals)" : "var(--beat)";
+  const accent = KIND_INFO[tab].color;
   const addedStemIds = new Set(lanes.map((l) => l.stemId));
   const filtered = stems.filter((s) => {
     const q = query.trim().toLowerCase();
     if (!q) return true;
     return (
       s.track_title.toLowerCase().includes(q) ||
-      s.artist_name.toLowerCase().includes(q)
+      s.artist_name.toLowerCase().includes(q) ||
+      (s.track_tags ?? []).some((t) => t.includes(q))
     );
   });
 
   return (
     <div className="flex h-full flex-col rounded-xl border border-border bg-surface">
       <div className="border-b border-border p-3">
-        <div className="flex rounded-lg border border-border bg-background p-1">
-          <button
-            onClick={() => setTab("vocals")}
-            className="flex-1 rounded-md px-2 py-1.5 text-xs font-semibold transition-colors"
-            style={{
-              background: tab === "vocals" ? "var(--vocals)" : "transparent",
-              color: tab === "vocals" ? "white" : "var(--muted)",
-            }}
-          >
-            Vocals
-          </button>
-          <button
-            onClick={() => setTab("beat")}
-            className="flex-1 rounded-md px-2 py-1.5 text-xs font-semibold transition-colors"
-            style={{
-              background: tab === "beat" ? "var(--beat)" : "transparent",
-              color: tab === "beat" ? "white" : "var(--muted)",
-            }}
-          >
-            Beats
-          </button>
+        <div className="scrollbar-thin flex overflow-x-auto rounded-lg border border-border bg-background p-1">
+          {kinds.map((kind) => (
+            <button
+              key={kind}
+              onClick={() => setTab(kind)}
+              className="flex-1 shrink-0 rounded-md px-2 py-1.5 text-xs font-semibold transition-colors"
+              style={{
+                background: tab === kind ? KIND_INFO[kind].color : "transparent",
+                color: tab === kind ? "white" : "var(--muted)",
+              }}
+            >
+              {KIND_INFO[kind].plural}
+            </button>
+          ))}
         </div>
         <input
           value={query}

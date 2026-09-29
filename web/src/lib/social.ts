@@ -1,5 +1,6 @@
 import sql from "./db";
 import { ensureRemixStats } from "./models";
+import { ensureSchema } from "./schema";
 
 // The social side of Remixt: following artists, commenting on remixes,
 // and the game layer on top — XP, levels, badges and leaderboards.
@@ -78,12 +79,14 @@ export type RemixComment = {
   user_id: string;
   artist_name: string;
   avatar_color: string;
+  /** Where in the song it was left, for comments pinned to a moment. */
+  at_seconds: number | null;
 };
 
 export async function getComments(remixId: string): Promise<RemixComment[]> {
-  await ensureSocialSchema();
+  await ensureSchema();
   return sql<RemixComment[]>`
-    SELECT remix_comments.id, remix_comments.body, remix_comments.created_at,
+    SELECT remix_comments.id, remix_comments.body, remix_comments.created_at, remix_comments.at_seconds,
            users.id AS user_id, users.artist_name, users.avatar_color
     FROM remix_comments JOIN users ON users.id = remix_comments.user_id
     WHERE remix_comments.remix_id = ${remixId}

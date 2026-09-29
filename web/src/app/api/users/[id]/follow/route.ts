@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import sql from "@/lib/db";
 import { getFollowState, setFollowing } from "@/lib/social";
+import { notify } from "@/lib/notifications";
 
 // Follow (POST) or unfollow (DELETE) an artist.
 async function handle(id: string, follow: boolean) {
@@ -11,6 +12,7 @@ async function handle(id: string, follow: boolean) {
   const [artist] = await sql`SELECT 1 FROM users WHERE id = ${id}`;
   if (!artist) return NextResponse.json({ error: "Not found" }, { status: 404 });
   await setFollowing(user.id, id, follow);
+  if (follow) await notify({ userId: id, actorId: user.id, type: "follow" });
   return NextResponse.json(await getFollowState(id, user.id));
 }
 

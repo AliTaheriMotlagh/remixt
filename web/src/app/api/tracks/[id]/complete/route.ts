@@ -4,8 +4,9 @@ import sql from "@/lib/db";
 import { getStemsByTrack, getTrackById } from "@/lib/models";
 import { storedObject } from "@/lib/storage";
 
-// The browser calls this once both stems are uploaded. The track only goes
-// "ready" — and into everyone's library — if both files really exist.
+// The browser calls this once every stem is uploaded (vocals and beat, and
+// on newer splits the drums, bass and other parts). The track only goes
+// "ready" — and into everyone's library — if all the files really exist.
 export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -21,7 +22,9 @@ export async function POST(
 
   const stems = await getStemsByTrack(id);
   const stored = await Promise.all(stems.map((s) => storedObject(s.file_url)));
-  if (stems.length !== 2 || stored.some((object) => !object?.size)) {
+  // Every stem made for this track must be there — two or five for a split
+  // song, one for a vocal recorded in the Studio.
+  if (stems.length === 0 || stored.some((object) => !object?.size)) {
     return NextResponse.json({ error: "The stems haven't finished uploading" }, { status: 409 });
   }
 

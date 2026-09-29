@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import { semitonesToMatch, transposeKey, type MusicalKey } from "./musicKey";
+import { isBacking, type StemKind } from "@/lib/stemKinds";
 
-export type LaneKind = "vocals" | "beat";
+export type LaneKind = StemKind;
 
 export type DelayDivision = "free" | "1/2" | "1/4" | "1/4." | "1/8" | "1/8." | "1/16";
 
@@ -26,6 +27,11 @@ export type LaneFx = {
   delayFeedback: number; // 0..0.85
   fadeIn: number; // seconds
   fadeOut: number; // seconds
+  /**
+   * Sidechain ducking, 0..1: how far this lane dips while the vocals are
+   * loud, so a beat makes room for the voice. 0 = off.
+   */
+  duck: number;
 };
 
 export const DEFAULT_FX: LaneFx = {
@@ -46,6 +52,7 @@ export const DEFAULT_FX: LaneFx = {
   delayFeedback: 0.35,
   fadeIn: 0,
   fadeOut: 0,
+  duck: 0,
 };
 
 export type StudioLane = {
@@ -74,6 +81,42 @@ export type StudioLane = {
    * Null plays the whole stem from `offsetSeconds`.
    */
   clips: LaneClip[] | null;
+  /** Which side of the crossfader this lane is on, if any (see ProjectSettings.crossfader). */
+  xfade: "a" | "b" | null;
+  /** Drawn changes over time — see LaneAutomation. */
+  automation: LaneAutomation;
+};
+
+/** One point of an automation line: a timeline position and a 0..1 value. */
+export type AutoPoint = { t: number; v: number };
+
+/**
+ * Parameters drawn over time, on the project timeline (so they stay put
+ * when the lane moves): `volume` scales the lane's level (1 = its fader),
+ * `filter` sweeps a low-pass from closed (0) to wide open (1).
+ */
+export type LaneAutomation = { volume?: AutoPoint[]; filter?: AutoPoint[] };
+export type AutomationParam = keyof LaneAutomation;
+
+/** A named stretch of the song ("chorus 0:42–1:05") to jump to, loop and export. */
+export type Marker = { id: string; label: string; start: number; end: number };
+
+/**
+ * A slice of a stem on a pad, to trigger by hand. Stored by stem (not lane)
+ * with the speed and pitch it was taken at, so it survives saving and
+ * lanes being removed.
+ */
+export type Pad = {
+  id: string;
+  stemId: string;
+  kind: LaneKind;
+  label: string;
+  /** Stem seconds. */
+  from: number;
+  to: number;
+  tempoRatio: number;
+  pitchSemitones: number;
+  reverse?: boolean;
 };
 
 /**
@@ -90,6 +133,8 @@ export type LaneClip = {
    * none). AI Match sets it so a phrase follows a beat whose tempo drifts.
    */
   stretch?: number;
+  /** Plays the clip backwards. */
+  reverse?: boolean;
 };
 
 /** How long a clip plays, in the lane's (unstretched) seconds. */
@@ -214,6 +259,14 @@ type StudioState = {
   loopEnabled: boolean;
   loopStart: number;
   loopEnd: number;
+  markers: Marker[];
+  crossfader: number;
+  pads: Pad[];
+  /** The saved remix this mix was opened from, if any — a save becomes a remix of it. */
+  sourceRemix: SourceRemix | null;
+  /** The challenge this mix is an entry for, if it was started from one. */
+  challenge: SourceRemix | null;
+  setChallenge: (challenge: SourceRemix | null) => void;
 
   addStem: (stem: LoadableStem) => string;
   removeLane: (laneId: string) => void;
@@ -253,11 +306,35 @@ type StudioState = {
   toggleMetronome: () => void;
   toggleSnap: () => void;
   setLoop: (patch: { enabled?: boolean; start?: number; end?: number }) => void;
+  addMarker: (marker: Omit<Marker, "id">) => void;
+  updateMarker: (id: string, patch: Partial<Omit<Marker, "id">>) => void;
+  removeMarker: (id: string) => void;
+  setCrossfader: (position: number) => void;
+  setLaneXfade: (laneId: string, side: "a" | "b" | null) => void;
+  /** Flips a clip backwards/forwards, or sets its own speed (1 = the lane's). */
+  setClipOptions: (laneId: string, index: number, patch: Pick<LaneClip, "reverse" | "stretch">) => void;
+  /**
+   * Beat repeat: from `timelineSeconds`, plays the `beats`-long slice that
+   * starts there `repeats` times in a row, over whatever was there.
+   * Returns whether there was audio there to repeat.
+   */
+  stutterAt: (laneId: string, timelineSeconds: number, beats: number, repeats: number) => boolean;
+  setAutomation: (laneId: string, param: AutomationParam, points: AutoPoint[] | null) => void;
+  addPad: (pad: Omit<Pad, "id">) => void;
+  updatePad: (id: string, patch: Partial<Omit<Pad, "id">>) => void;
+  removePad: (id: string) => void;
   clearLanes: () => void;
-  loadRemix: (lanes: StudioLane[], project?: Partial<ProjectSettings>) => void;
+  loadRemix: (lanes: StudioLane[], project?: Partial<ProjectSettings>, source?: SourceRemix | null) => void;
+  /**
+   * Takes on a collaborator's version of the mix (see collab.ts) without
+   * touching playback, and keeping this person's own solo buttons.
+   */
+  applySharedState: (lanes: StudioLane[], project: ProjectSettings) => void;
   _setPlaybackState: (isPlaying: boolean, playhead: number) => void;
   _setLaneRendering: (laneId: string, rendering: boolean) => void;
 };
+
+export type SourceRemix = { id: string; title: string };
 
 export type ProjectSettings = {
   projectBpm: number;
@@ -265,6 +342,21 @@ export type ProjectSettings = {
   loopEnabled: boolean;
   loopStart: number;
   loopEnd: number;
+  markers: Marker[];
+  /** 0 = all side A, 1 = all side B, 0.5 = both at full level. */
+  crossfader: number;
+  pads: Pad[];
+};
+
+export const PROJECT_DEFAULTS: ProjectSettings = {
+  projectBpm: 120,
+  masterVolume: 1,
+  loopEnabled: false,
+  loopStart: 0,
+  loopEnd: 0,
+  markers: [],
+  crossfader: 0.5,
+  pads: [],
 };
 
 function recomputeDuration(lanes: StudioLane[]) {
@@ -358,7 +450,7 @@ export function referenceLane(
   lanes: StudioLane[],
   has: (lane: StudioLane) => boolean
 ): StudioLane | undefined {
-  return lanes.find((l) => l.kind === "beat" && has(l)) ?? lanes.find(has);
+  return lanes.find((l) => isBacking(l.kind) && has(l)) ?? lanes.find(has);
 }
 
 /** The key a lane is sounding in right now, after its pitch shift. */
@@ -373,7 +465,7 @@ function withKeyMatched(lane: StudioLane, reference: StudioLane | undefined): St
 }
 
 function defaultProjectBpm(lanes: StudioLane[], fallback: number) {
-  const beat = lanes.find((l) => l.kind === "beat" && l.bpm);
+  const beat = lanes.find((l) => isBacking(l.kind) && l.bpm);
   if (beat?.bpm) return Math.round(beat.bpm * 10) / 10;
   const any = lanes.find((l) => l.bpm);
   if (any?.bpm) return Math.round(any.bpm * 10) / 10;
@@ -394,6 +486,12 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   loopEnabled: false,
   loopStart: 0,
   loopEnd: 0,
+  markers: [],
+  crossfader: 0.5,
+  pads: [],
+  sourceRemix: null,
+  challenge: null,
+  setChallenge: (challenge) => set({ challenge }),
 
   addStem: (stem) => {
     const laneId = crypto.randomUUID();
@@ -418,6 +516,8 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       tempoRatio: 1,
       fx: { ...DEFAULT_FX },
       clips: null,
+      xfade: null,
+      automation: {},
     };
     set((state) => {
       const lanes = [...state.lanes, lane];
@@ -722,6 +822,90 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     });
   },
 
+  addMarker: (marker) =>
+    set((state) => ({
+      markers: [...state.markers, { ...marker, id: crypto.randomUUID() }].sort((a, b) => a.start - b.start),
+    })),
+
+  updateMarker: (id, patch) =>
+    set((state) => ({ markers: state.markers.map((m) => (m.id === id ? { ...m, ...patch } : m)) })),
+
+  removeMarker: (id) => set((state) => ({ markers: state.markers.filter((m) => m.id !== id) })),
+
+  setCrossfader: (position) => set({ crossfader: Math.min(1, Math.max(0, position)) }),
+
+  setLaneXfade: (laneId, side) =>
+    set((state) => ({ lanes: state.lanes.map((l) => (l.laneId === laneId ? { ...l, xfade: side } : l)) })),
+
+  setClipOptions: (laneId, index, patch) => {
+    const lane = get().lanes.find((l) => l.laneId === laneId);
+    const clips = lane && clipsOf(lane);
+    if (!clips?.[index]) return;
+    get().setClips(
+      laneId,
+      clips.map((c, i) => {
+        if (i !== index) return c;
+        const next: LaneClip = { ...c, ...patch };
+        if (!next.reverse) delete next.reverse;
+        if (next.stretch === undefined || Math.abs(next.stretch - 1) < 0.0005) delete next.stretch;
+        return next;
+      })
+    );
+  },
+
+  stutterAt: (laneId, timelineSeconds, beats, repeats) => {
+    const state = get();
+    const lane = state.lanes.find((l) => l.laneId === laneId);
+    if (!lane || repeats < 2) return false;
+    const clips = clipsOf(lane);
+    const at = (timelineSeconds - lane.offsetSeconds) * lane.tempoRatio;
+    const index = clips.findIndex((c) => at >= c.at && at < c.at + clipSpan(c) - MIN_CLIP);
+    if (index < 0) return false;
+    const clip = clips[index];
+    const stretch = clip.stretch ?? 1;
+    // The slice, in the lane's (unstretched) seconds and in the stem's.
+    const sliceLane = beatLength(state.projectBpm) * beats * lane.tempoRatio;
+    const from = clip.from + (at - clip.at) * stretch;
+    const to = Math.min(clip.to, from + sliceLane * stretch);
+    if (to - from < MIN_CLIP) return false;
+    const span = (to - from) / stretch;
+    const end = at + span * repeats;
+
+    // Cut out what the repeats play over, keeping everything either side.
+    const kept: LaneClip[] = [];
+    for (const c of clips) {
+      const cEnd = c.at + clipSpan(c);
+      const cStretch = c.stretch ?? 1;
+      if (cEnd <= at || c.at >= end) {
+        kept.push(c);
+        continue;
+      }
+      if (c.at < at) kept.push({ ...c, to: c.from + (at - c.at) * cStretch });
+      if (cEnd > end) kept.push({ ...c, from: c.from + (end - c.at) * cStretch, at: end });
+    }
+    const repeated = Array.from({ length: repeats }, (_, i) => ({ ...clip, from, to, at: at + i * span }));
+    const next = [...kept, ...repeated].filter((c) => c.to - c.from >= MIN_CLIP / 2).sort((a, b) => a.at - b.at);
+    get().setClips(laneId, next);
+    return true;
+  },
+
+  setAutomation: (laneId, param, points) =>
+    set((state) => ({
+      lanes: state.lanes.map((l) => {
+        if (l.laneId !== laneId) return l;
+        const automation = { ...l.automation };
+        if (points && points.length) automation[param] = [...points].sort((a, b) => a.t - b.t);
+        else delete automation[param];
+        return { ...l, automation };
+      }),
+    })),
+
+  addPad: (pad) => set((state) => ({ pads: [...state.pads, { ...pad, id: crypto.randomUUID() }].slice(0, 16) })),
+
+  updatePad: (id, patch) => set((state) => ({ pads: state.pads.map((p) => (p.id === id ? { ...p, ...patch } : p)) })),
+
+  removePad: (id) => set((state) => ({ pads: state.pads.filter((p) => p.id !== id) })),
+
   clearLanes: () =>
     set({
       lanes: [],
@@ -731,9 +915,14 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       loopEnabled: false,
       loopStart: 0,
       loopEnd: 0,
+      markers: [],
+      crossfader: 0.5,
+      pads: [],
+      sourceRemix: null,
+      challenge: null,
     }),
 
-  loadRemix: (lanes, project) => {
+  loadRemix: (lanes, project, source = null) => {
     const withDurations = lanes.map(withClipsNormalised);
     const duration = recomputeDuration(withDurations);
     set((state) => ({
@@ -746,7 +935,20 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       loopEnabled: project?.loopEnabled ?? false,
       loopStart: project?.loopStart ?? 0,
       loopEnd: project?.loopEnd ?? 0,
+      markers: project?.markers ?? [],
+      crossfader: project?.crossfader ?? 0.5,
+      pads: project?.pads ?? [],
+      sourceRemix: source,
+      challenge: null,
     }));
+  },
+
+  applySharedState: (lanes, project) => {
+    set((state) => {
+      const solo = new Set(state.lanes.filter((l) => l.solo).map((l) => l.laneId));
+      const next = lanes.map((lane) => withClipsNormalised({ ...lane, solo: solo.has(lane.laneId) }));
+      return { ...project, lanes: next, duration: recomputeDuration(next) };
+    });
   },
 
   _setPlaybackState: (isPlaying, playhead) => set({ isPlaying, playhead }),
@@ -760,6 +962,19 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     });
   },
 }));
+
+/** Equal-power crossfader gain for a lane on side A or B (1 for lanes on neither). */
+export function crossfaderGain(lane: Pick<StudioLane, "xfade">, position: number) {
+  if (!lane.xfade) return 1;
+  // Both sides at full level in the middle, fading out towards the far end.
+  const toward = lane.xfade === "a" ? position : 1 - position;
+  return toward <= 0.5 ? 1 : Math.cos((toward - 0.5) * Math.PI);
+}
+
+/** The level a lane plays at: its fader, unless muted/soloed out, through the crossfader. */
+export function laneGain(lane: StudioLane, audible: Set<string>, crossfader: number) {
+  return audible.has(lane.laneId) ? lane.volume * crossfaderGain(lane, crossfader) : 0;
+}
 
 export function getAudibleLaneIds(lanes: StudioLane[]): Set<string> {
   const anySolo = lanes.some((l) => l.solo);

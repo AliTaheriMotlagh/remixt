@@ -21,13 +21,16 @@ export type SplitterRequest =
       right: Float32Array;
       sampleRate: number;
       bitrate: StemBitrate;
+      /** Also keep the beat's drums, bass and other parts as stems of their own. */
+      parts: boolean;
     };
 
+/** What a split produces: always vocals and beat, plus the beat's parts if asked. */
+export type SplitOutput = "vocals" | "beat" | "drums" | "bass" | "other";
+
 export type SplitResult = {
-  vocalsMp3: Uint8Array;
-  beatMp3: Uint8Array;
-  vocalsPeaks: number[];
-  beatPeaks: number[];
+  mp3: Partial<Record<SplitOutput, Uint8Array>> & { vocals: Uint8Array; beat: Uint8Array };
+  peaks: Partial<Record<SplitOutput, number[]>> & { vocals: number[]; beat: number[] };
   bpm: number | null;
 };
 

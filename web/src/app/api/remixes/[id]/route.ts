@@ -2,16 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import sql from "@/lib/db";
+import { notifyRemixCreated } from "@/lib/notifications";
+import { ensureSchema } from "@/lib/schema";
+import { normaliseTags } from "@/lib/tags";
 
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+  const user = await getCurrentUser();
+  // A private remix is only its owner's to open (or anyone's, once published).
   const remixRows = await sql`
     SELECT remixes.*, users.artist_name, users.id as artist_id
     FROM remixes JOIN users ON users.id = remixes.owner_id
-    WHERE remixes.id = ${id}
+    WHERE remixes.id = ${id} AND (remixes.published OR remixes.owner_id = ${user?.id ?? ""})
   `;
   const remix = remixRows[0];
   if (!remix) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -34,6 +39,7 @@ export async function GET(
 const patchSchema = z.object({
   title: z.string().min(1).max(100).optional(),
   published: z.boolean().optional(),
+  tags: z.array(z.string().max(40)).max(20).optional(),
 });
 
 export async function PATCH(
@@ -44,8 +50,9 @@ export async function PATCH(
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Sign in required" }, { status: 401 });
 
-  const rows = await sql<{ owner_id: string }[]>`
-    SELECT owner_id FROM remixes WHERE id = ${id}
+  await ensureSchema();
+  const rows = await sql<{ owner_id: string; published: boolean }[]>`
+    SELECT owner_id, published FROM remixes WHERE id = ${id}
   `;
   const remix = rows[0];
   if (!remix) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -60,13 +67,16 @@ export async function PATCH(
   }
 
   const { title, published } = parsed.data;
+  const tags = parsed.data.tags ? normaliseTags(parsed.data.tags) : null;
   await sql`
     UPDATE remixes SET
       title = COALESCE(${title ?? null}, title),
       published = COALESCE(${published ?? null}, published),
+      tags = COALESCE(${tags}, tags),
       updated_at = now()
     WHERE id = ${id}
   `;
+  if (published && !remix.published) await notifyRemixCreated(id, user.id).catch(() => {});
 
   return NextResponse.json({ ok: true });
 }

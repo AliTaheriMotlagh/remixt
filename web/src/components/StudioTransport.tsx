@@ -1,13 +1,16 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { audioEngine, PlaybackBlockedError } from "@/lib/client/audioEngine";
-import { exportMixdown } from "@/lib/client/mixdown";
-import { lanesToPayload } from "@/lib/client/remixLanes";
+import { exportMixdown, getExportFormat, setExportFormat, type ExportFormat } from "@/lib/client/mixdown";
+import { lanesToPayload, projectToPayload } from "@/lib/client/remixLanes";
 import { useStudioStore } from "@/lib/client/studioStore";
 import { redo, undo, useStudioHistory } from "@/lib/client/studioHistory";
+import { markDraftClean } from "@/lib/client/studioDraft";
 import type { User } from "@/lib/auth";
+import TagInput from "./TagInput";
+import SocialClipButton from "./studio/SocialClipButton";
 
 function formatTime(seconds: number) {
   const m = Math.floor(seconds / 60);
@@ -61,10 +64,16 @@ export default function StudioTransport({
   user,
   remixId,
   defaultTitle,
+  viewing = false,
+  artistName,
 }: {
   user: User | null;
   remixId: string | null;
   defaultTitle?: string;
+  /** On a remix's own page (rather than the Studio): `remixId` is the remix being played. */
+  viewing?: boolean;
+  /** Who made the remix being played, for the social clip (default: you). */
+  artistName?: string;
 }) {
   const isPlaying = useStudioStore((s) => s.isPlaying);
   const duration = useStudioStore((s) => s.duration);
@@ -80,6 +89,9 @@ export default function StudioTransport({
   const toggleMetronome = useStudioStore((s) => s.toggleMetronome);
   const toggleSnap = useStudioStore((s) => s.toggleSnap);
   const setLoop = useStudioStore((s) => s.setLoop);
+  const crossfader = useStudioStore((s) => s.crossfader);
+  const setCrossfader = useStudioStore((s) => s.setCrossfader);
+  const hasXfade = useStudioStore((s) => s.lanes.some((l) => l.xfade));
 
   const canUndo = useStudioHistory((h) => h.past.length > 0);
   const canRedo = useStudioHistory((h) => h.future.length > 0);
@@ -89,11 +101,18 @@ export default function StudioTransport({
   const [showSave, setShowSave] = useState(false);
   const [title, setTitle] = useState(defaultTitle ?? "");
   const [publish, setPublish] = useState(true);
+  const [tags, setTags] = useState<string[]>([]);
+  const challenge = useStudioStore((s) => s.challenge);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedId, setSavedId] = useState<string | null>(null);
   const [exportStage, setExportStage] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
+  // Read after mount: the server has no idea what this browser picked.
+  const [exportFormat, setFormat] = useState<ExportFormat | null>(null);
+  const format = exportFormat ?? "mp3";
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage only exists after mount
+  useEffect(() => setFormat(getExportFormat()), []);
   const router = useRouter();
 
   const hasLoop = loopEnd > loopStart;
@@ -135,6 +154,7 @@ export default function StudioTransport({
     try {
       await exportMixdown(title.trim() || defaultTitle || "remixt-mix", {
         range,
+        format,
         onProgress: setExportStage,
       });
     } catch (error) {
@@ -163,14 +183,11 @@ export default function StudioTransport({
         body: JSON.stringify({
           title: title.trim(),
           published: publish,
+          tags,
+          parentId: state.sourceRemix?.id ?? null,
+          challengeId: state.challenge?.id ?? null,
           lanes: lanesToPayload(lanes),
-          project: {
-            projectBpm: state.projectBpm,
-            masterVolume: state.masterVolume,
-            loopEnabled: state.loopEnabled,
-            loopStart: state.loopStart,
-            loopEnd: state.loopEnd,
-          },
+          project: projectToPayload(state),
         }),
       });
       const data = await res.json();
@@ -179,6 +196,8 @@ export default function StudioTransport({
         return;
       }
       setSavedId(data.id);
+      // It's on the server now; the local copy is only for unsaved work.
+      markDraftClean({ discard: true });
     } finally {
       setSaving(false);
     }
@@ -268,6 +287,27 @@ export default function StudioTransport({
           Snap
         </button>
 
+        {hasXfade && (
+          <label
+            className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted"
+            title="Crossfader: slide between the lanes on side A and side B (double-click to centre)"
+          >
+            A
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={crossfader}
+              onChange={(e) => setCrossfader(Number(e.target.value))}
+              onDoubleClick={() => setCrossfader(0.5)}
+              className="h-1.5 w-24 accent-beat"
+              aria-label="Crossfader"
+            />
+            B
+          </label>
+        )}
+
         <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted" title="Master level">
           Master
           <input
@@ -286,10 +326,29 @@ export default function StudioTransport({
             onClick={() => handleExport("full")}
             disabled={empty || exportStage !== null}
             className="rounded-lg border border-border px-3 py-2 text-sm font-medium transition-colors hover:bg-surface-hover disabled:opacity-40"
-            title="Bounce the mix to a WAV file"
+            title={format === "mp3" ? "Bounce the mix to an MP3 (256 kbps) — small, good for sharing" : "Bounce the mix to a lossless WAV file"}
           >
-            {exportStage ?? "Export WAV"}
+            {exportStage ?? `Export ${format.toUpperCase()}`}
           </button>
+          <select
+            value={format}
+            onChange={(e) => {
+              const next = e.target.value as ExportFormat;
+              setFormat(next);
+              setExportFormat(next);
+            }}
+            disabled={exportStage !== null}
+            className="rounded-lg border border-border bg-surface px-1.5 py-2 text-xs text-muted"
+            aria-label="Export format"
+          >
+            <option value="mp3">MP3</option>
+            <option value="wav">WAV</option>
+          </select>
+          <SocialClipButton
+            title={title.trim() || defaultTitle || "Untitled remix"}
+            artist={artistName ?? user?.artist_name ?? "Remixt"}
+            remixId={savedId ?? (viewing ? remixId : null)}
+          />
           {hasLoop && loopEnabled && (
             <button
               onClick={() => handleExport("loop")}
@@ -361,6 +420,16 @@ export default function StudioTransport({
                   className="input"
                 />
               </label>
+              <div className="flex w-full flex-col gap-1">
+                <span className="text-xs font-medium text-muted">Tags — genre and mood, so people can find it</span>
+                <TagInput value={tags} onChange={setTags} compact />
+              </div>
+              {challenge && (
+                <p className="w-full rounded-lg bg-beat/15 px-3 py-2 text-xs">
+                  🏁 This will be entered in the challenge “{challenge.title}”
+                  {publish ? "." : " once you publish it."}
+                </p>
+              )}
               <label className="flex items-center gap-2 pb-2.5 text-sm">
                 <input
                   type="checkbox"

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import sql from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
-import { ensureSocialSchema } from "@/lib/social";
+import { ensureSchema } from "@/lib/schema";
 
 type Tab = "latest" | "trending" | "following";
 
@@ -21,16 +21,30 @@ type RemixRow = {
   source_titles: string | null;
   play_count: number;
   like_count: number;
+  tags: string[];
 };
+
+function tabHref(tab: Tab, tag: string | null) {
+  const params = new URLSearchParams();
+  if (tab !== "latest") params.set("tab", tab);
+  if (tag) params.set("tag", tag);
+  const query = params.toString();
+  return query ? `/remixes?${query}` : "/remixes";
+}
 
 export default async function RemixesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; tag?: string }>;
 }) {
-  const requested = (await searchParams).tab;
+  const { tab: requested, tag: tagParam } = await searchParams;
   const tab: Tab = requested === "trending" || requested === "following" ? requested : "latest";
-  await ensureSocialSchema();
+  const tag = tagParam?.trim().toLowerCase() || null;
+  await ensureSchema();
+  const popularTags = await sql<{ tag: string; n: number }[]>`
+    SELECT tag, COUNT(*)::int AS n FROM remixes, UNNEST(remixes.tags) AS tag
+    WHERE remixes.published GROUP BY tag ORDER BY n DESC, tag LIMIT 16
+  `;
   const user = tab === "following" ? await getCurrentUser() : null;
   const needsSignIn = tab === "following" && !user;
 
@@ -42,7 +56,7 @@ export default async function RemixesPage({
     SELECT remixes.id, remixes.title, remixes.created_at, users.artist_name, users.id as artist_id,
            COUNT(DISTINCT remix_lanes.id)::int as lane_count,
            STRING_AGG(DISTINCT tracks.title, ',') as source_titles,
-           remixes.play_count,
+           remixes.play_count, remixes.tags,
            (SELECT COUNT(*) FROM remix_likes WHERE remix_likes.remix_id = remixes.id)::int as like_count
     FROM remixes
     JOIN users ON users.id = remixes.owner_id
@@ -50,6 +64,7 @@ export default async function RemixesPage({
     LEFT JOIN stems ON stems.id = remix_lanes.stem_id
     LEFT JOIN tracks ON tracks.id = stems.track_id
     WHERE remixes.published = true
+      ${tag ? sql`AND ${tag} = ANY(remixes.tags)` : sql``}
       ${
         tab === "following"
           ? sql`AND remixes.owner_id IN (SELECT followee_id FROM follows WHERE follower_id = ${user!.id})`
@@ -79,7 +94,7 @@ export default async function RemixesPage({
         {TABS.map((t) => (
           <Link
             key={t.id}
-            href={t.id === "latest" ? "/remixes" : `/remixes?tab=${t.id}`}
+            href={tabHref(t.id, tag)}
             className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
               tab === t.id ? "bg-brand text-white" : "border border-border text-muted hover:text-foreground"
             }`}
@@ -88,6 +103,30 @@ export default async function RemixesPage({
           </Link>
         ))}
       </div>
+
+      {(popularTags.length > 0 || tag) && (
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          {tag && !popularTags.some((t) => t.tag === tag) && (
+            <span className="rounded-full bg-brand px-2.5 py-1 text-xs text-white">#{tag}</span>
+          )}
+          {popularTags.map((t) => (
+            <Link
+              key={t.tag}
+              href={tabHref(tab, tag === t.tag ? null : t.tag)}
+              className={`rounded-full px-2.5 py-1 text-xs transition-colors ${
+                tag === t.tag ? "bg-brand text-white" : "bg-surface-raised text-muted hover:text-foreground"
+              }`}
+            >
+              #{t.tag}
+            </Link>
+          ))}
+          {tag && (
+            <Link href={tabHref(tab, null)} className="px-1 text-xs text-muted hover:text-foreground">
+              clear ✕
+            </Link>
+          )}
+        </div>
+      )}
 
       {needsSignIn ? (
         <div className="mt-8 rounded-2xl border border-dashed border-border bg-surface p-12 text-center text-muted">
@@ -108,7 +147,7 @@ export default async function RemixesPage({
             </>
           ) : (
             <>
-              No published remixes yet.{" "}
+              {tag ? `Nothing tagged #${tag} yet.` : "No published remixes yet."}{" "}
               <Link href="/studio" className="text-brand-strong hover:underline">
                 Build the first one
               </Link>
@@ -138,6 +177,11 @@ export default async function RemixesPage({
               {remix.source_titles && (
                 <p className="mt-2 truncate text-xs text-muted">
                   from {remix.source_titles.split(",").join(" + ")}
+                </p>
+              )}
+              {remix.tags?.length > 0 && (
+                <p className="mt-2 truncate text-[11px] text-brand-strong">
+                  {remix.tags.slice(0, 4).map((t) => `#${t}`).join(" ")}
                 </p>
               )}
               <p className="mt-3 flex gap-3 text-xs text-muted tabular-nums">

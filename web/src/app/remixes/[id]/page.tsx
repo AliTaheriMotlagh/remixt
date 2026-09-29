@@ -6,6 +6,9 @@ import RemixDetailPlayer from "@/components/RemixDetailPlayer";
 import RemixOwnerControls from "@/components/RemixOwnerControls";
 import RemixStatsBar from "@/components/RemixStatsBar";
 import RemixComments from "@/components/RemixComments";
+import ReportButton from "@/components/ReportButton";
+import RemixCredits from "@/components/RemixCredits";
+import { getRemixCredits } from "@/lib/credits";
 import { getArtistProgress, getComments } from "@/lib/social";
 import { getRemixCard, getRemixStats } from "@/lib/models";
 import type { Metadata } from "next";
@@ -56,10 +59,11 @@ export default async function RemixDetailPage({
   const isOwner = user?.id === remix.owner_id;
 
   if (!remix.published && !isOwner) notFound();
-  const [stats, comments, artistProgress] = await Promise.all([
+  const [stats, comments, artistProgress, credits] = await Promise.all([
     getRemixStats(remix.id, user?.id ?? null),
     getComments(remix.id),
     getArtistProgress(remix.artist_id),
+    getRemixCredits(remix.id),
   ]);
 
   return (
@@ -79,14 +83,18 @@ export default async function RemixDetailPage({
             )}
           </p>
         </div>
-        {isOwner && (
-          <RemixOwnerControls remixId={remix.id} initialPublished={remix.published} />
+        {isOwner ? (
+          <RemixOwnerControls remixId={remix.id} initialPublished={remix.published} initialTags={credits.tags} />
+        ) : (
+          <ReportButton kind="remix" targetId={remix.id} signedIn={!!user} />
         )}
       </div>
 
+      <RemixCredits credits={credits} />
+
       <RemixStatsBar remixId={remix.id} title={remix.title} initial={stats} signedIn={!!user} />
 
-      <RemixDetailPlayer remixId={remix.id} title={remix.title} user={user} />
+      <RemixDetailPlayer remixId={remix.id} title={remix.title} artistName={remix.artist_name} user={user} />
 
       <RemixComments remixId={remix.id} initial={comments} userId={user?.id ?? null} isRemixOwner={isOwner} />
     </div>

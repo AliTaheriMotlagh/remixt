@@ -1,8 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import ReportButton from "./ReportButton";
+import { audioEngine } from "@/lib/client/audioEngine";
+import { useRemixComments } from "@/lib/client/remixCommentsStore";
+import { useStudioStore } from "@/lib/client/studioStore";
 import type { RemixComment } from "@/lib/social";
 
 const MAX = 500;
@@ -14,6 +18,23 @@ function ago(iso: string) {
   if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ago`;
   if (seconds < 86400 * 30) return `${Math.floor(seconds / 86400)} d ago`;
   return new Date(iso).toLocaleDateString();
+}
+
+export function formatAt(seconds: number) {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+/** The "at 1:23" toggle: follows the playhead, so the comment lands where you are listening. */
+function AtPlayhead({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  const playhead = useStudioStore((s) => s.playhead);
+  return (
+    <label className="flex items-center gap-1.5 text-[11px] text-muted" title="Pin the comment to this moment in the song">
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="accent-brand" />
+      at {formatAt(playhead)}
+    </label>
+  );
 }
 
 /** Comments under a remix: read by anyone, written by signed-in listeners. */
@@ -30,6 +51,13 @@ export default function RemixComments({
 }) {
   const [comments, setComments] = useState(initial);
   const [draft, setDraft] = useState("");
+  const [timed, setTimed] = useState(false);
+
+  // The waveform above marks timed comments; keep it in step with this list.
+  useEffect(() => {
+    useRemixComments.setState({ comments });
+  }, [comments]);
+  useEffect(() => () => useRemixComments.setState({ comments: [] }), []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
@@ -43,12 +71,13 @@ export default function RemixComments({
       const res = await fetch(`/api/remixes/${remixId}/comments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body }),
+        body: JSON.stringify({ body, atSeconds: timed ? useStudioStore.getState().playhead : null }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "Couldn't post that");
       setComments(data.comments);
       setDraft("");
+      setTimed(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't post that");
     } finally {
@@ -84,6 +113,7 @@ export default function RemixComments({
             >
               {busy ? "Posting…" : "Comment"}
             </button>
+            <AtPlayhead checked={timed} onChange={setTimed} />
             <span className="text-[11px] tabular-nums text-muted">
               {draft.length}/{MAX}
             </span>
@@ -118,11 +148,26 @@ export default function RemixComments({
                     {c.artist_name}
                   </Link>
                   <span className="text-muted">{ago(c.created_at)}</span>
-                  {(c.user_id === userId || isRemixOwner) && (
-                    <button onClick={() => remove(c.id)} className="ml-auto text-[11px] text-muted hover:text-danger">
-                      delete
+                  {c.at_seconds !== null && (
+                    <button
+                      onClick={() => {
+                        audioEngine.seek(c.at_seconds!);
+                        if (!useStudioStore.getState().isPlaying) void audioEngine.play().catch(() => {});
+                      }}
+                      className="rounded bg-brand/15 px-1.5 font-mono text-[11px] text-brand-strong hover:bg-brand/25"
+                      title="Play from here"
+                    >
+                      ▶ {formatAt(c.at_seconds)}
                     </button>
                   )}
+                  <span className="ml-auto flex items-center gap-3">
+                    {(c.user_id === userId || isRemixOwner) && (
+                      <button onClick={() => remove(c.id)} className="text-[11px] text-muted hover:text-danger">
+                        delete
+                      </button>
+                    )}
+                    {c.user_id !== userId && <ReportButton kind="comment" targetId={c.id} signedIn={!!userId} />}
+                  </span>
                 </div>
                 <p className="mt-0.5 whitespace-pre-wrap break-words text-sm">{c.body}</p>
               </div>

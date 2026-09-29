@@ -17,12 +17,22 @@ const LIMIT = 100;
 
 type Snapshot = Pick<
   ReturnType<typeof useStudioStore.getState>,
-  "lanes" | "duration" | "projectBpm" | "masterVolume" | "loopEnabled" | "loopStart" | "loopEnd"
+  | "lanes"
+  | "duration"
+  | "projectBpm"
+  | "masterVolume"
+  | "loopEnabled"
+  | "loopStart"
+  | "loopEnd"
+  | "markers"
+  | "crossfader"
+  | "pads"
 >;
 
 function snapshot(state: Snapshot): Snapshot {
-  const { lanes, duration, projectBpm, masterVolume, loopEnabled, loopStart, loopEnd } = state;
-  return { lanes, duration, projectBpm, masterVolume, loopEnabled, loopStart, loopEnd };
+  const { lanes, duration, projectBpm, masterVolume, loopEnabled, loopStart, loopEnd, markers, crossfader, pads } =
+    state;
+  return { lanes, duration, projectBpm, masterVolume, loopEnabled, loopStart, loopEnd, markers, crossfader, pads };
 }
 
 function changed(a: Snapshot, b: Snapshot) {
@@ -32,7 +42,10 @@ function changed(a: Snapshot, b: Snapshot) {
     a.masterVolume !== b.masterVolume ||
     a.loopEnabled !== b.loopEnabled ||
     a.loopStart !== b.loopStart ||
-    a.loopEnd !== b.loopEnd
+    a.loopEnd !== b.loopEnd ||
+    a.markers !== b.markers ||
+    a.crossfader !== b.crossfader ||
+    a.pads !== b.pads
   );
 }
 
@@ -90,6 +103,19 @@ export function withoutHistory(laneId: string, patch: Partial<Snapshot["lanes"][
   });
   const { past, future } = useStudioHistory.getState();
   useStudioHistory.setState({ past: past.map(withPatch), future: future.map(withPatch) });
+}
+
+/**
+ * Applies a change that isn't this person's own edit — a collaborator's,
+ * arriving over the network — without making it an undo step.
+ */
+export function withoutRecording(apply: () => void) {
+  restoring = true;
+  try {
+    apply();
+  } finally {
+    restoring = false;
+  }
 }
 
 /** Forgets all history — when a different project is loaded. */

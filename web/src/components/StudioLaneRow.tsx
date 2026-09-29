@@ -1,9 +1,13 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import { kindColor, kindLabel } from "@/lib/stemKinds";
 import Waveform from "./Waveform";
 import LaneFxPanel from "./LaneFxPanel";
 import LaneMatchPanel from "./LaneMatchPanel";
+import AutomationLane from "./studio/AutomationLane";
+import KeyHelper from "./studio/KeyHelper";
+import TapTempo from "./studio/TapTempo";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { cutSilences } from "@/lib/client/autoMatch";
 import { exportLane } from "@/lib/client/mixdown";
@@ -101,9 +105,16 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
   const setLaneKey = useStudioStore((s) => s.setLaneKey);
   const matchLaneKey = useStudioStore((s) => s.matchLaneKey);
   const keyReference = useStudioStore((s) => referenceLane(s.lanes, (l) => !!l.musicalKey));
+  const setLaneXfade = useStudioStore((s) => s.setLaneXfade);
+  const setClipOptions = useStudioStore((s) => s.setClipOptions);
+  const stutterAt = useStudioStore((s) => s.stutterAt);
+  const addPad = useStudioStore((s) => s.addPad);
+  const padCount = useStudioStore((s) => s.pads.length);
 
   const [showFx, setShowFx] = useState(false);
   const [showMatch, setShowMatch] = useState(false);
+  const [showKeys, setShowKeys] = useState(false);
+  const [showAuto, setShowAuto] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [selectedClip, setSelectedClip] = useState<number | null>(null);
   const [cutting, setCutting] = useState(false);
@@ -157,7 +168,7 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
     }, 200);
   }
 
-  const accent = lane.kind === "vocals" ? "var(--vocals)" : "var(--beat)";
+  const accent = kindColor(lane.kind);
   const span = viewDuration(projectDuration, projectBpm);
   const beat = beatLength(projectBpm);
   const bar = beat * 4;
@@ -231,6 +242,56 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
     setEditNote(done ? null : "Put the playhead over this lane's audio to split there");
   }
 
+  function handleStutter(value: string) {
+    const [beats, repeats] = value.split("x").map(Number);
+    const playhead = useStudioStore.getState().playhead;
+    const done = stutterAt(lane.laneId, playhead, beats, repeats);
+    setSelectedClip(null);
+    setEditNote(done ? null : "Put the playhead over this lane's audio to repeat from there");
+  }
+
+  function sendToPad(index: number | null) {
+    const state = useStudioStore.getState();
+    let from: number;
+    let to: number;
+    let reverse = false;
+    let label: string;
+    if (index !== null) {
+      const clip = clips[index];
+      ({ from, to } = clip);
+      reverse = !!clip.reverse;
+      label = `${lane.trackTitle.slice(0, 14)} #${index + 1}`;
+    } else {
+      // No clip picked: one bar of the stem from the playhead.
+      const clip = clips.find((c) => {
+        const start = clipStart(lane, c);
+        return state.playhead >= start && state.playhead < start + clipSpan(c) / lane.tempoRatio;
+      });
+      if (!clip) {
+        setEditNote("Put the playhead over this lane's audio (or select a clip) to make a pad");
+        return;
+      }
+      from = clip.from + (state.playhead - clipStart(lane, clip)) * lane.tempoRatio * (clip.stretch ?? 1);
+      to = Math.min(clip.to, from + beatLength(state.projectBpm) * 4 * lane.tempoRatio);
+      label = `${lane.trackTitle.slice(0, 14)} bar`;
+    }
+    if (padCount >= 16) {
+      setEditNote("All 16 pads are full — remove one first");
+      return;
+    }
+    addPad({
+      stemId: lane.stemId,
+      kind: lane.kind,
+      label,
+      from,
+      to,
+      reverse,
+      tempoRatio: lane.tempoRatio,
+      pitchSemitones: lane.pitchSemitones,
+    });
+    setEditNote(null);
+  }
+
   async function handleCutSilences() {
     setCutting(true);
     setEditNote(null);
@@ -267,7 +328,7 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
                 className="inline-block rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white"
                 style={{ background: accent }}
               >
-                {lane.kind === "vocals" ? "Vocals" : "Beat"}
+                {kindLabel(lane.kind)}
               </span>
               {effectiveBpm && (
                 <span
@@ -406,6 +467,9 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
               }}
               className="input !w-16 !px-1.5 !py-0.5 text-[11px]"
             />
+            <TapTempo
+              onTempo={(bpm) => setLaneBpm(lane.laneId, Math.round((bpm / lane.tempoRatio) * 10) / 10)}
+            />
             <button
               onClick={() => matchLaneToProject(lane.laneId)}
               disabled={!lane.bpm}
@@ -445,6 +509,38 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
               }
             >
               {isReference ? "Project key" : "Match"}
+            </button>
+            <button
+              onClick={() => setShowKeys((v) => !v)}
+              className={`rounded border px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                showKeys ? "border-brand text-foreground" : "border-border text-muted hover:text-foreground"
+              }`}
+              title="Every key this lane can be shifted to, and how each fits the project"
+            >
+              keys
+            </button>
+          </div>
+
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setShowAuto((v) => !v)}
+              className={`flex-1 rounded border px-1.5 py-1 text-[10px] font-semibold transition-colors ${
+                showAuto || lane.automation.volume?.length || lane.automation.filter?.length
+                  ? "border-brand bg-brand/15 text-foreground"
+                  : "border-border text-muted hover:text-foreground"
+              }`}
+              title="Draw volume and filter changes over the song"
+            >
+              〰 Auto {showAuto ? "▾" : "▸"}
+            </button>
+            <button
+              onClick={() => setLaneXfade(lane.laneId, lane.xfade === null ? "a" : lane.xfade === "a" ? "b" : null)}
+              className={`w-12 rounded border px-1.5 py-1 text-[10px] font-semibold transition-colors ${
+                lane.xfade ? "border-beat bg-beat/15 text-foreground" : "border-border text-muted hover:text-foreground"
+              }`}
+              title="Put this lane on side A or B of the crossfader (in the transport) — e.g. two vocals to switch between"
+            >
+              {lane.xfade ? `Side ${lane.xfade.toUpperCase()}` : "A/B"}
             </button>
           </div>
 
@@ -564,8 +660,56 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
             >
               {cutting ? "listening…" : "cut silences"}
             </button>
+            <select
+              value=""
+              onChange={(e) => e.target.value && handleStutter(e.target.value)}
+              className="rounded border border-border bg-transparent px-1 py-0.5 text-[10px] text-muted hover:border-brand"
+              title="Beat repeat: repeat the slice at the playhead, DJ-style"
+            >
+              <option value="">stutter…</option>
+              <option value="0.25x8">1/16 × 8</option>
+              <option value="0.5x4">1/8 × 4</option>
+              <option value="0.5x8">1/8 × 8</option>
+              <option value="1x4">1 beat × 4</option>
+              <option value="2x2">½ bar × 2</option>
+              <option value="4x2">1 bar × 2</option>
+            </select>
+            <button
+              onClick={() => sendToPad(selected)}
+              className="nudge"
+              title={
+                selected !== null
+                  ? "Put the selected clip on a sample pad"
+                  : "Put one bar from the playhead on a sample pad"
+              }
+            >
+              → pad
+            </button>
             {selected !== null && (
               <>
+                <button
+                  onClick={() =>
+                    setClipOptions(lane.laneId, selected, {
+                      reverse: !clips[selected].reverse,
+                      stretch: clips[selected].stretch,
+                    })
+                  }
+                  className={`nudge ${clips[selected].reverse ? "!border-brand !text-foreground" : ""}`}
+                  title="Play the selected clip backwards"
+                >
+                  ⟲ reverse
+                </button>
+                <button
+                  onClick={() => {
+                    const clip = clips[selected];
+                    const half = Math.abs((clip.stretch ?? 1) - 0.5) < 0.001;
+                    setClipOptions(lane.laneId, selected, { reverse: clip.reverse, stretch: half ? 1 : 0.5 });
+                  }}
+                  className={`nudge ${Math.abs((clips[selected].stretch ?? 1) - 0.5) < 0.001 ? "!border-brand !text-foreground" : ""}`}
+                  title="Half speed — the clip plays twice as long, same pitch"
+                >
+                  ½ speed
+                </button>
                 <button
                   onClick={() => duplicateClip(lane.laneId, selected)}
                   className="nudge"
@@ -665,6 +809,13 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
         </div>
       </div>
 
+      {showAuto && (
+        // Lined up under the lane's track, so points sit under the audio they change.
+        <div className="pl-[14.75rem]">
+          <AutomationLane lane={lane} span={span} accent={accent} />
+        </div>
+      )}
+      {showKeys && <KeyHelper lane={lane} />}
       {showFx && <LaneFxPanel lane={lane} />}
       {showMatch && <LaneMatchPanel lane={lane} />}
     </div>

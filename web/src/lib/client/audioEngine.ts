@@ -3,16 +3,25 @@
 import {
   createLaneChain,
   createMasterChain,
-  hasOwnStretch,
+  needsOwnRender,
   scheduleLane,
   type ClipBufferLookup,
   type LaneChain,
 } from "./audioGraph";
+import { scheduleModulation } from "./modulation";
 import { renderPitchTempo } from "./pitchTempo";
 import { previewPlayer } from "./previewPlayer";
 import { keepScreenOn } from "./wakeLock";
 import { fetchStem } from "./stemFetch";
-import { beatLength, getAudibleLaneIds, useStudioStore, type LaneClip, type StudioLane } from "./studioStore";
+import {
+  beatLength,
+  getAudibleLaneIds,
+  laneGain,
+  useStudioStore,
+  type LaneClip,
+  type Pad,
+  type StudioLane,
+} from "./studioStore";
 
 type LoadedLane = {
   rawBuffer: AudioBuffer;
@@ -26,9 +35,23 @@ type LoadedLane = {
   clipBuffers: Map<string, AudioBuffer>;
 };
 
-/** Identifies one clip render: its slice of the stem and the speed and pitch it was rendered at. */
+/** Identifies one clip render: its slice of the stem, the speed and pitch it was rendered at, and direction. */
 function clipKey(lane: StudioLane, clip: LaneClip) {
-  return `${clip.from}|${clip.to}|${(lane.tempoRatio * (clip.stretch ?? 1)).toFixed(5)}|${lane.pitchSemitones}`;
+  return `${clip.from}|${clip.to}|${(lane.tempoRatio * (clip.stretch ?? 1)).toFixed(5)}|${lane.pitchSemitones}|${clip.reverse ? "r" : "f"}`;
+}
+
+/** Copies `from`..`to` seconds of a buffer, backwards if asked. */
+function sliceBuffer(ctx: BaseAudioContext, raw: AudioBuffer, from: number, to: number, reverse = false) {
+  const start = Math.floor(from * raw.sampleRate);
+  const end = Math.min(raw.length, Math.ceil(to * raw.sampleRate));
+  if (end - start < 16) return null;
+  const slice = ctx.createBuffer(raw.numberOfChannels, end - start, raw.sampleRate);
+  for (let c = 0; c < raw.numberOfChannels; c++) {
+    const data = raw.getChannelData(c).slice(start, end);
+    if (reverse) data.reverse();
+    slice.copyToChannel(data, c);
+  }
+  return slice;
 }
 
 function stopSources(sources: AudioBufferSourceNode[], when?: number) {
@@ -150,6 +173,20 @@ class AudioEngine {
     ]).then(() => ctx);
   }
 
+  /**
+   * Unlocks audio from inside a tap (see unlock) for things that start
+   * playback a moment later — recording asks for the microphone first.
+   */
+  prepareAudio(): Promise<AudioContext> {
+    previewPlayer.stop();
+    return this.unlock();
+  }
+
+  /** Where on the project timeline the audio clock's `contextTime` falls, while playing. */
+  timelineAt(contextTime: number) {
+    return this.startedAtPlayhead + (contextTime - this.startedAtContextTime);
+  }
+
   async ensureLane(laneId: string, stemId: string) {
     if (this.lanes.has(laneId) || this.loading.has(laneId)) {
       await this.loading.get(laneId);
@@ -217,7 +254,7 @@ class AudioEngine {
     if (!lane || !entry) return;
 
     const wanted = new Map<string, LaneClip>();
-    for (const clip of lane.clips ?? []) if (hasOwnStretch(clip)) wanted.set(clipKey(lane, clip), clip);
+    for (const clip of lane.clips ?? []) if (needsOwnRender(clip)) wanted.set(clipKey(lane, clip), clip);
     for (const key of entry.clipBuffers.keys()) if (!wanted.has(key)) entry.clipBuffers.delete(key);
     const missing = [...wanted].filter(([key]) => !entry.clipBuffers.has(key));
     if (missing.length === 0) return;
@@ -231,13 +268,8 @@ class AudioEngine {
         for (let i = 0; i < missing.length; i += 4) {
           await Promise.all(
             missing.slice(i, i + 4).map(async ([key, clip]) => {
-              const start = Math.floor(clip.from * raw.sampleRate);
-              const end = Math.min(raw.length, Math.ceil(clip.to * raw.sampleRate));
-              if (end - start < 16) return;
-              const slice = ctx.createBuffer(raw.numberOfChannels, end - start, raw.sampleRate);
-              for (let c = 0; c < raw.numberOfChannels; c++) {
-                slice.copyToChannel(raw.getChannelData(c).subarray(start, end), c);
-              }
+              const slice = sliceBuffer(ctx, raw, clip.from, clip.to, clip.reverse);
+              if (!slice) return;
               const rendered = await renderPitchTempo(ctx, slice, {
                 tempo: lane.tempoRatio * (clip.stretch ?? 1),
                 pitchSemitones: lane.pitchSemitones,
@@ -328,7 +360,7 @@ class AudioEngine {
 
   /** Pushes volume/mute/solo, per-lane FX and master volume into the graph. */
   applyMixState() {
-    const { lanes, projectBpm, masterVolume } = useStudioStore.getState();
+    const { lanes, projectBpm, masterVolume, crossfader } = useStudioStore.getState();
     const audible = getAudibleLaneIds(lanes);
     if (this.master) {
       this.master.gain.gain.setTargetAtTime(
@@ -340,9 +372,8 @@ class AudioEngine {
     for (const lane of lanes) {
       const entry = this.lanes.get(lane.laneId);
       if (!entry) continue;
-      const isAudible = audible.has(lane.laneId);
       entry.chain.volumeGain.gain.setTargetAtTime(
-        isAudible ? lane.volume : 0,
+        laneGain(lane, audible, crossfader),
         this.ctx!.currentTime,
         0.015
       );
@@ -397,7 +428,7 @@ class AudioEngine {
       stopSources(entry.sources);
       entry.sources = [];
       entry.chain.update(lane, useStudioStore.getState().projectBpm);
-      entry.chain.volumeGain.gain.value = audible.has(lane.laneId) ? lane.volume : 0;
+      entry.chain.volumeGain.gain.value = laneGain(lane, audible, useStudioStore.getState().crossfader);
 
       entry.sources = scheduleLane({
         ctx,
@@ -408,6 +439,7 @@ class AudioEngine {
         playhead,
         clipBuffer: this.clipLookup(lane.laneId),
       });
+      this.modulate(lane, entry.chain, startTime, playhead);
     }
 
     this.startedAtContextTime = startTime;
@@ -483,7 +515,7 @@ class AudioEngine {
 
     const playhead = this.startedAtPlayhead + (startTime - this.startedAtContextTime);
     const audible = getAudibleLaneIds(state.lanes);
-    entry.chain.volumeGain.gain.value = audible.has(laneId) ? lane.volume : 0;
+    entry.chain.volumeGain.gain.value = laneGain(lane, audible, state.crossfader);
     entry.sources = scheduleLane({
       ctx,
       lane,
@@ -493,6 +525,102 @@ class AudioEngine {
       playhead,
       clipBuffer: this.clipLookup(laneId),
     });
+    this.modulate(lane, entry.chain, startTime, playhead);
+  }
+
+  /** Schedules a lane's automation and ducking from `playhead` (heard at `when`) to the end. */
+  private modulate(lane: StudioLane, chain: LaneChain, when: number, playhead: number) {
+    const { lanes, duration } = useStudioStore.getState();
+    scheduleModulation({ chain, lane, lanes, when, playhead, length: Math.max(0, duration - playhead) + 3 });
+  }
+
+  /**
+   * Re-plans automation and ducking for every lane from where playback is
+   * now — after a point was drawn, a duck amount changed, or a vocal moved.
+   * The audio keeps playing; only the curves change.
+   */
+  rescheduleModulation() {
+    const ctx = this.ctx;
+    const state = useStudioStore.getState();
+    if (!ctx || !state.isPlaying) return;
+    const when = ctx.currentTime + 0.02;
+    const playhead = this.startedAtPlayhead + (when - this.startedAtContextTime);
+    for (const lane of state.lanes) {
+      const entry = this.lanes.get(lane.laneId);
+      if (entry) this.modulate(lane, entry.chain, when, playhead);
+    }
+  }
+
+  // --- Sample pads -------------------------------------------------------------
+
+  private stemBuffers = new Map<string, Promise<AudioBuffer>>();
+  private padBuffers = new Map<string, Promise<AudioBuffer | null>>();
+  private padVoices = new Map<string, AudioBufferSourceNode>();
+
+  /** A stem's decoded audio: a loaded lane's, or downloaded once for the pads. */
+  private stemBuffer(stemId: string): Promise<AudioBuffer> {
+    for (const [laneId, entry] of this.lanes) {
+      const lane = useStudioStore.getState().lanes.find((l) => l.laneId === laneId);
+      if (lane?.stemId === stemId) return Promise.resolve(entry.rawBuffer);
+    }
+    let pending = this.stemBuffers.get(stemId);
+    if (!pending) {
+      pending = fetchStem(stemId).then((bytes) => this.getContext().decodeAudioData(bytes));
+      pending.catch(() => this.stemBuffers.delete(stemId));
+      this.stemBuffers.set(stemId, pending);
+    }
+    return pending;
+  }
+
+  /** A pad's sound, cut and rendered at the speed and pitch it was taken at (once). */
+  private padBuffer(pad: Pad): Promise<AudioBuffer | null> {
+    const key = `${pad.stemId}|${pad.from}|${pad.to}|${pad.tempoRatio}|${pad.pitchSemitones}|${pad.reverse ? "r" : "f"}`;
+    let pending = this.padBuffers.get(key);
+    if (!pending) {
+      pending = this.stemBuffer(pad.stemId).then(async (raw) => {
+        const ctx = this.getContext();
+        const slice = sliceBuffer(ctx, raw, pad.from, pad.to, pad.reverse);
+        if (!slice) return null;
+        return renderPitchTempo(ctx, slice, { tempo: pad.tempoRatio, pitchSemitones: pad.pitchSemitones });
+      });
+      pending.catch(() => this.padBuffers.delete(key));
+      this.padBuffers.set(key, pending);
+    }
+    return pending;
+  }
+
+  /** Gets a pad's sound ready ahead of the first tap. */
+  preparePad(pad: Pad) {
+    void this.padBuffer(pad).catch(() => {});
+  }
+
+  /**
+   * Plays a pad once, on top of whatever is playing (retriggering a pad
+   * cuts its previous hit). Runs from a tap, so it unlocks audio first.
+   */
+  async triggerPad(pad: Pad) {
+    previewPlayer.stop();
+    const ctx = await this.unlock();
+    const buffer = await this.padBuffer(pad);
+    if (!buffer || ctx.state !== "running" || !this.master) return;
+    this.padVoices.get(pad.id)?.stop();
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    const gain = ctx.createGain();
+    // A few ms of fade each end so a hit never clicks.
+    const now = ctx.currentTime;
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(1, now + 0.004);
+    gain.gain.setValueAtTime(1, now + Math.max(0.005, buffer.duration - 0.01));
+    gain.gain.linearRampToValueAtTime(0, now + buffer.duration);
+    source.connect(gain);
+    gain.connect(this.master.input);
+    source.onended = () => {
+      gain.disconnect();
+      if (this.padVoices.get(pad.id) === source) this.padVoices.delete(pad.id);
+    };
+    source.start(now);
+    this.padVoices.set(pad.id, source);
   }
 
   /**
@@ -612,6 +740,17 @@ if (typeof window !== "undefined") {
   const pendingReschedule = new Set<string>();
   let rescheduleFrame: number | null = null;
 
+  // Automation and ducking curves cover the whole song, so re-planning them
+  // on every tick of a drag would be wasted work: wait for a short pause.
+  let modulationTimer: ReturnType<typeof setTimeout> | null = null;
+  function queueModulation() {
+    if (modulationTimer) clearTimeout(modulationTimer);
+    modulationTimer = setTimeout(() => {
+      modulationTimer = null;
+      audioEngine.rescheduleModulation();
+    }, 120);
+  }
+
   // A drag fires far more pointer events than there are frames; coalesce
   // them so each lane is re-scheduled at most once per frame.
   function queueReschedule(laneId: string) {
@@ -635,7 +774,8 @@ if (typeof window !== "undefined") {
       state.lanes === prevState.lanes &&
       state.masterVolume === prevState.masterVolume &&
       state.projectBpm === prevState.projectBpm &&
-      state.isPlaying === prevState.isPlaying
+      state.isPlaying === prevState.isPlaying &&
+      state.crossfader === prevState.crossfader
     ) {
       return;
     }
@@ -647,6 +787,21 @@ if (typeof window !== "undefined") {
       }
     }
     audioEngine.applyMixState();
+
+    // Drawn automation, a duck amount, or the vocals a ducking lane follows changed.
+    if (
+      state.isPlaying &&
+      state.lanes !== prevState.lanes &&
+      state.lanes.some(
+        (l) =>
+          l.fx.duck > 0 ||
+          l.automation.volume?.length ||
+          l.automation.filter?.length ||
+          prevState.lanes.find((p) => p.laneId === l.laneId)?.automation !== l.automation
+      )
+    ) {
+      queueModulation();
+    }
 
     for (const lane of state.lanes) {
       const placement = { key: `${lane.offsetSeconds}|${lane.fx.fadeIn}|${lane.fx.fadeOut}`, clips: lane.clips };

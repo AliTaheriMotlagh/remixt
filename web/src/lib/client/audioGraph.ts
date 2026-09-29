@@ -10,17 +10,23 @@ import {
 // The signal path a lane runs through, live and during an export bounce:
 //
 //   source → highpass → lowpass → low/mid/high EQ → drive → compressor
-//          → fadeGain → volumeGain → widener (Haas) → panner → master
+//          → fadeGain → autoGain → autoFilter → duckGain
+//          → volumeGain → widener (Haas) → panner → master
 //                                  ├→ reverb send → convolver ─┘
 //                                  └→ delay send → delay(+feedback) ─┘
 //
 // Everything except `drive` is a plain AudioParam, so a lane's chain is
 // built once and then updated in place whenever the store changes; only
 // pitch/tempo (rendered offline into a new buffer) needs a rebuild.
+// autoGain/autoFilter follow the lane's drawn automation and duckGain the
+// vocals (sidechain ducking) — both scheduled per play, see modulation.ts.
 
 export type LaneChain = {
   input: AudioNode;
   fadeGain: GainNode;
+  autoGain: GainNode;
+  autoFilter: BiquadFilterNode;
+  duckGain: GainNode;
   volumeGain: GainNode;
   update: (lane: StudioLane, projectBpm: number) => void;
   disconnect: () => void;
@@ -106,6 +112,12 @@ export function createLaneChain(
   const compressorWet = ctx.createGain();
 
   const fadeGain = ctx.createGain();
+  const autoGain = ctx.createGain();
+  const autoFilter = ctx.createBiquadFilter();
+  autoFilter.type = "lowpass";
+  autoFilter.frequency.value = 20000;
+  autoFilter.Q.value = 0.9;
+  const duckGain = ctx.createGain();
   const volumeGain = ctx.createGain();
 
   // Haas widener: the right channel is delayed by a few milliseconds,
@@ -139,7 +151,10 @@ export function createLaneChain(
   compressorWet.connect(fadeGain);
   compressorBypass.connect(fadeGain);
 
-  fadeGain.connect(volumeGain);
+  fadeGain.connect(autoGain);
+  autoGain.connect(autoFilter);
+  autoFilter.connect(duckGain);
+  duckGain.connect(volumeGain);
 
   volumeGain.connect(splitter);
   splitter.connect(merger, 0, 0);
@@ -204,12 +219,15 @@ export function createLaneChain(
   return {
     input: highpass,
     fadeGain,
+    autoGain,
+    autoFilter,
+    duckGain,
     volumeGain,
     update,
     disconnect: () => {
       for (const node of [
         highpass, lowpass, eqLow, eqMid, eqHigh, shaper, driveTrim,
-        compressor, compressorBypass, compressorWet, fadeGain, volumeGain,
+        compressor, compressorBypass, compressorWet, fadeGain, autoGain, autoFilter, duckGain, volumeGain,
         splitter, merger, widthDelay, panner, reverbSend, convolver,
         delaySend, delayNode, feedback, feedbackDamp,
       ]) {
@@ -258,9 +276,14 @@ const CLIP_FADE_OUT = 0.03;
 /** A clip rendered on its own at its own speed — see LaneClip.stretch. */
 export type ClipBufferLookup = (clip: LaneClip) => AudioBuffer | undefined;
 
-/** Whether a clip plays at a speed of its own (and so from its own buffer). */
+/** Whether a clip plays at a speed of its own. */
 export function hasOwnStretch(clip: LaneClip) {
   return clip.stretch !== undefined && Math.abs(clip.stretch - 1) > 0.0005;
+}
+
+/** Whether a clip plays from a render of its own: its own speed, or backwards. */
+export function needsOwnRender(clip: LaneClip) {
+  return hasOwnStretch(clip) || !!clip.reverse;
 }
 
 /**
@@ -276,7 +299,7 @@ function laneSegments(lane: StudioLane, buffer: AudioBuffer, clipBuffer?: ClipBu
   const ratio = lane.tempoRatio;
   return lane.clips.map((clip) => {
     const start = lane.offsetSeconds + clip.at / ratio;
-    const own = hasOwnStretch(clip) ? clipBuffer?.(clip) : undefined;
+    const own = needsOwnRender(clip) ? clipBuffer?.(clip) : undefined;
     if (own) return { buffer: own, start, from: 0, length: own.duration, fades: true };
     // Not rendered yet (or no stretch of its own): read it from the lane's buffer.
     const from = Math.min(buffer.duration, clip.from / ratio);

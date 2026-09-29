@@ -1,6 +1,7 @@
 "use client";
 
 import { analyzeStem, beatPhase, findPhrases, refineTempo, type StemAnalysis } from "./analysis";
+import { isBacking } from "@/lib/stemKinds";
 import { PRE_ROLL, TAIL, arrangeVocal, beatStructure } from "./arrange";
 import { audioEngine } from "./audioEngine";
 import { fetchStem } from "./stemFetch";
@@ -301,7 +302,7 @@ function buildPlan(
 
     // The beat the vocals are laid on: the reference if it's a beat, else
     // the first beat lane (the reference vocal then only sets the tempo).
-    const backing = ref.kind === "beat" ? ref : working.find((l) => l.kind === "beat" && l.bpm);
+    const backing = isBacking(ref.kind) ? ref : working.find((l) => isBacking(l.kind) && l.bpm);
     const backingAnalysis = backing && analyses.get(backing.laneId);
     const backingStructure =
       backing === ref ? refStructure : backing && backingAnalysis ? beatStructure(backingAnalysis, backing.bpm!) : null;
@@ -382,7 +383,7 @@ function buildPlan(
       for (const lane of working) {
         const loudness = analyses.get(lane.laneId)?.loudness ?? 0;
         if (loudness <= 0) continue;
-        const lift = lane.kind === "vocals" && levelRef.kind === "beat" ? 1.12 : 1;
+        const lift = lane.kind === "vocals" && isBacking(levelRef.kind) ? 1.12 : 1;
         const volume =
           lane.laneId === levelRef.laneId
             ? base
@@ -400,14 +401,14 @@ function buildPlan(
   // user already dialled in.
   if (steps.fx) {
     const hasVocal = working.some((l) => l.kind === "vocals");
-    const hasBeat = working.some((l) => l.kind === "beat");
+    const hasBeat = working.some((l) => isBacking(l.kind));
     const air = FX_PRESETS.find((p) => p.id === "vocal-air")!;
     for (const lane of working) {
       if (!isDefaultFx(lane.fx)) continue;
       if (lane.kind === "vocals" && hasBeat) {
         patch(lane.laneId, { fx: { ...DEFAULT_FX, ...air.fx } });
         lines.push(`${lane.trackTitle}: “Air” vocal chain — high-pass, levelling compressor, presence, a little room`);
-      } else if (lane.kind === "beat" && hasVocal) {
+      } else if (isBacking(lane.kind) && hasVocal) {
         patch(lane.laneId, { fx: { ...DEFAULT_FX, eqMid: -2.5 } });
         lines.push(`${lane.trackTitle}: mids dipped 2.5 dB to make a pocket for the vocal`);
       }
@@ -478,7 +479,7 @@ export async function suggestMatches(steps: MatchSteps): Promise<MatchSuggestion
   const sharpened = new Map<string, number>();
   if (steps.tempo) {
     for (const lane of lanes) {
-      const source = lane.kind === "beat" ? analyses.get(lane.laneId) : guides.get(lane.laneId);
+      const source = isBacking(lane.kind) ? analyses.get(lane.laneId) : guides.get(lane.laneId);
       if (!lane.bpm || !source) continue;
       const refined = refineTempo(source, lane.bpm);
       if (Math.abs(refined - lane.bpm) >= 0.01) sharpened.set(lane.laneId, refined);

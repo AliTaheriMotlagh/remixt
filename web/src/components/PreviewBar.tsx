@@ -1,6 +1,7 @@
 "use client";
 
 import { previewPlayer, usePreviewState } from "@/lib/client/previewPlayer";
+import { kindColor, kindLabel } from "@/lib/stemKinds";
 
 function formatTime(seconds: number) {
   if (!Number.isFinite(seconds)) return "0:00";
@@ -17,7 +18,7 @@ export default function PreviewBar() {
 
   if (!state.current) return null;
 
-  const accent = state.current.kind === "vocals" ? "var(--vocals)" : "var(--beat)";
+  const accent = kindColor(state.current.kind);
 
   return (
     <div className="fixed inset-x-0 bottom-0 z-50 border-t border-border bg-surface/95 backdrop-blur-md">
@@ -35,7 +36,7 @@ export default function PreviewBar() {
           <div className="flex items-baseline gap-2">
             <span className="truncate text-sm font-medium">{state.current.title}</span>
             <span className="hidden truncate text-xs text-muted sm:inline">
-              {state.current.artist} · {state.current.kind === "vocals" ? "vocals" : "beat"}
+              {state.current.artist} · {kindLabel(state.current.kind).toLowerCase()}
             </span>
           </div>
           <div

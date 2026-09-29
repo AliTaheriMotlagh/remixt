@@ -4,6 +4,7 @@ import { useSyncExternalStore } from "react";
 import { fetchInSlices } from "./stemFetch";
 import {
   STEM_BITRATES,
+  type SplitOutput,
   type SplitResult,
   type SplitterRequest,
   type SplitterResponse,
@@ -35,6 +36,12 @@ const SAMPLE_RATE = 44100; // what the model was trained on
 const STEM_BITRATE: StemBitrate =
   STEM_BITRATES.find((b) => b === Number(process.env.NEXT_PUBLIC_STEM_BITRATE)) ?? 192;
 const MAX_SECONDS = 15 * 60;
+/**
+ * Keep the beat's drums, bass and other parts as stems of their own, so
+ * people can remix at that level. Costs about 2.5× the storage per song;
+ * NEXT_PUBLIC_SPLIT_PARTS=false goes back to vocals + beat only.
+ */
+const SPLIT_PARTS = process.env.NEXT_PUBLIC_SPLIT_PARTS !== "false";
 /**
  * Phones and tablets get a shorter limit: the decoded song alone is ~21 MB
  * a minute, and iOS kills a tab outright (it just reloads) when it asks for
@@ -209,6 +216,7 @@ class Splitter {
           right,
           sampleRate: SAMPLE_RATE,
           bitrate: STEM_BITRATE,
+          parts: SPLIT_PARTS,
         } satisfies SplitterRequest,
         [left.buffer, right.buffer]
       );
@@ -239,7 +247,7 @@ export type UploadStage =
   | { stage: "uploading"; progress: number }
   | { stage: "saving" };
 
-type UploadTarget =
+export type UploadTarget =
   | { type: "put"; url: string; headers: Record<string, string> }
   | {
       type: "blob";
@@ -250,7 +258,7 @@ type UploadTarget =
     };
 
 /** Uploads one stem wherever the server said to (see lib/storage.ts). */
-async function upload(target: UploadTarget, body: Uint8Array, onProgress: (loaded: number) => void) {
+export async function upload(target: UploadTarget, body: Uint8Array, onProgress: (loaded: number) => void) {
   if (target.type === "blob") {
     // Vercel Blob: straight from the browser to the store, with a token
     // the server scoped to exactly this file.
@@ -319,7 +327,8 @@ async function decode(file: File): Promise<{ left: Float32Array; right: Float32A
  */
 export async function uploadSong(
   file: File,
-  onStage: (stage: UploadStage) => void
+  onStage: (stage: UploadStage) => void,
+  { tags = [] }: { tags?: string[] } = {}
 ): Promise<string> {
   onStage({ stage: "decoding" });
   const { left, right, duration } = await decode(file);
@@ -347,8 +356,16 @@ export async function uploadSong(
       filename: file.name,
       duration,
       bpm: result.bpm,
-      vocalsPeaks: result.vocalsPeaks,
-      beatPeaks: result.beatPeaks,
+      vocalsPeaks: result.peaks.vocals,
+      beatPeaks: result.peaks.beat,
+      partPeaks: {
+        drums: result.peaks.drums,
+        bass: result.peaks.bass,
+        other: result.peaks.other,
+      },
+      tags,
+      // The upload form doesn't start without the box ticked.
+      rightsConfirmed: true,
     }),
   });
   const track = await created.json().catch(() => null);
@@ -356,14 +373,16 @@ export async function uploadSong(
     throw new Error(track?.error ?? "Couldn't save the track");
   }
 
-  const total = result.vocalsMp3.length + result.beatMp3.length;
-  const sent = { vocals: 0, beat: 0 };
-  const report = () => onStage({ stage: "uploading", progress: (sent.vocals + sent.beat) / total });
+  // One upload per stem the server made room for (older servers: two).
+  const files = (Object.entries(track.uploads) as [SplitOutput, UploadTarget][])
+    .map(([kind, target]) => ({ kind, target, bytes: result.mp3[kind] }))
+    .filter((f): f is { kind: SplitOutput; target: UploadTarget; bytes: Uint8Array } => !!f.bytes);
+  const total = files.reduce((n, f) => n + f.bytes.length, 0);
+  const sent: Partial<Record<SplitOutput, number>> = {};
+  const report = () =>
+    onStage({ stage: "uploading", progress: Object.values(sent).reduce((a, b) => a + (b ?? 0), 0) / total });
   report();
-  await Promise.all([
-    upload(track.uploads.vocals, result.vocalsMp3, (n) => ((sent.vocals = n), report())),
-    upload(track.uploads.beat, result.beatMp3, (n) => ((sent.beat = n), report())),
-  ]);
+  await Promise.all(files.map((f) => upload(f.target, f.bytes, (n) => ((sent[f.kind] = n), report()))));
 
   onStage({ stage: "saving" });
   const done = await fetch(`/api/tracks/${track.id}/complete`, { method: "POST" });

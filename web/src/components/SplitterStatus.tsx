@@ -22,7 +22,8 @@ export default function SplitterStatus({ signedIn }: { signedIn: boolean }) {
   // Starting the model reads ~200 MB and busies the GPU for a few seconds;
   // on the pages that play audio that's heard as stutter, so wait for
   // another page (or the upload itself).
-  const playsAudio = pathname.startsWith("/studio") || pathname.startsWith("/remixes/");
+  const playsAudio =
+    pathname.startsWith("/studio") || pathname.startsWith("/remixes/") || pathname.startsWith("/embed/");
 
   useEffect(() => {
     if (!signedIn) return;

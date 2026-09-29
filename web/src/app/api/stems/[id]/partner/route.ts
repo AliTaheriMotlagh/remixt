@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import sql from "@/lib/db";
 
-// The other half of a stem's song: a vocal's beat, or a beat's vocal. The
+// The other half of a stem's song: a vocal's beat, or a beat's (or a
+// drum/bass/melody part's) vocal. The
 // Studio's AI Match reads a vocal's original beat to find exactly where
 // the singer's bars fall — the voice alone doesn't say. Stems are playable
 // by anyone (see /api/audio/stem), so this reveals nothing new.
@@ -13,7 +14,8 @@ export async function GET(
   const rows = await sql<{ id: string }[]>`
     SELECT partner.id
     FROM stems
-    JOIN stems partner ON partner.track_id = stems.track_id AND partner.kind <> stems.kind
+    JOIN stems partner ON partner.track_id = stems.track_id
+     AND partner.kind = CASE WHEN stems.kind = 'vocals' THEN 'beat' ELSE 'vocals' END
     WHERE stems.id = ${id}
     LIMIT 1
   `;

@@ -2,6 +2,7 @@
 
 import { useSyncExternalStore } from "react";
 import { keepScreenOn } from "./wakeLock";
+import type { StemKind } from "@/lib/stemKinds";
 
 // A single <audio> element shared by every "play this stem" button in the
 // app. Previews used to be owned by the component that started them, so
@@ -14,7 +15,7 @@ export type PreviewTrack = {
   stemId: string;
   title: string;
   artist: string;
-  kind: "vocals" | "beat";
+  kind: StemKind;
 };
 
 export type PreviewState = {

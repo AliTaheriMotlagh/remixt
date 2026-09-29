@@ -94,3 +94,78 @@ CREATE TABLE IF NOT EXISTS remix_comments (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_comments_remix ON remix_comments(remix_id, created_at);
+
+-- Rights and moderation: uploaders confirm they may share a song, and
+-- anyone can report a remix, comment or song, or file a takedown request.
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS rights_confirmed_at TIMESTAMPTZ;
+CREATE TABLE IF NOT EXISTS reports (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL, -- 'remix' | 'comment' | 'track' | 'takedown'
+  target_id TEXT,
+  reporter_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  reporter_email TEXT,
+  reason TEXT NOT NULL,
+  details TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open', -- open | resolved | dismissed
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status, created_at);
+
+-- Notifications: likes, comments, follows and remixes of your work.
+CREATE TABLE IF NOT EXISTS notifications (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  actor_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+  type TEXT NOT NULL, -- like | comment | follow | remix | challenge
+  remix_id TEXT REFERENCES remixes(id) ON DELETE CASCADE,
+  track_id TEXT REFERENCES tracks(id) ON DELETE CASCADE,
+  body TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  read_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, created_at DESC);
+
+-- Genres/moods as tags, remix credits (what a remix was remixed from) and
+-- comments pinned to a moment in the song.
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE remixes ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE remixes ADD COLUMN IF NOT EXISTS parent_id TEXT REFERENCES remixes(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_remixes_parent ON remixes(parent_id);
+ALTER TABLE remix_comments ADD COLUMN IF NOT EXISTS at_seconds DOUBLE PRECISION;
+
+-- Remix challenges: one vocal and one beat, everyone remixes the pair.
+CREATE TABLE IF NOT EXISTS challenges (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  vocal_stem_id TEXT REFERENCES stems(id) ON DELETE SET NULL,
+  beat_stem_id TEXT REFERENCES stems(id) ON DELETE SET NULL,
+  starts_at TIMESTAMPTZ NOT NULL,
+  ends_at TIMESTAMPTZ NOT NULL,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE remixes ADD COLUMN IF NOT EXISTS challenge_id TEXT REFERENCES challenges(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_remixes_challenge ON remixes(challenge_id);
+
+-- Shared projects: a Studio mix several artists edit together.
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  state_json TEXT NOT NULL DEFAULT '{}',
+  version INTEGER NOT NULL DEFAULT 1,
+  updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  invite_code TEXT UNIQUE NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS project_members (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  joined_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members(user_id);

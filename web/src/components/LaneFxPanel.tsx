@@ -1,5 +1,6 @@
 "use client";
 
+import { kindColor, kindLabel } from "@/lib/stemKinds";
 import {
   DEFAULT_FX,
   DELAY_DIVISIONS,
@@ -64,16 +65,18 @@ export default function LaneFxPanel({ lane }: { lane: StudioLane }) {
   const applyPreset = useStudioStore((s) => s.applyPreset);
   const projectBpm = useStudioStore((s) => s.projectBpm);
   const fx = lane.fx;
-  const accent = lane.kind === "vocals" ? "var(--vocals)" : "var(--beat)";
+  const accent = kindColor(lane.kind);
 
   const patch = (next: Partial<LaneFx>) => setFx(lane.laneId, next);
-  const presets = FX_PRESETS.filter((p) => p.kind === "any" || p.kind === lane.kind);
+  // Drum, bass and melody parts get the beat's presets.
+  const presetKind = lane.kind === "vocals" ? "vocals" : "beat";
+  const presets = FX_PRESETS.filter((p) => p.kind === "any" || p.kind === presetKind);
 
   return (
     <div className="mt-3 rounded-lg border border-border bg-background p-3">
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="mr-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
-          {lane.kind === "vocals" ? "Vocal presets" : "Beat presets"}
+          {lane.kind === "vocals" ? "Vocal presets" : `${kindLabel(lane.kind)} presets`}
         </span>
         {presets.map((preset) => (
           <button
@@ -185,6 +188,14 @@ export default function LaneFxPanel({ lane }: { lane: StudioLane }) {
           />
         )}
 
+        {lane.kind !== "vocals" && (
+          <FxSlider
+            label="Duck" value={fx.duck} min={0} max={1} step={0.01} accent={accent}
+            format={(v) => (v === 0 ? "off" : pct(v))}
+            onChange={(duck) => patch({ duck })}
+            title="Sidechain ducking — dips this lane whenever the vocals come in, so the voice sits on top"
+          />
+        )}
         <FxSlider
           label="Fade in" value={fx.fadeIn} min={0} max={10} step={0.1}
           format={secs} onChange={(fadeIn) => patch({ fadeIn })}

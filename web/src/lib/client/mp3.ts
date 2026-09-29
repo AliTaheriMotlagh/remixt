@@ -1,0 +1,42 @@
+"use client";
+
+import type { Mp3Response } from "./mp3.worker";
+import { encodePcmToMp3, type Mp3Bitrate } from "./mp3Core";
+
+function channels(buffer: AudioBuffer) {
+  const left = buffer.getChannelData(0).slice();
+  const right = (buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : buffer.getChannelData(0)).slice();
+  return { left, right };
+}
+
+/** Encodes an AudioBuffer as MP3 bytes, in a worker where possible. */
+export async function encodeMp3Bytes(
+  buffer: AudioBuffer,
+  { bitrate = 256, trimDelay = false }: { bitrate?: Mp3Bitrate; trimDelay?: boolean } = {}
+): Promise<Uint8Array> {
+  const options = { sampleRate: buffer.sampleRate, bitrate, trimDelay };
+  try {
+    return await new Promise<Uint8Array>((resolve, reject) => {
+      const worker = new Worker(new URL("./mp3.worker.ts", import.meta.url), { type: "module" });
+      worker.onmessage = (event: MessageEvent<Mp3Response>) => {
+        worker.terminate();
+        if (event.data.ok) resolve(event.data.bytes);
+        else reject(new Error(event.data.message));
+      };
+      worker.onerror = (event) => {
+        worker.terminate();
+        reject(new Error(event.message || "MP3 worker failed"));
+      };
+      const { left, right } = channels(buffer);
+      worker.postMessage({ ...options, left, right }, [left.buffer, right.buffer]);
+    });
+  } catch {
+    // No worker (or it failed to start) — slower, but still works.
+    return encodePcmToMp3({ ...options, ...channels(buffer) });
+  }
+}
+
+export async function encodeMp3(buffer: AudioBuffer, options?: { bitrate?: Mp3Bitrate }): Promise<Blob> {
+  const bytes = await encodeMp3Bytes(buffer, options);
+  return new Blob([bytes as BlobPart], { type: "audio/mpeg" });
+}

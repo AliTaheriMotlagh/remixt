@@ -107,3 +107,20 @@ export function bestKeyShift(key: MusicalKey, target: MusicalKey): KeyMatch {
         : "relative";
   return { semitones: best.semitones, relation };
 }
+
+export type KeyFit = "same" | "relative" | "neighbour" | "far" | "clash";
+
+/**
+ * How well two keys sit together, by distance on the Camelot wheel: the
+ * same notes (same key, or its relative major/minor), a neighbour (a fifth
+ * away — six of seven notes shared), two steps (usable, with care), or a
+ * clash.
+ */
+export function keyFit(key: MusicalKey, target: MusicalKey): KeyFit {
+  const steps = mod12((relativeMajor(key) - relativeMajor(target)) * 7);
+  const distance = Math.min(steps, 12 - steps);
+  if (distance === 0) return key.tonic === target.tonic && key.mode === target.mode ? "same" : "relative";
+  if (distance === 1) return "neighbour";
+  if (distance === 2) return "far";
+  return "clash";
+}

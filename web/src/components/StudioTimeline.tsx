@@ -27,6 +27,78 @@ function RulerPlayhead({ duration }: { duration: number }) {
   );
 }
 
+/**
+ * Named sections ("chorus 0:42–1:05"): save the loop region as one, then
+ * tap a section to loop it and jump there. Exports of "the loop" follow.
+ */
+function Sections({ duration }: { duration: number }) {
+  const markers = useStudioStore((s) => s.markers);
+  const loopEnabled = useStudioStore((s) => s.loopEnabled);
+  const loopStart = useStudioStore((s) => s.loopStart);
+  const loopEnd = useStudioStore((s) => s.loopEnd);
+  const addMarker = useStudioStore((s) => s.addMarker);
+  const updateMarker = useStudioStore((s) => s.updateMarker);
+  const removeMarker = useStudioStore((s) => s.removeMarker);
+  const setLoop = useStudioStore((s) => s.setLoop);
+  const hasLoop = loopEnd > loopStart;
+  const saved = markers.some((m) => Math.abs(m.start - loopStart) < 0.01 && Math.abs(m.end - loopEnd) < 0.01);
+
+  function jump(start: number, end: number) {
+    setLoop({ enabled: true, start, end });
+    audioEngine.seek(start);
+  }
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+      {markers.map((m, i) => {
+        const active = loopEnabled && Math.abs(m.start - loopStart) < 0.01 && Math.abs(m.end - loopEnd) < 0.01;
+        return (
+          <span
+            key={m.id}
+            className={`flex items-center overflow-hidden rounded-full border ${
+              active ? "border-brand bg-brand/20" : "border-border bg-background"
+            }`}
+          >
+            <button
+              onClick={() => jump(m.start, m.end)}
+              onDoubleClick={() => {
+                const label = window.prompt("Name this section", m.label)?.trim();
+                if (label) updateMarker(m.id, { label: label.slice(0, 40) });
+              }}
+              className="py-0.5 pl-2.5 pr-1.5"
+              title={`${formatTime(m.start)}–${formatTime(m.end)} · tap to loop it · double-click to rename`}
+            >
+              <span className="mr-1 text-muted">{i + 1}</span>
+              {m.label}
+            </button>
+            <button
+              onClick={() => removeMarker(m.id)}
+              className="px-1.5 py-0.5 text-muted hover:text-danger"
+              aria-label={`Remove section ${m.label}`}
+            >
+              ✕
+            </button>
+          </span>
+        );
+      })}
+      {hasLoop && !saved && (
+        <button
+          onClick={() => {
+            const label = window.prompt("Name this section (e.g. chorus, drop, verse 2)", `Section ${markers.length + 1}`);
+            if (label?.trim()) addMarker({ label: label.trim().slice(0, 40), start: loopStart, end: loopEnd });
+          }}
+          className="rounded-full border border-dashed border-border px-2.5 py-0.5 text-muted hover:border-brand hover:text-foreground"
+        >
+          ★ save loop as a section
+        </button>
+      )}
+      {markers.length === 0 && !hasLoop && duration > 0 && (
+        <span className="text-muted">Drag across the ruler to mark a loop, then save it as a section.</span>
+      )}
+    </div>
+  );
+}
+
 export default function StudioTimeline() {
   const projectDuration = useStudioStore((s) => s.duration);
   const projectBpm = useStudioStore((s) => s.projectBpm);
@@ -141,6 +213,7 @@ export default function StudioTimeline() {
           {formatTime(duration)}
         </span>
       </div>
+      <Sections duration={duration} />
     </div>
   );
 }

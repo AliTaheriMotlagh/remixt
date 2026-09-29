@@ -66,7 +66,8 @@ function Choice<T extends string | number>({
 export default function LaneMatchPanel({ lane }: { lane: StudioLane }) {
   const lanes = useStudioStore((s) => s.lanes);
   const applyLanePatches = useStudioStore((s) => s.applyLanePatches);
-  const partners = lanes.filter((l) => l.kind !== lane.kind);
+  // A vocal pairs with any backing lane (beat, drums, bass, melody), and back.
+  const partners = lanes.filter((l) => (l.kind === "vocals") !== (lane.kind === "vocals"));
   const [partnerId, setPartnerId] = useState("");
   const [options, setOptions] = useState<MatchOptions>(DEFAULT_OPTIONS);
   const [busy, setBusy] = useState(false);

@@ -6,6 +6,7 @@ import StudioTransport from "./StudioTransport";
 import StudioTimeline from "./StudioTimeline";
 import StudioLaneRow from "./StudioLaneRow";
 import BpmSyncPanel from "./BpmSyncPanel";
+import MixWaveform from "./MixWaveform";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/remixLanes";
 import { useStudioStore } from "@/lib/client/studioStore";
@@ -15,10 +16,12 @@ import type { User } from "@/lib/auth";
 export default function RemixDetailPlayer({
   remixId,
   title,
+  artistName,
   user,
 }: {
   remixId: string;
   title: string;
+  artistName: string;
   user: User | null;
 }) {
   const lanes = useStudioStore((s) => s.lanes);
@@ -33,7 +36,8 @@ export default function RemixDetailPlayer({
         if (cancelled) return;
         loadRemix(
           (data.lanes as RemixLaneApi[]).map(laneFromApi),
-          projectFromApi(data.remix)
+          projectFromApi(data.remix),
+          { id: remixId, title }
         );
         resetHistory();
       })
@@ -58,7 +62,10 @@ export default function RemixDetailPlayer({
 
   return (
     <div className="mt-6 flex flex-col gap-4">
-      <StudioTransport user={user} remixId={remixId} defaultTitle={title} />
+      <StudioTransport user={user} remixId={remixId} defaultTitle={title} viewing artistName={artistName} />
+      <div className="rounded-xl border border-border bg-surface p-3">
+        <MixWaveform />
+      </div>
       <BpmSyncPanel />
       <StudioTimeline />
 

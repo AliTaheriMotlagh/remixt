@@ -3,11 +3,13 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { User } from "@/lib/auth";
+import NotificationBell from "./NotificationBell";
 
 const links = [
   { href: "/library", label: "Library" },
   { href: "/studio", label: "Studio" },
   { href: "/remixes", label: "Remixes" },
+  { href: "/challenges", label: "Challenges" },
   { href: "/leaderboard", label: "Top" },
   { href: "/upload", label: "Upload" },
 ];
@@ -16,6 +18,8 @@ export default function NavBar({ user, isAdmin = false }: { user: User | null; i
   const pathname = usePathname();
   const navLinks = isAdmin ? [...links, { href: "/admin", label: "Admin" }] : links;
   const router = useRouter();
+  // An embedded player (on someone else's site) is just the player.
+  if (pathname?.startsWith("/embed/")) return null;
 
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -54,7 +58,8 @@ export default function NavBar({ user, isAdmin = false }: { user: User | null; i
         </div>
 
         {user ? (
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <NotificationBell />
             <Link
               href={`/artist/${user.id}`}
               className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-surface"

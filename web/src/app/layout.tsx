@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import NavBar from "@/components/NavBar";
@@ -33,6 +33,12 @@ export const metadata: Metadata = {
     type: "website",
   },
   twitter: { card: "summary_large_image" },
+  // Installed to an iPhone's home screen, it opens full-screen like an app.
+  appleWebApp: { capable: true, title: "Remixt", statusBarStyle: "black" },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0a0a0f",
 };
 
 export default async function RootLayout({

@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import Waveform from "./Waveform";
+import TagInput from "./TagInput";
+import { KIND_INFO, STEM_KINDS, type StemKind } from "@/lib/stemKinds";
 import { formatMB } from "./SplitterStatus";
 import {
   fetchSongFromLink,
@@ -17,7 +19,7 @@ import { isYouTubeLink, YOUTUBE_UNAVAILABLE } from "@/lib/linkHosts";
 
 type Stem = {
   id: string;
-  kind: "vocals" | "beat";
+  kind: StemKind;
   peaks_json: string;
 };
 
@@ -30,6 +32,7 @@ type Track = {
   bpm: number | null;
   created_at: string;
   stems: Stem[];
+  tags?: string[];
 };
 
 /** Set while a song is being split, so a reload mid-split can be explained. */
@@ -53,6 +56,8 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
   const [job, setJob] = useState<{ name: string; stage: UploadStage } | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [link, setLink] = useState("");
+  const [rights, setRights] = useState(false);
+  const [newTags, setNewTags] = useState<string[]>([]);
   const splitterState = useSplitter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const running = useRef(false);
@@ -125,13 +130,17 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
 
   async function runJob(name: string, getFile: (onStage: (stage: UploadStage) => void) => Promise<File>) {
     if (running.current) return;
+    if (!rights) {
+      setUploadError("Tick the box to confirm you have the right to share this song first.");
+      return;
+    }
     running.current = true;
     setUploadError(null);
     setJob({ name, stage: { stage: "decoding" } });
     try {
       const file = await getFile((stage) => setJob({ name, stage }));
       rememberInFlight(file.name);
-      await uploadSong(file, (stage) => setJob({ name: file.name, stage }));
+      await uploadSong(file, (stage) => setJob({ name: file.name, stage }), { tags: newTags });
       fetchTracks();
       return true;
     } catch (err) {
@@ -179,6 +188,29 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
         <PhoneNotice onTryAnyway={() => setTryAnyway(true)} />
       ) : (
         <>
+          <label className="mb-4 flex items-start gap-2.5 rounded-xl border border-border bg-surface p-3 text-sm">
+            <input
+              type="checkbox"
+              checked={rights}
+              onChange={(e) => {
+                setRights(e.target.checked);
+                setUploadError(null);
+              }}
+              className="mt-0.5 h-4 w-4 shrink-0 accent-brand"
+            />
+            <span>
+              I made this song, or I have permission from whoever owns it to share it on Remixt for others to
+              remix. <span className="text-muted">Songs uploaded without the rights will be removed —</span>{" "}
+              <a href="/takedown" className="text-brand-strong hover:underline">
+                takedown requests
+              </a>
+              .
+            </span>
+          </label>
+          <div className="mb-4">
+            <p className="mb-1.5 text-xs font-medium text-muted">Tags for the next song (optional)</p>
+            <TagInput value={newTags} onChange={setNewTags} compact />
+          </div>
           <div
             role="button"
             tabIndex={busy ? -1 : 0}
@@ -290,7 +322,7 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
             </p>
           )}
           {tracks.map((track) => (
-            <TrackRow key={track.id} track={track} onAddToStudio={handleAddToStudio} />
+            <TrackRow key={track.id} track={track} onAddToStudio={handleAddToStudio} onChanged={fetchTracks} />
           ))}
         </div>
       </div>
@@ -323,12 +355,33 @@ function PhoneNotice({ onTryAnyway }: { onTryAnyway: () => void }) {
 function TrackRow({
   track,
   onAddToStudio,
+  onChanged,
 }: {
   track: Track;
   onAddToStudio: (track: Track, stem: Stem) => void;
+  onChanged: () => void;
 }) {
-  const vocals = track.stems.find((s) => s.kind === "vocals");
-  const beat = track.stems.find((s) => s.kind === "beat");
+  const [editingTags, setEditingTags] = useState<string[] | null>(null);
+  const [savingTags, setSavingTags] = useState(false);
+
+  async function saveTags() {
+    if (!editingTags) return;
+    setSavingTags(true);
+    try {
+      await fetch(`/api/tracks/${track.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tags: editingTags }),
+      });
+      setEditingTags(null);
+      onChanged();
+    } finally {
+      setSavingTags(false);
+    }
+  }
+
+  // Vocals and beat first, then the beat's parts on songs split since the 4-stem update.
+  const stems = STEM_KINDS.map((kind) => track.stems.find((s) => s.kind === kind)).filter((s): s is Stem => !!s);
 
   return (
     <div className="rounded-xl border border-border bg-surface p-4">
@@ -348,12 +401,50 @@ function TrackRow({
         <p className="mt-2 text-xs text-danger">{track.error}</p>
       )}
 
-      {track.status === "ready" && vocals && beat && (
+      {track.status === "ready" &&
+        (editingTags ? (
+          <div className="mt-2 flex flex-col gap-2">
+            <TagInput value={editingTags} onChange={setEditingTags} compact />
+            <div className="flex gap-2">
+              <button
+                onClick={saveTags}
+                disabled={savingTags}
+                className="rounded-md bg-brand px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-50"
+              >
+                {savingTags ? "Saving…" : "Save tags"}
+              </button>
+              <button onClick={() => setEditingTags(null)} className="text-xs text-muted hover:text-foreground">
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-2 flex flex-wrap items-center gap-1">
+            {(track.tags ?? []).map((tag) => (
+              <span key={tag} className="rounded-full bg-surface-raised px-2 py-0.5 text-[11px] text-muted">
+                #{tag}
+              </span>
+            ))}
+            <button
+              onClick={() => setEditingTags(track.tags ?? [])}
+              className="text-[11px] text-brand-strong hover:underline"
+            >
+              {track.tags?.length ? "edit tags" : "+ add tags"}
+            </button>
+          </div>
+        ))}
+
+      {track.status === "ready" && stems.length > 0 && (
         <div className="mt-3 flex flex-col gap-2">
-          <StemMiniRow label="Vocals" stem={vocals} color="var(--vocals)"
-            onAdd={() => onAddToStudio(track, vocals)} />
-          <StemMiniRow label="Beat" stem={beat} color="var(--beat)"
-            onAdd={() => onAddToStudio(track, beat)} />
+          {stems.map((stem) => (
+            <StemMiniRow
+              key={stem.id}
+              label={KIND_INFO[stem.kind].label}
+              stem={stem}
+              color={KIND_INFO[stem.kind].color}
+              onAdd={() => onAddToStudio(track, stem)}
+            />
+          ))}
         </div>
       )}
     </div>
