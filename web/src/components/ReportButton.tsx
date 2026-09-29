@@ -62,7 +62,7 @@ export default function ReportButton({
         ⚑ Report
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-30 mt-1 w-72 rounded-xl border border-border bg-surface p-3 text-left shadow-xl">
+        <div className="absolute right-0 top-full z-[45] mt-1 w-72 rounded-xl border border-border bg-surface p-3 text-left shadow-xl">
           {!signedIn ? (
             <p className="text-xs text-muted">
               <Link href="/login" className="text-brand-strong hover:underline">

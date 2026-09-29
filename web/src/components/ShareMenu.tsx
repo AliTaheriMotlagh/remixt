@@ -42,7 +42,7 @@ export default function ShareMenu({ remixId, title, onClose }: { remixId: string
   }
 
   return (
-    <div className="absolute left-0 top-full z-30 mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-xl border border-border bg-surface p-4 text-sm shadow-xl">
+    <div className="absolute left-0 top-full z-[45] mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-xl border border-border bg-surface p-4 text-sm shadow-xl">
       <div className="flex items-center justify-between">
         <p className="font-semibold">Share “{title}”</p>
         <button onClick={onClose} className="text-muted hover:text-foreground" aria-label="Close">
