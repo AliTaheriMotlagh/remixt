@@ -23,11 +23,46 @@ in the browser's cache, so later visits get it from disk in a few seconds.
 When they upload a song, it's split on their device:
 
 - about 1–2 minutes on a GPU (WebGPU: current Chrome and Edge, Safari 26+),
-- several minutes on the CPU otherwise,
-- phones may run out of memory on long songs.
+- several minutes on the CPU otherwise.
 
 The original file never leaves their device; only the two MP3 stems are
 uploaded.
+
+On phones and tablets (iPhone, iPad, Android) the splitter isn't
+preloaded. It loads when a song is picked and is unloaded again
+afterwards, because iOS reloads a tab that holds too much memory. Songs
+there can be up to 10 minutes (15 on a computer), and the screen is kept
+awake while a song is split.
+
+### Songs from a link
+
+The Upload page also takes a link (YouTube, SoundCloud, Bandcamp, Vimeo, a
+direct MP3 URL, and
+[many more sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md)).
+The server fetches the audio with [yt-dlp](https://github.com/yt-dlp/yt-dlp)
+and keeps it in storage under `imports/` for a moment. The browser
+downloads it, splits it like any other file, and deletes it. Leftovers
+older than an hour are swept away. (On R2, add a lifecycle rule that
+expires `imports/` after a day.)
+
+`npm run build` downloads the latest yt-dlp for the build machine into
+`web/bin/`, and it ships with the `/api/import` function. There's nothing
+to install, on Vercel or in Docker.
+
+**YouTube often blocks downloads from cloud servers** (Vercel, Oracle and
+other data centres) with *"Sign in to confirm you're not a bot"*. The
+user then sees a message suggesting they upload the file instead. Other
+sites usually work. If you need YouTube, two optional environment
+variables help:
+
+| Variable | Meaning |
+| --- | --- |
+| `YTDLP_PROXY` | e.g. `http://user:pass@host:port`: fetch through a residential proxy. |
+| `YTDLP_COOKIES` | The contents of a `cookies.txt` (Netscape format) exported from a browser signed in to YouTube. Use a throwaway account. |
+| `YTDLP_PATH` | Use an installed yt-dlp instead of the downloaded one. |
+
+Only let people import what they have the right to use; see
+[Before you open it to the public](#before-you-open-it-to-the-public).
 
 ---
 

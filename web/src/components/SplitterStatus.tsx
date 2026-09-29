@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { splitter, useSplitter } from "@/lib/client/splitter";
+import { isConstrainedDevice, splitter, useSplitter } from "@/lib/client/splitter";
 
 export function formatMB(bytes: number) {
   return `${Math.round(bytes / 1_000_000)} MB`;
@@ -24,6 +24,10 @@ export default function SplitterStatus({ signedIn }: { signedIn: boolean }) {
     // still loads it on demand.
     const connection = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection;
     if (connection?.saveData) return;
+    // On phones and tablets, holding the model in memory on every page gets
+    // the tab killed (iOS reloads it, e.g. while the file picker is open),
+    // so there it only loads for an actual upload.
+    if (isConstrainedDevice()) return;
     void splitter.load();
   }, [signedIn]);
 

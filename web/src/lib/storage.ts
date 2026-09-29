@@ -1,9 +1,9 @@
 import { createReadStream } from "fs";
-import { stat, mkdir } from "fs/promises";
+import { mkdir, readdir, rm, stat, writeFile } from "fs/promises";
 import path from "path";
 import { Readable } from "stream";
 import { AwsClient } from "aws4fetch";
-import { head, put } from "@vercel/blob";
+import { del, head, list, put } from "@vercel/blob";
 import { generateClientTokenFromReadWriteToken } from "@vercel/blob/client";
 
 // Where stems live. Three backends, picked by environment:
@@ -102,6 +102,9 @@ const CONTENT_TYPES: Record<string, string> = {
   ".flac": "audio/flac",
   ".ogg": "audio/ogg",
   ".aac": "audio/aac",
+  ".webm": "audio/webm",
+  ".opus": "audio/ogg",
+  ".mp4": "audio/mp4",
 };
 
 export function contentTypeFor(key: string): string {
@@ -337,4 +340,88 @@ export async function serveStorageFile(
       "Cache-Control": "private, max-age=3600",
     },
   });
+}
+
+// --- Files the server writes itself ------------------------------------------------
+//
+// A song fetched from a link (see lib/linkImport.ts) is parked under
+// imports/ just long enough for the browser to download it, split it and
+// throw it away, the same way it would a file from the device.
+
+/** Stores `body` at `key`, in whichever backend is in use. */
+export async function putObject(key: string, body: Buffer): Promise<void> {
+  const contentType = contentTypeFor(key);
+  if (blobToken) {
+    await put(key, body, {
+      access: await blobAccess(),
+      token: blobToken,
+      contentType,
+      addRandomSuffix: false,
+      allowOverwrite: true,
+      multipart: body.length > 8 * 1024 * 1024,
+    });
+    return;
+  }
+  if (r2) {
+    const res = await r2.client.fetch(objectUrl(key), {
+      method: "PUT",
+      body: new Uint8Array(body),
+      headers: { "Content-Type": contentType },
+    });
+    if (!res.ok) throw new Error(`storage PUT failed (HTTP ${res.status})`);
+    return;
+  }
+  const full = resolveKey(key);
+  if (!full) throw new Error(`invalid storage key: ${key}`);
+  await mkdir(path.dirname(full), { recursive: true });
+  await writeFile(/* turbopackIgnore: true */ full, body);
+}
+
+export async function deleteObject(key: string): Promise<void> {
+  if (blobToken) return del(key, { token: blobToken });
+  if (r2) {
+    await r2.client.fetch(objectUrl(key), { method: "DELETE" });
+    return;
+  }
+  const full = resolveKey(key);
+  if (full) await rm(/* turbopackIgnore: true */ full, { force: true });
+}
+
+/**
+ * Serves a stored object to the browser, with Range support: from R2's
+ * public URL, in slices through this app for Blob, or from disk.
+ */
+export function serveObject(key: string, rangeHeader: string | null): Promise<Response> | Response {
+  if (blobToken) return serveBlobRange(key, rangeHeader);
+  const remote = publicUrl(key);
+  if (remote) return Response.redirect(remote, 302);
+  return serveStorageFile(key, rangeHeader);
+}
+
+/**
+ * Deletes whatever's under `prefix` and older than `maxAgeMs` — imports
+ * whose browser never came back for them. R2 can't be listed cheaply
+ * from here; give its bucket a lifecycle rule for imports/ instead.
+ */
+export async function sweepOld(prefix: string, maxAgeMs: number): Promise<void> {
+  const cutoff = Date.now() - maxAgeMs;
+  if (blobToken) {
+    const { blobs } = await list({ prefix, token: blobToken, limit: 1000 });
+    const stale = blobs.filter((b) => b.uploadedAt.getTime() < cutoff).map((b) => b.url);
+    if (stale.length) await del(stale, { token: blobToken });
+    return;
+  }
+  if (r2) return;
+  const dir = resolveKey(prefix);
+  if (!dir) return;
+  const entries = await readdir(/* turbopackIgnore: true */ dir, {
+    recursive: true,
+    withFileTypes: true,
+  }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const full = path.join(entry.parentPath, entry.name);
+    const info = await stat(/* turbopackIgnore: true */ full).catch(() => null);
+    if (info && info.mtimeMs < cutoff) await rm(/* turbopackIgnore: true */ full, { force: true });
+  }
 }

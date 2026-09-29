@@ -26,6 +26,12 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  // yt-dlp for link import (downloaded into bin/ by scripts/fetch-ytdlp.mjs)
+  // isn't imported by any code, so tell the bundler to ship it with the
+  // route that runs it.
+  outputFileTracingIncludes: {
+    "/api/import": ["./bin/yt-dlp*"],
+  },
   turbopack: {
     root: path.join(__dirname),
   },

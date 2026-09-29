@@ -43,3 +43,7 @@ next-env.d.ts
 # ONNX Runtime files for the song splitter — copied from node_modules by
 # scripts/copy-ort.mjs before dev/build.
 /public/ort/
+
+# yt-dlp for link import — downloaded by scripts/fetch-ytdlp.mjs before
+# dev/build.
+/bin/

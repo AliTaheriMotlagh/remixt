@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "predev": "node scripts/copy-ort.mjs",
+    "predev": "node scripts/copy-ort.mjs && node scripts/fetch-ytdlp.mjs",
     "dev": "next dev",
-    "prebuild": "node scripts/copy-ort.mjs",
+    "prebuild": "node scripts/copy-ort.mjs && node scripts/fetch-ytdlp.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

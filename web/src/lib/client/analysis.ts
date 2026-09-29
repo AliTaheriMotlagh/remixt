@@ -207,15 +207,29 @@ function estimateBpm(onsets: Float32Array, onsetRate: number): number | null {
  * energy doesn't need a clean one.
  */
 export function estimateTempo(mono: Float32Array, sampleRate: number): number | null {
-  const factor = Math.max(1, Math.round(sampleRate / RATE));
+  const factor = tempoDecimation(sampleRate);
   const decimated = new Float32Array(Math.floor(mono.length / factor));
   for (let i = 0; i < decimated.length; i++) {
     let sum = 0;
     for (let j = 0; j < factor; j++) sum += mono[i * factor + j];
     decimated[i] = sum / factor;
   }
+  return estimateTempoDecimated(decimated, sampleRate / factor);
+}
+
+/** How many samples `estimateTempo` averages into one. */
+export function tempoDecimation(sampleRate: number): number {
+  return Math.max(1, Math.round(sampleRate / RATE));
+}
+
+/**
+ * `estimateTempo` for audio already averaged down by `tempoDecimation` —
+ * lets the splitter build it as the song streams past, instead of keeping
+ * a full-rate copy of the whole beat around just for this.
+ */
+export function estimateTempoDecimated(decimated: Float32Array, rate: number): number | null {
   const { onsets } = envelopes(decimated);
-  return estimateBpm(onsets, sampleRate / factor / BLOCK);
+  return estimateBpm(onsets, rate / BLOCK);
 }
 
 // --- Key ---------------------------------------------------------------------

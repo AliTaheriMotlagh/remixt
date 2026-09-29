@@ -1,6 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
+import { fetchInSlices } from "./stemFetch";
 import {
   STEM_BITRATES,
   type SplitResult,
@@ -34,6 +35,27 @@ const SAMPLE_RATE = 44100; // what the model was trained on
 const STEM_BITRATE: StemBitrate =
   STEM_BITRATES.find((b) => b === Number(process.env.NEXT_PUBLIC_STEM_BITRATE)) ?? 192;
 const MAX_SECONDS = 15 * 60;
+/**
+ * Phones and tablets get a shorter limit: the decoded song alone is ~21 MB
+ * a minute, and iOS kills a tab outright (it just reloads) when it asks for
+ * more memory than the device will give it.
+ */
+const MAX_SECONDS_MOBILE = 10 * 60;
+
+/**
+ * True on phones and tablets, where memory is tight and the OS kills tabs
+ * that use too much: keep the ~500 MB splitter out of memory until it's
+ * needed, and let it go again afterwards. iPadOS reports itself as a Mac,
+ * so it's recognised by its touchscreen.
+ */
+export function isConstrainedDevice(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  const iPadOS = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
+  if (iPadOS || /iPhone|iPad|iPod|Android|Mobi/i.test(ua)) return true;
+  const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  return memory !== undefined && memory <= 2;
+}
 
 export type SplitterState = {
   status: "idle" | "downloading" | "starting" | "ready" | "error";
@@ -151,6 +173,18 @@ class Splitter {
     return this.ready;
   }
 
+  /**
+   * Shuts the worker down, freeing the model's memory. The next `load`
+   * starts it again, from Cache Storage, in a few seconds.
+   */
+  unload() {
+    if (!this.worker || this.jobs.size > 0) return;
+    this.worker.terminate();
+    this.worker = null;
+    this.ready = null;
+    this.set({ status: "idle", backend: null });
+  }
+
   private fail(message: string) {
     this.worker?.terminate();
     this.worker = null;
@@ -196,6 +230,8 @@ export function useSplitter(): SplitterState {
 // --- Upload pipeline ------------------------------------------------------------
 
 export type UploadStage =
+  | { stage: "fetching-link" }
+  | { stage: "downloading"; progress: number }
   | { stage: "decoding" }
   | { stage: "loading-model" }
   | { stage: "splitting"; progress: number }
@@ -264,8 +300,13 @@ async function decode(file: File): Promise<{ left: Float32Array; right: Float32A
   } catch {
     throw new Error("This browser can't read that file — try an MP3 or WAV");
   }
-  if (buffer.duration > MAX_SECONDS) {
-    throw new Error(`Songs can be up to ${MAX_SECONDS / 60} minutes long`);
+  const limit = isConstrainedDevice() ? MAX_SECONDS_MOBILE : MAX_SECONDS;
+  if (buffer.duration > limit) {
+    throw new Error(
+      limit === MAX_SECONDS
+        ? `Songs can be up to ${limit / 60} minutes long`
+        : `On a phone or tablet songs can be up to ${limit / 60} minutes long — use a computer for longer ones`
+    );
   }
   const left = buffer.getChannelData(0).slice();
   const right = (buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : buffer.getChannelData(0)).slice();
@@ -287,9 +328,15 @@ export async function uploadSong(
   await splitter.load();
 
   onStage({ stage: "splitting", progress: 0 });
-  const result = await splitter.split(left, right, (stage, value) =>
-    onStage({ stage, progress: value })
-  );
+  let result: SplitResult;
+  try {
+    result = await splitter.split(left, right, (stage, value) =>
+      onStage({ stage, progress: value })
+    );
+  } finally {
+    // Give the memory back before uploading, and to the rest of the app.
+    if (isConstrainedDevice()) splitter.unload();
+  }
 
   onStage({ stage: "saving" });
   const created = await fetch("/api/tracks", {
@@ -325,4 +372,36 @@ export async function uploadSong(
     throw new Error(data?.error ?? "Couldn't finish saving the track");
   }
   return track.id as string;
+}
+
+/**
+ * Gets the song behind a link (YouTube, SoundCloud, …) as a File, ready
+ * for `uploadSong`. The server fetches it — browsers aren't allowed to
+ * read those sites — and parks it briefly; it's deleted as soon as it's
+ * here.
+ */
+export async function fetchSongFromLink(
+  link: string,
+  onStage: (stage: UploadStage) => void
+): Promise<File> {
+  onStage({ stage: "fetching-link" });
+  const res = await fetch("/api/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url: link }),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.id) throw new Error(data?.error ?? "Couldn't get a song from that link");
+
+  const url = `/api/import/${data.id}`;
+  onStage({ stage: "downloading", progress: 0 });
+  try {
+    const bytes = await fetchInSlices(url, (loaded, total) =>
+      onStage({ stage: "downloading", progress: loaded / Math.max(1, total) })
+    );
+    const ext = String(data.id).split(".").pop();
+    return new File([bytes], `${data.title}.${ext}`);
+  } finally {
+    void fetch(url, { method: "DELETE" }).catch(() => {});
+  }
 }

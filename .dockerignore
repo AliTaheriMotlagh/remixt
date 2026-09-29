@@ -10,3 +10,6 @@ web/.next
 web/.env*
 web/.agents
 web/public/ort
+# yt-dlp is fetched for the image's own OS/CPU during the build.
+web/bin
+web/.split-test

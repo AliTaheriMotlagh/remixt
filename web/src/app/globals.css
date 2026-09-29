@@ -68,6 +68,12 @@ body {
   outline: none;
   transition: border-color 0.15s ease;
 }
+/* iOS Safari zooms the page into any field with text under 16px. */
+@media (pointer: coarse) {
+  .input {
+    font-size: 16px;
+  }
+}
 .input::placeholder {
   color: var(--muted);
 }
