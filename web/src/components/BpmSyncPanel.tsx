@@ -112,7 +112,7 @@ export default function BpmSyncPanel() {
       <button
         onClick={() => setShowAi((v) => !v)}
         className="rounded-lg bg-gradient-to-r from-brand to-vocals px-3 py-1.5 text-xs font-bold text-white shadow-[0_0_16px_-4px_var(--brand)] transition-opacity hover:opacity-90"
-        title="Analyse every lane and suggest ways to match tempo, key, beat alignment, levels and FX"
+        title="Listen to every lane once and fit them together: match tempo (pitch stays as it is), lay each vocal phrase on the beat's bars, balance levels and FX"
       >
         ✨ AI Match {showAi ? "▾" : "▸"}
       </button>
@@ -220,9 +220,8 @@ export default function BpmSyncPanel() {
             <span className="text-xs font-semibold">✨ Match</span>
             {(
               [
-                ["tempo", "Tempo"],
-                ["key", "Key"],
-                ["timing", "Timing (beat grid)"],
+                ["tempo", "Tempo (no pitch change)"],
+                ["arrange", "Arrange vocal phrases on the beat"],
                 ["levels", "Levels"],
                 ["fx", "Starting FX"],
               ] as const

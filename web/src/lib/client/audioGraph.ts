@@ -250,13 +250,39 @@ export function createMasterChain(ctx: BaseAudioContext, destination: AudioNode)
   return { input: gain as AudioNode, gain };
 }
 
+/** Fade at each end of an arranged clip, so the cut doesn't click. */
+const CLIP_FADE_IN = 0.008;
+const CLIP_FADE_OUT = 0.03;
+
 /**
- * Schedules a lane's buffer on the timeline.
+ * Where each piece of a lane sounds, in timeline seconds, and where in the
+ * processed (already stretched) buffer it's read from. A lane without an
+ * arrangement is one piece: the whole buffer.
+ */
+function laneSegments(lane: StudioLane, buffer: AudioBuffer) {
+  if (!lane.clips?.length) {
+    return [{ start: lane.offsetSeconds, from: 0, length: buffer.duration, fades: false }];
+  }
+  const ratio = lane.tempoRatio;
+  return lane.clips.map((clip) => {
+    const from = Math.min(buffer.duration, clip.from / ratio);
+    return {
+      start: lane.offsetSeconds + clip.at / ratio,
+      from,
+      length: Math.max(0, Math.min(buffer.duration, clip.to / ratio) - from),
+      fades: true,
+    };
+  });
+}
+
+/**
+ * Schedules a lane's buffer on the timeline — one source per clip when
+ * the lane is arranged.
  *
  * `playhead` is a project-timeline position; a lane that starts later than
  * the playhead is scheduled into the future instead of being trimmed, and
- * a lane whose end is already behind the playhead is skipped entirely.
- * Returns null when the lane has nothing left to play.
+ * a piece whose end is already behind the playhead is skipped entirely.
+ * Returns the sources started (none when the lane has nothing left to play).
  */
 export function scheduleLane({
   ctx,
@@ -274,41 +300,64 @@ export function scheduleLane({
   startTime: number;
   playhead: number;
   until?: number;
-}): AudioBufferSourceNode | null {
-  const local = playhead - lane.offsetSeconds;
-  if (local >= buffer.duration) return null;
+}): AudioBufferSourceNode[] {
+  const segments = laneSegments(lane, buffer);
+  const laneEnd = Math.max(...segments.map((s) => s.start + s.length));
+  if (playhead >= laneEnd) return [];
 
-  const when = local < 0 ? startTime - local : startTime;
-  const bufferOffset = Math.max(0, local);
+  // Timeline position → audio-clock time.
+  const at = (seconds: number) => startTime + (seconds - playhead);
 
-  const source = ctx.createBufferSource();
-  source.buffer = buffer;
-  source.connect(chain.input);
-
+  // The lane's own fade in/out spans the whole lane, clips and all.
   const { fadeIn, fadeOut } = lane.fx;
   const fade = chain.fadeGain.gain;
   fade.cancelScheduledValues(startTime);
-
-  if (fadeIn > 0 && bufferOffset < fadeIn) {
-    const from = bufferOffset / fadeIn;
-    fade.setValueAtTime(from, when);
-    fade.linearRampToValueAtTime(1, when + (fadeIn - bufferOffset));
+  const laneStart = lane.offsetSeconds;
+  const into = Math.max(0, playhead - laneStart);
+  const when = at(Math.max(playhead, laneStart));
+  if (fadeIn > 0 && into < fadeIn) {
+    fade.setValueAtTime(into / fadeIn, when);
+    fade.linearRampToValueAtTime(1, at(laneStart + fadeIn));
   } else {
     fade.setValueAtTime(1, when);
   }
-
-  const remaining = buffer.duration - bufferOffset;
   if (fadeOut > 0) {
-    const fadeOutStartsIn = remaining - fadeOut;
-    if (fadeOutStartsIn > 0) {
-      fade.setValueAtTime(1, when + fadeOutStartsIn);
-      fade.linearRampToValueAtTime(0.0001, when + remaining);
-    } else {
-      fade.linearRampToValueAtTime(0.0001, when + remaining);
-    }
+    const fadeOutStart = laneEnd - fadeOut;
+    if (fadeOutStart > playhead) fade.setValueAtTime(1, at(fadeOutStart));
+    fade.linearRampToValueAtTime(0.0001, at(laneEnd));
   }
 
-  source.start(when, bufferOffset);
-  if (until !== undefined) source.stop(until);
-  return source;
+  const sources: AudioBufferSourceNode[] = [];
+  for (const segment of segments) {
+    const local = playhead - segment.start;
+    if (segment.length <= 0 || local >= segment.length) continue;
+    const offset = Math.max(0, local);
+    const startsAt = local < 0 ? startTime - local : startTime;
+    const remaining = segment.length - offset;
+
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    if (segment.fades) {
+      const gain = ctx.createGain();
+      const g = gain.gain;
+      if (offset < CLIP_FADE_IN) {
+        g.setValueAtTime(offset / CLIP_FADE_IN, startsAt);
+        g.linearRampToValueAtTime(1, startsAt + CLIP_FADE_IN - offset);
+      } else {
+        g.setValueAtTime(1, startsAt);
+      }
+      const tail = Math.min(CLIP_FADE_OUT, remaining);
+      g.setValueAtTime(1, startsAt + remaining - tail);
+      g.linearRampToValueAtTime(0, startsAt + remaining);
+      source.connect(gain);
+      gain.connect(chain.input);
+      source.onended = () => gain.disconnect();
+    } else {
+      source.connect(chain.input);
+    }
+    source.start(startsAt, segment.from + offset, remaining);
+    if (until !== undefined) source.stop(until);
+    sources.push(source);
+  }
+  return sources;
 }

@@ -68,11 +68,27 @@ export type StudioLane = {
   pitchSemitones: number;
   tempoRatio: number;
   fx: LaneFx;
+  /**
+   * When set, the lane plays only these pieces of its stem, each at its own
+   * place — AI Match cuts a vocal into phrases and lays them on the beat.
+   * Null plays the whole stem from `offsetSeconds`.
+   */
+  clips: LaneClip[] | null;
 };
+
+/**
+ * One piece of a stem placed on the timeline. All three are in the stem's
+ * own (unstretched) seconds, and `at` counts from the lane's start, so an
+ * arrangement stretches along with the lane when its tempo changes.
+ */
+export type LaneClip = { from: number; to: number; at: number };
 
 /** The fields a bulk edit (auto-match, or undoing one) may change. */
 export type LanePatch = Partial<
-  Pick<StudioLane, "bpm" | "musicalKey" | "pitchSemitones" | "tempoRatio" | "offsetSeconds" | "volume" | "fx">
+  Pick<
+    StudioLane,
+    "bpm" | "musicalKey" | "pitchSemitones" | "tempoRatio" | "offsetSeconds" | "volume" | "fx" | "clips"
+  >
 >;
 
 export type LoadableStem = {
@@ -199,6 +215,19 @@ type StudioState = {
   matchAllKeys: () => void;
   applyLanePatches: (patches: Record<string, LanePatch>, projectBpm?: number) => void;
   setOffset: (laneId: string, offsetSeconds: number) => void;
+  /** Moves one clip so it starts at `timelineSeconds`. */
+  moveClip: (laneId: string, index: number, timelineSeconds: number) => void;
+  /** Drops the arrangement: the lane plays its whole stem again. */
+  clearClips: (laneId: string) => void;
+  /** Replaces the lane's clips (`at` may be anything; the lane start follows). */
+  setClips: (laneId: string, clips: LaneClip[]) => void;
+  /** Cuts whichever clip is under `timelineSeconds` in two. Returns whether it did. */
+  splitAt: (laneId: string, timelineSeconds: number) => boolean;
+  /** Drags one edge of a clip to `timelineSeconds`, uncovering or hiding audio. */
+  trimClip: (laneId: string, index: number, edge: "start" | "end", timelineSeconds: number) => void;
+  deleteClip: (laneId: string, index: number) => void;
+  /** Copies a clip and places the copy straight after it. */
+  duplicateClip: (laneId: string, index: number) => void;
   nudgeOffset: (laneId: string, deltaSeconds: number) => void;
   setFx: (laneId: string, patch: Partial<LaneFx>) => void;
   applyPreset: (laneId: string, presetId: string) => void;
@@ -228,11 +257,48 @@ function recomputeDuration(lanes: StudioLane[]) {
   return lanes.reduce((max, lane) => Math.max(max, lane.offsetSeconds + lane.duration), 0);
 }
 
+/** How much of the stem's own time the lane spans, start to end. */
+function sourceSpan(lane: StudioLane) {
+  if (!lane.clips?.length) return lane.originalDuration;
+  return lane.clips.reduce((max, c) => Math.max(max, c.at + c.to - c.from), 0);
+}
+
 function withEffectiveDuration(lane: StudioLane): StudioLane {
   return {
     ...lane,
-    duration: lane.originalDuration / lane.tempoRatio,
+    duration: sourceSpan(lane) / lane.tempoRatio,
   };
+}
+
+/** Shortest a clip can be trimmed to, in stem seconds. */
+const MIN_CLIP = 0.05;
+
+/** A lane's clips — a lane that isn't arranged is one clip of its whole stem. */
+export function clipsOf(lane: StudioLane): LaneClip[] {
+  return lane.clips?.length ? lane.clips : [{ from: 0, to: lane.originalDuration, at: 0 }];
+}
+
+/** Where a clip starts on the timeline, in seconds. */
+export function clipStart(lane: StudioLane, clip: LaneClip) {
+  return lane.offsetSeconds + clip.at / lane.tempoRatio;
+}
+
+/**
+ * Keeps the lane starting where its first clip starts, so dragging the
+ * lane, its "Start" field and the nudges all mean the same thing with or
+ * without an arrangement.
+ */
+function withClipsNormalised(lane: StudioLane): StudioLane {
+  if (!lane.clips?.length) return withEffectiveDuration(lane);
+  const first = Math.min(...lane.clips.map((c) => c.at));
+  let offsetSeconds = lane.offsetSeconds + first / lane.tempoRatio;
+  let shift = first;
+  if (offsetSeconds < 0) {
+    shift += offsetSeconds * lane.tempoRatio;
+    offsetSeconds = 0;
+  }
+  const clips = lane.clips.map((c) => ({ ...c, at: c.at - shift }));
+  return withEffectiveDuration({ ...lane, offsetSeconds, clips });
 }
 
 /**
@@ -337,6 +403,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       pitchSemitones: 0,
       tempoRatio: 1,
       fx: { ...DEFAULT_FX },
+      clips: null,
     };
     set((state) => {
       const lanes = [...state.lanes, lane];
@@ -455,7 +522,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       const lanes = state.lanes.map((l) => {
         const patch = patches[l.laneId];
         if (!patch) return l;
-        return withEffectiveDuration({
+        return withClipsNormalised({
           ...l,
           ...patch,
           offsetSeconds: Math.max(0, patch.offsetSeconds ?? l.offsetSeconds),
@@ -476,6 +543,92 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       );
       return { lanes, duration: recomputeDuration(lanes) };
     });
+  },
+
+  moveClip: (laneId, index, timelineSeconds) => {
+    set((state) => {
+      const lanes = state.lanes.map((l) => {
+        if (l.laneId !== laneId || !l.clips?.[index]) return l;
+        const at = (Math.max(0, timelineSeconds) - l.offsetSeconds) * l.tempoRatio;
+        const clips = l.clips.map((c, i) => (i === index ? { ...c, at } : c));
+        return withClipsNormalised({ ...l, clips });
+      });
+      return { lanes, duration: recomputeDuration(lanes) };
+    });
+  },
+
+  clearClips: (laneId) => {
+    set((state) => {
+      const lanes = state.lanes.map((l) => {
+        if (l.laneId !== laneId || !l.clips?.length) return l;
+        // Keep the first phrase where it was, with the rest of the take
+        // around it as originally sung.
+        const first = l.clips.reduce((a, b) => (b.at < a.at ? b : a));
+        const offsetSeconds = Math.max(0, l.offsetSeconds + (first.at - first.from) / l.tempoRatio);
+        return withEffectiveDuration({ ...l, offsetSeconds, clips: null });
+      });
+      return { lanes, duration: recomputeDuration(lanes) };
+    });
+  },
+
+  setClips: (laneId, clips) => {
+    set((state) => {
+      const lanes = state.lanes.map((l) =>
+        l.laneId === laneId && clips.length ? withClipsNormalised({ ...l, clips }) : l
+      );
+      return { lanes, duration: recomputeDuration(lanes) };
+    });
+  },
+
+  splitAt: (laneId, timelineSeconds) => {
+    const lane = get().lanes.find((l) => l.laneId === laneId);
+    if (!lane) return false;
+    const clips = clipsOf(lane);
+    const at = (timelineSeconds - lane.offsetSeconds) * lane.tempoRatio;
+    const index = clips.findIndex((c) => at > c.at + MIN_CLIP && at < c.at + (c.to - c.from) - MIN_CLIP);
+    if (index < 0) return false;
+    const clip = clips[index];
+    const cut = clip.from + (at - clip.at);
+    const next = [
+      ...clips.slice(0, index),
+      { from: clip.from, to: cut, at: clip.at },
+      { from: cut, to: clip.to, at },
+      ...clips.slice(index + 1),
+    ];
+    get().setClips(laneId, next);
+    return true;
+  },
+
+  trimClip: (laneId, index, edge, timelineSeconds) => {
+    const lane = get().lanes.find((l) => l.laneId === laneId);
+    const clips = lane && clipsOf(lane);
+    const clip = clips?.[index];
+    if (!lane || !clips || !clip) return;
+    const moved = (timelineSeconds - clipStart(lane, clip)) * lane.tempoRatio;
+    let next: LaneClip;
+    if (edge === "start") {
+      const delta = Math.min(clip.to - clip.from - MIN_CLIP, Math.max(-clip.from, moved));
+      next = { from: clip.from + delta, to: clip.to, at: clip.at + delta };
+    } else {
+      const to = Math.min(lane.originalDuration, Math.max(clip.from + MIN_CLIP, clip.from + moved));
+      next = { ...clip, to };
+    }
+    get().setClips(laneId, clips.map((c, i) => (i === index ? next : c)));
+  },
+
+  deleteClip: (laneId, index) => {
+    const lane = get().lanes.find((l) => l.laneId === laneId);
+    if (!lane?.clips || lane.clips.length < 2) return;
+    get().setClips(laneId, lane.clips.filter((_, i) => i !== index));
+  },
+
+  duplicateClip: (laneId, index) => {
+    const lane = get().lanes.find((l) => l.laneId === laneId);
+    const clips = lane && clipsOf(lane);
+    const clip = clips?.[index];
+    if (!clips || !clip) return;
+    const copy = { ...clip, at: clip.at + (clip.to - clip.from) };
+    get().setClips(laneId, [...clips.slice(0, index + 1), copy, ...clips.slice(index + 1)]);
   },
 
   nudgeOffset: (laneId, deltaSeconds) => {
@@ -565,7 +718,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     }),
 
   loadRemix: (lanes, project) => {
-    const withDurations = lanes.map(withEffectiveDuration);
+    const withDurations = lanes.map(withClipsNormalised);
     const duration = recomputeDuration(withDurations);
     set((state) => ({
       lanes: withDurations,

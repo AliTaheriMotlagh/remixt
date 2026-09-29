@@ -20,7 +20,11 @@ export type StemAnalysis = {
   keyConfidence: number;
   /** Onset strength per block, for locating the beat. */
   onsets: Float32Array;
-  /** Blocks per second of `onsets`. */
+  /** Onsets of the low end only (below ~150 Hz) — where the kick drum is. */
+  lowOnsets: Float32Array;
+  /** Mean power per block. */
+  energy: Float32Array;
+  /** Blocks per second of `onsets`, `lowOnsets` and `energy`. */
   onsetRate: number;
   /** Seconds into the stem where it first gets going (a vocal's entry). */
   entry: number;
@@ -46,12 +50,15 @@ const yieldToUI = () => new Promise((resolve) => setTimeout(resolve, 0));
 async function runAnalysis(buffer: AudioBuffer): Promise<StemAnalysis> {
   const mono = await downmix(buffer);
   const { energy, onsets } = envelopes(mono);
+  const lowOnsets = envelopes(lowPass(mono)).onsets;
   const { key, confidence } = await detectKey(mono);
   const onsetRate = RATE / BLOCK;
   return {
     key,
     keyConfidence: confidence,
     onsets,
+    lowOnsets,
+    energy,
     onsetRate,
     entry: findEntry(energy) / onsetRate,
     loudness: activeLoudness(energy),
@@ -92,6 +99,20 @@ function envelopes(mono: Float32Array) {
     previous = current;
   }
   return { energy, onsets };
+}
+
+/** Two one-pole low-passes at ~150 Hz: keeps the kick and bass, drops the rest. */
+function lowPass(mono: Float32Array) {
+  const a = 1 - Math.exp((-2 * Math.PI * 150) / RATE);
+  const out = new Float32Array(mono.length);
+  let y1 = 0;
+  let y2 = 0;
+  for (let i = 0; i < mono.length; i++) {
+    y1 += a * (mono[i] - y1);
+    y2 += a * (y1 - y2);
+    out[i] = y2;
+  }
+  return out;
 }
 
 function percentile(values: Float32Array, p: number) {
@@ -154,6 +175,138 @@ export function beatPhase(analysis: StemAnalysis, periodSeconds: number) {
   return bestPhase / onsetRate;
 }
 
+/**
+ * Every beat of the stem, in seconds, following the hits the music really
+ * has rather than an ideal grid — so a live recording's drift, or a BPM
+ * that's a fraction off, doesn't pull things apart over a whole song.
+ * Dynamic programming over the onset envelope (Ellis, 2007): each beat is
+ * worth its onset strength, and each gap costs more the further it strays
+ * from one period. `tightness` sets how strongly the spacing is held; the
+ * beat keeps its tempo straight through silences either way.
+ */
+export function trackBeats(analysis: StemAnalysis, bpm: number, tightness = 100): Float64Array {
+  const { onsets, onsetRate } = analysis;
+  const period = (60 / bpm) * onsetRate;
+  const n = onsets.length;
+  if (!(period > 4) || n < period * 4) return new Float64Array(0);
+
+  let sum = 0;
+  let sumSq = 0;
+  const local = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    local[i] = onsetAt(onsets, i);
+    sum += local[i];
+    sumSq += local[i] * local[i];
+  }
+  const std = Math.sqrt(Math.max(1e-12, sumSq / n - (sum / n) ** 2));
+  for (let i = 0; i < n; i++) local[i] /= std;
+
+  const minGap = Math.max(1, Math.round(period / 2));
+  const maxGap = Math.round(period * 2);
+  const penalty = new Float64Array(maxGap + 1);
+  for (let gap = minGap; gap <= maxGap; gap++) penalty[gap] = tightness * Math.log(gap / period) ** 2;
+
+  const score = new Float64Array(n);
+  const back = new Int32Array(n).fill(-1);
+  for (let t = 0; t < n; t++) {
+    let best = -Infinity;
+    let from = -1;
+    for (let gap = minGap; gap <= maxGap && gap <= t; gap++) {
+      const candidate = score[t - gap] - penalty[gap];
+      if (candidate > best) {
+        best = candidate;
+        from = t - gap;
+      }
+    }
+    // Starting fresh beats a predecessor that's only a burden.
+    if (from >= 0 && best > 0) {
+      score[t] = local[t] + best;
+      back[t] = from;
+    } else {
+      score[t] = local[t];
+    }
+  }
+
+  let last = n - 1;
+  for (let t = Math.max(0, n - Math.ceil(period)); t < n; t++) if (score[t] > score[last]) last = t;
+  const found: number[] = [];
+  for (let t = last; t >= 0; t = back[t]) found.push(t / onsetRate);
+  found.reverse();
+
+  // Each beat lands on a whole block, so on its own it wobbles by tens of
+  // milliseconds. Averaging it with its neighbours (for a symmetric
+  // window, the same as a local straight-line fit) evens that out and
+  // still follows a tempo that drifts over the song.
+  const beats = found.map((_, i) => {
+    const k = Math.min(4, i, found.length - 1 - i);
+    let s = 0;
+    for (let j = i - k; j <= i + k; j++) s += found[j];
+    return s / (2 * k + 1);
+  });
+
+  // Carry the grid on to both ends of the stem at the same tempo, so every
+  // moment of it has a beat position.
+  const step = 60 / bpm;
+  const duration = n / onsetRate;
+  while (beats.length && beats[0] - step >= 0) beats.unshift(beats[0] - step);
+  while (beats.length && beats[beats.length - 1] + step <= duration) beats.push(beats[beats.length - 1] + step);
+  return Float64Array.from(beats);
+}
+
+export type Phrase = { start: number; end: number };
+
+/**
+ * The stretches where a vocal is actually singing, in seconds — the gaps
+ * between them are breaths, rests and instrumental breaks. Hysteresis
+ * (loud to start, quieter to stop) keeps a phrase from breaking up on
+ * every soft syllable, and the floor sits above the faint bleed of the
+ * original song that a separated vocal carries between lines.
+ */
+export function findPhrases(analysis: StemAnalysis): Phrase[] {
+  const { energy, onsetRate } = analysis;
+  const n = energy.length;
+  const smooth = new Float32Array(n);
+  const radius = 3;
+  for (let i = 0; i < n; i++) {
+    let s = 0;
+    let count = 0;
+    for (let j = Math.max(0, i - radius); j <= Math.min(n - 1, i + radius); j++) {
+      s += energy[j];
+      count++;
+    }
+    smooth[i] = s / count;
+  }
+
+  const loud = percentile(smooth, 0.95);
+  if (!(loud > 0)) return [];
+  const on = loud * 0.02; // -17 dB
+  const off = loud * 0.006; // -22 dB
+  const raw: [number, number][] = [];
+  let startedAt = -1;
+  for (let i = 0; i < n; i++) {
+    if (startedAt < 0 && smooth[i] > on) startedAt = i;
+    else if (startedAt >= 0 && smooth[i] < off) {
+      raw.push([startedAt, i]);
+      startedAt = -1;
+    }
+  }
+  if (startedAt >= 0) raw.push([startedAt, n]);
+
+  // Breaths shorter than this stay inside the phrase.
+  const minGap = 0.3 * onsetRate;
+  const merged: [number, number][] = [];
+  for (const segment of raw) {
+    const previous = merged[merged.length - 1];
+    if (previous && segment[0] - previous[1] < minGap) previous[1] = segment[1];
+    else merged.push([...segment]);
+  }
+
+  const minLength = 0.12 * onsetRate;
+  return merged
+    .filter(([a, b]) => b - a >= minLength)
+    .map(([a, b]) => ({ start: a / onsetRate, end: b / onsetRate }));
+}
+
 function autocorrelation(onsets: Float32Array, lag: number) {
   let sum = 0;
   for (let i = 0; i + lag < onsets.length; i++) sum += onsets[i] * onsets[i + lag];
@@ -198,6 +351,48 @@ function estimateBpm(onsets: Float32Array, onsetRate: number): number | null {
   const beats = onsets.length > bestLag * 12 ? 4 : 1;
   const refined = refinePeak(onsets, bestLag * beats, beats) / beats;
   return Math.round((60 * onsetRate * 10) / refined) / 10;
+}
+
+/** How much onset energy a strict grid at `bpm` collects, at its best phase. */
+function gridScore(onsets: Float32Array, onsetRate: number, bpm: number) {
+  const period = (60 / bpm) * onsetRate;
+  let best = 0;
+  for (let phase = 0; phase < period; phase += 0.5) {
+    let sum = 0;
+    let count = 0;
+    for (let t = phase; t < onsets.length - 1; t += period) {
+      const i = Math.floor(t);
+      const f = t - i;
+      sum += onsets[i] * (1 - f) + onsets[i + 1] * f;
+      count++;
+    }
+    best = Math.max(best, sum / count);
+  }
+  return best;
+}
+
+/**
+ * Sharpens a tempo reading to the hundredth: tries every tempo within 2%
+ * and keeps the one whose grid lines up with the most hits across the
+ * whole song. The stored reading is only good to a tenth or so, which over
+ * a song adds up to beats of drift — and a stretch ratio that far off.
+ * Returns the reading unchanged when nothing fits clearly better.
+ */
+export function refineTempo(analysis: StemAnalysis, bpm: number): number {
+  const { onsets, onsetRate } = analysis;
+  if (onsets.length < onsetRate * 20) return bpm;
+  const base = gridScore(onsets, onsetRate, bpm);
+  let best = bpm;
+  let bestScore = base;
+  for (let r = -0.02; r <= 0.02; r += 0.0005) {
+    const candidate = bpm * (1 + r);
+    const score = gridScore(onsets, onsetRate, candidate);
+    if (score > bestScore) {
+      bestScore = score;
+      best = candidate;
+    }
+  }
+  return bestScore > base * 1.05 ? Math.round(best * 100) / 100 : bpm;
 }
 
 /**

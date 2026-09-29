@@ -1,30 +1,63 @@
 "use client";
 
-import { analyzeStem, beatPhase, type StemAnalysis } from "./analysis";
+import { analyzeStem, beatPhase, findPhrases, refineTempo, type StemAnalysis } from "./analysis";
+import { PRE_ROLL, TAIL, arrangeVocal, beatStructure } from "./arrange";
 import { audioEngine } from "./audioEngine";
-import { bestKeyShift, camelotCode, keyLabel, transposeKey } from "./musicKey";
+import { fetchStem } from "./stemFetch";
+import { bestKeyShift, keyLabel } from "./musicKey";
 import { withoutHistory } from "./studioHistory";
 import {
   DEFAULT_FX,
   FX_PRESETS,
   beatLength,
+  clipsOf,
   referenceLane,
   useStudioStore,
+  type LaneClip,
   type LaneFx,
   type LanePatch,
+  effectiveKey,
   type StudioLane,
 } from "./studioStore";
 
 // "AI Match": listens to every lane and fits them together in one go —
-// tempo (with half/double-time correction), key, beat alignment, relative
-// levels and a starting FX chain. It's signal analysis in the browser
-// (see analysis.ts), deterministic and explainable; the report lists each
-// decision so the user can see what changed and undo it.
+// tempo (with half/double-time correction), a phrase-by-phrase
+// arrangement of each vocal on the beat's bars (see arrange.ts), relative
+// levels and a starting FX chain. It never changes pitch: keys are only
+// reported, and shifting one stays the user's call. It's signal analysis
+// in the browser (see analysis.ts), deterministic and explainable; the
+// report lists each decision so the user can see what changed and undo it.
 
 async function analyzeLane(lane: StudioLane): Promise<StemAnalysis | null> {
   await audioEngine.ensureLane(lane.laneId, lane.stemId);
   const buffer = audioEngine.getRawBuffer(lane.laneId);
   return buffer ? analyzeStem(lane.stemId, buffer) : null;
+}
+
+const guideCache = new Map<string, Promise<StemAnalysis | null>>();
+
+/**
+ * A vocal's original beat — the other stem of the song it came from —
+ * analysed. Its hits say exactly where the singer's bars fall, which the
+ * voice alone can't. Null when that beat isn't in the library any more.
+ */
+function analyzeGuide(lane: StudioLane): Promise<StemAnalysis | null> {
+  const cached = guideCache.get(lane.stemId);
+  if (cached) return cached;
+  const promise = (async () => {
+    const res = await fetch(`/api/stems/${lane.stemId}/partner`);
+    if (!res.ok) return null;
+    const { id } = (await res.json()) as { id: string | null };
+    if (!id) return null;
+    const inProject = useStudioStore.getState().lanes.find((l) => l.stemId === id);
+    if (inProject) return analyzeLane(inProject);
+    const data = await fetchStem(id);
+    // Decoding needs a context but not a running one.
+    const buffer = await new OfflineAudioContext(1, 1, 44100).decodeAudioData(data);
+    return analyzeStem(id, buffer);
+  })().catch(() => null);
+  guideCache.set(lane.stemId, promise);
+  return promise;
 }
 
 const keyAttempted = new Set<string>();
@@ -53,28 +86,56 @@ export async function detectMissingKeys() {
   }
 }
 
+/**
+ * Splits a lane at its silences and drops them, leaving every phrase
+ * exactly where it was — cleans the bleed out of a vocal's gaps and makes
+ * each line a clip that can be moved on its own. Returns how many clips
+ * the lane has afterwards (0: nothing to cut).
+ */
+export async function cutSilences(laneId: string): Promise<number> {
+  const lane = useStudioStore.getState().lanes.find((l) => l.laneId === laneId);
+  if (!lane) return 0;
+  const analysis = await analyzeLane(lane);
+  if (!analysis) return 0;
+  const phrases = findPhrases(analysis);
+  const current = useStudioStore.getState().lanes.find((l) => l.laneId === laneId);
+  if (!current || phrases.length === 0) return 0;
+
+  const clips: LaneClip[] = [];
+  for (const clip of clipsOf(current)) {
+    for (const p of phrases) {
+      const from = Math.max(clip.from, p.start - PRE_ROLL);
+      const to = Math.min(clip.to, p.end + TAIL);
+      if (to - from > 0.05) clips.push({ from, to, at: clip.at + (from - clip.from) });
+    }
+  }
+  if (clips.length === 0) return 0;
+  useStudioStore.getState().setClips(laneId, clips);
+  return clips.length;
+}
+
 /** Which parts of the mix AI Match is allowed to change. */
 export type MatchSteps = {
   tempo: boolean;
-  key: boolean;
-  timing: boolean;
+  /** Beat grid alignment, and each vocal cut into phrases and laid on the beat. */
+  arrange: boolean;
   levels: boolean;
   fx: boolean;
 };
 
-export const ALL_STEPS: MatchSteps = { tempo: true, key: true, timing: true, levels: true, fx: true };
+export const ALL_STEPS: MatchSteps = { tempo: true, arrange: true, levels: true, fx: true };
 
 /** One way of fitting the lanes together, ready to apply. */
 export type MatchPlan = {
   id: string;
   title: string;
-  /** One line: the target tempo/key and what gets bent to reach it. */
+  /** One line: the target tempo and what gets stretched to reach it. */
   summary: string;
   /** Every decision, for the "what changed" report. */
   lines: string[];
   patches: Record<string, LanePatch>;
   projectBpm: number;
-  /** How far the audio gets bent (semitones + stretch); lower sounds more natural. */
+  /** How far the audio gets stretched; lower sounds more natural. */
   cost: number;
   recommended: boolean;
 };
@@ -89,10 +150,6 @@ function isDefaultFx(fx: LaneFx) {
   return (Object.keys(DEFAULT_FX) as (keyof LaneFx)[]).every((k) => fx[k] === DEFAULT_FX[k]);
 }
 
-function formatShift(semitones: number) {
-  return semitones > 0 ? `+${semitones}` : `${semitones}`;
-}
-
 function db(ratio: number) {
   return `${ratio >= 1 ? "+" : ""}${(20 * Math.log10(ratio)).toFixed(1)} dB`;
 }
@@ -103,12 +160,14 @@ function shortTitle(title: string) {
 
 /**
  * Works out one match with `anchor` as the lane everything else follows
- * (its tempo, its key, its beat grid, its level). Pure: returns patches,
- * changes nothing.
+ * (its tempo, its beat grid, its level). Pure: returns patches, changes
+ * nothing.
  */
 function buildPlan(
   original: StudioLane[],
   analyses: Map<string, StemAnalysis>,
+  guides: Map<string, StemAnalysis>,
+  sharpened: Map<string, number>,
   steps: MatchSteps,
   anchor: StudioLane | undefined,
   currentBpm: number
@@ -122,7 +181,7 @@ function buildPlan(
     const analysis = analyses.get(lane.laneId);
     return {
       ...lane,
-      bpm: lane.bpm ?? analysis?.bpmEstimate ?? null,
+      bpm: sharpened.get(lane.laneId) ?? lane.bpm ?? analysis?.bpmEstimate ?? null,
       musicalKey: lane.musicalKey ?? analysis?.key ?? null,
     };
   });
@@ -137,7 +196,13 @@ function buildPlan(
     const before = original.find((l) => l.laneId === lane.laneId)!;
     if (lane.bpm !== before.bpm) {
       patch(lane.laneId, { bpm: lane.bpm });
-      lines.push(`${lane.trackTitle}: no stored BPM — estimated ${lane.bpm?.toFixed(1)}`);
+      lines.push(
+        before.bpm
+          ? `${lane.trackTitle}: BPM sharpened ${before.bpm.toFixed(1)} → ${lane.bpm?.toFixed(2)} from ${
+              lane.kind === "vocals" ? "its original beat's" : "its"
+            } hits across the whole song`
+          : `${lane.trackTitle}: no stored BPM — estimated ${lane.bpm?.toFixed(1)}`
+      );
     }
     if (lane.musicalKey && !before.musicalKey) patch(lane.laneId, { musicalKey: lane.musicalKey });
   }
@@ -175,59 +240,116 @@ function buildPlan(
     }
   }
 
-  // --- 2. Key -----------------------------------------------------------------
+  // --- 2. Keys (reported, never changed) -------------------------------------------
+  // Pitch-shifting a stem colours it, so AI Match leaves pitch as it is
+  // and only says how the keys sit; the lane's Key → Match does the shift
+  // if the user wants it.
   const keyRef = anchorOf((l) => !!l.musicalKey);
-  let targetKey = keyRef?.musicalKey ? transposeKey(keyRef.musicalKey, keyRef.pitchSemitones) : null;
-  if (steps.key) {
-    if (keyRef && targetKey) {
-      lines.push(`Key: matching to ${keyLabel(targetKey)} (${camelotCode(targetKey)}) from “${keyRef.trackTitle}”`);
-      for (const lane of working) {
-        if (!lane.musicalKey || lane.laneId === keyRef.laneId) continue;
-        const match = bestKeyShift(lane.musicalKey, targetKey);
-        lane.pitchSemitones = match.semitones;
-        patch(lane.laneId, { pitchSemitones: match.semitones });
-        const result = transposeKey(lane.musicalKey, match.semitones);
-        const how =
-          match.relation === "same"
-            ? "same key"
-            : match.relation === "relative"
-              ? "relative key, same notes"
-              : "a fifth away on the Camelot wheel — a smaller, cleaner shift";
-        lines.push(
-          `${lane.trackTitle}: ${keyLabel(lane.musicalKey)} ${formatShift(match.semitones)} st → ${keyLabel(result)} (${camelotCode(result)}, ${how})`
-        );
-      }
-    } else {
-      lines.push("Key: couldn't detect a key on any lane");
-      targetKey = null;
+  const refKey = keyRef ? effectiveKey(keyRef) : null;
+  if (keyRef && refKey) {
+    for (const lane of working) {
+      const key = effectiveKey(lane);
+      if (!key || lane.laneId === keyRef.laneId) continue;
+      const match = bestKeyShift(key, refKey);
+      lines.push(
+        match.semitones === 0
+          ? `Key: ${lane.trackTitle} (${keyLabel(key)}) already sits with ${keyLabel(refKey)} — ${
+              match.relation === "neighbour" ? "neighbours on the Camelot wheel" : "same notes"
+            }`
+          : `Key: ${lane.trackTitle} is ${keyLabel(key)} against ${keyLabel(refKey)} — pitch left alone; its Key → Match would shift it ${
+              match.semitones > 0 ? "+" : ""
+            }${match.semitones} st if it clashes`
+      );
     }
   }
 
-  // --- 3. Beat alignment --------------------------------------------------------
-  // First slide the reference lane (by under half a beat) so its hits land
-  // on the project grid — then the ruler, snap and metronome all agree with
-  // the music. Then drop every other lane's entry onto a bar line.
-  if (steps.timing && tempoRef?.bpm) {
+  // --- 3. Beat grid and arrangement ----------------------------------------------------
+  // First slide the reference lane (by under half a bar) so its downbeats
+  // land on the project's bar lines — then the ruler, snap and metronome
+  // all agree with the music. Then lay every vocal on the beat phrase by
+  // phrase, and put any other lane's entry on a bar line.
+  if (steps.arrange && tempoRef?.bpm) {
     const beat = beatLength(projectBpm);
     const bar = beat * 4;
-    const refAnalysis = analyses.get(tempoRef.laneId);
     const ref = tempoRef;
+    const refAnalysis = analyses.get(ref.laneId);
+    const refStructure = refAnalysis ? beatStructure(refAnalysis, ref.bpm!) : null;
     const startOffset = ref.offsetSeconds;
-    if (refAnalysis) {
-      const phase = beatPhase(refAnalysis, 60 / ref.bpm!) / ref.tempoRatio;
-      const misalignment = (((ref.offsetSeconds + phase) % beat) + beat) % beat;
-      let offset = ref.offsetSeconds + (misalignment > beat / 2 ? beat - misalignment : -misalignment);
-      if (offset < 0) offset += beat;
+    let firstDownbeat: number | null = null;
+    if (refStructure) {
+      firstDownbeat = refStructure.grid.time(refStructure.downbeat) / ref.tempoRatio;
+    } else if (refAnalysis) {
+      firstDownbeat = beatPhase(refAnalysis, 60 / ref.bpm!) / ref.tempoRatio;
+    }
+    if (firstDownbeat !== null) {
+      const unit = refStructure ? bar : beat;
+      const misalignment = (((ref.offsetSeconds + firstDownbeat) % unit) + unit) % unit;
+      let offset = ref.offsetSeconds + (misalignment > unit / 2 ? unit - misalignment : -misalignment);
+      if (offset < 0) offset += unit;
       if (Math.abs(offset - ref.offsetSeconds) > 0.001) {
         ref.offsetSeconds = offset;
         patch(ref.laneId, { offsetSeconds: offset });
-        lines.push(`“${ref.trackTitle}”: moved ${Math.round((offset - startOffset) * 1000)} ms so its beat sits on the grid`);
+        lines.push(
+          `“${ref.trackTitle}”: moved ${Math.round((offset - startOffset) * 1000)} ms so its ${
+            refStructure ? "downbeats sit on the bar lines" : "beat sits on the grid"
+          }`
+        );
       }
     }
+
+    // The beat the vocals are laid on: the reference if it's a beat, else
+    // the first beat lane (the reference vocal then only sets the tempo).
+    const backing = ref.kind === "beat" ? ref : working.find((l) => l.kind === "beat" && l.bpm);
+    const backingAnalysis = backing && analyses.get(backing.laneId);
+    const backingStructure =
+      backing === ref ? refStructure : backing && backingAnalysis ? beatStructure(backingAnalysis, backing.bpm!) : null;
 
     for (const lane of working) {
       const analysis = analyses.get(lane.laneId);
       if (lane.laneId === tempoRef.laneId || !analysis || !lane.bpm) continue;
+
+      if (lane.kind === "vocals" && backing && backingAnalysis && backingStructure) {
+        const vocalTempo = lane.bpm * lane.tempoRatio;
+        const beatTempo = backing.bpm! * backing.tempoRatio;
+        if (Math.abs(Math.log(vocalTempo / beatTempo)) > 0.03) {
+          lines.push(
+            `${lane.trackTitle}: plays at ${vocalTempo.toFixed(1)} BPM against ${beatTempo.toFixed(1)} — match the tempo first to arrange it`
+          );
+          continue;
+        }
+        const result = arrangeVocal(
+          {
+            analysis,
+            bpm: lane.bpm,
+            tempoRatio: lane.tempoRatio,
+            offsetSeconds: lane.offsetSeconds,
+            title: lane.trackTitle,
+            duration: lane.originalDuration,
+            guide: guides.get(lane.laneId),
+          },
+          {
+            analysis: backingAnalysis,
+            bpm: backing.bpm!,
+            tempoRatio: backing.tempoRatio,
+            offsetSeconds: backing.offsetSeconds,
+            title: backing.trackTitle,
+            duration: backing.originalDuration,
+          },
+          backingStructure,
+          bar
+        );
+        if ("error" in result) {
+          lines.push(result.error);
+        } else {
+          lane.offsetSeconds = result.offsetSeconds;
+          lane.clips = result.clips;
+          patch(lane.laneId, { offsetSeconds: result.offsetSeconds, clips: result.clips });
+          lines.push(...result.lines);
+          continue;
+        }
+      }
+
+      // Anything not arranged: the whole take, its entry on a bar line.
       const period = 60 / lane.bpm;
       const phase = beatPhase(analysis, period);
       // The beat in the lane's own groove nearest to where it comes in.
@@ -241,8 +363,9 @@ function buildPlan(
       if (barIndex * bar < entry) barIndex = Math.ceil(entry / bar);
       const offset = barIndex * bar - entry;
       lane.offsetSeconds = offset;
-      patch(lane.laneId, { offsetSeconds: offset });
-      lines.push(`${lane.trackTitle}: first phrase lands on bar ${barIndex + 1}, locked to the beat grid`);
+      lane.clips = null;
+      patch(lane.laneId, { offsetSeconds: offset, clips: null });
+      lines.push(`${lane.trackTitle}: comes in on bar ${barIndex + 1}, locked to the beat grid`);
     }
   }
 
@@ -289,31 +412,23 @@ function buildPlan(
     }
   }
 
-  // How much bending this plan asks for: every semitone of pitch shift,
-  // and every ~5% of time-stretch, costs about the same audibly.
+  // How much stretching this plan asks for — every ~5% is audible.
   let cost = 0;
   const bends: string[] = [];
   for (const lane of working) {
-    const semis = Math.abs(lane.pitchSemitones);
-    const stretch = Math.abs(Math.log(lane.tempoRatio)) * 20;
-    cost += semis + stretch;
-    const parts: string[] = [];
-    if (steps.key && patches[lane.laneId]?.pitchSemitones !== undefined && lane.pitchSemitones !== 0) {
-      parts.push(`${formatShift(lane.pitchSemitones)} st`);
-    }
+    cost += Math.abs(Math.log(lane.tempoRatio)) * 20;
     if (steps.tempo && patches[lane.laneId]?.tempoRatio !== undefined && Math.abs(lane.tempoRatio - 1) > 0.001) {
-      parts.push(`${lane.tempoRatio.toFixed(2)}×`);
+      bends.push(`${shortTitle(lane.trackTitle)} ${lane.tempoRatio.toFixed(2)}×`);
     }
-    if (parts.length) bends.push(`${shortTitle(lane.trackTitle)} ${parts.join(", ")}`);
   }
+  const arranged = working.filter((l) => patches[l.laneId]?.clips?.length).length;
 
-  const target = [
-    steps.tempo && tempoRef?.bpm ? `${projectBpm.toFixed(1)} BPM` : null,
-    steps.key && targetKey ? keyLabel(targetKey) : null,
+  const target = steps.tempo && tempoRef?.bpm ? `${projectBpm.toFixed(1)} BPM` : "";
+  const summary = [
+    target,
+    bends.length ? bends.join(" · ") : "nothing needs stretching",
+    arranged ? `${arranged === 1 ? "vocal" : `${arranged} vocals`} arranged phrase by phrase` : null,
   ]
-    .filter(Boolean)
-    .join(" · ");
-  const summary = [target, bends.length ? bends.join(" · ") : "nothing needs bending"]
     .filter(Boolean)
     .join(" — ");
 
@@ -334,29 +449,47 @@ export async function suggestMatches(steps: MatchSteps): Promise<MatchSuggestion
     undo.patches[lane.laneId] = {
       bpm: lane.bpm,
       musicalKey: lane.musicalKey,
-      pitchSemitones: lane.pitchSemitones,
       tempoRatio: lane.tempoRatio,
       offsetSeconds: lane.offsetSeconds,
+      clips: lane.clips,
       volume: lane.volume,
       fx: { ...lane.fx },
     };
   }
 
   const analyses = new Map<string, StemAnalysis>();
+  const guides = new Map<string, StemAnalysis>();
   await Promise.all(
     lanes.map(async (lane) => {
-      const analysis = await analyzeLane(lane);
+      const [analysis, guide] = await Promise.all([
+        analyzeLane(lane),
+        lane.kind === "vocals" && (steps.arrange || steps.tempo) ? analyzeGuide(lane) : null,
+      ]);
       if (analysis) analyses.set(lane.laneId, analysis);
+      if (guide) guides.set(lane.laneId, guide);
     })
   );
 
-  // One candidate per lane as the anchor; the tempo/key only differ
-  // between lanes, so with just levels/timing/FX ticked, one plan will do.
-  const bendable = steps.tempo || steps.key;
+  // Sharpen each stored tempo against the song's real hits — a beat's
+  // own, a vocal's from its original beat (a voice's onsets are too soft
+  // to judge by).
+  const sharpened = new Map<string, number>();
+  if (steps.tempo) {
+    for (const lane of lanes) {
+      const source = lane.kind === "beat" ? analyses.get(lane.laneId) : guides.get(lane.laneId);
+      if (!lane.bpm || !source) continue;
+      const refined = refineTempo(source, lane.bpm);
+      if (Math.abs(refined - lane.bpm) >= 0.01) sharpened.set(lane.laneId, refined);
+    }
+  }
+
+  // One candidate per lane as the anchor; only the tempo differs between
+  // them, so with just arrangement/levels/FX ticked, one plan will do.
+  const bendable = steps.tempo;
   const anchors = bendable ? lanes : [referenceLane(lanes, () => true)!];
   const candidates = anchors.map((anchor) => ({
     anchor,
-    ...buildPlan(lanes, analyses, steps, anchor, store.projectBpm),
+    ...buildPlan(lanes, analyses, guides, sharpened, steps, anchor, store.projectBpm),
   }));
 
   // Two anchors that land on the same tempo and key are the same plan.

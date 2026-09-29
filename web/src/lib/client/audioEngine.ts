@@ -5,7 +5,7 @@ import { renderPitchTempo } from "./pitchTempo";
 import { previewPlayer } from "./previewPlayer";
 import { keepScreenOn } from "./wakeLock";
 import { fetchStem } from "./stemFetch";
-import { beatLength, getAudibleLaneIds, useStudioStore } from "./studioStore";
+import { beatLength, getAudibleLaneIds, useStudioStore, type StudioLane } from "./studioStore";
 
 type LoadedLane = {
   rawBuffer: AudioBuffer;
@@ -13,8 +13,19 @@ type LoadedLane = {
   appliedTempo: number;
   appliedPitch: number;
   chain: LaneChain;
-  source: AudioBufferSourceNode | null;
+  /** One per clip while playing (just one for a lane that isn't arranged). */
+  sources: AudioBufferSourceNode[];
 };
+
+function stopSources(sources: AudioBufferSourceNode[], when?: number) {
+  for (const source of sources) {
+    try {
+      source.stop(when);
+    } catch {
+      // already stopped
+    }
+  }
+}
 
 class AudioEngine {
   private ctx: AudioContext | null = null;
@@ -95,7 +106,7 @@ class AudioEngine {
           appliedTempo: 1,
           appliedPitch: 0,
           chain,
-          source: null,
+          sources: [],
         });
       })
       .finally(() => {
@@ -178,13 +189,7 @@ class AudioEngine {
 
   removeLane(laneId: string) {
     const entry = this.lanes.get(laneId);
-    if (entry?.source) {
-      try {
-        entry.source.stop();
-      } catch {
-        // already stopped
-      }
-    }
+    if (entry) stopSources(entry.sources);
     entry?.chain.disconnect();
     this.lanes.delete(laneId);
   }
@@ -246,18 +251,12 @@ class AudioEngine {
     for (const lane of lanes) {
       const entry = this.lanes.get(lane.laneId);
       if (!entry) continue;
-      if (entry.source) {
-        try {
-          entry.source.stop();
-        } catch {
-          // ignore
-        }
-        entry.source = null;
-      }
+      stopSources(entry.sources);
+      entry.sources = [];
       entry.chain.update(lane, useStudioStore.getState().projectBpm);
       entry.chain.volumeGain.gain.value = audible.has(lane.laneId) ? lane.volume : 0;
 
-      entry.source = scheduleLane({
+      entry.sources = scheduleLane({
         ctx,
         lane,
         buffer: entry.processedBuffer,
@@ -305,14 +304,8 @@ class AudioEngine {
 
   private stopAllSources() {
     for (const entry of this.lanes.values()) {
-      if (entry.source) {
-        try {
-          entry.source.stop();
-        } catch {
-          // ignore
-        }
-        entry.source = null;
-      }
+      stopSources(entry.sources);
+      entry.sources = [];
     }
   }
 
@@ -332,24 +325,20 @@ class AudioEngine {
 
     const now = ctx.currentTime;
     const startTime = now + 0.02;
-    if (entry.source) {
+    if (entry.sources.length) {
       // Duck the outgoing source over a few ms instead of cutting it
       // mid-waveform, which would click on every drag step.
       const fade = entry.chain.fadeGain.gain;
       fade.cancelScheduledValues(now);
       fade.setTargetAtTime(0, now, 0.004);
-      try {
-        entry.source.stop(startTime);
-      } catch {
-        // already stopped
-      }
-      entry.source = null;
+      stopSources(entry.sources, startTime);
+      entry.sources = [];
     }
 
     const playhead = this.startedAtPlayhead + (startTime - this.startedAtContextTime);
     const audible = getAudibleLaneIds(state.lanes);
     entry.chain.volumeGain.gain.value = audible.has(laneId) ? lane.volume : 0;
-    entry.source = scheduleLane({
+    entry.sources = scheduleLane({
       ctx,
       lane,
       buffer: entry.processedBuffer,
@@ -372,7 +361,7 @@ class AudioEngine {
       // Play retries the load and surfaces the failure then.
       return;
     }
-    if (useStudioStore.getState().isPlaying && !this.lanes.get(laneId)?.source) {
+    if (useStudioStore.getState().isPlaying && !this.lanes.get(laneId)?.sources.length) {
       this.rescheduleLane(laneId);
     }
   }
@@ -466,7 +455,8 @@ if (typeof window !== "undefined") {
   const lastTransforms = new Map<string, { tempo: number; pitch: number }>();
   // Everything scheduleLane bakes into a source when it starts: changing
   // any of these while playing means that lane has to be re-scheduled.
-  const lastPlacement = new Map<string, string>();
+  // Clips are compared by reference — the store replaces the array on edit.
+  const lastPlacement = new Map<string, { key: string; clips: StudioLane["clips"] }>();
   const pendingReschedule = new Set<string>();
   let rescheduleFrame: number | null = null;
 
@@ -507,12 +497,13 @@ if (typeof window !== "undefined") {
     audioEngine.applyMixState();
 
     for (const lane of state.lanes) {
-      const placement = `${lane.offsetSeconds}|${lane.fx.fadeIn}|${lane.fx.fadeOut}`;
+      const placement = { key: `${lane.offsetSeconds}|${lane.fx.fadeIn}|${lane.fx.fadeOut}`, clips: lane.clips };
       const lastPlaced = lastPlacement.get(lane.laneId);
       lastPlacement.set(lane.laneId, placement);
+      const moved = lastPlaced && (lastPlaced.key !== placement.key || lastPlaced.clips !== placement.clips);
       if (lastPlaced === undefined) {
         void audioEngine.prefetchLane(lane.laneId, lane.stemId);
-      } else if (lastPlaced !== placement && state.isPlaying && audioEngine.isReady(lane.laneId)) {
+      } else if (moved && state.isPlaying && audioEngine.isReady(lane.laneId)) {
         queueReschedule(lane.laneId);
       }
     }

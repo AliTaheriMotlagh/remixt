@@ -17,6 +17,12 @@ const laneSettingsSchema = z
       .object({ tonic: z.number().int().min(0).max(11), mode: z.enum(["major", "minor"]) })
       .nullable()
       .optional(),
+    // A lane arranged into phrases (see LaneClip in the Studio store).
+    clips: z
+      .array(z.object({ from: z.number().min(0), to: z.number().min(0), at: z.number().min(0) }))
+      .max(2000)
+      .nullable()
+      .optional(),
   })
   .default({});
 

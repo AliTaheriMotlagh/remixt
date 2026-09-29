@@ -162,7 +162,7 @@ export async function exportLane(lane: StudioLane, title: string) {
   const sampleRate = 44100;
   const ctx = new OfflineAudioContext({
     numberOfChannels: 2,
-    length: Math.ceil((buffer.duration + 2.5) * sampleRate),
+    length: Math.ceil(((lane.clips ? lane.duration : buffer.duration) + 2.5) * sampleRate),
     sampleRate,
   });
   const master = createMasterChain(ctx, ctx.destination);

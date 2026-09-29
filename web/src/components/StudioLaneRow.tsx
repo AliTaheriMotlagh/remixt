@@ -1,18 +1,22 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Waveform from "./Waveform";
 import LaneFxPanel from "./LaneFxPanel";
 import { audioEngine } from "@/lib/client/audioEngine";
+import { cutSilences } from "@/lib/client/autoMatch";
 import { exportLane } from "@/lib/client/mixdown";
 import { previewPlayer } from "@/lib/client/previewPlayer";
 import { ALL_KEYS, camelotCode, keyId, keyLabel, parseKeyId } from "@/lib/client/musicKey";
 import {
   beatLength,
+  clipStart,
+  clipsOf,
   effectiveKey,
   referenceLane,
   useStudioStore,
   viewDuration,
+  type LaneClip,
   type StudioLane,
 } from "@/lib/client/studioStore";
 
@@ -46,6 +50,20 @@ function LaneWaveform({ lane, accent }: { lane: StudioLane; accent: string }) {
   );
 }
 
+/** The slice of the lane's waveform one clip plays. Drawn once, no progress. */
+function ClipWaveform({ lane, clip, accent }: { lane: StudioLane; clip: LaneClip; accent: string }) {
+  const { peaks: all, originalDuration } = lane;
+  const peaks = useMemo(() => {
+    if (!all.length || !(originalDuration > 0)) return [];
+    const from = Math.floor((clip.from / originalDuration) * all.length);
+    const to = Math.ceil((clip.to / originalDuration) * all.length);
+    return all.slice(from, Math.max(from + 1, to));
+  }, [all, originalDuration, clip.from, clip.to]);
+  return <Waveform peaks={peaks} color={`${accent}cc`} height={66} />;
+}
+
+type DragMode = "move" | "trim-start" | "trim-end";
+
 function LanePlayhead({ span }: { span: number }) {
   const playhead = useStudioStore((s) => s.playhead);
   return (
@@ -70,6 +88,12 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
   const setTempoRatio = useStudioStore((s) => s.setTempoRatio);
   const setLaneBpm = useStudioStore((s) => s.setLaneBpm);
   const setOffset = useStudioStore((s) => s.setOffset);
+  const moveClip = useStudioStore((s) => s.moveClip);
+  const trimClip = useStudioStore((s) => s.trimClip);
+  const splitAt = useStudioStore((s) => s.splitAt);
+  const deleteClip = useStudioStore((s) => s.deleteClip);
+  const duplicateClip = useStudioStore((s) => s.duplicateClip);
+  const clearClips = useStudioStore((s) => s.clearClips);
   const nudgeOffset = useStudioStore((s) => s.nudgeOffset);
   const matchLaneToProject = useStudioStore((s) => s.matchLaneToProject);
   const setLaneKey = useStudioStore((s) => s.setLaneKey);
@@ -78,6 +102,9 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
 
   const [showFx, setShowFx] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [selectedClip, setSelectedClip] = useState<number | null>(null);
+  const [cutting, setCutting] = useState(false);
+  const [editNote, setEditNote] = useState<string | null>(null);
   const [pitchDraft, setPitchDraft] = useState(lane.pitchSemitones);
   const [lastSeenPitch, setLastSeenPitch] = useState(lane.pitchSemitones);
   const [tempoDraft, setTempoDraft] = useState(lane.tempoRatio);
@@ -87,9 +114,11 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
 
   const trackRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{
-    pointerId: number;
+    mode: DragMode;
+    index: number;
     startX: number;
-    startOffset: number;
+    /** Timeline position of what's being dragged (clip start, or the trimmed edge). */
+    startPosition: number;
     width: number;
     span: number;
     moved: boolean;
@@ -138,12 +167,22 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
     return snapToGrid ? Math.round(seconds / beat) * beat : seconds;
   }
 
-  function handleClipPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+  const clips = clipsOf(lane);
+  const arranged = !!lane.clips?.length;
+  const selected = arranged && selectedClip !== null && selectedClip < clips.length ? selectedClip : null;
+
+  // Pointer-down lands on a clip or one of its edges; the move/up events
+  // that follow bubble up to the track, which does the dragging.
+  function handleDragStart(e: React.PointerEvent<HTMLDivElement>, mode: DragMode, index: number) {
     if (!trackRef.current) return;
+    e.stopPropagation();
+    const clip = clips[index];
+    const start = clipStart(lane, clip);
     drag.current = {
-      pointerId: e.pointerId,
+      mode,
+      index,
       startX: e.clientX,
-      startOffset: lane.offsetSeconds,
+      startPosition: mode === "trim-end" ? start + (clip.to - clip.from) / lane.tempoRatio : start,
       width: trackRef.current.clientWidth,
       span,
       moved: false,
@@ -151,27 +190,55 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
     e.currentTarget.setPointerCapture(e.pointerId);
   }
 
-  function handleClipPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+  function handleDragMove(e: React.PointerEvent<HTMLDivElement>) {
     const state = drag.current;
     if (!state) return;
     const dx = e.clientX - state.startX;
     if (!state.moved && Math.abs(dx) < 3) return;
     state.moved = true;
     const deltaSeconds = (dx / state.width) * state.span;
-    // Snap the *movement* to whole beats rather than the absolute position,
-    // so a clip that was lined up off-grid (auto-match does this to put a
-    // vocal on the beat's downbeat) keeps its phase while it's dragged.
-    setOffset(lane.laneId, Math.max(0, state.startOffset + snap(deltaSeconds)));
+    if (state.mode === "move") {
+      // Snap the *movement* to whole beats rather than the absolute position,
+      // so a clip that was lined up off-grid (AI Match puts each phrase at
+      // its own spot in the bar) keeps its feel while it's dragged.
+      const position = Math.max(0, state.startPosition + snap(deltaSeconds));
+      if (arranged) moveClip(lane.laneId, state.index, position);
+      else setOffset(lane.laneId, position);
+    } else {
+      // Trims follow the pointer exactly — cuts belong between words, not on the grid.
+      trimClip(lane.laneId, state.index, state.mode === "trim-start" ? "start" : "end", state.startPosition + deltaSeconds);
+    }
   }
 
-  function handleClipPointerUp(e: React.PointerEvent<HTMLDivElement>) {
+  function handleDragEnd(e: React.PointerEvent<HTMLDivElement>) {
     const state = drag.current;
     drag.current = null;
     if (!state) return;
     if (!state.moved && trackRef.current) {
-      // A plain click seeks, the same as clicking the ruler.
+      // A plain click selects the clip and seeks, the same as clicking the ruler.
+      setSelectedClip(state.index);
       const rect = trackRef.current.getBoundingClientRect();
       audioEngine.seek(((e.clientX - rect.left) / rect.width) * span);
+    }
+  }
+
+  function handleSplit() {
+    const playhead = useStudioStore.getState().playhead;
+    const done = splitAt(lane.laneId, playhead);
+    setEditNote(done ? null : "Put the playhead over this lane's audio to split there");
+  }
+
+  async function handleCutSilences() {
+    setCutting(true);
+    setEditNote(null);
+    try {
+      const count = await cutSilences(lane.laneId);
+      setSelectedClip(null);
+      setEditNote(count ? null : "Couldn't find any silences to cut");
+    } catch {
+      setEditNote("Couldn't analyse this lane");
+    } finally {
+      setCutting(false);
     }
   }
 
@@ -456,7 +523,69 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
             </span>
           </div>
 
-          <div ref={trackRef} className="relative h-[68px] overflow-hidden rounded-lg bg-background">
+          <div className="mb-1 flex flex-wrap items-center gap-1 text-[10px] text-muted">
+            <span className="mr-0.5">Edit</span>
+            <button onClick={handleSplit} className="nudge" title="Cut the clip under the playhead in two">
+              ✂ split at playhead
+            </button>
+            <button
+              onClick={handleCutSilences}
+              disabled={cutting}
+              className="nudge disabled:opacity-40"
+              title="Split at every silence and drop the gaps — each phrase stays where it is and becomes its own clip"
+            >
+              {cutting ? "listening…" : "cut silences"}
+            </button>
+            {selected !== null && (
+              <>
+                <button
+                  onClick={() => duplicateClip(lane.laneId, selected)}
+                  className="nudge"
+                  title="Copy the selected clip and place the copy right after it"
+                >
+                  duplicate clip
+                </button>
+                <button
+                  onClick={() => {
+                    deleteClip(lane.laneId, selected);
+                    setSelectedClip(null);
+                  }}
+                  disabled={clips.length < 2}
+                  className="nudge hover:!text-danger disabled:opacity-40"
+                  title="Delete the selected clip"
+                >
+                  delete clip
+                </button>
+              </>
+            )}
+            {arranged && (
+              <>
+                <span className="ml-1">
+                  {clips.length} clip{clips.length === 1 ? "" : "s"}
+                  {selected !== null && ` · #${selected + 1} selected`}
+                </span>
+                <button
+                  onClick={() => {
+                    clearClips(lane.laneId);
+                    setSelectedClip(null);
+                  }}
+                  className="nudge"
+                  title="Undo all the cuts: play the whole stem again, lined up on the first clip"
+                >
+                  whole take
+                </button>
+              </>
+            )}
+            {editNote && <span className="text-danger">{editNote}</span>}
+          </div>
+
+          <div
+            ref={trackRef}
+            onPointerMove={handleDragMove}
+            onPointerUp={handleDragEnd}
+            onPointerCancel={handleDragEnd}
+            className="relative h-[68px] overflow-hidden rounded-lg bg-background"
+          >
             {/* Bar grid behind the clip, so a lane's start reads against the beat. */}
             {Array.from({ length: Math.ceil(span / bar) }, (_, i) => (
               <div
@@ -466,22 +595,42 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
               />
             ))}
 
-            <div
-              onPointerDown={handleClipPointerDown}
-              onPointerMove={handleClipPointerMove}
-              onPointerUp={handleClipPointerUp}
-              onPointerCancel={handleClipPointerUp}
-              className="absolute inset-y-0 cursor-grab touch-none rounded-md border active:cursor-grabbing"
-              style={{
-                left: `${(lane.offsetSeconds / span) * 100}%`,
-                width: `${(lane.duration / span) * 100}%`,
-                borderColor: accent,
-                background: `color-mix(in srgb, ${accent} 14%, transparent)`,
-              }}
-              title="Drag to move this lane in time · click to seek"
-            >
-              <LaneWaveform lane={lane} accent={accent} />
-            </div>
+            {clips.map((clip, i) => (
+              <div
+                key={i}
+                onPointerDown={(e) => handleDragStart(e, "move", i)}
+                className={`absolute inset-y-0 cursor-grab touch-none overflow-hidden rounded-md border active:cursor-grabbing ${
+                  selected === i ? "ring-2 ring-foreground/70" : ""
+                }`}
+                style={{
+                  left: `${(clipStart(lane, clip) / span) * 100}%`,
+                  width: `${((clip.to - clip.from) / lane.tempoRatio / span) * 100}%`,
+                  borderColor: accent,
+                  background: `color-mix(in srgb, ${accent} 14%, transparent)`,
+                }}
+                title={
+                  arranged
+                    ? "Drag to move this clip · drag an edge to trim · click to select and seek"
+                    : "Drag to move this lane in time · drag an edge to trim · click to seek"
+                }
+              >
+                {arranged ? (
+                  <ClipWaveform lane={lane} clip={clip} accent={accent} />
+                ) : (
+                  <LaneWaveform lane={lane} accent={accent} />
+                )}
+                <div
+                  onPointerDown={(e) => handleDragStart(e, "trim-start", i)}
+                  className="absolute inset-y-0 left-0 w-1.5 cursor-ew-resize touch-none hover:bg-foreground/40"
+                  title="Drag to trim the start"
+                />
+                <div
+                  onPointerDown={(e) => handleDragStart(e, "trim-end", i)}
+                  className="absolute inset-y-0 right-0 w-1.5 cursor-ew-resize touch-none hover:bg-foreground/40"
+                  title="Drag to trim the end"
+                />
+              </div>
+            ))}
 
             <LanePlayhead span={span} />
           </div>

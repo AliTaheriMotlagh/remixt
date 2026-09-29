@@ -114,15 +114,29 @@ against a project tempo you set (type it, or tap it in).
   (shown as e.g. "A min · 8A" with its Camelot code, and editable), and
   "Match" / "Match keys" pitch-shifts lanes onto the project key — the
   key of the first beat lane. Relative major/minor count as a match.
-- **✨ AI Match** — one button that analyses every lane and fits them
-  together: locks tempo to the beat (reading a vocal as half/double time
-  when that needs less stretching), shifts keys (taking a Camelot
-  neighbour when it saves a big, artefact-prone shift), slides the beat
-  onto the project grid and drops each vocal's first phrase on a bar
-  line, loudness-matches the lanes, and gives untouched lanes a starting
-  FX chain. It lists every change and can be undone. It's signal analysis
-  (`web/src/lib/client/analysis.ts`), not a remote model — nothing leaves
-  the browser.
+- **✨ AI Match** — listens to every lane once and fits them together,
+  without ever changing pitch (keys are only reported; the lane's Key →
+  Match shifts one if you want). It sharpens each BPM against the song's
+  real hits, locks tempo to the beat (reading a vocal as half/double time
+  when that needs less stretching), puts the beat's downbeats on the bar
+  lines, then **arranges each vocal phrase by phrase**: the vocal is cut
+  at its silences (which also drops the original song's bleed between
+  lines), and every phrase is placed on the matching bar of the beat at
+  the same spot in the bar it was sung, re-locked to the beat's actual
+  hits so live or drifting recordings stay together. It comes in after
+  the beat's intro, keeps the original song's spacing, shortens long
+  instrumental breaks, and leaves out sections that run past the end of
+  the beat. The vocal's bar lines come from its original beat stem (the
+  other half of its song, via `/api/stems/<id>/partner`); without it,
+  each section is kept as sung and slid onto the beat by its syllables.
+  Levels and a starting FX chain round it off. It lists every change and
+  can be undone. It's signal analysis (`web/src/lib/client/analysis.ts`,
+  `arrange.ts`), not a remote model — nothing leaves the browser.
+- **Editing** — a lane can be cut into clips: split at the playhead, "cut
+  silences" (every phrase becomes a clip, left where it was), drag a clip
+  to move it, drag its edges to trim, duplicate or delete the selected
+  clip, and "whole take" to go back to the uncut stem. Arrangements are
+  saved with the remix.
 - **Mixing** — volume, mute, solo, pan, stereo width, a 3-band EQ, high-
   and low-pass filters, saturation, fades in/out, and a master fader that
   runs into a safety limiter.
