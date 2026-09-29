@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { User } from "@/lib/auth";
 import NotificationBell from "./NotificationBell";
+import RemixtMark from "./RemixtMark";
 import { NAV_LINKS, NavIcon, isActive } from "./navLinks";
 
 export default function NavBar({ user, isAdmin = false }: { user: User | null; isAdmin?: boolean }) {
@@ -17,9 +18,7 @@ export default function NavBar({ user, isAdmin = false }: { user: User | null; i
       <div className="mx-auto flex h-[var(--header-h)] max-w-7xl items-center justify-between gap-3 px-4 sm:px-6">
         <div className="flex min-w-0 items-center gap-4 lg:gap-8">
           <Link href="/" className="flex shrink-0 items-center gap-2" aria-label="Remixt home">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-vocals to-beat text-sm font-black text-white">
-              R
-            </span>
+            <RemixtMark className="h-8 w-8" />
             <span className="text-lg font-bold tracking-tight">Remixt</span>
           </Link>
           {/* Phones get the tab bar at the bottom instead (MobileTabBar). */}

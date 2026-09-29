@@ -1,5 +1,6 @@
 import Link from "next/link";
 import sql from "@/lib/db";
+import RemixtMark from "@/components/RemixtMark";
 
 type RemixPreview = {
   id: string;
@@ -44,6 +45,7 @@ export default async function Home() {
         />
         <div className="relative mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-32">
           <div className="mx-auto max-w-3xl text-center">
+            <RemixtMark className="mx-auto mb-6 h-16 w-16 drop-shadow-[0_12px_32px_rgba(139,92,246,0.35)] sm:h-20 sm:w-20" />
             <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-surface px-4 py-1.5 text-xs font-medium text-muted">
               <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse-glow" />
               AI vocal &amp; beat separation, in your browser

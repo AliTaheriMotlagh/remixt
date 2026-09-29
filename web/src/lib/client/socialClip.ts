@@ -1,6 +1,7 @@
 "use client";
 
 import { renderMixdown } from "./mixdown";
+import { MARK_BARS, MARK_BAR_WIDTH, MARK_GRADIENT, MARK_TILE_RADIUS } from "@/lib/brand";
 
 // A vertical (9:16) video of a stretch of the mix, for Reels, TikTok,
 // Shorts and Stories: the title and artist over the Remixt gradient, a
@@ -83,6 +84,21 @@ function pill(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h:
   ctx.fill();
 }
 
+/** The Remixt mark (lib/brand.ts), drawn straight onto the canvas at `size` px with its top-left at x, y. */
+function drawMark(ctx: CanvasRenderingContext2D, x: number, y: number, size: number) {
+  const k = size / 512;
+  const tile = ctx.createLinearGradient(x, y, x + size, y + size);
+  tile.addColorStop(0, MARK_GRADIENT[0]);
+  tile.addColorStop(0.55, MARK_GRADIENT[1]);
+  tile.addColorStop(1, MARK_GRADIENT[2]);
+  ctx.fillStyle = tile;
+  pill(ctx, x, y, size, size, MARK_TILE_RADIUS * k);
+  ctx.fillStyle = "#ffffff";
+  for (const [bx, by, h] of MARK_BARS) {
+    pill(ctx, x + bx * k, y + by * k, MARK_BAR_WIDTH * k, h * k, (MARK_BAR_WIDTH / 2) * k);
+  }
+}
+
 function drawFrame(
   ctx: CanvasRenderingContext2D,
   { title, artist, link, levels, frame, progress }: {
@@ -143,12 +159,13 @@ function drawFrame(
   pill(ctx, 120, 1620, Math.max(12, (WIDTH - 240) * progress), 12, 6);
 
   // Brand and link.
+  drawMark(ctx, WIDTH / 2 - 60, 70, 120);
   ctx.fillStyle = "#ffffff";
   ctx.font = "bold 64px system-ui, -apple-system, Segoe UI, sans-serif";
-  ctx.fillText("Remixt", WIDTH / 2, 230);
+  ctx.fillText("Remixt", WIDTH / 2, 262);
   ctx.fillStyle = "#a1a1b5";
   ctx.font = "40px system-ui, -apple-system, Segoe UI, sans-serif";
-  ctx.fillText("made on Remixt — remix any song", WIDTH / 2, 295);
+  ctx.fillText("made on Remixt — remix any song", WIDTH / 2, 327);
   ctx.fillStyle = "#e5e5f0";
   ctx.font = "44px ui-monospace, SFMono-Regular, Menlo, monospace";
   ctx.fillText(link, WIDTH / 2, 1760);

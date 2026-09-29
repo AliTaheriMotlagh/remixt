@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import RemixtMark from "@/components/RemixtMark";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -37,6 +38,9 @@ export default function SignupPage() {
   return (
     <div className="flex flex-1 items-center justify-center px-4 py-10 sm:py-16">
       <div className="w-full max-w-sm">
+        <Link href="/" aria-label="Remixt home" className="mb-6 inline-block">
+          <RemixtMark className="h-12 w-12" />
+        </Link>
         <h1 className="text-2xl font-bold">Become an artist</h1>
         <p className="mt-1 text-sm text-muted">
           Create an account to upload songs and publish remixes.

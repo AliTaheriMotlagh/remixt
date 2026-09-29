@@ -12,6 +12,7 @@ import { scheduleModulation } from "./modulation";
 import { renderPitchTempo } from "./pitchTempo";
 import { previewPlayer } from "./previewPlayer";
 import { keepScreenOn } from "./wakeLock";
+import { getMixCredit, setNowPlaying } from "./mediaSession";
 import { fetchStem } from "./stemFetch";
 import {
   beatLength,
@@ -477,6 +478,8 @@ class AudioEngine {
       this.rafId = null;
     }
     const { loopEnabled, loopStart } = useStudioStore.getState();
+    // Stopped, not paused: off the lock screen until it plays again.
+    mixOnLockScreen = false;
     useStudioStore.getState()._setPlaybackState(false, loopEnabled ? loopStart : 0);
   }
 
@@ -727,6 +730,31 @@ class AudioEngine {
 
 export const audioEngine = new AudioEngine();
 
+/** Whether the mix has played since it was last stopped — only then is it on the lock screen. */
+let mixOnLockScreen = false;
+
+/** Tells the lock screen / media notification about the mix (see mediaSession). */
+function reportMixNowPlaying(state: ReturnType<typeof useStudioStore.getState>) {
+  if (state.isPlaying) mixOnLockScreen = true;
+  if (!mixOnLockScreen || state.lanes.length === 0) {
+    setNowPlaying("mix", null);
+    return;
+  }
+  const artists = [...new Set(state.lanes.map((l) => l.artistName))];
+  setNowPlaying("mix", {
+    title: state.sourceRemix?.title ?? state.challenge?.title ?? "Untitled mix",
+    artist: getMixCredit() ?? artists.slice(0, 3).join(" × "),
+    album: "Remixt",
+    playing: state.isPlaying,
+    position: state.playhead,
+    duration: state.duration,
+    play: () => void audioEngine.play().catch(() => {}),
+    pause: () => audioEngine.pause(),
+    stop: () => audioEngine.stop(),
+    seekTo: (seconds) => audioEngine.seek(seconds),
+  });
+}
+
 // ...and the other way round: a library preview pauses the mix (or cancels
 // a play that's still loading) instead of playing over it.
 previewPlayer.onStart(() => audioEngine.pause());
@@ -765,6 +793,7 @@ if (typeof window !== "undefined") {
 
   useStudioStore.subscribe((state, prevState) => {
     if (state.isPlaying !== prevState.isPlaying) keepScreenOn("mix", state.isPlaying);
+    reportMixNowPlaying(state);
 
     // The playhead moves every frame while playing; none of what follows
     // depends on it. Re-applying every lane's settings 60 times a second

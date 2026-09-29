@@ -1,5 +1,6 @@
 import { ImageResponse } from "next/og";
 import { getRemixCard } from "@/lib/models";
+import { markDataUri } from "@/lib/brand";
 
 // The picture a shared remix link shows in WhatsApp, Telegram, X, iMessage…
 
@@ -30,21 +31,7 @@ export default async function Image({ params }: { params: Promise<{ id: string }
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 32, fontWeight: 700 }}>
-          <div
-            style={{
-              width: 56,
-              height: 56,
-              borderRadius: 14,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              background: "linear-gradient(135deg, #ec4899, #22d3ee)",
-              fontSize: 30,
-              fontWeight: 900,
-            }}
-          >
-            R
-          </div>
+          <img src={markDataUri("tile")} width={56} height={56} alt="" />
           Remixt
         </div>
 

@@ -1,41 +1,20 @@
 import { ImageResponse } from "next/og";
+import { markDataUri } from "@/lib/brand";
 
 /**
- * The Remixt mark — the "R" on the vocals→beat gradient from the nav bar —
- * drawn at any size, for the home-screen icon and the browser tab.
- * `maskable` leaves the safe-zone padding Android crops icons to.
+ * The Remixt mark (lib/brand.ts) as a PNG at any size, for the browser tab
+ * and home-screen icons. `rounded` draws the rounded tile with transparent
+ * corners; without it the gradient runs to the edges — what iOS wants (it
+ * rounds icons itself and shows black through transparency) and what
+ * Android's `maskable` icons want (it crops them to its own shape; the bars
+ * already sit inside the safe zone).
  */
 export function appIcon(size: number, { maskable = false, rounded = true } = {}) {
-  const inset = maskable ? size * 0.1 : 0;
+  const src = markDataUri(rounded && !maskable ? "tile" : "square");
   return new ImageResponse(
     (
-      <div
-        style={{
-          width: "100%",
-          height: "100%",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          background: maskable ? "#0a0a0f" : "transparent",
-        }}
-      >
-        <div
-          style={{
-            width: size - inset * 2,
-            height: size - inset * 2,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            borderRadius: rounded && !maskable ? size * 0.22 : 0,
-            background: "linear-gradient(135deg, #ec4899, #06b6d4)",
-            color: "white",
-            fontSize: (size - inset * 2) * 0.58,
-            fontWeight: 900,
-          }}
-        >
-          R
-        </div>
-      </div>
+      // eslint-disable-next-line @next/next/no-img-element -- next/og renders <img>, not next/image
+      <img src={src} width={size} height={size} alt="" />
     ),
     { width: size, height: size }
   );

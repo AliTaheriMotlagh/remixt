@@ -12,6 +12,7 @@ import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/rem
 import { useStudioStore } from "@/lib/client/studioStore";
 import { resetHistory } from "@/lib/client/studioHistory";
 import type { User } from "@/lib/auth";
+import { setMixCredit } from "@/lib/client/mediaSession";
 
 export default function RemixDetailPlayer({
   remixId,
@@ -51,6 +52,12 @@ export default function RemixDetailPlayer({
   }, [remixId]);
 
   useEffect(() => () => audioEngine.stop(), []);
+
+  // On the lock screen, this remix is by its artist (not the stems' artists).
+  useEffect(() => {
+    setMixCredit(artistName);
+    return () => setMixCredit(null);
+  }, [artistName]);
 
   if (loading) {
     return (

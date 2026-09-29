@@ -5,6 +5,8 @@ import MixWaveform from "./MixWaveform";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/remixLanes";
 import { useStudioStore } from "@/lib/client/studioStore";
+import RemixtMark from "./RemixtMark";
+import { setMixCredit } from "@/lib/client/mediaSession";
 
 function formatTime(seconds: number) {
   const m = Math.floor(seconds / 60);
@@ -45,7 +47,10 @@ export default function EmbedPlayer({
       .then((res) => (res.ok ? res.json() : Promise.reject()))
       .then((data) => {
         if (cancelled) return;
-        loadRemix((data.lanes as RemixLaneApi[]).map(laneFromApi), projectFromApi(data.remix));
+        loadRemix((data.lanes as RemixLaneApi[]).map(laneFromApi), projectFromApi(data.remix), {
+          id: remixId,
+          title,
+        });
         setState("ready");
       })
       .catch(() => !cancelled && setState("error"));
@@ -53,7 +58,13 @@ export default function EmbedPlayer({
       cancelled = true;
       audioEngine.stop();
     };
-  }, [remixId, loadRemix]);
+  }, [remixId, title, loadRemix]);
+
+  // On the lock screen, this remix is by its artist (not the stems' artists).
+  useEffect(() => {
+    setMixCredit(artist);
+    return () => setMixCredit(null);
+  }, [artist]);
 
   async function toggle() {
     if (isPlaying) {
@@ -97,8 +108,9 @@ export default function EmbedPlayer({
             href={pageUrl}
             target="_blank"
             rel="noopener"
-            className="shrink-0 text-[11px] font-bold tracking-tight text-brand-strong hover:underline"
+            className="flex shrink-0 items-center gap-1 text-[11px] font-bold tracking-tight text-brand-strong hover:underline"
           >
+            <RemixtMark className="h-4 w-4" />
             Remixt ↗
           </a>
         </div>

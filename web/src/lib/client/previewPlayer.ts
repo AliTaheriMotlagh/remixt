@@ -2,7 +2,8 @@
 
 import { useSyncExternalStore } from "react";
 import { keepScreenOn } from "./wakeLock";
-import type { StemKind } from "@/lib/stemKinds";
+import { setNowPlaying } from "./mediaSession";
+import { kindLabel, type StemKind } from "@/lib/stemKinds";
 
 // A single <audio> element shared by every "play this stem" button in the
 // app. Previews used to be owned by the component that started them, so
@@ -80,6 +81,31 @@ class PreviewPlayer {
     }
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) listener(this.state);
+    this.reportNowPlaying();
+  }
+
+  /** The lock screen / media notification (see mediaSession). */
+  private reportNowPlaying() {
+    const { current, playing, currentTime, duration } = this.state;
+    setNowPlaying(
+      "preview",
+      current && {
+        title: current.title,
+        artist: current.artist,
+        album: `${kindLabel(current.kind)} · Remixt`,
+        playing,
+        position: currentTime,
+        duration,
+        play: () => {
+          if (!this.state.playing) void this.toggle(current);
+        },
+        pause: () => this.audio?.pause(),
+        stop: () => this.stop(),
+        seekTo: (seconds) => {
+          if (duration > 0) this.seek(seconds / duration);
+        },
+      }
+    );
   }
 
   /**
