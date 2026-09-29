@@ -41,6 +41,15 @@ export default function LibraryBrowser({
 
 
   const stems = tab === "vocals" ? initialVocals : initialBeats;
+  // Parsed once: a fresh array per render made every waveform redraw on
+  // every preview progress tick.
+  const peaksById = useMemo(
+    () =>
+      new Map(
+        [...initialVocals, ...initialBeats].map((s) => [s.id, JSON.parse(s.peaks_json || "[]") as number[]])
+      ),
+    [initialVocals, initialBeats]
+  );
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return stems;
@@ -104,7 +113,6 @@ export default function LibraryBrowser({
       ) : (
         <div className="mt-6 grid gap-3 sm:grid-cols-2">
           {filtered.map((stem) => {
-            const peaks: number[] = JSON.parse(stem.peaks_json || "[]");
             const isCurrent = preview.current?.stemId === stem.id;
             const isPlaying = isCurrent && preview.playing;
             return (
@@ -138,7 +146,7 @@ export default function LibraryBrowser({
                     {isPlaying ? "⏸" : "▶"}
                   </button>
                   <Waveform
-                    peaks={peaks}
+                    peaks={peaksById.get(stem.id) ?? []}
                     color={`${accent}99`}
                     progressColor={accent}
                     progress={isCurrent ? preview.progress : 0}

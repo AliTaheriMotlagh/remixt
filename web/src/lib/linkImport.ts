@@ -5,6 +5,7 @@ import { lookup } from "dns/promises";
 import { isIP } from "net";
 import os from "os";
 import path from "path";
+import { isYouTubeLink, YOUTUBE_UNAVAILABLE } from "./linkHosts";
 
 // Gets a song from a link — YouTube, SoundCloud, Bandcamp, Vimeo, a direct
 // MP3 URL, anything yt-dlp knows — on the server, since a browser isn't
@@ -59,6 +60,11 @@ function ytDlp(): Promise<string | null> {
   return binary;
 }
 
+/** Whether this server is set up to get past YouTube's block on cloud servers. */
+export function youtubeImportEnabled(): boolean {
+  return !!(process.env.YTDLP_PROXY || process.env.YTDLP_COOKIES);
+}
+
 /** True for addresses on this machine or a private network. */
 function isPrivateAddress(address: string): boolean {
   if (address.startsWith("::ffff:")) return isPrivateAddress(address.slice(7));
@@ -103,6 +109,9 @@ export async function checkLink(raw: string): Promise<string> {
   if (url.protocol !== "https:" && url.protocol !== "http:") {
     throw new ImportError("Only http and https links work");
   }
+  // Say so straight away rather than after yt-dlp spends half a minute
+  // being refused.
+  if (isYouTubeLink(url.href) && !youtubeImportEnabled()) throw new ImportError(YOUTUBE_UNAVAILABLE);
   const host = url.hostname.replace(/^\[|\]$/g, "");
   const addresses = isIP(host)
     ? [host]

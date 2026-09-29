@@ -1,7 +1,13 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { autoMatch, type AutoMatchResult } from "@/lib/client/autoMatch";
+import {
+  ALL_STEPS,
+  applyMatch,
+  suggestMatches,
+  type MatchSteps,
+  type MatchSuggestions,
+} from "@/lib/client/autoMatch";
 import { camelotCode, keyLabel } from "@/lib/client/musicKey";
 import {
   beatLength,
@@ -28,19 +34,27 @@ export default function BpmSyncPanel() {
   const applyLanePatches = useStudioStore((s) => s.applyLanePatches);
 
   const tapTimes = useRef<number[]>([]);
+  const [showAi, setShowAi] = useState(false);
+  const [steps, setSteps] = useState<MatchSteps>(ALL_STEPS);
   const [matching, setMatching] = useState(false);
-  const [report, setReport] = useState<AutoMatchResult | null>(null);
+  const [suggestions, setSuggestions] = useState<MatchSuggestions | null>(null);
+  const [appliedId, setAppliedId] = useState<string | null>(null);
   const [matchError, setMatchError] = useState<string | null>(null);
 
   const keyReference = referenceLane(lanes, (l) => !!l.musicalKey);
   const projectKey = keyReference ? effectiveKey(keyReference) : null;
   const keyedLanes = lanes.filter((l) => l.musicalKey);
 
-  async function handleAutoMatch() {
+  async function handleFindMatches() {
+    // Suggestions are worked out from the mix as it was before any of them
+    // was applied, so put that back first.
+    if (suggestions && appliedId) applyLanePatches(suggestions.undo.patches, suggestions.undo.projectBpm);
+    setAppliedId(null);
+    setSuggestions(null);
     setMatching(true);
     setMatchError(null);
     try {
-      setReport(await autoMatch());
+      setSuggestions(await suggestMatches(steps));
     } catch (err) {
       setMatchError(err instanceof Error ? err.message : "Couldn't analyse the lanes");
     } finally {
@@ -48,11 +62,26 @@ export default function BpmSyncPanel() {
     }
   }
 
-  function handleUndo() {
-    if (!report) return;
-    applyLanePatches(report.undo.patches, report.undo.projectBpm);
-    setReport(null);
+  function handleApply(planId: string) {
+    const plan = suggestions?.plans.find((p) => p.id === planId);
+    if (!plan || !suggestions) return;
+    applyMatch(plan, suggestions.undo);
+    setAppliedId(planId);
   }
+
+  function handleUndo() {
+    if (!suggestions) return;
+    applyLanePatches(suggestions.undo.patches, suggestions.undo.projectBpm);
+    setAppliedId(null);
+  }
+
+  function toggleStep(step: keyof MatchSteps) {
+    setSteps((current) => ({ ...current, [step]: !current[step] }));
+    // Suggestions made with the old choices no longer apply.
+    if (!appliedId) setSuggestions(null);
+  }
+
+  const anyStep = Object.values(steps).some(Boolean);
 
   const isStretched = lanes.some((l) => Math.abs(l.tempoRatio - 1) > 0.001);
   const withBpm = lanes.filter((l) => l.bpm && l.bpm > 0);
@@ -81,12 +110,11 @@ export default function BpmSyncPanel() {
       <span className="text-xs font-semibold uppercase tracking-wide text-muted">Project</span>
 
       <button
-        onClick={handleAutoMatch}
-        disabled={matching}
-        className="rounded-lg bg-gradient-to-r from-brand to-vocals px-3 py-1.5 text-xs font-bold text-white shadow-[0_0_16px_-4px_var(--brand)] transition-opacity hover:opacity-90 disabled:opacity-60"
-        title="Analyse every lane and match tempo, key, beat alignment, levels and a starting FX chain"
+        onClick={() => setShowAi((v) => !v)}
+        className="rounded-lg bg-gradient-to-r from-brand to-vocals px-3 py-1.5 text-xs font-bold text-white shadow-[0_0_16px_-4px_var(--brand)] transition-opacity hover:opacity-90"
+        title="Analyse every lane and suggest ways to match tempo, key, beat alignment, levels and FX"
       >
-        {matching ? "Listening…" : "✨ AI Match"}
+        ✨ AI Match {showAi ? "▾" : "▸"}
       </button>
 
       <label className="flex items-center gap-1.5 text-xs text-muted">
@@ -186,26 +214,87 @@ export default function BpmSyncPanel() {
       </div>
     </div>
 
-      {matchError && <p className="text-xs text-danger">{matchError}</p>}
-
-      {report && (
+      {showAi && (
         <div className="rounded-lg border border-brand/40 bg-brand/10 p-3">
-          <div className="mb-1.5 flex items-center justify-between">
-            <span className="text-xs font-semibold">✨ AI Match: here&apos;s what changed</span>
-            <div className="flex gap-1.5">
-              <button onClick={handleUndo} className="nudge">
-                undo
-              </button>
-              <button onClick={() => setReport(null)} className="nudge">
-                dismiss
-              </button>
-            </div>
-          </div>
-          <ul className="list-disc space-y-0.5 pl-4 text-[11px] leading-relaxed text-muted">
-            {report.lines.map((line, i) => (
-              <li key={i}>{line}</li>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <span className="text-xs font-semibold">✨ Match</span>
+            {(
+              [
+                ["tempo", "Tempo"],
+                ["key", "Key"],
+                ["timing", "Timing (beat grid)"],
+                ["levels", "Levels"],
+                ["fx", "Starting FX"],
+              ] as const
+            ).map(([step, label]) => (
+              <label key={step} className="flex items-center gap-1.5 text-xs">
+                <input
+                  type="checkbox"
+                  checked={steps[step]}
+                  onChange={() => toggleStep(step)}
+                  className="accent-brand"
+                />
+                {label}
+              </label>
             ))}
-          </ul>
+            <button
+              onClick={handleFindMatches}
+              disabled={matching || !anyStep}
+              className="ml-auto rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-brand-strong disabled:opacity-50"
+            >
+              {matching ? "Listening…" : suggestions ? "Find again" : "Find matches"}
+            </button>
+          </div>
+
+          {matchError && <p className="mt-2 text-xs text-danger">{matchError}</p>}
+
+          {suggestions && (
+            <div className="mt-3 flex flex-col gap-2">
+              {suggestions.plans.map((plan) => {
+                const applied = plan.id === appliedId;
+                return (
+                  <div
+                    key={plan.id}
+                    className={`rounded-lg border bg-surface p-2.5 ${applied ? "border-brand" : "border-border"}`}
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-semibold">{plan.title}</span>
+                      {plan.recommended && (
+                        <span className="rounded-full bg-success/15 px-2 py-0.5 text-[10px] font-medium text-success">
+                          Most natural
+                        </span>
+                      )}
+                      <div className="ml-auto flex gap-1.5">
+                        {applied ? (
+                          <button onClick={handleUndo} className="nudge">
+                            undo
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleApply(plan.id)}
+                            className="rounded border border-brand/60 px-2 py-0.5 text-[11px] font-medium text-foreground transition-colors hover:bg-brand/15"
+                          >
+                            Apply
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <p className="mt-1 text-[11px] text-muted">{plan.summary}</p>
+                    <details className="mt-1">
+                      <summary className="cursor-pointer text-[11px] text-muted hover:text-foreground">
+                        {applied ? "What changed" : "What it would change"}
+                      </summary>
+                      <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[11px] leading-relaxed text-muted">
+                        {plan.lines.map((line, i) => (
+                          <li key={i}>{line}</li>
+                        ))}
+                      </ul>
+                    </details>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>

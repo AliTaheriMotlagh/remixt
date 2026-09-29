@@ -80,3 +80,45 @@ export async function getStemById(id: string): Promise<StemWithTrack | undefined
   `;
   return rows[0];
 }
+
+// --- Remix listening stats ---------------------------------------------------
+
+let statsSchema: Promise<void> | null = null;
+
+/**
+ * Creates the play-count column and likes table if this database predates
+ * them (the same statements as scripts/schema.sql, which are idempotent).
+ * Hosted databases don't get schema.sql re-run on deploy, so this saves a
+ * manual migration; it runs once per server instance.
+ */
+export function ensureRemixStats(): Promise<void> {
+  statsSchema ??= (async () => {
+    await sql`ALTER TABLE remixes ADD COLUMN IF NOT EXISTS play_count INTEGER NOT NULL DEFAULT 0`;
+    await sql`
+      CREATE TABLE IF NOT EXISTS remix_likes (
+        remix_id TEXT NOT NULL REFERENCES remixes(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (remix_id, user_id)
+      )
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_remix_likes_user ON remix_likes(user_id)`;
+  })();
+  statsSchema.catch(() => (statsSchema = null));
+  return statsSchema;
+}
+
+export type RemixStats = { plays: number; likes: number; liked: boolean };
+
+export async function getRemixStats(remixId: string, userId: string | null): Promise<RemixStats> {
+  await ensureRemixStats();
+  const rows = await sql<RemixStats[]>`
+    SELECT remixes.play_count AS plays,
+           (SELECT COUNT(*) FROM remix_likes WHERE remix_id = remixes.id)::int AS likes,
+           EXISTS (
+             SELECT 1 FROM remix_likes WHERE remix_id = remixes.id AND user_id = ${userId ?? ""}
+           ) AS liked
+    FROM remixes WHERE remixes.id = ${remixId}
+  `;
+  return rows[0] ?? { plays: 0, likes: 0, liked: false };
+}

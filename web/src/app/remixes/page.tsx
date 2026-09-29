@@ -1,5 +1,6 @@
 import Link from "next/link";
 import sql from "@/lib/db";
+import { ensureRemixStats } from "@/lib/models";
 
 type RemixRow = {
   id: string;
@@ -9,13 +10,18 @@ type RemixRow = {
   artist_id: string;
   lane_count: number;
   source_titles: string | null;
+  play_count: number;
+  like_count: number;
 };
 
 export default async function RemixesPage() {
+  await ensureRemixStats();
   const remixes = await sql<RemixRow[]>`
     SELECT remixes.id, remixes.title, remixes.created_at, users.artist_name, users.id as artist_id,
            COUNT(DISTINCT remix_lanes.id)::int as lane_count,
-           STRING_AGG(DISTINCT tracks.title, ',') as source_titles
+           STRING_AGG(DISTINCT tracks.title, ',') as source_titles,
+           remixes.play_count,
+           (SELECT COUNT(*) FROM remix_likes WHERE remix_likes.remix_id = remixes.id)::int as like_count
     FROM remixes
     JOIN users ON users.id = remixes.owner_id
     LEFT JOIN remix_lanes ON remix_lanes.remix_id = remixes.id
@@ -66,6 +72,10 @@ export default async function RemixesPage() {
                   from {remix.source_titles.split(",").join(" + ")}
                 </p>
               )}
+              <p className="mt-3 flex gap-3 text-xs text-muted tabular-nums">
+                <span title="Plays">▶ {remix.play_count}</span>
+                <span title="Likes">♥ {remix.like_count}</span>
+              </p>
             </Link>
           ))}
         </div>

@@ -11,8 +11,9 @@ const links = [
   { href: "/upload", label: "Upload" },
 ];
 
-export default function NavBar({ user }: { user: User | null }) {
+export default function NavBar({ user, isAdmin = false }: { user: User | null; isAdmin?: boolean }) {
   const pathname = usePathname();
+  const navLinks = isAdmin ? [...links, { href: "/admin", label: "Admin" }] : links;
   const router = useRouter();
 
   async function handleLogout() {
@@ -32,7 +33,7 @@ export default function NavBar({ user }: { user: User | null }) {
             <span className="text-lg font-bold tracking-tight">Remixt</span>
           </Link>
           <nav className="hidden gap-1 sm:flex">
-            {links.map((link) => {
+            {navLinks.map((link) => {
               const active = pathname === link.href || pathname?.startsWith(link.href + "/");
               return (
                 <Link
@@ -92,7 +93,7 @@ export default function NavBar({ user }: { user: User | null }) {
         )}
       </div>
       <nav className="flex gap-1 overflow-x-auto border-t border-border px-4 py-1.5 sm:hidden">
-        {links.map((link) => (
+        {navLinks.map((link) => (
           <Link
             key={link.href}
             href={link.href}

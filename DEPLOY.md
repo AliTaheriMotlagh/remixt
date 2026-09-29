@@ -50,10 +50,11 @@ expires `imports/` after a day.)
 to install, on Vercel or in Docker.
 
 **YouTube often blocks downloads from cloud servers** (Vercel, Oracle and
-other data centres) with *"Sign in to confirm you're not a bot"*. The
-user then sees a message suggesting they upload the file instead. Other
-sites usually work. If you need YouTube, two optional environment
-variables help:
+other data centres) with *"Sign in to confirm you're not a bot"*. So
+YouTube links are turned off by default: the Upload page says so as soon
+as one is pasted and suggests uploading the file instead. Other sites
+usually work. Setting either of these environment variables turns YouTube
+links back on:
 
 | Variable | Meaning |
 | --- | --- |
@@ -110,6 +111,7 @@ git push -u origin main
    | --- | --- |
    | `SESSION_SECRET` | a long random string (run `openssl rand -base64 48` in Terminal) |
    | `NEXT_PUBLIC_STEM_BITRATE` | `128` (stretches the 1 GB free storage; `192` is the default) |
+   | `ADMIN_EMAILS` | your email (comma-separate several). These accounts get the **Admin** page for managing users, songs and remixes |
 
 5. Click **Deploy**. It builds and goes live at
    `https://<project>.vercel.app`, but it can't sign anyone in yet, because
@@ -367,6 +369,7 @@ docker save remixt | gzip | ssh root@your-server 'gunzip | docker load'
 | `SESSION_SECRET` | *(generated)* | Generated once into `/data/session_secret` if unset. |
 | `R2_*` | *(unset)* | Store stems in R2 instead of the volume (see the free setup). |
 | `COOKIE_SECURE` | `true` | `false` only to try it over plain HTTP. Sign-in fails otherwise. |
+| `ADMIN_EMAILS` | *(unset)* | Comma-separated emails of accounts that get the Admin page (`/admin`). |
 
 ### Updating and backups
 

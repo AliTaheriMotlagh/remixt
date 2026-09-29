@@ -5,6 +5,7 @@ import NavBar from "@/components/NavBar";
 import PreviewBar from "@/components/PreviewBar";
 import SplitterStatus from "@/components/SplitterStatus";
 import { getCurrentUser } from "@/lib/auth";
+import { isAdmin } from "@/lib/admin";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -35,7 +36,7 @@ export default async function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-background text-foreground">
-        <NavBar user={user} />
+        <NavBar user={user} isAdmin={isAdmin(user)} />
         <div className="flex flex-1 flex-col">{children}</div>
         <PreviewBar />
         <SplitterStatus signedIn={!!user} />

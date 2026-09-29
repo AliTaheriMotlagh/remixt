@@ -425,3 +425,21 @@ export async function sweepOld(prefix: string, maxAgeMs: number): Promise<void> 
     if (info && info.mtimeMs < cutoff) await rm(/* turbopackIgnore: true */ full, { force: true });
   }
 }
+
+/**
+ * Deletes a stem's file given what's stored in stems.file_url: a storage
+ * key, a Blob URL, or (from older builds) an R2 public URL. Anything
+ * else — a URL outside our storage — is left alone.
+ */
+export async function deleteStemFile(fileUrl: string): Promise<void> {
+  if (!/^https?:\/\//.test(fileUrl)) return deleteObject(fileUrl);
+  if (blobToken) {
+    await del(fileUrl, { token: blobToken });
+    return;
+  }
+  const base = r2?.publicUrl;
+  if (base && fileUrl.startsWith(`${base}/`)) {
+    const key = fileUrl.slice(base.length + 1).split("/").map(decodeURIComponent).join("/");
+    await deleteObject(key);
+  }
+}

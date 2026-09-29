@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import Waveform from "./Waveform";
 import { formatMB } from "./SplitterStatus";
@@ -12,6 +12,8 @@ import {
   type UploadStage,
 } from "@/lib/client/splitter";
 import { useStudioStore } from "@/lib/client/studioStore";
+import { keepScreenOn } from "@/lib/client/wakeLock";
+import { isYouTubeLink, YOUTUBE_UNAVAILABLE } from "@/lib/linkHosts";
 
 type Stem = {
   id: string;
@@ -42,7 +44,9 @@ function rememberInFlight(name: string | null) {
   }
 }
 
-export default function UploadManager() {
+const noSubscription = () => () => {};
+
+export default function UploadManager({ youtubeImport }: { youtubeImport: boolean }) {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [loadingList, setLoadingList] = useState(true);
   const [dragOver, setDragOver] = useState(false);
@@ -55,6 +59,12 @@ export default function UploadManager() {
   const router = useRouter();
   const addStem = useStudioStore((s) => s.addStem);
   const busy = job !== null;
+  // Phones and tablets can't split songs yet (not enough memory for the
+  // model), so they get told that up front instead of a failure minutes in.
+  const onPhone = useSyncExternalStore(noSubscription, isConstrainedDevice, () => false);
+  const [tryAnyway, setTryAnyway] = useState(false);
+  const blockedHere = onPhone && !tryAnyway;
+  const youtubeBlocked = !youtubeImport && isYouTubeLink(link);
 
   const fetchTracks = useCallback(async () => {
     const res = await fetch("/api/tracks");
@@ -107,30 +117,10 @@ export default function UploadManager() {
   }, [busy]);
 
   // …and keep the screen on meanwhile: a phone that locks itself pauses
-  // the page, and the split with it. The lock drops whenever the page is
-  // hidden, so take it again on the way back.
+  // the page, and the split with it.
   useEffect(() => {
-    if (!busy || !("wakeLock" in navigator)) return;
-    let lock: WakeLockSentinel | null = null;
-    let stopped = false;
-    const acquire = async () => {
-      if (document.visibilityState !== "visible") return;
-      try {
-        const next = await navigator.wakeLock.request("screen");
-        if (stopped) void next.release();
-        else lock = next;
-      } catch {
-        // Not allowed (e.g. low battery mode) — it still works, the user
-        // just has to keep the screen on.
-      }
-    };
-    void acquire();
-    document.addEventListener("visibilitychange", acquire);
-    return () => {
-      stopped = true;
-      document.removeEventListener("visibilitychange", acquire);
-      void lock?.release().catch(() => {});
-    };
+    keepScreenOn("upload", busy);
+    return () => keepScreenOn("upload", false);
   }, [busy]);
 
   async function runJob(name: string, getFile: (onStage: (stage: UploadStage) => void) => Promise<File>) {
@@ -165,6 +155,7 @@ export default function UploadManager() {
     e.preventDefault();
     const url = link.trim();
     if (!url || busy) return;
+    if (youtubeBlocked) return;
     const ok = await runJob(url, (onStage) => fetchSongFromLink(url, onStage));
     if (ok) setLink("");
   }
@@ -184,87 +175,105 @@ export default function UploadManager() {
 
   return (
     <div className="mt-8">
-      <div
-        role="button"
-        tabIndex={busy ? -1 : 0}
-        aria-disabled={busy}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragOver(true);
-        }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDragOver(false);
-          handleFiles(e.dataTransfer.files);
-        }}
-        onClick={() => !busy && fileInputRef.current?.click()}
-        onKeyDown={(e) => {
-          if (!busy && (e.key === "Enter" || e.key === " ")) {
-            e.preventDefault();
-            fileInputRef.current?.click();
-          }
-        }}
-        className={`flex flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-10 text-center transition-colors sm:py-14 ${
-          busy
-            ? "cursor-default border-border bg-surface opacity-60"
-            : dragOver
-              ? "cursor-pointer border-brand bg-brand/5"
-              : "cursor-pointer border-border bg-surface hover:bg-surface-hover"
-        }`}
-      >
-        <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-vocals to-beat text-xl">
-          🎵
-        </div>
-        <p className="font-medium">
-          <span className="pointer-coarse:hidden">Drop an audio file here, or click to browse</span>
-          <span className="hidden pointer-coarse:inline">Tap to choose a song</span>
-        </p>
-        <p className="mt-1 text-sm text-muted">
-          MP3, WAV, M4A, FLAC, OGG, AAC — up to 15 minutes (10 on a phone or tablet)
-        </p>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".mp3,.wav,.m4a,.flac,.ogg,.aac,audio/*"
-          className="hidden"
-          onChange={(e) => {
-            handleFiles(e.target.files);
-            // So picking the same file again (after an error) still fires.
-            e.target.value = "";
-          }}
-        />
-      </div>
+      {blockedHere ? (
+        <PhoneNotice onTryAnyway={() => setTryAnyway(true)} />
+      ) : (
+        <>
+          <div
+            role="button"
+            tabIndex={busy ? -1 : 0}
+            aria-disabled={busy}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              handleFiles(e.dataTransfer.files);
+            }}
+            onClick={() => !busy && fileInputRef.current?.click()}
+            onKeyDown={(e) => {
+              if (!busy && (e.key === "Enter" || e.key === " ")) {
+                e.preventDefault();
+                fileInputRef.current?.click();
+              }
+            }}
+            className={`flex flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-10 text-center transition-colors sm:py-14 ${
+              busy
+                ? "cursor-default border-border bg-surface opacity-60"
+                : dragOver
+                  ? "cursor-pointer border-brand bg-brand/5"
+                  : "cursor-pointer border-border bg-surface hover:bg-surface-hover"
+            }`}
+          >
+            <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-vocals to-beat text-xl">
+              🎵
+            </div>
+            <p className="font-medium">
+              <span className="pointer-coarse:hidden">Drop an audio file here, or click to browse</span>
+              <span className="hidden pointer-coarse:inline">Tap to choose a song</span>
+            </p>
+            <p className="mt-1 text-sm text-muted">
+              MP3, WAV, M4A, FLAC, OGG, AAC — up to 15 minutes (10 on a phone or tablet)
+            </p>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".mp3,.wav,.m4a,.flac,.ogg,.aac,audio/*"
+              className="hidden"
+              onChange={(e) => {
+                handleFiles(e.target.files);
+                // So picking the same file again (after an error) still fires.
+                e.target.value = "";
+              }}
+            />
+          </div>
 
-      <form onSubmit={handleLink} className="mt-4 flex flex-col gap-2 sm:flex-row">
-        <label htmlFor="song-link" className="sr-only">
-          Link to a song
-        </label>
-        <input
-          id="song-link"
-          type="url"
-          inputMode="url"
-          autoComplete="off"
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck={false}
-          enterKeyHint="go"
-          placeholder="…or paste a link (YouTube, SoundCloud…)"
-          value={link}
-          onChange={(e) => setLink(e.target.value)}
-          disabled={busy}
-          className="input min-w-0 flex-1 disabled:opacity-60"
-        />
-        <button
-          type="submit"
-          disabled={busy || !link.trim()}
-          className="shrink-0 rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-strong disabled:opacity-40"
-        >
-          Get song
-        </button>
-      </form>
+          <form onSubmit={handleLink} className="mt-4 flex flex-col gap-2 sm:flex-row">
+            <label htmlFor="song-link" className="sr-only">
+              Link to a song
+            </label>
+            <input
+              id="song-link"
+              type="url"
+              inputMode="url"
+              autoComplete="off"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              enterKeyHint="go"
+              placeholder={
+                youtubeImport ? "…or paste a link (YouTube, SoundCloud…)" : "…or paste a link (SoundCloud, Bandcamp…)"
+              }
+              value={link}
+              onChange={(e) => setLink(e.target.value)}
+              disabled={busy}
+              className="input min-w-0 flex-1 disabled:opacity-60"
+            />
+            <button
+              type="submit"
+              disabled={busy || !link.trim() || youtubeBlocked}
+              className="shrink-0 rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-strong disabled:opacity-40"
+            >
+              Get song
+            </button>
+          </form>
+          {youtubeBlocked ? (
+            <p className="mt-2 text-sm text-danger">{YOUTUBE_UNAVAILABLE}</p>
+          ) : (
+            !youtubeImport && (
+              <p className="mt-2 text-xs text-muted">
+                Works with SoundCloud, Bandcamp, Vimeo, direct MP3 links and many more sites. YouTube isn&apos;t
+                supported yet.
+              </p>
+            )
+          )}
 
-      <SplitterInfo state={splitterState} />
+          <SplitterInfo state={splitterState} />
+        </>
+      )}
 
       {job && <JobProgress name={job.name} stage={job.stage} splitterState={splitterState} />}
       {uploadError && <p className="mt-3 text-sm text-danger">{uploadError}</p>}
@@ -285,6 +294,28 @@ export default function UploadManager() {
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+function PhoneNotice({ onTryAnyway }: { onTryAnyway: () => void }) {
+  return (
+    <div className="rounded-2xl border border-border bg-surface px-5 py-8 text-center sm:px-8">
+      <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-surface-raised text-xl">
+        💻
+      </div>
+      <p className="font-medium">Adding songs works on a computer for now</p>
+      <p className="mx-auto mt-2 max-w-md text-sm text-muted">
+        Splitting a song into vocals and beat happens on your own device, and phones and tablets
+        don&apos;t give a web page enough memory for it yet. Add songs from a computer — they&apos;ll
+        show up here and in the Library on every device, ready to play and remix.
+      </p>
+      <button
+        onClick={onTryAnyway}
+        className="mt-4 text-xs text-muted underline underline-offset-2 hover:text-foreground"
+      >
+        Try on this device anyway
+      </button>
     </div>
   );
 }
@@ -340,7 +371,7 @@ function StemMiniRow({
   color: string;
   onAdd: () => void;
 }) {
-  const peaks: number[] = JSON.parse(stem.peaks_json || "[]");
+  const peaks = useMemo<number[]>(() => JSON.parse(stem.peaks_json || "[]"), [stem.peaks_json]);
   return (
     <div className="flex items-center gap-3 rounded-lg bg-surface-raised px-3 py-2">
       <span

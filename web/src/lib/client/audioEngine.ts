@@ -3,6 +3,7 @@
 import { createLaneChain, createMasterChain, scheduleLane, type LaneChain } from "./audioGraph";
 import { renderPitchTempo } from "./pitchTempo";
 import { previewPlayer } from "./previewPlayer";
+import { keepScreenOn } from "./wakeLock";
 import { fetchStem } from "./stemFetch";
 import { beatLength, getAudibleLaneIds, useStudioStore } from "./studioStore";
 
@@ -443,6 +444,8 @@ if (typeof window !== "undefined") {
   }
 
   useStudioStore.subscribe((state, prevState) => {
+    if (state.isPlaying !== prevState.isPlaying) keepScreenOn("mix", state.isPlaying);
+
     // The playhead moves every frame while playing; none of what follows
     // depends on it. Re-applying every lane's settings 60 times a second
     // piles automation events onto each AudioParam, which slowly bogs the

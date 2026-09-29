@@ -15,10 +15,25 @@ type StemWithTrack = {
   artist_name: string;
 };
 
+type Kind = StemWithTrack["kind"];
+type ListedStem = StemWithTrack & { peaks: number[] };
+
+// Both lists, kept for the whole visit: switching tabs (or coming back to
+// the Studio) shows them at once, while a fresh copy loads behind.
+const listCache: Partial<Record<Kind, ListedStem[]>> = {};
+
+async function fetchKind(kind: Kind): Promise<ListedStem[]> {
+  const res = await fetch(`/api/stems?kind=${kind}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data: { stems: StemWithTrack[] } = await res.json();
+  // Parsed once here: a fresh array each render would make every
+  // waveform in the list redraw on every render.
+  return data.stems.map((stem) => ({ ...stem, peaks: JSON.parse(stem.peaks_json || "[]") }));
+}
+
 export default function StudioLibraryPanel() {
-  const [tab, setTab] = useState<"vocals" | "beat">("vocals");
-  const [stems, setStems] = useState<StemWithTrack[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<Kind>("vocals");
+  const [lists, setLists] = useState<Partial<Record<Kind, ListedStem[]>>>(() => ({ ...listCache }));
   const [query, setQuery] = useState("");
   const addStem = useStudioStore((s) => s.addStem);
   const lanes = useStudioStore((s) => s.lanes);
@@ -26,21 +41,24 @@ export default function StudioLibraryPanel() {
 
   useEffect(() => {
     let cancelled = false;
-    async function load() {
-      setLoading(true);
-      try {
-        const res = await fetch(`/api/stems?kind=${tab}`);
-        const data = await res.json();
-        if (!cancelled) setStems(data.stems);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+    for (const kind of ["vocals", "beat"] as const) {
+      fetchKind(kind)
+        .then((stems) => {
+          listCache[kind] = stems;
+          if (!cancelled) setLists((current) => ({ ...current, [kind]: stems }));
+        })
+        .catch(() => {
+          // Keep whatever was cached; the list just isn't refreshed.
+          if (!cancelled) setLists((current) => ({ ...current, [kind]: current[kind] ?? [] }));
+        });
     }
-    load();
     return () => {
       cancelled = true;
     };
-  }, [tab]);
+  }, []);
+
+  const stems = lists[tab] ?? [];
+  const loading = lists[tab] === undefined;
 
   const accent = tab === "vocals" ? "var(--vocals)" : "var(--beat)";
   const addedStemIds = new Set(lanes.map((l) => l.stemId));
@@ -93,7 +111,6 @@ export default function StudioLibraryPanel() {
         )}
         <div className="flex flex-col gap-2">
           {filtered.map((stem) => {
-            const peaks: number[] = JSON.parse(stem.peaks_json || "[]");
             const added = addedStemIds.has(stem.id);
             const previewing = preview.current?.stemId === stem.id;
             return (
@@ -149,7 +166,7 @@ export default function StudioLibraryPanel() {
                   {stem.track_bpm ? ` · ${stem.track_bpm.toFixed(0)} BPM` : ""}
                 </p>
                 <Waveform
-                  peaks={peaks}
+                  peaks={stem.peaks}
                   color={previewing ? `${accent}99` : accent}
                   progressColor={accent}
                   progress={previewing ? preview.progress : 0}

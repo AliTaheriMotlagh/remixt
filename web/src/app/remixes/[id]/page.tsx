@@ -4,6 +4,8 @@ import sql from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import RemixDetailPlayer from "@/components/RemixDetailPlayer";
 import RemixOwnerControls from "@/components/RemixOwnerControls";
+import RemixStatsBar from "@/components/RemixStatsBar";
+import { getRemixStats } from "@/lib/models";
 
 type RemixRow = {
   id: string;
@@ -34,6 +36,7 @@ export default async function RemixDetailPage({
   const isOwner = user?.id === remix.owner_id;
 
   if (!remix.published && !isOwner) notFound();
+  const stats = await getRemixStats(remix.id, user?.id ?? null);
 
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-12 sm:px-6">
@@ -51,6 +54,8 @@ export default async function RemixDetailPage({
           <RemixOwnerControls remixId={remix.id} initialPublished={remix.published} />
         )}
       </div>
+
+      <RemixStatsBar remixId={remix.id} title={remix.title} initial={stats} signedIn={!!user} />
 
       <RemixDetailPlayer remixId={remix.id} title={remix.title} user={user} />
     </div>

@@ -62,3 +62,16 @@ CREATE INDEX IF NOT EXISTS idx_lanes_remix ON remix_lanes(remix_id);
 -- per knob. These ALTERs are idempotent, so re-running this file is safe.
 ALTER TABLE remix_lanes ADD COLUMN IF NOT EXISTS settings_json TEXT NOT NULL DEFAULT '{}';
 ALTER TABLE remixes ADD COLUMN IF NOT EXISTS project_json TEXT NOT NULL DEFAULT '{}';
+
+-- Listening stats: a remix page counts a play after a few seconds of
+-- listening, and signed-in listeners can like a remix (once each).
+-- lib/models.ts also applies these on first use, so a database that
+-- missed this migration still works.
+ALTER TABLE remixes ADD COLUMN IF NOT EXISTS play_count INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS remix_likes (
+  remix_id TEXT NOT NULL REFERENCES remixes(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (remix_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_remix_likes_user ON remix_likes(user_id);

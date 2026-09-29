@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import UploadManager from "@/components/UploadManager";
+import { youtubeImportEnabled } from "@/lib/linkImport";
 
 export default async function UploadPage() {
   const user = await getCurrentUser();
@@ -14,7 +15,7 @@ export default async function UploadPage() {
         here in your browser — the song itself never leaves your device, only
         the two stems are uploaded to your library.
       </p>
-      <UploadManager />
+      <UploadManager youtubeImport={youtubeImportEnabled()} />
     </div>
   );
 }

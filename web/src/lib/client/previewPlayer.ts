@@ -1,6 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
+import { keepScreenOn } from "./wakeLock";
 
 // A single <audio> element shared by every "play this stem" button in the
 // app. Previews used to be owned by the component that started them, so
@@ -72,6 +73,9 @@ class PreviewPlayer {
   }
 
   private emit(patch: Partial<PreviewState>) {
+    if (patch.playing !== undefined && patch.playing !== this.state.playing) {
+      keepScreenOn("preview", patch.playing);
+    }
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) listener(this.state);
   }
