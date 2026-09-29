@@ -73,16 +73,16 @@ export default async function ArtistPage({
   `;
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-12 sm:px-6">
+    <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 sm:py-12">
       <div className="flex items-center gap-4">
         <span
-          className="flex h-16 w-16 items-center justify-center rounded-full text-2xl font-black text-white"
+          className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full text-2xl font-black text-white"
           style={{ background: artist.avatar_color }}
         >
           {artist.artist_name.slice(0, 1).toUpperCase()}
         </span>
-        <div>
-          <h1 className="text-2xl font-bold">{artist.artist_name}</h1>
+        <div className="min-w-0">
+          <h1 className="break-words text-2xl font-bold">{artist.artist_name}</h1>
           <p className="text-sm text-muted">
             {progress && `Level ${progress.level.level} ${progress.level.title} · `}
             Joined {new Date(artist.created_at).toLocaleDateString()}
@@ -111,7 +111,7 @@ export default async function ArtistPage({
         {remixes.length === 0 ? (
           <p className="mt-2 text-sm text-muted">No remixes yet.</p>
         ) : (
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {remixes.map((remix) => (
               <Link
                 key={remix.id}
@@ -143,10 +143,10 @@ export default async function ArtistPage({
             {tracks.map((track) => (
               <div
                 key={track.id}
-                className="flex items-center justify-between rounded-xl border border-border bg-surface p-4"
+                className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface p-4"
               >
-                <span className="font-medium">{track.title}</span>
-                <span className="text-xs text-muted">
+                <span className="min-w-0 truncate font-medium">{track.title}</span>
+                <span className="shrink-0 text-right text-xs text-muted">
                   {track.status === "ready"
                     ? "Vocals + Beat available"
                     : track.status === "processing"

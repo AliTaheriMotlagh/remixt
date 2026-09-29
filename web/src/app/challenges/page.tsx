@@ -36,7 +36,7 @@ async function ChallengeDetail({ challenge }: { challenge: Challenge }) {
         )}
       </div>
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
         {challenge.vocal ? <ChallengeStemCard stem={challenge.vocal} /> : <p className="text-sm text-muted">The vocal was removed.</p>}
         {challenge.beat ? <ChallengeStemCard stem={challenge.beat} /> : <p className="text-sm text-muted">The beat was removed.</p>}
       </div>
@@ -87,7 +87,7 @@ export default async function ChallengesPage({ searchParams }: { searchParams: P
   const others = challenges.filter((c) => c.id !== featured?.id);
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-4 py-12 sm:px-6">
+    <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 sm:py-12">
       <h1 className="text-2xl font-bold">Remix challenges</h1>
       <p className="mt-1 text-sm text-muted">
         One vocal, one beat, everyone remixes the same pair. Publish your version while the challenge is on — the most
@@ -107,7 +107,7 @@ export default async function ChallengesPage({ searchParams }: { searchParams: P
       {others.length > 0 && (
         <section className="mt-8">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">Other challenges</h2>
-          <ul className="mt-3 grid gap-2 sm:grid-cols-2">
+          <ul className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
             {others.map((c) => (
               <li key={c.id}>
                 <Link

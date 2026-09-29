@@ -83,7 +83,7 @@ export default async function RemixesPage({
   `;
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-12 sm:px-6">
+    <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
       <h1 className="text-2xl font-bold">Remixes</h1>
       <p className="mt-1 text-sm text-muted">
         Published remixes from the community — mixes of vocals and beats
@@ -156,7 +156,7 @@ export default async function RemixesPage({
           )}
         </div>
       ) : (
-        <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {remixes.map((remix) => (
             <Link
               key={remix.id}

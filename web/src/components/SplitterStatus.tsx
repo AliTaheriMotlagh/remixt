@@ -56,7 +56,11 @@ export default function SplitterStatus({ signedIn }: { signedIn: boolean }) {
   const percent = Math.min(100, Math.round((state.loaded / Math.max(1, state.total)) * 100));
 
   return (
-    <div className="fixed bottom-20 left-4 z-40 w-72 rounded-xl border border-border bg-surface/95 p-3 text-xs shadow-lg backdrop-blur-md">
+    <div
+      role="status"
+      className="bottom-float fixed left-3 right-3 z-40 rounded-xl border border-border bg-surface/95 p-3 text-xs shadow-lg backdrop-blur-md sm:left-4 sm:right-auto sm:w-72"
+      style={{ marginLeft: "env(safe-area-inset-left)" }}
+    >
       {state.status === "error" ? (
         <>
           <p className="font-semibold text-danger">The song splitter couldn&apos;t load</p>

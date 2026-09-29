@@ -105,11 +105,11 @@ export default function RemixComments({
             placeholder="Say something about this remix…"
             className="input resize-y text-sm"
           />
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={post}
               disabled={busy || !draft.trim()}
-              className="rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-strong disabled:opacity-50"
+              className="rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-strong disabled:opacity-50 pointer-coarse:px-4 pointer-coarse:py-2.5 pointer-coarse:text-sm"
             >
               {busy ? "Posting…" : "Comment"}
             </button>
@@ -143,7 +143,7 @@ export default function RemixComments({
                 {c.artist_name.slice(0, 1).toUpperCase()}
               </Link>
               <div className="min-w-0 flex-1">
-                <div className="flex items-baseline gap-2 text-xs">
+                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-xs">
                   <Link href={`/artist/${c.user_id}`} className="font-semibold hover:underline">
                     {c.artist_name}
                   </Link>
@@ -162,7 +162,7 @@ export default function RemixComments({
                   )}
                   <span className="ml-auto flex items-center gap-3">
                     {(c.user_id === userId || isRemixOwner) && (
-                      <button onClick={() => remove(c.id)} className="text-[11px] text-muted hover:text-danger">
+                      <button onClick={() => remove(c.id)} className="-my-2 py-2 text-[11px] text-muted hover:text-danger">
                         delete
                       </button>
                     )}

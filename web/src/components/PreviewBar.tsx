@@ -21,11 +21,21 @@ export default function PreviewBar() {
   const accent = kindColor(state.current.kind);
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-50 border-t border-border bg-surface/95 backdrop-blur-md">
-      <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-2.5 sm:px-6">
+    <div
+      data-previewbar
+      className="fixed inset-x-0 z-50 border-t border-border bg-surface/95 backdrop-blur-md"
+      style={{
+        // Sits on top of the phone tab bar; with no tab bar, clear of the home indicator.
+        bottom: "var(--tabbar-h)",
+        paddingBottom: "max(0px, calc(env(safe-area-inset-bottom) - var(--tabbar-h)))",
+        paddingLeft: "env(safe-area-inset-left)",
+        paddingRight: "env(safe-area-inset-right)",
+      }}
+    >
+      <div className="mx-auto flex h-14 max-w-7xl items-center gap-3 px-4 sm:px-6">
         <button
           onClick={() => previewPlayer.toggle(state.current!)}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white"
           style={{ background: accent }}
           aria-label={state.playing ? "Pause preview" : "Resume preview"}
         >
@@ -39,17 +49,20 @@ export default function PreviewBar() {
               {state.current.artist} · {kindLabel(state.current.kind).toLowerCase()}
             </span>
           </div>
+          {/* A thin bar with a taller invisible hit area, so it's easy to tap. */}
           <div
-            className="mt-1.5 h-1.5 cursor-pointer overflow-hidden rounded-full bg-surface-raised"
+            className="-my-1.5 cursor-pointer py-1.5"
             onClick={(e) => {
               const rect = e.currentTarget.getBoundingClientRect();
               previewPlayer.seek((e.clientX - rect.left) / rect.width);
             }}
           >
-            <div
-              className="h-full rounded-full"
-              style={{ width: `${state.progress * 100}%`, background: accent }}
-            />
+            <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-surface-raised">
+              <div
+                className="h-full rounded-full"
+                style={{ width: `${state.progress * 100}%`, background: accent }}
+              />
+            </div>
           </div>
         </div>
 
@@ -59,9 +72,10 @@ export default function PreviewBar() {
 
         <button
           onClick={() => previewPlayer.stop()}
-          className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:border-danger hover:text-danger"
+          className="flex h-10 shrink-0 items-center rounded-lg border border-border px-3 text-xs font-medium text-muted transition-colors hover:border-danger hover:text-danger"
+          aria-label="Stop preview"
         >
-          ■ Stop
+          ■<span className="ml-1 hidden sm:inline">Stop</span>
         </button>
       </div>
     </div>

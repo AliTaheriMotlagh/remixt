@@ -42,48 +42,48 @@ export default async function Home() {
               "radial-gradient(circle at 20% 20%, var(--vocals-dim), transparent 45%), radial-gradient(circle at 80% 0%, var(--beat-dim), transparent 45%)",
           }}
         />
-        <div className="relative mx-auto max-w-6xl px-6 py-24 sm:py-32">
+        <div className="relative mx-auto max-w-6xl px-4 py-16 sm:px-6 sm:py-32">
           <div className="mx-auto max-w-3xl text-center">
             <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-surface px-4 py-1.5 text-xs font-medium text-muted">
               <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse-glow" />
               AI vocal &amp; beat separation, in your browser
             </div>
-            <h1 className="text-4xl font-black tracking-tight sm:text-6xl">
+            <h1 className="text-4xl font-black tracking-tight text-balance sm:text-6xl">
               Split any song.
               <br />
               <span className="bg-gradient-to-r from-vocals to-beat bg-clip-text text-transparent">
                 Remix it your way.
               </span>
             </h1>
-            <p className="mx-auto mt-6 max-w-xl text-lg text-muted">
+            <p className="mx-auto mt-6 max-w-xl text-base text-muted sm:text-lg">
               Upload a track and Remixt automatically separates the vocals
               from the beat. Browse the library, drop any vocal onto any
               beat in the studio, mix it like a DAW, and publish it as your
               own remix.
             </p>
-            <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
+            <div className="mt-10 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:flex-wrap sm:items-center">
               <Link
                 href="/upload"
-                className="rounded-xl bg-brand px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-brand/25 transition-transform hover:scale-[1.03] hover:bg-brand-strong"
+                className="rounded-xl bg-brand px-6 py-3.5 text-center text-sm font-semibold text-white shadow-lg shadow-brand/25 transition-transform hover:scale-[1.03] hover:bg-brand-strong sm:py-3"
               >
                 Upload a song
               </Link>
               <Link
                 href="/library"
-                className="rounded-xl border border-border bg-surface px-6 py-3 text-sm font-semibold transition-colors hover:bg-surface-hover"
+                className="rounded-xl border border-border bg-surface px-6 py-3.5 text-center text-sm font-semibold transition-colors hover:bg-surface-hover sm:py-3"
               >
                 Browse vocals &amp; beats
               </Link>
               <Link
                 href="/studio"
-                className="rounded-xl border border-border bg-surface px-6 py-3 text-sm font-semibold transition-colors hover:bg-surface-hover"
+                className="rounded-xl border border-border bg-surface px-6 py-3.5 text-center text-sm font-semibold transition-colors hover:bg-surface-hover sm:py-3"
               >
                 Open the studio
               </Link>
             </div>
           </div>
 
-          <div className="mx-auto mt-16 grid max-w-2xl grid-cols-3 gap-4 text-center">
+          <div className="mx-auto mt-12 grid max-w-2xl grid-cols-3 gap-4 text-center sm:mt-16">
             <Stat label="Tracks split" value={stats.tracks} />
             <Stat label="Remixes made" value={stats.remixes} />
             <Stat label="Artists" value={stats.artists} />
@@ -91,11 +91,11 @@ export default async function Home() {
         </div>
       </section>
 
-      <section className="mx-auto w-full max-w-6xl px-6 py-20">
+      <section className="mx-auto w-full max-w-6xl px-4 py-14 sm:px-6 sm:py-20">
         <h2 className="text-center text-2xl font-bold tracking-tight sm:text-3xl">
           From upload to remix in three steps
         </h2>
-        <div className="mt-12 grid gap-6 sm:grid-cols-3">
+        <div className="mt-10 grid grid-cols-1 gap-4 sm:mt-12 sm:gap-6 md:grid-cols-3">
           <StepCard
             step="01"
             accent="brand"
@@ -118,8 +118,8 @@ export default async function Home() {
       </section>
 
       <section className="border-t border-border bg-surface/40">
-        <div className="mx-auto max-w-6xl px-6 py-20">
-          <div className="mb-8 flex items-center justify-between">
+        <div className="mx-auto max-w-6xl px-4 py-14 sm:px-6 sm:py-20">
+          <div className="mb-8 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
             <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">
               Fresh from the community
             </h2>
@@ -134,7 +134,7 @@ export default async function Home() {
               build one in the studio.
             </div>
           ) : (
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {remixes.map((remix) => (
                 <Link
                   key={remix.id}
@@ -168,8 +168,8 @@ export default async function Home() {
 function Stat({ label, value }: { label: string; value: number }) {
   return (
     <div>
-      <div className="text-3xl font-black">{value}</div>
-      <div className="mt-1 text-xs uppercase tracking-wide text-muted">{label}</div>
+      <div className="text-2xl font-black tabular-nums sm:text-3xl">{value}</div>
+      <div className="mt-1 text-[11px] uppercase tracking-wide text-muted sm:text-xs">{label}</div>
     </div>
   );
 }

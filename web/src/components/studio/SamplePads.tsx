@@ -78,7 +78,7 @@ export default function SamplePads() {
             {editing && (
               <button
                 onClick={() => removePad(pad.id)}
-                className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-danger text-[10px] text-white"
+                className="absolute -right-1.5 -top-1.5 flex h-5 min-h-0 w-5 items-center justify-center rounded-full bg-danger text-[10px] text-white pointer-coarse:h-7 pointer-coarse:w-7 pointer-coarse:text-xs"
                 aria-label={`Remove pad ${pad.label}`}
               >
                 ✕

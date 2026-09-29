@@ -578,7 +578,7 @@ function ChallengesTab() {
         <p className="text-sm font-semibold">New challenge</p>
         <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title, e.g. “Late-night flip”" className="input" required minLength={3} />
         <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What should people go for? (optional)" rows={2} className="input" />
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="flex flex-col gap-1 text-xs text-muted">
             Vocal
             <select value={vocal} onChange={(e) => setVocal(e.target.value)} className="input" required>

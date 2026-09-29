@@ -2,49 +2,36 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import type { User } from "@/lib/auth";
 import NotificationBell from "./NotificationBell";
-
-const links = [
-  { href: "/library", label: "Library" },
-  { href: "/studio", label: "Studio" },
-  { href: "/remixes", label: "Remixes" },
-  { href: "/challenges", label: "Challenges" },
-  { href: "/leaderboard", label: "Top" },
-  { href: "/upload", label: "Upload" },
-];
+import { NAV_LINKS, NavIcon, isActive } from "./navLinks";
 
 export default function NavBar({ user, isAdmin = false }: { user: User | null; isAdmin?: boolean }) {
   const pathname = usePathname();
-  const navLinks = isAdmin ? [...links, { href: "/admin", label: "Admin" }] : links;
-  const router = useRouter();
   // An embedded player (on someone else's site) is just the player.
   if (pathname?.startsWith("/embed/")) return null;
 
-  async function handleLogout() {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.push("/");
-    router.refresh();
-  }
-
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md">
-      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6">
-        <div className="flex items-center gap-8">
-          <Link href="/" className="flex items-center gap-2 shrink-0">
+      <div className="mx-auto flex h-[var(--header-h)] max-w-7xl items-center justify-between gap-3 px-4 sm:px-6">
+        <div className="flex min-w-0 items-center gap-4 lg:gap-8">
+          <Link href="/" className="flex shrink-0 items-center gap-2" aria-label="Remixt home">
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-vocals to-beat text-sm font-black text-white">
               R
             </span>
             <span className="text-lg font-bold tracking-tight">Remixt</span>
           </Link>
-          <nav className="hidden gap-1 sm:flex">
-            {navLinks.map((link) => {
-              const active = pathname === link.href || pathname?.startsWith(link.href + "/");
+          {/* Phones get the tab bar at the bottom instead (MobileTabBar). */}
+          <nav className="hidden gap-0.5 md:flex lg:gap-1" aria-label="Main">
+            {NAV_LINKS.map((link) => {
+              const active = isActive(pathname, link.href);
               return (
                 <Link
                   key={link.href}
                   href={link.href}
-                  className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  aria-current={active ? "page" : undefined}
+                  className={`rounded-lg px-2.5 py-2 text-sm font-medium transition-colors lg:px-3 ${
                     active
                       ? "bg-surface-raised text-foreground"
                       : "text-muted hover:bg-surface hover:text-foreground"
@@ -58,57 +45,116 @@ export default function NavBar({ user, isAdmin = false }: { user: User | null; i
         </div>
 
         {user ? (
-          <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex shrink-0 items-center gap-1 sm:gap-2">
             <NotificationBell />
-            <Link
-              href={`/artist/${user.id}`}
-              className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-surface"
-            >
-              <span
-                className="flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold text-white"
-                style={{ background: user.avatar_color }}
-              >
-                {user.artist_name.slice(0, 1).toUpperCase()}
-              </span>
-              <span className="hidden text-sm font-medium sm:inline">
-                {user.artist_name}
-              </span>
-            </Link>
-            <button
-              onClick={handleLogout}
-              className="rounded-lg border border-border px-3 py-1.5 text-sm text-muted transition-colors hover:border-danger hover:text-danger"
-            >
-              Log out
-            </button>
+            <AccountMenu user={user} isAdmin={isAdmin} />
           </div>
         ) : (
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1 sm:gap-2">
             <Link
               href="/login"
-              className="rounded-lg px-3 py-1.5 text-sm font-medium text-muted hover:text-foreground"
+              className="rounded-lg px-3 py-2 text-sm font-medium text-muted hover:text-foreground"
             >
               Log in
             </Link>
             <Link
               href="/signup"
-              className="rounded-lg bg-brand px-3 py-1.5 text-sm font-semibold text-white transition-colors hover:bg-brand-strong"
+              className="rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-strong"
             >
-              Become an artist
+              <span className="sm:hidden">Sign up</span>
+              <span className="hidden sm:inline">Become an artist</span>
             </Link>
           </div>
         )}
       </div>
-      <nav className="flex gap-1 overflow-x-auto border-t border-border px-4 py-1.5 sm:hidden">
-        {navLinks.map((link) => (
-          <Link
-            key={link.href}
-            href={link.href}
-            className="shrink-0 rounded-lg px-3 py-1.5 text-sm text-muted hover:bg-surface hover:text-foreground"
-          >
-            {link.label}
-          </Link>
-        ))}
-      </nav>
     </header>
+  );
+}
+
+/** The avatar button: your profile, admin, and logging out. */
+function AccountMenu({ user, isAdmin }: { user: User; isAdmin: boolean }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const router = useRouter();
+  const pathname = usePathname();
+
+  // Close when you tap elsewhere, press Escape, or go to another page.
+  useEffect(() => {
+    if (!open) return;
+    function onPointerDown(event: PointerEvent) {
+      if (!ref.current?.contains(event.target as Node)) setOpen(false);
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+  const [lastPath, setLastPath] = useState(pathname);
+  if (pathname !== lastPath) {
+    setLastPath(pathname);
+    setOpen(false);
+  }
+
+  async function handleLogout() {
+    setOpen(false);
+    await fetch("/api/auth/logout", { method: "POST" });
+    router.push("/");
+    router.refresh();
+  }
+
+  const item =
+    "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm text-foreground transition-colors hover:bg-surface-hover";
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Account menu"
+        className="flex h-10 items-center gap-2 rounded-lg px-1.5 hover:bg-surface sm:px-2"
+      >
+        <span
+          className="flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold text-white"
+          style={{ background: user.avatar_color }}
+        >
+          {user.artist_name.slice(0, 1).toUpperCase()}
+        </span>
+        <span className="hidden max-w-[10rem] truncate text-sm font-medium lg:inline">{user.artist_name}</span>
+        <svg viewBox="0 0 24 24" className="hidden h-4 w-4 text-muted sm:block" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-full mt-2 w-60 rounded-xl border border-border bg-surface p-1.5 shadow-xl"
+        >
+          <p className="truncate px-3 pb-2 pt-1.5 text-xs text-muted">
+            Signed in as <span className="font-semibold text-foreground">{user.artist_name}</span>
+          </p>
+          <Link href={`/artist/${user.id}`} role="menuitem" className={item}>
+            <NavIcon name="profile" className="h-4 w-4 text-muted" />
+            Your artist page
+          </Link>
+          {isAdmin && (
+            <Link href="/admin" role="menuitem" className={item}>
+              <NavIcon name="admin" className="h-4 w-4 text-muted" />
+              Admin
+            </Link>
+          )}
+          <div className="my-1 border-t border-border" />
+          <button onClick={handleLogout} role="menuitem" className={`${item} hover:!text-danger`}>
+            <NavIcon name="logout" className="h-4 w-4" />
+            Log out
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

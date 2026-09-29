@@ -104,6 +104,8 @@ export default function Studio({ user }: { user: User | null }) {
   const sourceRemix = useStudioStore((s) => s.sourceRemix);
   const [loadingRemix, setLoadingRemix] = useState(!!remixId);
   const [draft, setDraft] = useState<StudioDraft | null>(null);
+  // Below desktop width the stem library is a sheet that slides up.
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const remixTitle = sourceRemix?.title ?? null;
 
   // Unsaved work from a previous visit (a reload, or the phone dropping
@@ -247,10 +249,29 @@ export default function Studio({ user }: { user: User | null }) {
   // Leaving the Studio shouldn't leave the mix playing behind you.
   useEffect(() => () => audioEngine.stop(), []);
 
+  // While the library sheet is up, the page behind it stays put.
+  useEffect(() => {
+    if (!libraryOpen) return;
+    const root = document.documentElement;
+    const previous = root.style.overflow;
+    root.style.overflow = "hidden";
+    const onKeyDown = (event: KeyboardEvent) => event.key === "Escape" && setLibraryOpen(false);
+    document.addEventListener("keydown", onKeyDown);
+    // Rotating a tablet to landscape puts the library back beside the mix.
+    const desktop = window.matchMedia("(min-width: 64rem)");
+    const onChange = () => desktop.matches && setLibraryOpen(false);
+    desktop.addEventListener("change", onChange);
+    return () => {
+      root.style.overflow = previous;
+      document.removeEventListener("keydown", onKeyDown);
+      desktop.removeEventListener("change", onChange);
+    };
+  }, [libraryOpen]);
+
   return (
-    <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6">
-      <div className="flex items-center justify-between">
-        <div>
+    <div className="touch-targets mx-auto w-full max-w-7xl px-4 py-5 max-lg:pb-24 sm:px-6 sm:py-8">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold">Studio</h1>
           <p className="mt-1 text-sm text-muted">
             {challenge
@@ -260,7 +281,7 @@ export default function Studio({ user }: { user: User | null }) {
                 : "Mix vocals from one song with the beat from another."}
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-3">
           {!projectId && (
             <button
               onClick={startTogether}
@@ -268,7 +289,12 @@ export default function Studio({ user }: { user: User | null }) {
               className="rounded-lg border border-beat/60 px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-beat/15 disabled:opacity-40"
               title="Invite other artists to edit this mix with you, live"
             >
-              {startingSession ? "Starting…" : "👥 Remix together"}
+              {startingSession ? "Starting…" : (
+                <>
+                  👥<span className="hidden sm:inline"> Remix together</span>
+                  <span className="sm:hidden"> Invite</span>
+                </>
+              )}
             </button>
           )}
           <p className="hidden text-right text-[11px] leading-relaxed text-muted lg:block">
@@ -280,8 +306,8 @@ export default function Studio({ user }: { user: User | null }) {
 
       {collabError && <p className="mt-3 text-sm text-danger">{collabError}</p>}
 
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[1fr_300px]">
-        <div className="flex flex-col gap-4">
+      <div className="mt-5 grid grid-cols-1 gap-6 sm:mt-6 lg:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="flex min-w-0 flex-col gap-4">
           {projectId && user && <CollabBar userId={user.id} onLeave={() => void leaveTogether()} />}
           {draft && lanes.length === 0 && (
             <div className="flex flex-wrap items-center gap-3 rounded-xl border border-brand/50 bg-brand/10 px-4 py-3 text-sm">
@@ -320,11 +346,15 @@ export default function Studio({ user }: { user: User | null }) {
               Loading remix…
             </div>
           ) : lanes.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-border bg-surface p-12 text-center text-muted">
-              No stems yet. Add a vocal and a beat from the panel
-              {" "}
-              <span className="hidden lg:inline">on the right</span>
-              <span className="lg:hidden">below</span> to start mixing.
+            <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-10 text-center text-muted sm:p-12">
+              No stems yet. Add a vocal and a beat
+              <span className="hidden lg:inline"> from the panel on the right</span> to start mixing.
+              <button
+                onClick={() => setLibraryOpen(true)}
+                className="mx-auto mt-4 flex h-11 items-center gap-2 rounded-xl bg-brand px-5 text-sm font-semibold text-white hover:bg-brand-strong lg:hidden"
+              >
+                + Add a vocal or beat
+              </button>
             </div>
           ) : (
             <div className="flex flex-col gap-3">
@@ -338,10 +368,47 @@ export default function Studio({ user }: { user: User | null }) {
           {lanes.length > 0 && <SamplePads />}
         </div>
 
-        <div className="h-[420px] lg:h-[calc(100vh-220px)] lg:sticky lg:top-40">
-          <StudioLibraryPanel />
-        </div>
+        {libraryOpen && (
+          <div className="fixed inset-0 z-[60] bg-black/55 lg:hidden" onClick={() => setLibraryOpen(false)} />
+        )}
+        <aside
+          aria-label="Stem library"
+          className={`flex flex-col lg:sticky lg:top-[calc(var(--header-h)+1.5rem)] lg:h-[calc(100dvh-var(--header-h)-3rem)] ${
+            libraryOpen
+              ? "max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-[61] max-lg:mx-auto max-lg:h-[85dvh] max-lg:max-w-2xl max-lg:rounded-t-2xl max-lg:border max-lg:border-b-0 max-lg:border-border max-lg:bg-background max-lg:px-3 max-lg:pb-[max(0.75rem,env(safe-area-inset-bottom))] max-lg:shadow-2xl"
+              : "max-lg:hidden"
+          }`}
+          style={libraryOpen ? { animation: "sheet-in 0.2s ease-out" } : undefined}
+        >
+          <div className="flex items-center justify-between gap-3 py-3 lg:hidden">
+            <div>
+              <p className="font-semibold">Add stems</p>
+              <p className="text-xs text-muted">
+                {lanes.length === 0 ? "Pick a vocal and a beat to start" : `${lanes.length} in your mix`}
+              </p>
+            </div>
+            <button
+              onClick={() => setLibraryOpen(false)}
+              className="h-10 rounded-lg bg-brand px-4 text-sm font-semibold text-white hover:bg-brand-strong"
+            >
+              Done
+            </button>
+          </div>
+          <div className="min-h-0 flex-1">
+            <StudioLibraryPanel />
+          </div>
+        </aside>
       </div>
+
+      {!libraryOpen && (
+        <button
+          onClick={() => setLibraryOpen(true)}
+          className="bottom-float fixed right-4 z-40 flex h-12 items-center gap-2 rounded-full bg-brand px-5 text-sm font-semibold text-white shadow-lg shadow-brand/30 hover:bg-brand-strong lg:hidden"
+          style={{ marginRight: "env(safe-area-inset-right)" }}
+        >
+          <span className="text-lg leading-none">+</span> Add stems
+        </button>
+      )}
     </div>
   );
 }

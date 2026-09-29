@@ -52,7 +52,7 @@ export default async function NotificationsPage() {
   const notifications = await listNotifications(user.id);
 
   return (
-    <div className="mx-auto w-full max-w-2xl px-4 py-12 sm:px-6">
+    <div className="mx-auto w-full max-w-2xl px-4 py-8 sm:px-6 sm:py-12">
       <MarkNotificationsRead />
       <h1 className="text-2xl font-bold">Notifications</h1>
       <p className="mt-1 text-sm text-muted">Likes, comments, follows and remixes of your work.</p>

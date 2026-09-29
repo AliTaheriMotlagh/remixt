@@ -56,13 +56,15 @@ export default function ReportButton({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="text-xs text-muted hover:text-danger"
+        className="-my-2 py-2 text-xs text-muted hover:text-danger"
+        aria-expanded={open}
         title={`Report this ${kind === "track" ? "song" : kind}`}
       >
         ⚑ Report
       </button>
+      {open && <div className="sheet-backdrop" onClick={() => setOpen(false)} />}
       {open && (
-        <div className="absolute right-0 top-full z-[45] mt-1 w-72 rounded-xl border border-border bg-surface p-3 text-left shadow-xl">
+        <div className="popover-sheet absolute right-0 top-full z-[45] mt-1 w-72 rounded-xl border border-border bg-surface p-3 text-left shadow-xl">
           {!signedIn ? (
             <p className="text-xs text-muted">
               <Link href="/login" className="text-brand-strong hover:underline">
@@ -100,13 +102,13 @@ export default function ReportButton({
               />
               {error && <p className="text-xs text-danger">{error}</p>}
               <div className="flex justify-end gap-2">
-                <button type="button" onClick={() => setOpen(false)} className="text-xs text-muted">
+                <button type="button" onClick={() => setOpen(false)} className="px-2 py-1.5 text-xs text-muted">
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={state === "sending"}
-                  className="rounded-md bg-danger px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-50"
+                  className="rounded-md bg-danger px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
                 >
                   {state === "sending" ? "Sending…" : "Report"}
                 </button>

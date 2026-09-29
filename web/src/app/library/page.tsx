@@ -10,7 +10,7 @@ export default async function LibraryPage({
   const [stems, user, params] = await Promise.all([getLibraryStems(), getCurrentUser(), searchParams]);
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-12 sm:px-6">
+    <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
       <h1 className="text-2xl font-bold">Library</h1>
       <p className="mt-1 text-sm text-muted">
         Every stem split from an uploaded song — vocals, beats, and on newer songs the drums, bass and melody on

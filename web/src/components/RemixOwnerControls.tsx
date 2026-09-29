@@ -62,8 +62,8 @@ export default function RemixOwnerControls({
   }
 
   return (
-    <div className="flex flex-col items-end gap-2">
-      <div className="flex items-center gap-2">
+    <div className="flex flex-col items-start gap-2 sm:items-end">
+      <div className="flex flex-wrap items-center gap-2">
         <span
           className={`rounded-full px-2.5 py-1 text-xs font-medium ${
             published ? "bg-success/15 text-success" : "bg-surface-raised text-muted"

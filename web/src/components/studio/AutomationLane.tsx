@@ -166,7 +166,7 @@ export default function AutomationLane({ lane, span, accent }: { lane: StudioLan
             key={i}
             onPointerDown={(e) => handlePointDown(e, i)}
             onDoubleClick={() => remove(i)}
-            className={`absolute h-3.5 w-3.5 -translate-x-1/2 translate-y-1/2 cursor-grab rounded-full border-2 border-background ${
+            className={`absolute h-3.5 w-3.5 -translate-x-1/2 translate-y-1/2 cursor-grab rounded-full border-2 border-background pointer-coarse:h-5 pointer-coarse:w-5 ${
               selected === i ? "ring-2 ring-foreground" : ""
             }`}
             style={{ left: `${(p.t / span) * 100}%`, bottom: `${p.v * 100}%`, background: accent }}

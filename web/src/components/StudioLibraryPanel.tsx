@@ -81,7 +81,7 @@ export default function StudioLibraryPanel() {
             <button
               key={kind}
               onClick={() => setTab(kind)}
-              className="flex-1 shrink-0 rounded-md px-2 py-1.5 text-xs font-semibold transition-colors"
+              className="flex-1 shrink-0 rounded-md px-2 py-1.5 text-xs font-semibold transition-colors pointer-coarse:px-3 pointer-coarse:py-2.5"
               style={{
                 background: tab === kind ? KIND_INFO[kind].color : "transparent",
                 color: tab === kind ? "white" : "var(--muted)",
@@ -95,6 +95,9 @@ export default function StudioLibraryPanel() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search…"
+          type="search"
+          enterKeyHint="search"
+          aria-label="Search stems"
           className="input mt-2 !py-1.5 text-xs"
         />
       </div>
@@ -129,9 +132,10 @@ export default function StudioLibraryPanel() {
                         kind: stem.kind,
                       })
                     }
-                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] text-white"
+                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] text-white pointer-coarse:h-9 pointer-coarse:w-9 pointer-coarse:text-xs"
                     style={{ background: accent }}
                     title={previewing && preview.playing ? "Pause preview" : "Preview"}
+                    aria-label={`${previewing && preview.playing ? "Pause" : "Preview"} ${stem.track_title}`}
                   >
                     {previewing && preview.playing ? "⏸" : "▶"}
                   </button>
@@ -151,12 +155,12 @@ export default function StudioLibraryPanel() {
                         track_bpm: stem.track_bpm,
                       })
                     }
-                    className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted transition-colors hover:border-brand/60 hover:text-foreground disabled:border-transparent disabled:text-success"
+                    className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted transition-colors hover:border-brand/60 hover:text-foreground disabled:border-transparent disabled:text-success pointer-coarse:rounded-lg pointer-coarse:px-3 pointer-coarse:py-2 pointer-coarse:text-xs"
                   >
                     {added ? "added" : "+ add"}
                   </button>
                 </div>
-                <p className="mt-0.5 truncate pl-8 text-[11px] text-muted">
+                <p className="mt-0.5 truncate pl-8 text-[11px] text-muted pointer-coarse:pl-11">
                   {stem.artist_name}
                   {stem.track_bpm ? ` · ${stem.track_bpm.toFixed(0)} BPM` : ""}
                 </p>

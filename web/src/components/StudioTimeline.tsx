@@ -158,10 +158,11 @@ export default function StudioTimeline() {
 
   return (
     <div className="rounded-xl border border-border bg-surface px-3 py-2">
-      <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wide text-muted">
-        <span>Timeline · {projectBpm.toFixed(1)} BPM</span>
-        <span>
-          {snapToGrid ? "Snap: beat" : "Snap: off"} · drag here to set a loop
+      <div className="mb-1 flex items-center justify-between gap-2 text-[10px] uppercase tracking-wide text-muted">
+        <span className="shrink-0">Timeline · {projectBpm.toFixed(1)} BPM</span>
+        <span className="truncate">
+          {snapToGrid ? "Snap: beat" : "Snap: off"}
+          <span className="hidden sm:inline"> · drag here to set a loop</span>
         </span>
       </div>
       <div
@@ -169,7 +170,11 @@ export default function StudioTimeline() {
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        className="relative h-10 cursor-pointer select-none overflow-hidden rounded-lg bg-background"
+        onPointerCancel={() => {
+          dragStart.current = null;
+        }}
+        // Sideways drags mark the loop; up and down still scroll the page.
+        className="relative h-10 cursor-pointer touch-pan-y select-none overflow-hidden rounded-lg bg-background"
       >
         {showLoop && (
           <div

@@ -127,7 +127,10 @@ export default function LibraryBrowser({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search by song, artist or tag…"
-          className="input max-w-xs flex-1"
+          type="search"
+          enterKeyHint="search"
+          aria-label="Search the library"
+          className="input sm:max-w-xs sm:flex-1"
         />
       </div>
 
@@ -159,7 +162,7 @@ export default function LibraryBrowser({
             : "No matches for your search."}
         </div>
       ) : (
-        <div className="mt-6 grid gap-3 sm:grid-cols-2">
+        <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
           {filtered.map((stem) => {
             const isCurrent = preview.current?.stemId === stem.id;
             const isPlaying = isCurrent && preview.playing;
@@ -198,7 +201,7 @@ export default function LibraryBrowser({
                 <div className="mt-3 flex items-center gap-2">
                   <button
                     onClick={() => togglePreview(stem)}
-                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white transition-transform hover:scale-105"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white transition-transform hover:scale-105"
                     style={{ background: accent }}
                     aria-label={isPlaying ? "Pause preview" : "Play preview"}
                   >
@@ -217,7 +220,7 @@ export default function LibraryBrowser({
                 <div className="mt-3 flex items-center gap-3">
                   <button
                     onClick={() => handleAddToStudio(stem)}
-                    className="flex-1 rounded-lg border border-border py-1.5 text-sm font-medium transition-colors hover:bg-surface-hover"
+                    className="flex-1 rounded-lg border border-border py-2 text-sm font-medium transition-colors hover:bg-surface-hover pointer-coarse:py-2.5"
                   >
                     + Add to Studio
                   </button>

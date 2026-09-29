@@ -126,7 +126,7 @@ export default function BpmSyncPanel() {
           step={0.1}
           value={projectBpm}
           onChange={(e) => setProjectBpm(Number(e.target.value))}
-          className="input w-20 !py-1 text-xs"
+          className="input !w-24 !py-1 text-xs"
         />
         BPM
       </label>
@@ -180,7 +180,7 @@ export default function BpmSyncPanel() {
         </button>
       )}
 
-      <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-muted">
+      <div className="hidden flex-wrap items-center gap-x-2 text-[11px] text-muted sm:flex">
         {lanes.map((lane, i) => (
           <span key={lane.laneId}>
             {i > 0 && <span className="mr-2 text-border">·</span>}

@@ -34,7 +34,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex flex-1 items-center justify-center px-4 py-16">
+    <div className="flex flex-1 items-center justify-center px-4 py-10 sm:py-16">
       <div className="w-full max-w-sm">
         <h1 className="text-2xl font-bold">Welcome back</h1>
         <p className="mt-1 text-sm text-muted">Log in to keep remixing.</p>
@@ -48,6 +48,12 @@ export default function LoginPage() {
               onChange={(e) => setEmail(e.target.value)}
               className="input"
               placeholder="you@example.com"
+              autoComplete="email"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              inputMode="email"
+              enterKeyHint="next"
             />
           </Field>
           <Field label="Password">
@@ -58,6 +64,8 @@ export default function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               className="input"
               placeholder="••••••••"
+              autoComplete="current-password"
+              enterKeyHint="go"
             />
           </Field>
 
@@ -66,7 +74,7 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="mt-2 rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-strong disabled:opacity-50"
+            className="mt-2 rounded-lg bg-brand px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-strong disabled:opacity-50"
           >
             {loading ? "Logging in…" : "Log in"}
           </button>

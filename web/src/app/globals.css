@@ -19,6 +19,31 @@
   --other: #60a5fa;
   --danger: #ef4444;
   --success: #22c55e;
+
+  /* Chrome that's fixed to the screen edges, so content and other
+     floating bars can keep clear of it. The bottom ones are 0 until the
+     bar is actually on the page (see the :has() rules below). */
+  --header-h: 3.5rem;
+  --tabbar-h: 0px;
+  --previewbar-h: 0px;
+  --bottom-chrome: calc(var(--tabbar-h) + var(--previewbar-h));
+}
+
+@media (min-width: 48rem) {
+  :root {
+    --header-h: 4rem;
+  }
+}
+
+/* Phones and small tablets navigate from a tab bar at the bottom. */
+@media (max-width: 47.999rem) {
+  :root:has([data-tabbar]) {
+    --tabbar-h: calc(3.5rem + env(safe-area-inset-bottom));
+  }
+}
+:root:has([data-previewbar]) {
+  /* With no tab bar under it, the preview bar also pads for the home indicator. */
+  --previewbar-h: calc(3.5rem + 1px + max(0px, env(safe-area-inset-bottom) - var(--tabbar-h)));
 }
 
 @theme inline {
@@ -50,12 +75,78 @@
 
 html {
   color-scheme: dark;
+  /* Stops iOS enlarging text when a phone is turned to landscape. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  /* The page runs edge to edge (viewport-fit=cover); keep it out from
+     under the notch in landscape and clear of the bars fixed at the bottom. */
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: var(--bottom-chrome);
+  -webkit-tap-highlight-color: transparent;
+}
+
+@layer base {
+  /* No double-tap-to-zoom delay on anything you tap. In the base layer, so
+     a `touch-none` utility on a draggable still wins. */
+  a,
+  button,
+  input,
+  select,
+  textarea,
+  label,
+  summary {
+    touch-action: manipulation;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--brand-strong);
+    outline-offset: 2px;
+  }
+
+  button:not(:disabled),
+  summary,
+  [role="button"] {
+    cursor: pointer;
+  }
+}
+
+/* iOS Safari zooms the page into any field whose text is under 16px, and
+   doesn't zoom back out. Unlayered, so it beats the text-size utilities. */
+@media (pointer: coarse) {
+  input:not([type="range"], [type="checkbox"], [type="radio"], [type="file"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+
+  /* Sliders get a thumb-sized hit area; the track still looks thin. */
+  input[type="range"] {
+    min-height: 1.75rem;
+  }
+
+  /* The tab bar would float mid-screen above the keyboard; hide it while typing. */
+  body:has(:is(input:not([type="range"], [type="checkbox"], [type="radio"], [type="file"]), textarea):focus)
+    [data-tabbar] {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 ::selection {
@@ -73,12 +164,6 @@ body {
   color: var(--foreground);
   outline: none;
   transition: border-color 0.15s ease;
-}
-/* iOS Safari zooms the page into any field with text under 16px. */
-@media (pointer: coarse) {
-  .input {
-    font-size: 16px;
-  }
 }
 .input::placeholder {
   color: var(--muted);
@@ -119,4 +204,63 @@ body {
 .nudge:hover {
   color: var(--foreground);
   border-color: var(--brand);
+}
+/* Big enough to hit with a thumb. */
+@media (pointer: coarse) {
+  .nudge {
+    min-height: 2rem;
+    padding: 0.25rem 0.625rem;
+    font-size: 12px;
+  }
+}
+
+/* Dense control surfaces (the Studio) on touch screens: every button and
+   field at least 32px tall. In the components layer, so a sizing utility
+   on one element (e.g. `min-h-0`) still overrides it. */
+@layer components {
+  @media (pointer: coarse) {
+    .touch-targets :is(button, select, input:not([type="range"], [type="checkbox"], [type="radio"])) {
+      min-height: 2rem;
+    }
+  }
+}
+
+/* A popover that becomes a sheet pinned to the bottom of a phone screen,
+   where an anchored box would run off the edge. Pair it with a
+   .sheet-backdrop sibling that closes it. */
+@media (max-width: 39.999rem) {
+  .popover-sheet {
+    position: fixed !important;
+    inset: auto 0.75rem calc(var(--bottom-chrome) + 0.75rem) 0.75rem !important;
+    width: auto !important;
+    max-height: calc(100dvh - var(--header-h) - var(--bottom-chrome) - 1.5rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    margin: 0 !important;
+    z-index: 70 !important;
+    animation: sheet-in 0.18s ease-out;
+  }
+}
+.sheet-backdrop {
+  display: none;
+}
+@media (max-width: 39.999rem) {
+  .sheet-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 69;
+    background: rgb(0 0 0 / 0.55);
+  }
+}
+@keyframes sheet-in {
+  from {
+    transform: translateY(1rem);
+    opacity: 0;
+  }
+}
+
+/* Room for the bars fixed at the bottom, for things floating above them. */
+.bottom-float {
+  bottom: calc(max(var(--bottom-chrome), env(safe-area-inset-bottom)) + 0.75rem);
 }

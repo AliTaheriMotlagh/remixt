@@ -104,11 +104,22 @@ export default function SocialClipButton({ title, artist, remixId }: { title: st
         disabled={duration <= 0}
         className="rounded-lg border border-border px-2.5 py-2 text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40"
         title="Make a vertical video clip for Reels, TikTok, Shorts or Stories"
+        aria-label="Make a video clip for socials"
+        aria-expanded={open}
       >
         🎬
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-40 mt-2 w-[min(20rem,calc(100vw-2rem))] rounded-xl border border-border bg-surface p-4 text-sm shadow-xl">
+        <div
+          className="sheet-backdrop"
+          onClick={() => {
+            abort.current?.abort();
+            setOpen(false);
+          }}
+        />
+      )}
+      {open && (
+        <div className="popover-sheet absolute right-0 top-full z-40 mt-2 w-[min(20rem,calc(100vw-2rem))] rounded-xl border border-border bg-surface p-4 text-sm shadow-xl">
           <div className="flex items-center justify-between">
             <p className="font-semibold">Clip for socials</p>
             <button
@@ -116,7 +127,7 @@ export default function SocialClipButton({ title, artist, remixId }: { title: st
                 abort.current?.abort();
                 setOpen(false);
               }}
-              className="text-muted hover:text-foreground"
+              className="-m-2 p-2 text-muted hover:text-foreground"
               aria-label="Close"
             >
               ✕

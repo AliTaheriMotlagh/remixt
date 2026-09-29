@@ -54,13 +54,13 @@ export default async function LeaderboardPage() {
   ]);
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-12 sm:px-6">
+    <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
       <h1 className="text-2xl font-bold">Leaderboard</h1>
       <p className="mt-1 text-sm text-muted">
         Earn XP by publishing remixes, uploading songs, and getting likes, plays and followers. Level up and collect badges.
       </p>
 
-      <div className="mt-8 grid gap-6 lg:grid-cols-[1.4fr_1fr]">
+      <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <section className="rounded-2xl border border-border bg-surface p-5">
           <h2 className="font-semibold">Top artists</h2>
           <p className="mt-0.5 text-xs text-muted">By XP, all time</p>

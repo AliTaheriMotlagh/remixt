@@ -6,7 +6,7 @@ export const metadata = { title: "Takedown requests — Remixt" };
 export default async function TakedownPage() {
   const user = await getCurrentUser();
   return (
-    <div className="mx-auto w-full max-w-2xl px-4 py-12 sm:px-6">
+    <div className="mx-auto w-full max-w-2xl px-4 py-8 sm:px-6 sm:py-12">
       <h1 className="text-2xl font-bold">Takedown requests</h1>
       <p className="mt-2 text-sm text-muted">
         Everyone who uploads a song to Remixt confirms they have the right to share it. If your music is here

@@ -8,7 +8,7 @@ export default async function UploadPage() {
   if (!user) redirect("/login?next=/upload");
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-4 py-12 sm:px-6">
+    <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 sm:py-12">
       <h1 className="text-2xl font-bold">Upload a song</h1>
       <p className="mt-1 text-sm text-muted">
         It&apos;s split into a vocal stem and a beat (instrumental) stem right

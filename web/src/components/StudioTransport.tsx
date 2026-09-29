@@ -28,13 +28,15 @@ function TransportPosition({ empty }: { empty: boolean }) {
   const hasLoop = loopEnd > loopStart;
 
   return (
-    <>
-      <div className="font-mono text-sm text-muted tabular-nums">
+    // Its own full-width row on phones; inline with the buttons from sm up.
+    <div className="flex items-center gap-3 max-sm:order-last max-sm:w-full sm:contents">
+      <div className="shrink-0 font-mono text-sm text-muted tabular-nums">
         {formatTime(playhead)} / {formatTime(duration)}
       </div>
 
+      {/* A thin bar with a taller invisible hit area, so it's easy to tap. */}
       <div
-        className="group relative h-2 flex-1 min-w-[120px] cursor-pointer overflow-hidden rounded-full bg-surface-raised"
+        className="-my-2 min-w-[120px] flex-1 cursor-pointer py-2"
         onClick={(e) => {
           if (empty) return;
           const rect = e.currentTarget.getBoundingClientRect();
@@ -42,21 +44,23 @@ function TransportPosition({ empty }: { empty: boolean }) {
         }}
         title="Click to seek"
       >
-        {hasLoop && duration > 0 && (
+        <div className="group relative h-2 overflow-hidden rounded-full bg-surface-raised">
+          {hasLoop && duration > 0 && (
+            <div
+              className={`absolute inset-y-0 ${loopEnabled ? "bg-brand/30" : "bg-surface-hover"}`}
+              style={{
+                left: `${(loopStart / duration) * 100}%`,
+                width: `${((loopEnd - loopStart) / duration) * 100}%`,
+              }}
+            />
+          )}
           <div
-            className={`absolute inset-y-0 ${loopEnabled ? "bg-brand/30" : "bg-surface-hover"}`}
-            style={{
-              left: `${(loopStart / duration) * 100}%`,
-              width: `${((loopEnd - loopStart) / duration) * 100}%`,
-            }}
+            className="relative h-full bg-gradient-to-r from-vocals to-beat"
+            style={{ width: duration > 0 ? `${(playhead / duration) * 100}%` : "0%" }}
           />
-        )}
-        <div
-          className="relative h-full bg-gradient-to-r from-vocals to-beat"
-          style={{ width: duration > 0 ? `${(playhead / duration) * 100}%` : "0%" }}
-        />
+        </div>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -99,6 +103,8 @@ export default function StudioTransport({
   const playAttempt = useRef(0);
   const [playError, setPlayError] = useState<string | null>(null);
   const [showSave, setShowSave] = useState(false);
+  // Phones: the less-used controls fold away so the sticky bar stays short.
+  const [showTools, setShowTools] = useState(false);
   const [title, setTitle] = useState(defaultTitle ?? "");
   const [publish, setPublish] = useState(true);
   const [tags, setTags] = useState<string[]>([]);
@@ -206,13 +212,21 @@ export default function StudioTransport({
   const empty = lanes.length === 0;
 
   return (
-    <div className="sticky top-16 z-40 rounded-xl border border-border bg-surface/95 backdrop-blur-md">
-      <div className="flex flex-wrap items-center gap-3 p-4">
+    // On phones the backdrop blur is left off: it would trap the social-clip
+    // sheet (position: fixed) inside this bar. While the save form is open
+    // it scrolls away rather than covering the screen.
+    <div
+      className={`sticky top-[var(--header-h)] z-40 rounded-xl border border-border bg-surface sm:bg-surface/95 sm:backdrop-blur-md ${
+        showSave ? "max-sm:static" : ""
+      }`}
+    >
+      <div className="flex flex-wrap items-center gap-2 p-3 sm:gap-3 sm:p-4">
         <button
           onClick={handlePlayPause}
           disabled={empty}
           className="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-full bg-brand text-lg text-white transition-transform hover:scale-105 disabled:opacity-40 disabled:hover:scale-100"
           title={starting ? "Preparing the audio… (tap to cancel)" : isPlaying ? "Pause (space)" : "Play (space)"}
+          aria-label={starting ? "Cancel" : isPlaying ? "Pause" : "Play"}
           aria-busy={starting}
         >
           {starting ? (
@@ -227,8 +241,9 @@ export default function StudioTransport({
         <button
           onClick={() => audioEngine.stop()}
           disabled={empty}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border text-sm text-muted transition-colors hover:border-danger hover:text-danger disabled:opacity-40"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border text-sm text-muted transition-colors hover:border-danger hover:text-danger disabled:opacity-40 sm:h-9 sm:w-9"
           title="Stop and return to the start (Esc)"
+          aria-label="Stop"
         >
           ■
         </button>
@@ -239,7 +254,7 @@ export default function StudioTransport({
           <button
             onClick={undo}
             disabled={!canUndo}
-            className="rounded-lg border border-border px-2.5 py-2 text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40"
+            className="h-10 rounded-lg border border-border px-3 text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40 sm:h-auto sm:px-2.5 sm:py-2"
             title="Undo (⌘/Ctrl+Z)"
             aria-label="Undo"
           >
@@ -248,7 +263,7 @@ export default function StudioTransport({
           <button
             onClick={redo}
             disabled={!canRedo}
-            className="rounded-lg border border-border px-2.5 py-2 text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40"
+            className="h-10 rounded-lg border border-border px-3 text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40 sm:h-auto sm:px-2.5 sm:py-2"
             title="Redo (⇧⌘Z / Ctrl+Y)"
             aria-label="Redo"
           >
@@ -257,127 +272,153 @@ export default function StudioTransport({
         </div>
 
         <button
-          onClick={() => setLoop({ enabled: !loopEnabled, start: hasLoop ? loopStart : 0, end: hasLoop ? loopEnd : Math.min(duration, 16) })}
-          disabled={empty}
-          className={`rounded-lg border px-2.5 py-2 text-sm transition-colors disabled:opacity-40 ${
-            loopEnabled ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted hover:text-foreground"
+          onClick={() => setShowTools((v) => !v)}
+          aria-expanded={showTools}
+          aria-label="More controls"
+          className={`h-10 rounded-lg border px-3 text-sm transition-colors sm:hidden ${
+            showTools ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted"
           }`}
-          title="Loop the region marked on the timeline (L)"
         >
-          🔁
+          ⋯
         </button>
 
-        <button
-          onClick={toggleMetronome}
-          className={`rounded-lg border px-2.5 py-2 text-sm transition-colors ${
-            metronome ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted hover:text-foreground"
-          }`}
-          title="Metronome click at the project tempo"
+        {/* From sm up these sit inline (display: contents); on phones they're a row of their own. */}
+        <div
+          className={`${
+            showTools ? "flex" : "hidden"
+          } w-full flex-wrap items-center gap-2 border-t border-border pt-3 max-sm:order-last sm:contents`}
         >
-          🥁
-        </button>
-
-        <button
-          onClick={toggleSnap}
-          className={`rounded-lg border px-2.5 py-2 text-xs font-medium transition-colors ${
-            snapToGrid ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted hover:text-foreground"
-          }`}
-          title="Snap lane starts and loop points to the beat grid"
-        >
-          Snap
-        </button>
-
-        {hasXfade && (
-          <label
-            className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted"
-            title="Crossfader: slide between the lanes on side A and side B (double-click to centre)"
+          <button
+            onClick={() => setLoop({ enabled: !loopEnabled, start: hasLoop ? loopStart : 0, end: hasLoop ? loopEnd : Math.min(duration, 16) })}
+            disabled={empty}
+            className={`rounded-lg border px-2.5 py-2 text-sm transition-colors disabled:opacity-40 ${
+              loopEnabled ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted hover:text-foreground"
+            }`}
+            title="Loop the region marked on the timeline (L)"
+            aria-label="Loop"
+            aria-pressed={loopEnabled}
           >
-            A
+            🔁
+          </button>
+
+          <button
+            onClick={toggleMetronome}
+            className={`rounded-lg border px-2.5 py-2 text-sm transition-colors ${
+              metronome ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted hover:text-foreground"
+            }`}
+            title="Metronome click at the project tempo"
+            aria-label="Metronome"
+            aria-pressed={metronome}
+          >
+            🥁
+          </button>
+
+          <button
+            onClick={toggleSnap}
+            className={`rounded-lg border px-2.5 py-2 text-xs font-medium transition-colors ${
+              snapToGrid ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted hover:text-foreground"
+            }`}
+            title="Snap lane starts and loop points to the beat grid"
+            aria-pressed={snapToGrid}
+          >
+            Snap
+          </button>
+
+          {hasXfade && (
+            <label
+              className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted"
+              title="Crossfader: slide between the lanes on side A and side B (double-click to centre)"
+            >
+              A
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={crossfader}
+                onChange={(e) => setCrossfader(Number(e.target.value))}
+                onDoubleClick={() => setCrossfader(0.5)}
+                className="h-1.5 w-24 accent-beat"
+                aria-label="Crossfader"
+              />
+              B
+            </label>
+          )}
+
+          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted max-sm:min-w-[10rem] max-sm:flex-1" title="Master level">
+            Master
             <input
               type="range"
               min={0}
-              max={1}
+              max={1.5}
               step={0.01}
-              value={crossfader}
-              onChange={(e) => setCrossfader(Number(e.target.value))}
-              onDoubleClick={() => setCrossfader(0.5)}
-              className="h-1.5 w-24 accent-beat"
-              aria-label="Crossfader"
+              value={masterVolume}
+              onChange={(e) => setMasterVolume(Number(e.target.value))}
+              className="h-1.5 w-20 accent-brand max-sm:flex-1"
+              aria-label="Master level"
             />
-            B
           </label>
-        )}
 
-        <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted" title="Master level">
-          Master
-          <input
-            type="range"
-            min={0}
-            max={1.5}
-            step={0.01}
-            value={masterVolume}
-            onChange={(e) => setMasterVolume(Number(e.target.value))}
-            className="h-1.5 w-20 accent-brand"
-          />
-        </label>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => handleExport("full")}
-            disabled={empty || exportStage !== null}
-            className="rounded-lg border border-border px-3 py-2 text-sm font-medium transition-colors hover:bg-surface-hover disabled:opacity-40"
-            title={format === "mp3" ? "Bounce the mix to an MP3 (256 kbps) — small, good for sharing" : "Bounce the mix to a lossless WAV file"}
-          >
-            {exportStage ?? `Export ${format.toUpperCase()}`}
-          </button>
-          <select
-            value={format}
-            onChange={(e) => {
-              const next = e.target.value as ExportFormat;
-              setFormat(next);
-              setExportFormat(next);
-            }}
-            disabled={exportStage !== null}
-            className="rounded-lg border border-border bg-surface px-1.5 py-2 text-xs text-muted"
-            aria-label="Export format"
-          >
-            <option value="mp3">MP3</option>
-            <option value="wav">WAV</option>
-          </select>
-          <SocialClipButton
-            title={title.trim() || defaultTitle || "Untitled remix"}
-            artist={artistName ?? user?.artist_name ?? "Remixt"}
-            remixId={savedId ?? (viewing ? remixId : null)}
-          />
-          {hasLoop && loopEnabled && (
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => handleExport("loop")}
+              onClick={() => handleExport("full")}
               disabled={empty || exportStage !== null}
-              className="rounded-lg border border-border px-2.5 py-2 text-xs text-muted transition-colors hover:text-foreground disabled:opacity-40"
-              title="Export only the looped region"
+              className="rounded-lg border border-border px-3 py-2 text-sm font-medium transition-colors hover:bg-surface-hover disabled:opacity-40"
+              title={format === "mp3" ? "Bounce the mix to an MP3 (256 kbps) — small, good for sharing" : "Bounce the mix to a lossless WAV file"}
             >
-              Loop only
+              {exportStage ?? `Export ${format.toUpperCase()}`}
             </button>
-          )}
-        </div>
+            <select
+              value={format}
+              onChange={(e) => {
+                const next = e.target.value as ExportFormat;
+                setFormat(next);
+                setExportFormat(next);
+              }}
+              disabled={exportStage !== null}
+              className="rounded-lg border border-border bg-surface px-1.5 py-2 text-xs text-muted"
+              aria-label="Export format"
+            >
+              <option value="mp3">MP3</option>
+              <option value="wav">WAV</option>
+            </select>
+            <SocialClipButton
+              title={title.trim() || defaultTitle || "Untitled remix"}
+              artist={artistName ?? user?.artist_name ?? "Remixt"}
+              remixId={savedId ?? (viewing ? remixId : null)}
+            />
+            {hasLoop && loopEnabled && (
+              <button
+                onClick={() => handleExport("loop")}
+                disabled={empty || exportStage !== null}
+                className="rounded-lg border border-border px-2.5 py-2 text-xs text-muted transition-colors hover:text-foreground disabled:opacity-40"
+                title="Export only the looped region"
+              >
+                Loop only
+              </button>
+            )}
+          </div>
 
-        <button
-          onClick={() => {
-            audioEngine.stop();
-            clearLanes();
-          }}
-          disabled={empty}
-          className="rounded-lg border border-border px-3 py-2 text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40"
-        >
-          Clear
-        </button>
+          <button
+            onClick={() => {
+              audioEngine.stop();
+              clearLanes();
+            }}
+            disabled={empty}
+            className="rounded-lg border border-border px-3 py-2 text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40"
+          >
+            Clear
+          </button>
+        </div>
 
         <button
           onClick={() => setShowSave((v) => !v)}
           disabled={empty}
-          className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-strong disabled:opacity-40"
+          aria-expanded={showSave}
+          className="h-10 rounded-lg bg-brand px-4 text-sm font-semibold text-white transition-colors hover:bg-brand-strong disabled:opacity-40 max-sm:ml-auto sm:h-auto sm:py-2"
         >
-          {remixId ? "Save as new remix" : "Save remix"}
+          <span className="sm:hidden">{remixId ? "Save new" : "Save"}</span>
+          <span className="hidden sm:inline">{remixId ? "Save as new remix" : "Save remix"}</span>
         </button>
       </div>
 

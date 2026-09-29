@@ -115,6 +115,8 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
   const [showMatch, setShowMatch] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
   const [showAuto, setShowAuto] = useState(false);
+  // Phones: the lane shows its waveform and levels; the rest folds away.
+  const [expanded, setExpanded] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [selectedClip, setSelectedClip] = useState<number | null>(null);
   const [cutting, setCutting] = useState(false);
@@ -224,6 +226,12 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
     }
   }
 
+  // The browser took the gesture over (the page scrolled): drop the drag
+  // without treating it as a tap.
+  function handleDragCancel() {
+    drag.current = null;
+  }
+
   function handleDragEnd(e: React.PointerEvent<HTMLDivElement>) {
     const state = drag.current;
     drag.current = null;
@@ -320,10 +328,13 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
 
   return (
     <div className="rounded-xl border border-border bg-surface p-3">
-      <div className="flex items-stretch gap-3">
-        <div className="flex w-56 shrink-0 flex-col justify-between gap-2 border-r border-border pr-3">
+      {/* Phones stack it — name, levels, waveform, then the controls — by
+          dissolving the side column (display: contents) and ordering its
+          parts; from md up it's the side column beside the track. */}
+      <div className="flex flex-col gap-2 md:flex-row md:items-stretch md:gap-3">
+        <div className="flex flex-col justify-between gap-2 max-md:contents md:w-56 md:shrink-0 md:border-r md:border-border md:pr-3">
           <div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               <span
                 className="inline-block rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white"
                 style={{ background: accent }}
@@ -364,6 +375,15 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
                   title="Re-rendering pitch/tempo"
                 />
               )}
+              <button
+                onClick={() => setExpanded((v) => !v)}
+                aria-expanded={expanded}
+                className={`ml-auto rounded-lg border px-3 py-1 text-xs font-medium transition-colors md:hidden ${
+                  expanded ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted"
+                }`}
+              >
+                Controls {expanded ? "▾" : "▸"}
+              </button>
             </div>
             <p className="mt-1.5 truncate text-sm font-medium" title={lane.trackTitle}>
               {lane.trackTitle}
@@ -374,19 +394,23 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
           <div className="flex items-center gap-1.5">
             <button
               onClick={() => toggleMute(lane.laneId)}
-              className={`h-6 w-6 rounded text-[11px] font-bold transition-colors ${
+              className={`h-6 w-6 shrink-0 rounded text-[11px] font-bold transition-colors pointer-coarse:h-9 pointer-coarse:w-9 pointer-coarse:rounded-lg pointer-coarse:text-xs ${
                 lane.muted ? "bg-danger text-white" : "bg-surface-raised text-muted hover:text-foreground"
               }`}
               title="Mute"
+              aria-label="Mute"
+              aria-pressed={lane.muted}
             >
               M
             </button>
             <button
               onClick={() => toggleSolo(lane.laneId)}
-              className={`h-6 w-6 rounded text-[11px] font-bold transition-colors ${
+              className={`h-6 w-6 shrink-0 rounded text-[11px] font-bold transition-colors pointer-coarse:h-9 pointer-coarse:w-9 pointer-coarse:rounded-lg pointer-coarse:text-xs ${
                 lane.solo ? "bg-success text-white" : "bg-surface-raised text-muted hover:text-foreground"
               }`}
               title="Solo"
+              aria-label="Solo"
+              aria-pressed={lane.solo}
             >
               S
             </button>
@@ -397,8 +421,9 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
               step={0.01}
               value={lane.volume}
               onChange={(e) => setVolume(lane.laneId, Number(e.target.value))}
-              className="h-1.5 flex-1 accent-brand"
+              className="h-1.5 min-w-0 flex-1 accent-brand"
               title={`Volume — ${Math.round(lane.volume * 100)}%`}
+              aria-label="Volume"
             />
             <button
               onClick={() =>
@@ -409,191 +434,199 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
                   kind: lane.kind,
                 })
               }
-              className="h-6 w-6 shrink-0 rounded text-[10px] text-muted hover:bg-surface-raised hover:text-foreground"
+              className="h-6 w-6 shrink-0 rounded text-[10px] text-muted hover:bg-surface-raised hover:text-foreground pointer-coarse:h-9 pointer-coarse:w-9"
               title="Preview the original stem on its own"
+              aria-label="Preview the original stem"
             >
               ▶
             </button>
           </div>
 
-          <div className="flex items-center gap-1.5">
-            <span className="w-9 shrink-0 text-[10px] text-muted">Pitch</span>
-            <input
-              type="range"
-              min={-12}
-              max={12}
-              step={1}
-              value={pitchDraft}
-              onChange={(e) => handlePitchChange(Number(e.target.value))}
-              className="h-1.5 flex-1 accent-brand-strong"
-              title="Pitch in semitones — key-shift a vocal to fit the beat"
-            />
-            <span className="w-7 shrink-0 text-right text-[10px] tabular-nums text-muted">
-              {pitchDraft > 0 ? `+${pitchDraft}` : pitchDraft}
-            </span>
-          </div>
+          <div className={`${expanded ? "flex" : "hidden"} flex-col gap-2 max-md:order-2 max-md:border-t max-md:border-border max-md:pt-3 md:contents`}>
+            <div className="flex items-center gap-1.5">
+              <span className="w-9 shrink-0 text-[10px] text-muted">Pitch</span>
+              <input
+                type="range"
+                min={-12}
+                max={12}
+                step={1}
+                value={pitchDraft}
+                onChange={(e) => handlePitchChange(Number(e.target.value))}
+                className="h-1.5 min-w-0 flex-1 accent-brand-strong"
+                title="Pitch in semitones — key-shift a vocal to fit the beat"
+                aria-label="Pitch in semitones"
+              />
+              <span className="w-7 shrink-0 text-right text-[10px] tabular-nums text-muted">
+                {pitchDraft > 0 ? `+${pitchDraft}` : pitchDraft}
+              </span>
+            </div>
 
-          <div className="flex items-center gap-1.5">
-            <span className="w-9 shrink-0 text-[10px] text-muted">Speed</span>
-            <input
-              type="range"
-              min={0.5}
-              max={2}
-              step={0.005}
-              value={tempoDraft}
-              onChange={(e) => handleTempoChange(Number(e.target.value))}
-              className="h-1.5 flex-1 accent-brand-strong"
-              title="Time-stretch without changing pitch"
-            />
-            <span className="w-7 shrink-0 text-right text-[10px] tabular-nums text-muted">
-              {tempoDraft.toFixed(2)}×
-            </span>
-          </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-9 shrink-0 text-[10px] text-muted">Speed</span>
+              <input
+                type="range"
+                min={0.5}
+                max={2}
+                step={0.005}
+                value={tempoDraft}
+                onChange={(e) => handleTempoChange(Number(e.target.value))}
+                className="h-1.5 min-w-0 flex-1 accent-brand-strong"
+                title="Time-stretch without changing pitch"
+                aria-label="Speed"
+              />
+              <span className="w-7 shrink-0 text-right text-[10px] tabular-nums text-muted">
+                {tempoDraft.toFixed(2)}×
+              </span>
+            </div>
 
-          <div className="flex items-center gap-1.5">
-            <span className="w-9 shrink-0 text-[10px] text-muted" title="Source tempo — fix it if detection was wrong">
-              BPM
-            </span>
-            <input
-              type="number"
-              min={20}
-              max={300}
-              step={0.1}
-              value={lane.bpm ?? ""}
-              placeholder="—"
-              onChange={(e) => {
-                const value = e.target.value;
-                setLaneBpm(lane.laneId, value === "" ? null : Number(value));
-              }}
-              className="input !w-16 !px-1.5 !py-0.5 text-[11px]"
-            />
-            <TapTempo
-              onTempo={(bpm) => setLaneBpm(lane.laneId, Math.round((bpm / lane.tempoRatio) * 10) / 10)}
-            />
-            <button
-              onClick={() => matchLaneToProject(lane.laneId)}
-              disabled={!lane.bpm}
-              className="flex-1 rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted transition-colors hover:border-brand/60 hover:text-foreground disabled:opacity-40"
-              title={`Time-stretch this lane to the project tempo (${projectBpm.toFixed(1)} BPM)`}
-            >
-              Match
-            </button>
-          </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-9 shrink-0 text-[10px] text-muted" title="Source tempo — fix it if detection was wrong">
+                BPM
+              </span>
+              <input
+                type="number"
+                min={20}
+                max={300}
+                step={0.1}
+                value={lane.bpm ?? ""}
+                placeholder="—"
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setLaneBpm(lane.laneId, value === "" ? null : Number(value));
+                }}
+                className="input !w-16 !px-1.5 !py-0.5 text-[11px]"
+              />
+              <TapTempo
+                onTempo={(bpm) => setLaneBpm(lane.laneId, Math.round((bpm / lane.tempoRatio) * 10) / 10)}
+              />
+              <button
+                onClick={() => matchLaneToProject(lane.laneId)}
+                disabled={!lane.bpm}
+                className="flex-1 rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted transition-colors hover:border-brand/60 hover:text-foreground disabled:opacity-40"
+                title={`Time-stretch this lane to the project tempo (${projectBpm.toFixed(1)} BPM)`}
+              >
+                Match
+              </button>
+            </div>
 
-          <div className="flex items-center gap-1.5">
-            <span className="w-9 shrink-0 text-[10px] text-muted" title="Source key — detected automatically, fix it if it's wrong">
-              Key
-            </span>
-            <select
-              value={lane.musicalKey ? keyId(lane.musicalKey) : ""}
-              onChange={(e) => setLaneKey(lane.laneId, parseKeyId(e.target.value))}
-              className="input !w-16 !px-1 !py-0.5 text-[11px]"
-            >
-              <option value="">{lane.musicalKey ? "—" : "…"}</option>
-              {ALL_KEYS.map((key) => (
-                <option key={keyId(key)} value={keyId(key)}>
-                  {keyLabel(key)}
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={() => matchLaneKey(lane.laneId)}
-              disabled={!lane.musicalKey || !keyReference || isReference}
-              className="flex-1 rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted transition-colors hover:border-brand/60 hover:text-foreground disabled:opacity-40"
-              title={
-                isReference
-                  ? "This lane sets the project key"
-                  : keyReference && effectiveKey(keyReference)
-                    ? `Pitch-shift into ${keyLabel(effectiveKey(keyReference)!)} (from “${keyReference.trackTitle}”)`
-                    : "Waiting for key detection"
-              }
-            >
-              {isReference ? "Project key" : "Match"}
-            </button>
-            <button
-              onClick={() => setShowKeys((v) => !v)}
-              className={`rounded border px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
-                showKeys ? "border-brand text-foreground" : "border-border text-muted hover:text-foreground"
-              }`}
-              title="Every key this lane can be shifted to, and how each fits the project"
-            >
-              keys
-            </button>
-          </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-9 shrink-0 text-[10px] text-muted" title="Source key — detected automatically, fix it if it's wrong">
+                Key
+              </span>
+              <select
+                value={lane.musicalKey ? keyId(lane.musicalKey) : ""}
+                onChange={(e) => setLaneKey(lane.laneId, parseKeyId(e.target.value))}
+                className="input !w-16 !px-1 !py-0.5 text-[11px]"
+              >
+                <option value="">{lane.musicalKey ? "—" : "…"}</option>
+                {ALL_KEYS.map((key) => (
+                  <option key={keyId(key)} value={keyId(key)}>
+                    {keyLabel(key)}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => matchLaneKey(lane.laneId)}
+                disabled={!lane.musicalKey || !keyReference || isReference}
+                className="flex-1 rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted transition-colors hover:border-brand/60 hover:text-foreground disabled:opacity-40"
+                title={
+                  isReference
+                    ? "This lane sets the project key"
+                    : keyReference && effectiveKey(keyReference)
+                      ? `Pitch-shift into ${keyLabel(effectiveKey(keyReference)!)} (from “${keyReference.trackTitle}”)`
+                      : "Waiting for key detection"
+                }
+              >
+                {isReference ? "Project key" : "Match"}
+              </button>
+              <button
+                onClick={() => setShowKeys((v) => !v)}
+                className={`rounded border px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                  showKeys ? "border-brand text-foreground" : "border-border text-muted hover:text-foreground"
+                }`}
+                title="Every key this lane can be shifted to, and how each fits the project"
+              >
+                keys
+              </button>
+            </div>
 
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => setShowAuto((v) => !v)}
-              className={`flex-1 rounded border px-1.5 py-1 text-[10px] font-semibold transition-colors ${
-                showAuto || lane.automation.volume?.length || lane.automation.filter?.length
-                  ? "border-brand bg-brand/15 text-foreground"
-                  : "border-border text-muted hover:text-foreground"
-              }`}
-              title="Draw volume and filter changes over the song"
-            >
-              〰 Auto {showAuto ? "▾" : "▸"}
-            </button>
-            <button
-              onClick={() => setLaneXfade(lane.laneId, lane.xfade === null ? "a" : lane.xfade === "a" ? "b" : null)}
-              className={`w-12 rounded border px-1.5 py-1 text-[10px] font-semibold transition-colors ${
-                lane.xfade ? "border-beat bg-beat/15 text-foreground" : "border-border text-muted hover:text-foreground"
-              }`}
-              title="Put this lane on side A or B of the crossfader (in the transport) — e.g. two vocals to switch between"
-            >
-              {lane.xfade ? `Side ${lane.xfade.toUpperCase()}` : "A/B"}
-            </button>
-          </div>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setShowAuto((v) => !v)}
+                className={`flex-1 rounded border px-1.5 py-1 text-[10px] font-semibold transition-colors ${
+                  showAuto || lane.automation.volume?.length || lane.automation.filter?.length
+                    ? "border-brand bg-brand/15 text-foreground"
+                    : "border-border text-muted hover:text-foreground"
+                }`}
+                title="Draw volume and filter changes over the song"
+              >
+                〰 Auto {showAuto ? "▾" : "▸"}
+              </button>
+              <button
+                onClick={() => setLaneXfade(lane.laneId, lane.xfade === null ? "a" : lane.xfade === "a" ? "b" : null)}
+                className={`w-12 rounded border px-1.5 py-1 text-[10px] font-semibold transition-colors ${
+                  lane.xfade ? "border-beat bg-beat/15 text-foreground" : "border-border text-muted hover:text-foreground"
+                }`}
+                title="Put this lane on side A or B of the crossfader (in the transport) — e.g. two vocals to switch between"
+              >
+                {lane.xfade ? `Side ${lane.xfade.toUpperCase()}` : "A/B"}
+              </button>
+            </div>
 
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => setShowFx((v) => !v)}
-              className={`flex-1 rounded border px-1.5 py-1 text-[10px] font-semibold transition-colors ${
-                showFx
-                  ? "border-brand bg-brand/15 text-foreground"
-                  : "border-border text-muted hover:text-foreground"
-              }`}
-              title="Effects: EQ, filters, reverb, delay, drive, fades"
-            >
-              FX {showFx ? "▾" : "▸"}
-            </button>
-            <button
-              onClick={() => setShowMatch((v) => !v)}
-              className={`flex-1 rounded border px-1.5 py-1 text-[10px] font-semibold transition-colors ${
-                showMatch
-                  ? "border-brand bg-brand/15 text-foreground"
-                  : "border-border text-muted hover:text-foreground"
-              }`}
-              title={`Match this ${lane.kind === "vocals" ? "vocal with a beat" : "beat with a vocal"} — choose tempo, structure and sound`}
-            >
-              🎚 Match {showMatch ? "▾" : "▸"}
-            </button>
-            <button
-              onClick={() => duplicateLane(lane.laneId)}
-              className="rounded border border-border px-1.5 py-1 text-[10px] text-muted transition-colors hover:text-foreground"
-              title="Duplicate this lane"
-            >
-              ⧉
-            </button>
-            <button
-              onClick={handleExportLane}
-              disabled={exporting}
-              className="rounded border border-border px-1.5 py-1 text-[10px] text-muted transition-colors hover:text-foreground disabled:opacity-40"
-              title="Export this lane on its own as WAV"
-            >
-              {exporting ? "…" : "⤓"}
-            </button>
-            <button
-              onClick={() => removeLane(lane.laneId)}
-              className="rounded border border-border px-1.5 py-1 text-[10px] text-muted transition-colors hover:border-danger hover:text-danger"
-              title="Remove lane"
-            >
-              ✕
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setShowFx((v) => !v)}
+                className={`flex-1 rounded border px-1.5 py-1 text-[10px] font-semibold transition-colors ${
+                  showFx
+                    ? "border-brand bg-brand/15 text-foreground"
+                    : "border-border text-muted hover:text-foreground"
+                }`}
+                title="Effects: EQ, filters, reverb, delay, drive, fades"
+              >
+                FX {showFx ? "▾" : "▸"}
+              </button>
+              <button
+                onClick={() => setShowMatch((v) => !v)}
+                className={`flex-1 whitespace-nowrap rounded border px-1.5 py-1 text-[10px] font-semibold transition-colors ${
+                  showMatch
+                    ? "border-brand bg-brand/15 text-foreground"
+                    : "border-border text-muted hover:text-foreground"
+                }`}
+                title={`Match this ${lane.kind === "vocals" ? "vocal with a beat" : "beat with a vocal"} — choose tempo, structure and sound`}
+              >
+                🎚 Match {showMatch ? "▾" : "▸"}
+              </button>
+              <button
+                onClick={() => duplicateLane(lane.laneId)}
+                className="rounded border border-border px-1.5 py-1 text-[10px] text-muted transition-colors hover:text-foreground"
+                title="Duplicate this lane"
+              >
+                ⧉
+              </button>
+              <button
+                onClick={handleExportLane}
+                disabled={exporting}
+                className="rounded border border-border px-1.5 py-1 text-[10px] text-muted transition-colors hover:text-foreground disabled:opacity-40"
+                title="Export this lane on its own as WAV"
+              >
+                {exporting ? "…" : "⤓"}
+              </button>
+              <button
+                onClick={() => removeLane(lane.laneId)}
+                className="rounded border border-border px-1.5 py-1 text-[10px] text-muted transition-colors hover:border-danger hover:text-danger"
+                title="Remove lane"
+                aria-label="Remove lane"
+              >
+                ✕
+              </button>
+            </div>
           </div>
         </div>
 
-        <div className="min-w-0 flex-1">
-          <div className="mb-1 flex flex-wrap items-center gap-1 text-[10px] text-muted">
+        <div className="flex min-w-0 flex-1 flex-col max-md:order-1">
+          <div
+            className={`${expanded ? "flex" : "hidden"} mb-1 flex-wrap items-center gap-1 text-[10px] text-muted max-md:order-2 max-md:mt-2 md:flex`}
+          >
             <span className="mr-0.5">Start</span>
             <input
               type="number"
@@ -647,7 +680,9 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
             </span>
           </div>
 
-          <div className="mb-1 flex flex-wrap items-center gap-1 text-[10px] text-muted">
+          <div
+            className={`${expanded ? "flex" : "hidden"} mb-1 flex-wrap items-center gap-1 text-[10px] text-muted max-md:order-2 md:flex`}
+          >
             <span className="mr-0.5">Edit</span>
             <button onClick={handleSplit} className="nudge" title="Cut the clip under the playhead in two">
               ✂ split at playhead
@@ -755,7 +790,7 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
             ref={trackRef}
             onPointerMove={handleDragMove}
             onPointerUp={handleDragEnd}
-            onPointerCancel={handleDragEnd}
+            onPointerCancel={handleDragCancel}
             className="relative h-[68px] overflow-hidden rounded-lg bg-background"
           >
             {/* Bar grid behind the clip, so a lane's start reads against the beat. */}
@@ -771,7 +806,7 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
               <div
                 key={i}
                 onPointerDown={(e) => handleDragStart(e, "move", i)}
-                className={`absolute inset-y-0 cursor-grab touch-none overflow-hidden rounded-md border active:cursor-grabbing ${
+                className={`absolute inset-y-0 cursor-grab touch-pan-y overflow-hidden rounded-md border active:cursor-grabbing ${
                   selected === i ? "ring-2 ring-foreground/70" : ""
                 }`}
                 style={{
@@ -793,12 +828,12 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
                 )}
                 <div
                   onPointerDown={(e) => handleDragStart(e, "trim-start", i)}
-                  className="absolute inset-y-0 left-0 w-1.5 cursor-ew-resize touch-none hover:bg-foreground/40"
+                  className="absolute inset-y-0 left-0 w-1.5 cursor-ew-resize touch-none hover:bg-foreground/40 pointer-coarse:w-3 pointer-coarse:bg-foreground/15"
                   title="Drag to trim the start"
                 />
                 <div
                   onPointerDown={(e) => handleDragStart(e, "trim-end", i)}
-                  className="absolute inset-y-0 right-0 w-1.5 cursor-ew-resize touch-none hover:bg-foreground/40"
+                  className="absolute inset-y-0 right-0 w-1.5 cursor-ew-resize touch-none hover:bg-foreground/40 pointer-coarse:w-3 pointer-coarse:bg-foreground/15"
                   title="Drag to trim the end"
                 />
               </div>
@@ -811,7 +846,7 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
 
       {showAuto && (
         // Lined up under the lane's track, so points sit under the audio they change.
-        <div className="pl-[14.75rem]">
+        <div className="md:pl-[14.75rem]">
           <AutomationLane lane={lane} span={span} accent={accent} />
         </div>
       )}
