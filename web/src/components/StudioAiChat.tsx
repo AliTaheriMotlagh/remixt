@@ -1,25 +1,61 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { AiProvider } from "@/lib/aiKeys";
+import type { AiProvider, KeyedProvider, PublicAiSettings } from "@/lib/aiKeys";
 import { hasKey, useAiAccount, useAiChat, type ChatEntry } from "@/lib/client/aiAgent";
 
-const PROVIDERS: Record<AiProvider, { label: string; short: string; models: string[]; keyHint: string; keyUrl: string }> = {
+type ProviderInfo = {
+  label: string;
+  short: string;
+  /** Free to use (a free key, or no key at all). */
+  free: boolean;
+  models: string[];
+  keyHint: string;
+  keyUrl: string;
+  /** How to get the key, in one line. */
+  howTo: string;
+};
+
+const PROVIDERS: Record<KeyedProvider, ProviderInfo> = {
+  gemini: {
+    label: "Google Gemini",
+    short: "Gemini",
+    free: true,
+    models: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"],
+    keyHint: "AIza…",
+    keyUrl: "https://aistudio.google.com/apikey",
+    howTo: "Free: sign in with a Google account at aistudio.google.com → Get API key. No card needed.",
+  },
+  groq: {
+    label: "Groq (open models)",
+    short: "Groq",
+    free: true,
+    models: ["openai/gpt-oss-120b", "llama-3.3-70b-versatile", "openai/gpt-oss-20b"],
+    keyHint: "gsk_…",
+    keyUrl: "https://console.groq.com/keys",
+    howTo: "Free: sign up at console.groq.com → API Keys → Create. No card needed.",
+  },
   anthropic: {
     label: "Claude (Anthropic)",
     short: "Claude",
+    free: false,
     models: ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5", "claude-fable-5-1"],
     keyHint: "sk-ant-…",
     keyUrl: "https://platform.claude.com/settings/keys",
+    howTo: "Paid: platform.claude.com → Billing (buy credit) → API keys.",
   },
   openai: {
     label: "ChatGPT (OpenAI)",
     short: "ChatGPT",
+    free: false,
     models: ["gpt-5", "gpt-5-mini", "gpt-4.1"],
     keyHint: "sk-…",
     keyUrl: "https://platform.openai.com/api-keys",
+    howTo: "Paid: platform.openai.com → Billing (buy credit) → API keys.",
   },
 };
+
+const ORDER: KeyedProvider[] = ["gemini", "groq", "anthropic", "openai"];
 
 const STARTERS = [
   "Match my vocal with the beat and arrange it like a real song",
@@ -27,16 +63,20 @@ const STARTERS = [
   "Make the vocal clearer on top of the beat",
 ];
 
-/** Provider, key and model — saved (encrypted) in the user's account. */
+/** Which AI, its key and model — saved (keys encrypted) in the user's account. */
 function AiSettingsForm({ onDone }: { onDone: () => void }) {
   const { settings, save } = useAiAccount();
-  const [provider, setProvider] = useState<AiProvider>(settings?.provider ?? "anthropic");
-  const [models, setModels] = useState(settings?.models ?? { anthropic: "claude-opus-5", openai: "gpt-5" });
-  const [newKeys, setNewKeys] = useState<Partial<Record<AiProvider, string>>>({});
+  const [provider, setProvider] = useState<AiProvider>(settings?.provider ?? "gemini");
+  const [models, setModels] = useState<Record<KeyedProvider, string>>(
+    settings?.models ?? { gemini: "gemini-2.5-flash", groq: "openai/gpt-oss-120b", anthropic: "claude-opus-5", openai: "gpt-5" }
+  );
+  const [newKeys, setNewKeys] = useState<Partial<Record<KeyedProvider, string>>>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const info = PROVIDERS[provider];
-  const ending = settings?.keyEndings[provider];
+  const free = settings?.free ?? null;
+  const keyed = provider === "free" ? null : provider;
+  const info = keyed ? PROVIDERS[keyed] : null;
+  const ending = keyed ? settings?.keyEndings[keyed] : null;
 
   async function handleSave() {
     setSaving(true);
@@ -52,9 +92,22 @@ function AiSettingsForm({ onDone }: { onDone: () => void }) {
   }
 
   return (
-    <div className="flex flex-col gap-2 border-b border-border p-3">
+    <div className="flex max-h-[70%] flex-col gap-2 overflow-y-auto border-b border-border p-3">
       <div className="flex flex-col gap-1 text-xs">
-        {(Object.keys(PROVIDERS) as AiProvider[]).map((id) => (
+        {free && (
+          <label className="flex items-center gap-1.5">
+            <input
+              type="radio"
+              name="ai-provider"
+              checked={provider === "free"}
+              onChange={() => setProvider("free")}
+              className="accent-brand"
+            />
+            Free — built into Remixt
+            <span className="text-[10px] text-success">no key needed</span>
+          </label>
+        )}
+        {ORDER.map((id) => (
           <label key={id} className="flex items-center gap-1.5">
             <input
               type="radio"
@@ -64,42 +117,61 @@ function AiSettingsForm({ onDone }: { onDone: () => void }) {
               className="accent-brand"
             />
             {PROVIDERS[id].label}
-            {settings?.keyEndings[id] && <span className="text-[10px] text-success">key ••••{settings.keyEndings[id]}</span>}
+            <span className={`text-[10px] ${PROVIDERS[id].free ? "text-success" : "text-muted"}`}>
+              {PROVIDERS[id].free ? "free key" : "paid"}
+            </span>
+            {settings?.keyEndings[id] && <span className="text-[10px] text-muted">••••{settings.keyEndings[id]}</span>}
           </label>
         ))}
       </div>
-      <label className="flex flex-col gap-1 text-[11px] text-muted">
-        {ending ? "Replace API key" : "API key"}
-        <input
-          type="password"
-          autoComplete="off"
-          value={newKeys[provider] ?? ""}
-          placeholder={ending ? `saved ••••${ending} — leave empty to keep` : info.keyHint}
-          onChange={(e) => setNewKeys({ ...newKeys, [provider]: e.target.value })}
-          className="input !py-1 text-xs"
-        />
-      </label>
-      <label className="flex flex-col gap-1 text-[11px] text-muted">
-        Model
-        <input
-          list={`ai-models-${provider}`}
-          value={models[provider]}
-          onChange={(e) => setModels({ ...models, [provider]: e.target.value })}
-          className="input !py-1 text-xs"
-        />
-        <datalist id={`ai-models-${provider}`}>
-          {info.models.map((m) => (
-            <option key={m} value={m} />
-          ))}
-        </datalist>
-      </label>
-      <p className="text-[10px] leading-relaxed text-muted">
-        Your key is saved encrypted in your Remixt account and used only for your own requests. Each message
-        costs a little on your {provider === "anthropic" ? "Anthropic" : "OpenAI"} account.{" "}
-        <a href={info.keyUrl} target="_blank" rel="noreferrer" className="underline hover:text-foreground">
-          Get a key
-        </a>
-      </p>
+
+      {provider === "free" && free && (
+        <p className="text-[10px] leading-relaxed text-muted">
+          Uses {free.service === "gemini" ? "Google Gemini" : "Groq"} ({free.model}) through Remixt — nothing to set up.
+          You have {free.leftToday} of {free.dailyLimit} free requests left today (one message uses a few). For more, add
+          your own free Gemini or Groq key.
+        </p>
+      )}
+
+      {keyed && info && (
+        <>
+          <p className="text-[10px] leading-relaxed text-muted">
+            {info.howTo}{" "}
+            <a href={info.keyUrl} target="_blank" rel="noreferrer" className="underline hover:text-foreground">
+              Get a key
+            </a>
+          </p>
+          <label className="flex flex-col gap-1 text-[11px] text-muted">
+            {ending ? "Replace API key" : "API key"}
+            <input
+              type="password"
+              autoComplete="off"
+              value={newKeys[keyed] ?? ""}
+              placeholder={ending ? `saved ••••${ending} — leave empty to keep` : info.keyHint}
+              onChange={(e) => setNewKeys({ ...newKeys, [keyed]: e.target.value })}
+              className="input !py-1 text-xs"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-[11px] text-muted">
+            Model
+            <input
+              list={`ai-models-${keyed}`}
+              value={models[keyed]}
+              onChange={(e) => setModels({ ...models, [keyed]: e.target.value })}
+              className="input !py-1 text-xs"
+            />
+            <datalist id={`ai-models-${keyed}`}>
+              {info.models.map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
+          </label>
+          <p className="text-[10px] leading-relaxed text-muted">
+            Your key is saved encrypted in your Remixt account and used only for your own requests.
+          </p>
+        </>
+      )}
+
       {error && <p className="text-[11px] text-danger">{error}</p>}
       <div className="flex flex-wrap gap-1.5">
         <button
@@ -109,13 +181,13 @@ function AiSettingsForm({ onDone }: { onDone: () => void }) {
         >
           {saving ? "Saving…" : "Save"}
         </button>
-        {ending && (
+        {keyed && ending && (
           <button
-            onClick={() => setNewKeys({ ...newKeys, [provider]: "" })}
+            onClick={() => setNewKeys({ ...newKeys, [keyed]: "" })}
             className="nudge hover:!text-danger"
             title="Remove the saved key when you press Save"
           >
-            {newKeys[provider] === "" ? "will remove key" : "remove key"}
+            {newKeys[keyed] === "" ? "will remove key" : "remove key"}
           </button>
         )}
         <button onClick={onDone} className="nudge">
@@ -124,6 +196,12 @@ function AiSettingsForm({ onDone }: { onDone: () => void }) {
       </div>
     </div>
   );
+}
+
+/** "Gemini · gemini-2.5-flash", "Free · 38 left today", … */
+function currentAiLabel(settings: PublicAiSettings) {
+  if (settings.provider === "free") return settings.free ? `Free · ${settings.free.leftToday} left today` : "settings";
+  return `${PROVIDERS[settings.provider].short} · ${settings.models[settings.provider]}`;
 }
 
 function Entry({ entry, undoable, onUndo }: { entry: ChatEntry; undoable: boolean; onUndo: () => void }) {
@@ -173,7 +251,6 @@ export default function StudioAiChat({ signedIn }: { signedIn: boolean }) {
 
   const settings = account.settings;
   const ready = hasKey(settings);
-  const provider = settings ? PROVIDERS[settings.provider] : null;
 
   // The last assistant message of each turn carries that turn's undo.
   const lastOfTurn = new Map<number, number>();
@@ -190,7 +267,7 @@ export default function StudioAiChat({ signedIn }: { signedIn: boolean }) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-xs text-muted">
         <span className="text-2xl">✨</span>
-        Sign in to use the AI producer with your own ChatGPT or Claude key.
+        Sign in to use the AI producer — free, or with your own ChatGPT, Claude, Gemini or Groq key.
       </div>
     );
   }
@@ -204,7 +281,7 @@ export default function StudioAiChat({ signedIn }: { signedIn: boolean }) {
           className="nudge ml-auto"
           title="Choose ChatGPT or Claude and set your API key"
         >
-          ⚙ {ready && provider ? `${provider.short} · ${settings!.models[settings!.provider]}` : "settings"}
+          ⚙ {ready && settings ? currentAiLabel(settings) : "settings"}
         </button>
         {entries.length > 0 && (
           <button onClick={reset} className="nudge" title="Start a new conversation">
@@ -266,7 +343,7 @@ export default function StudioAiChat({ signedIn }: { signedIn: boolean }) {
             }
           }}
           rows={2}
-          placeholder={ready ? "Tell the AI what you want…" : "Set your API key above first"}
+          placeholder={ready ? "Tell the AI what you want…" : "Choose an AI in settings first"}
           disabled={!ready}
           className="input resize-none text-xs disabled:opacity-50"
         />

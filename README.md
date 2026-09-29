@@ -90,6 +90,10 @@ cd web && node scripts/migrate.mjs
 | --- | --- |
 | `DATABASE_URL` | Postgres connection string |
 | `SESSION_SECRET` | signs session cookies (and, unless `AI_KEY_SECRET` is set, encrypts users' AI keys) |
+| `FREE_AI_KEY` | optional: a free Google Gemini (or Groq) API key that gives every signed-in user a free AI producer with no key of their own |
+| `FREE_AI_PROVIDER` | `gemini` (default) or `groq` — which service `FREE_AI_KEY` is for |
+| `FREE_AI_MODEL` | optional: model for the free AI (default `gemini-2.5-flash` / `openai/gpt-oss-120b`) |
+| `FREE_AI_DAILY_LIMIT` | model calls per user per day on the free AI (default 60; one message uses a few) |
 | `AI_KEY_SECRET` | optional: its own secret for encrypting users' ChatGPT/Claude keys. Changing it (or `SESSION_SECRET` without it) makes saved keys unreadable — users re-enter them |
 | `STORAGE_DIR` | where stems go when R2 isn't configured (`../storage`) |
 | `BLOB_READ_WRITE_TOKEN` | store stems in Vercel Blob (Vercel sets it when a Blob store is connected) |
@@ -140,7 +144,11 @@ against a project tempo you set (type it, or tap it in).
   nudges fix that in one click).
 - **✨ AI producer** — a chat in the Studio's sidebar (and a ✨ AI
   button on every lane that drafts a request for it) where the user's own
-  model — Claude or ChatGPT — edits the open remix. Each user saves their
+  model — Claude, ChatGPT, Google Gemini or Groq, or a free one built in —
+  edits the open remix. Gemini and Groq hand out free API keys; and when
+  the server has `FREE_AI_KEY` set, users can pick "Free — built into
+  Remixt" and need no key at all (a daily allowance per user is counted in
+  `ai_free_usage`). Each user saves their
   API key in AI settings; it's stored in their account encrypted with
   AES-256-GCM (`user_ai_settings`, `lib/aiKeys.ts`) and never sent back to
   the browser. `/api/ai/chat` makes one model call per turn with that key;

@@ -88,3 +88,17 @@ CREATE TABLE IF NOT EXISTS user_ai_settings (
   openai_key TEXT NOT NULL DEFAULT '',
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- AI producer, free options: users can also bring a free Google Gemini or
+-- Groq key, and the site can offer a shared free AI (FREE_AI_KEY) with a
+-- daily allowance per user, counted here.
+ALTER TABLE user_ai_settings ADD COLUMN IF NOT EXISTS gemini_model TEXT NOT NULL DEFAULT '';
+ALTER TABLE user_ai_settings ADD COLUMN IF NOT EXISTS groq_model TEXT NOT NULL DEFAULT '';
+ALTER TABLE user_ai_settings ADD COLUMN IF NOT EXISTS gemini_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE user_ai_settings ADD COLUMN IF NOT EXISTS groq_key TEXT NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS ai_free_usage (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day DATE NOT NULL,
+  calls INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, day)
+);

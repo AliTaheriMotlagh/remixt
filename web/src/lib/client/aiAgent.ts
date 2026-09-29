@@ -61,8 +61,11 @@ export const useAiAccount = create<AccountStore>((set, get) => ({
   },
 }));
 
+/** Whether the chosen AI can be used: a saved key, or the site's free AI. */
 export function hasKey(settings: PublicAiSettings | null) {
-  return !!settings?.keyEndings[settings.provider];
+  if (!settings) return false;
+  if (settings.provider === "free") return !!settings.free;
+  return !!settings.keyEndings[settings.provider];
 }
 
 // --- Lanes and bars as the model sees them ---------------------------------------
@@ -380,7 +383,7 @@ export const useAiChat = create<ChatStore>((set, get) => {
       if (get().running || !text.trim()) return;
       const settings = useAiAccount.getState().settings;
       if (!hasKey(settings)) {
-        add({ kind: "error", text: "Add your ChatGPT or Claude API key in AI settings first." });
+        add({ kind: "error", text: "Choose an AI and add its key in AI settings first." });
         return;
       }
       provider ??= settings!.provider;
@@ -430,6 +433,8 @@ export const useAiChat = create<ChatStore>((set, get) => {
       } finally {
         controller = null;
         set({ running: null });
+        // The free AI's "left today" count went down.
+        if (provider === "free") void useAiAccount.getState().load();
       }
     },
 

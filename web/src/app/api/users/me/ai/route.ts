@@ -3,20 +3,20 @@ import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import { getAiSettings, saveAiSettings } from "@/lib/aiKeys";
 
-// The signed-in user's AI producer settings: which provider, which model,
+// The signed-in user's AI producer settings: which service, which model,
 // and their own API keys. Keys go in here and are never sent back out —
-// GET returns only their last four characters.
+// GET returns only their last four characters (and how much of the shared
+// free AI they have left today).
 
 const modelName = z.string().trim().max(100).regex(/^[\w.:/-]*$/, "Invalid model name");
 
+const keyValue = z.string().max(500).optional();
+
 const updateSchema = z.object({
-  provider: z.enum(["anthropic", "openai"]),
-  models: z.object({ anthropic: modelName, openai: modelName }),
+  provider: z.enum(["anthropic", "openai", "gemini", "groq", "free"]),
+  models: z.object({ anthropic: modelName, openai: modelName, gemini: modelName, groq: modelName }),
   keys: z
-    .object({
-      anthropic: z.string().max(500).optional(),
-      openai: z.string().max(500).optional(),
-    })
+    .object({ anthropic: keyValue, openai: keyValue, gemini: keyValue, groq: keyValue })
     .default({}),
 });
 
