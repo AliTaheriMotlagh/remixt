@@ -158,3 +158,5 @@ window always has a stop button for it.
   not a live audio-worklet) — changing a lane's pitch or tempo re-renders
   that stem's buffer once, like a DAW "freeze" operation, then plays back
   normally. Keeps multi-lane sync simple.
+
+ali
