@@ -2,6 +2,14 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import UploadManager from "@/components/UploadManager";
 import { youtubeImportEnabled } from "@/lib/linkImport";
+import { pageMetadata } from "@/lib/seo";
+
+export const metadata = pageMetadata({
+  title: "Upload a song",
+  description: "Split a song into vocals and beat in your browser and add the stems to your Remixt library.",
+  path: "/upload",
+  noindex: true,
+});
 
 export default async function UploadPage() {
   const user = await getCurrentUser();

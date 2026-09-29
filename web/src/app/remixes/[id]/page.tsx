@@ -12,6 +12,8 @@ import { getRemixCredits } from "@/lib/credits";
 import { getArtistProgress, getComments } from "@/lib/social";
 import { getRemixCard, getRemixStats } from "@/lib/models";
 import type { Metadata } from "next";
+import { JsonLd, pageMetadata } from "@/lib/seo";
+import { SITE_NAME, absoluteUrl } from "@/lib/site";
 
 type RemixRow = {
   id: string;
@@ -28,16 +30,21 @@ export async function generateMetadata({
 }: {
   params: Promise<{ id: string }>;
 }): Promise<Metadata> {
-  const remix = await getRemixCard((await params).id);
-  if (!remix?.published) return { title: "Remix — Remixt" };
+  const { id } = await params;
+  const remix = await getRemixCard(id);
+  // Private (or missing): nothing to show a search engine.
+  if (!remix?.published) return { title: "Remix", robots: { index: false } };
   const from = remix.source_titles.length ? ` Built from ${remix.source_titles.slice(0, 3).join(" + ")}.` : "";
-  const description = `Listen to “${remix.title}”, a remix by ${remix.artist_name} on Remixt.${from}`;
-  return {
-    title: `${remix.title} — remix by ${remix.artist_name} · Remixt`,
+  const description = `Listen to “${remix.title}”, a remix by ${remix.artist_name} on Remixt.${from} Open it in the studio and make your own version.`;
+  return pageMetadata({
+    title: `${remix.title} — remix by ${remix.artist_name}`,
     description,
-    openGraph: { title: remix.title, description, type: "music.song", siteName: "Remixt" },
-    twitter: { card: "summary_large_image", title: remix.title, description },
-  };
+    path: `/remixes/${id}`,
+    type: "music.song",
+    // The card this route draws (opengraph-image.tsx), named outright:
+    // setting openGraph here would otherwise drop it.
+    image: { url: `/remixes/${id}/opengraph-image`, width: 1200, height: 630, alt: `${remix.title} — remix by ${remix.artist_name}` },
+  });
 }
 
 export default async function RemixDetailPage({
@@ -66,14 +73,39 @@ export default async function RemixDetailPage({
     getRemixCredits(remix.id),
   ]);
 
+  const url = absoluteUrl(`/remixes/${remix.id}`);
+
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 sm:py-12">
+      {remix.published && (
+        <JsonLd
+          data={{
+            "@context": "https://schema.org",
+            "@type": "MusicRecording",
+            name: remix.title,
+            url,
+            image: absoluteUrl(`/remixes/${remix.id}/opengraph-image`),
+            datePublished: new Date(remix.created_at).toISOString(),
+            byArtist: { "@type": "Person", name: remix.artist_name, url: absoluteUrl(`/artist/${remix.artist_id}`) },
+            genre: credits.tags.length ? credits.tags : undefined,
+            interactionStatistic: [
+              { "@type": "InteractionCounter", interactionType: "https://schema.org/ListenAction", userInteractionCount: stats.plays },
+              { "@type": "InteractionCounter", interactionType: "https://schema.org/LikeAction", userInteractionCount: stats.likes },
+              { "@type": "InteractionCounter", interactionType: "https://schema.org/CommentAction", userInteractionCount: comments.length },
+            ],
+            isPartOf: { "@type": "WebSite", name: SITE_NAME, url: absoluteUrl("/") },
+          }}
+        />
+      )}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">{remix.title}</h1>
           <p className="mt-1 text-sm text-muted">
             by{" "}
-            <Link href={`/artist/${remix.artist_id}`} className="text-brand-strong hover:underline">
+            <Link
+              href={`/artist/${remix.artist_id}`}
+              className="text-brand-strong underline decoration-brand-strong/40 underline-offset-2 hover:decoration-brand-strong"
+            >
               {remix.artist_name}
             </Link>
             {artistProgress && (

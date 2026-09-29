@@ -2,6 +2,14 @@ import { Suspense } from "react";
 import { getCurrentUser } from "@/lib/auth";
 import Studio from "@/components/Studio";
 import RemixtMark from "@/components/RemixtMark";
+import { pageMetadata } from "@/lib/seo";
+
+export const metadata = pageMetadata({
+  title: "Online remix studio — mix vocals over any beat",
+  description:
+    "A free remix studio in your browser: put a vocal from one song over the beat of another, match tempo and key automatically, add effects and export an MP3.",
+  path: "/studio",
+});
 
 export default async function StudioPage() {
   const user = await getCurrentUser();

@@ -1,6 +1,8 @@
 import Link from "next/link";
 import sql from "@/lib/db";
 import RemixtMark from "@/components/RemixtMark";
+import { JsonLd, organizationJsonLd, pageMetadata } from "@/lib/seo";
+import { SITE_DESCRIPTION, SITE_NAME, absoluteUrl } from "@/lib/site";
 
 type RemixPreview = {
   id: string;
@@ -9,6 +11,13 @@ type RemixPreview = {
   lane_count: number;
   created_at: string;
 };
+
+export const metadata = pageMetadata({
+  // The home page shares the layout's segment, so the "· Remixt" template doesn't apply.
+  title: `${SITE_NAME} — split any song & remix vocals over any beat`,
+  description: SITE_DESCRIPTION,
+  path: "/",
+});
 
 export default async function Home() {
   const remixes = await sql<RemixPreview[]>`
@@ -35,6 +44,34 @@ export default async function Home() {
 
   return (
     <div className="flex flex-1 flex-col">
+      <JsonLd
+        data={[
+          {
+            "@context": "https://schema.org",
+            "@type": "WebSite",
+            name: SITE_NAME,
+            url: absoluteUrl("/"),
+            description: SITE_DESCRIPTION,
+            potentialAction: {
+              "@type": "SearchAction",
+              target: { "@type": "EntryPoint", urlTemplate: absoluteUrl("/library?q={search_term_string}") },
+              "query-input": "required name=search_term_string",
+            },
+          },
+          organizationJsonLd(),
+          {
+            "@context": "https://schema.org",
+            "@type": "WebApplication",
+            name: SITE_NAME,
+            url: absoluteUrl("/studio"),
+            applicationCategory: "MultimediaApplication",
+            operatingSystem: "Any (runs in the browser)",
+            description:
+              "Split songs into vocal and beat stems with AI in the browser, then remix them in an online multitrack studio.",
+            offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+          },
+        ]}
+      />
       <section className="relative overflow-hidden border-b border-border">
         <div
           className="pointer-events-none absolute inset-0 opacity-40"

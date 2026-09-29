@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { currentAdmin } from "@/lib/admin";
 import AdminPanel from "@/components/AdminPanel";
 
-export const metadata = { title: "Admin — Remixt" };
+export const metadata = { title: "Admin", robots: { index: false } };
 
 export default async function AdminPage() {
   // Anyone who isn't an admin gets a plain 404, not a hint the page exists.

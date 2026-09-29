@@ -28,6 +28,7 @@ export default function RemixDetailPlayer({
   const lanes = useStudioStore((s) => s.lanes);
   const loadRemix = useStudioStore((s) => s.loadRemix);
   const [loading, setLoading] = useState(true);
+  const [showMixer, setShowMixer] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -59,10 +60,15 @@ export default function RemixDetailPlayer({
     return () => setMixCredit(null);
   }, [artistName]);
 
+  // The placeholder takes the same space as the player, so nothing below it
+  // (the comments) jumps when the audio arrives.
   if (loading) {
     return (
-      <div className="mt-6 rounded-xl border border-dashed border-border bg-surface p-12 text-center text-muted">
-        Loading remix…
+      <div className="mt-6 flex flex-col gap-4" aria-busy="true" aria-label="Loading remix">
+        <div className="h-[118px] animate-pulse rounded-xl border border-border bg-surface sm:h-[134px]" />
+        <div className="h-[90px] animate-pulse rounded-xl border border-border bg-surface" />
+        <div className="h-12 rounded-xl border border-border bg-surface" />
+        <div className="h-10" />
       </div>
     );
   }
@@ -73,20 +79,40 @@ export default function RemixDetailPlayer({
       <div className="rounded-xl border border-border bg-surface p-3">
         <MixWaveform />
       </div>
-      <BpmSyncPanel />
-      <StudioTimeline />
 
-      <div className="flex flex-col gap-3">
-        {lanes.map((lane) => (
-          <StudioLaneRow key={lane.laneId} lane={lane} />
-        ))}
+      {/* Listeners get the player; the mixer behind it is one tap away. */}
+      <div className="rounded-xl border border-border bg-surface">
+        <button
+          onClick={() => setShowMixer((v) => !v)}
+          aria-expanded={showMixer}
+          className="flex min-h-12 w-full items-center justify-between gap-3 px-4 text-left text-sm font-medium"
+        >
+          <span>
+            Stems &amp; mixer{" "}
+            <span className="text-muted">
+              · {lanes.length} stem{lanes.length === 1 ? "" : "s"} — solo, mute, tempo, key, FX
+            </span>
+          </span>
+          <span className="text-muted">{showMixer ? "▾" : "▸"}</span>
+        </button>
+        {showMixer && (
+          <div className="flex flex-col gap-4 border-t border-border p-3">
+            <BpmSyncPanel />
+            <StudioTimeline />
+            <div className="flex flex-col gap-3">
+              {lanes.map((lane) => (
+                <StudioLaneRow key={lane.laneId} lane={lane} />
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <Link
         href={`/studio?remix=${remixId}`}
-        className="self-start rounded-lg border border-border px-4 py-2 text-sm font-medium transition-colors hover:bg-surface-hover"
+        className="flex h-10 items-center self-start rounded-lg bg-brand px-4 text-sm font-semibold text-white transition-colors hover:bg-brand-strong"
       >
-        Open in Studio to remix further →
+        Remix it in the Studio →
       </Link>
     </div>
   );

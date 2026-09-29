@@ -1,7 +1,12 @@
 import { getCurrentUser } from "@/lib/auth";
 import TakedownForm from "@/components/TakedownForm";
+import { pageMetadata } from "@/lib/seo";
 
-export const metadata = { title: "Takedown requests — Remixt" };
+export const metadata = pageMetadata({
+  title: "Copyright takedown requests",
+  description: "Own the rights to a song or remix on Remixt? Ask for it to be taken down here.",
+  path: "/takedown",
+});
 
 export default async function TakedownPage() {
   const user = await getCurrentUser();

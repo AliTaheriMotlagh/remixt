@@ -1,6 +1,14 @@
 import { getLibraryStems } from "@/lib/models";
 import { getCurrentUser } from "@/lib/auth";
 import LibraryBrowser from "@/components/LibraryBrowser";
+import { pageMetadata } from "@/lib/seo";
+
+export const metadata = pageMetadata({
+  title: "Free vocal & beat stems library",
+  description:
+    "Browse acapella vocals, instrumental beats, drums and bass split from real songs. Preview any stem and drop it into the free online remix studio.",
+  path: "/library",
+});
 
 export default async function LibraryPage({
   searchParams,

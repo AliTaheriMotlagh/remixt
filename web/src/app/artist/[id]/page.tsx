@@ -8,6 +8,8 @@ import ArtistProgressCard from "@/components/ArtistProgressCard";
 import FollowButton from "@/components/FollowButton";
 import { getArtistProgress, getFollowState } from "@/lib/social";
 import type { Metadata } from "next";
+import { JsonLd, pageMetadata } from "@/lib/seo";
+import { absoluteUrl } from "@/lib/site";
 
 type ArtistRow = {
   id: string;
@@ -23,16 +25,23 @@ export async function generateMetadata({
   params: Promise<{ id: string }>;
 }): Promise<Metadata> {
   const { id } = await params;
-  const [artist] = await sql<{ artist_name: string; bio: string }[]>`
-    SELECT artist_name, bio FROM users WHERE id = ${id}
+  const [artist] = await sql<{ artist_name: string; bio: string; published: number }[]>`
+    SELECT artist_name, bio,
+           (SELECT COUNT(*) FROM remixes WHERE owner_id = users.id AND published)::int AS published
+    FROM users WHERE id = ${id}
   `;
-  if (!artist) return { title: "Artist — Remixt" };
-  const description = artist.bio?.trim() || `Songs and remixes by ${artist.artist_name} on Remixt.`;
-  return {
-    title: `${artist.artist_name} · Remixt`,
+  if (!artist) return { title: "Artist not found" };
+  const description =
+    artist.bio?.trim() ||
+    `Listen to ${artist.published} remix${artist.published === 1 ? "" : "es"} by ${artist.artist_name} on Remixt, and remix their vocals and beats.`;
+  return pageMetadata({
+    title: `${artist.artist_name} — remixes & stems`,
     description,
-    openGraph: { title: artist.artist_name, description, siteName: "Remixt", type: "profile" },
-  };
+    path: `/artist/${id}`,
+    type: "profile",
+    // A profile with nothing published is a thin page; keep it out of search.
+    noindex: artist.published === 0,
+  });
 }
 
 export default async function ArtistPage({
@@ -72,8 +81,29 @@ export default async function ArtistPage({
     ORDER BY created_at DESC
   `;
 
+  const published = remixes.filter((r) => r.published);
+
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 sm:py-12">
+      <JsonLd
+        data={{
+          "@context": "https://schema.org",
+          "@type": "ProfilePage",
+          url: absoluteUrl(`/artist/${artist.id}`),
+          dateCreated: new Date(artist.created_at).toISOString(),
+          mainEntity: {
+            "@type": "Person",
+            name: artist.artist_name,
+            description: artist.bio || undefined,
+            url: absoluteUrl(`/artist/${artist.id}`),
+          },
+          hasPart: published.slice(0, 20).map((r) => ({
+            "@type": "MusicRecording",
+            name: r.title,
+            url: absoluteUrl(`/remixes/${r.id}`),
+          })),
+        }}
+      />
       <div className="flex items-center gap-4">
         <span
           className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full text-2xl font-black text-white"

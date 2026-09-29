@@ -1,8 +1,14 @@
 import Link from "next/link";
 import ChallengeStemCard from "@/components/ChallengeStemCard";
 import { challengeEntries, getChallenge, listChallenges, type Challenge } from "@/lib/challenges";
+import { pageMetadata } from "@/lib/seo";
 
-export const metadata = { title: "Remix challenges — Remixt" };
+export const metadata = pageMetadata({
+  title: "Remix challenges",
+  description:
+    "Weekly remix contests: everyone gets the same vocal and beat — make your version in the browser, publish it, and climb the entries.",
+  path: "/challenges",
+});
 
 function timeLeft(challenge: Challenge) {
   const target = new Date(challenge.status === "upcoming" ? challenge.starts_at : challenge.ends_at).getTime();

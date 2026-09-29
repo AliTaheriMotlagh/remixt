@@ -1,11 +1,13 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 import { rankedRemixes, topArtists, type RankedRemix } from "@/lib/social";
+import { pageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
-  title: "Leaderboard · Remixt",
+export const metadata: Metadata = pageMetadata({
+  title: "Top remix artists & trending remixes",
   description: "The top remix artists on Remixt, and the remixes everyone's listening to this week.",
-};
+  path: "/leaderboard",
+});
 
 const MEDALS = ["🥇", "🥈", "🥉"];
 

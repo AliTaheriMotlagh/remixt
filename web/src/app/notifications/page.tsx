@@ -4,7 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { listNotifications, type Notification } from "@/lib/notifications";
 import MarkNotificationsRead from "@/components/MarkNotificationsRead";
 
-export const metadata = { title: "Notifications — Remixt" };
+export const metadata = { title: "Notifications", robots: { index: false } };
 
 function timeAgo(value: string) {
   const seconds = Math.max(0, (Date.now() - new Date(value).getTime()) / 1000);

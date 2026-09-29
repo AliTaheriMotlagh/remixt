@@ -7,6 +7,7 @@ import PreviewBar from "@/components/PreviewBar";
 import SplitterStatus from "@/components/SplitterStatus";
 import { getCurrentUser } from "@/lib/auth";
 import { isAdmin } from "@/lib/admin";
+import { SITE_DESCRIPTION, SITE_NAME, SITE_TAGLINE, siteUrl } from "@/lib/site";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -18,24 +19,28 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const description =
-  "Upload a song, auto-split it into vocals and beat stems, and remix them with other tracks in a browser-based studio.";
-
 export const metadata: Metadata = {
-  // Absolute URLs for link previews. On Vercel, Next works this out
-  // itself; elsewhere set PUBLIC_BASE_URL (e.g. https://remix.example.com).
-  metadataBase: process.env.PUBLIC_BASE_URL ? new URL(process.env.PUBLIC_BASE_URL) : undefined,
-  title: "Remixt — remix vocals and beats from any song",
-  description,
+  // Absolute URLs for canonical links and link previews (lib/site.ts).
+  metadataBase: siteUrl(),
+  title: {
+    default: `${SITE_NAME} — ${SITE_TAGLINE.toLowerCase()}`,
+    // Each page names itself; this adds the brand.
+    template: `%s · ${SITE_NAME}`,
+  },
+  description: SITE_DESCRIPTION,
+  applicationName: SITE_NAME,
+  category: "music",
   openGraph: {
-    siteName: "Remixt",
-    title: "Remixt — remix vocals and beats from any song",
-    description,
+    siteName: SITE_NAME,
+    title: `${SITE_NAME} — ${SITE_TAGLINE.toLowerCase()}`,
+    description: SITE_DESCRIPTION,
     type: "website",
+    locale: "en_US",
   },
   twitter: { card: "summary_large_image" },
+  formatDetection: { telephone: false, email: false, address: false },
   // Installed to an iPhone's home screen, it opens full-screen like an app.
-  appleWebApp: { capable: true, title: "Remixt", statusBarStyle: "black" },
+  appleWebApp: { capable: true, title: SITE_NAME, statusBarStyle: "black" },
 };
 
 export const viewport: Viewport = {

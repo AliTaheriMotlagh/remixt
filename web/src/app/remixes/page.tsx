@@ -2,6 +2,8 @@ import Link from "next/link";
 import sql from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { ensureSchema } from "@/lib/schema";
+import { pageMetadata } from "@/lib/seo";
+import type { Metadata } from "next";
 
 type Tab = "latest" | "trending" | "following";
 
@@ -30,6 +32,27 @@ function tabHref(tab: Tab, tag: string | null) {
   if (tag) params.set("tag", tag);
   const query = params.toString();
   return query ? `/remixes?${query}` : "/remixes";
+}
+
+export async function generateMetadata({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string; tag?: string }>;
+}): Promise<Metadata> {
+  const tag = (await searchParams).tag?.trim().toLowerCase() || null;
+  // Tag pages are worth finding ("house remixes"); the tabs are just orderings of /remixes.
+  return tag
+    ? pageMetadata({
+        title: `#${tag} remixes`,
+        description: `Remixes tagged #${tag} on Remixt — vocals and beats from different songs, mixed by the community. Listen, then remix one yourself.`,
+        path: `/remixes?tag=${encodeURIComponent(tag)}`,
+      })
+    : pageMetadata({
+        title: "Community remixes & mashups",
+        description:
+          "Listen to remixes and mashups made on Remixt: vocals from one song over the beat of another. Trending, latest, and from artists you follow.",
+        path: "/remixes",
+      });
 }
 
 export default async function RemixesPage({

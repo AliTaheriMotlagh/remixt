@@ -170,7 +170,7 @@ export default function LibraryBrowser({
               <div key={stem.id} className="rounded-xl border border-border bg-surface p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <h3 className="truncate font-medium">{stem.track_title}</h3>
+                    <h2 className="truncate font-medium">{stem.track_title}</h2>
                     <Link
                       href={`/artist/${stem.artist_id}`}
                       className="text-xs text-muted hover:text-brand-strong hover:underline"
