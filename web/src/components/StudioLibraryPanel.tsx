@@ -150,7 +150,7 @@ export default function StudioLibraryPanel() {
                 </p>
                 <Waveform
                   peaks={peaks}
-                  color={previewing ? `${accent}55` : accent}
+                  color={previewing ? `${accent}99` : accent}
                   progressColor={accent}
                   progress={previewing ? preview.progress : 0}
                   height={20}

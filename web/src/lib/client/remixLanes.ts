@@ -1,5 +1,6 @@
 "use client";
 
+import { isMusicalKey, type MusicalKey } from "./musicKey";
 import {
   DEFAULT_FX,
   type LaneFx,
@@ -33,6 +34,7 @@ export type RemixApi = {
 type LaneSettings = {
   fx?: Partial<LaneFx>;
   bpm?: number | null;
+  key?: MusicalKey | null;
 };
 
 function parseJson<T>(raw: string | null | undefined, fallback: T): T {
@@ -63,6 +65,7 @@ export function laneFromApi(lane: RemixLaneApi): StudioLane {
     duration: originalDuration / tempoRatio,
     offsetSeconds: lane.offset_seconds ?? 0,
     bpm: settings.bpm ?? lane.track_bpm,
+    musicalKey: isMusicalKey(settings.key) ? settings.key : null,
     pitchSemitones: lane.pitch_semitones || 0,
     tempoRatio,
     fx: { ...DEFAULT_FX, ...(settings.fx ?? {}) },
@@ -82,6 +85,6 @@ export function lanesToPayload(lanes: StudioLane[]) {
     offsetSeconds: lane.offsetSeconds,
     pitchSemitones: lane.pitchSemitones,
     tempoRatio: lane.tempoRatio,
-    settings: { fx: lane.fx, bpm: lane.bpm },
+    settings: { fx: lane.fx, bpm: lane.bpm, key: lane.musicalKey },
   }));
 }

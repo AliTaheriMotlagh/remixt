@@ -1,0 +1,300 @@
+"use client";
+
+import type { MusicalKey } from "./musicKey";
+
+// Client-side audio analysis for the Studio's key detection and auto-match.
+// Everything runs on the decoded stem the audio engine already holds, so
+// it works for every track in the library without re-processing uploads.
+// Results are cached per stem: they only depend on the audio itself.
+
+/** Analysis rate: plenty for key and rhythm, and a quarter of the work. */
+const RATE = 11025;
+/** Envelope block size — ~11.6 ms, the precision beat alignment gets. */
+const BLOCK = 128;
+const FFT_SIZE = 4096;
+const FFT_HOP = 2048;
+
+export type StemAnalysis = {
+  key: MusicalKey;
+  /** 0..1 — how clearly the best key beat the runner-up. */
+  keyConfidence: number;
+  /** Onset strength per block, for locating the beat. */
+  onsets: Float32Array;
+  /** Blocks per second of `onsets`. */
+  onsetRate: number;
+  /** Seconds into the stem where it first gets going (a vocal's entry). */
+  entry: number;
+  /** RMS of the non-silent parts, linear. */
+  loudness: number;
+  /** Tempo estimated from the onsets — a fallback when no BPM is stored. */
+  bpmEstimate: number | null;
+};
+
+const cache = new Map<string, Promise<StemAnalysis>>();
+
+export function analyzeStem(stemId: string, buffer: AudioBuffer): Promise<StemAnalysis> {
+  const cached = cache.get(stemId);
+  if (cached) return cached;
+  const promise = runAnalysis(buffer);
+  cache.set(stemId, promise);
+  promise.catch(() => cache.delete(stemId));
+  return promise;
+}
+
+const yieldToUI = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+async function runAnalysis(buffer: AudioBuffer): Promise<StemAnalysis> {
+  const mono = await downmix(buffer);
+  const { energy, onsets } = envelopes(mono);
+  const { key, confidence } = await detectKey(mono);
+  const onsetRate = RATE / BLOCK;
+  return {
+    key,
+    keyConfidence: confidence,
+    onsets,
+    onsetRate,
+    entry: findEntry(energy) / onsetRate,
+    loudness: activeLoudness(energy),
+    bpmEstimate: estimateBpm(onsets, onsetRate),
+  };
+}
+
+/** Mono at RATE via an offline context, which resamples properly. */
+async function downmix(buffer: AudioBuffer): Promise<Float32Array> {
+  const length = Math.max(1, Math.ceil(buffer.duration * RATE));
+  const ctx = new OfflineAudioContext(1, length, RATE);
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(ctx.destination);
+  source.start();
+  const rendered = await ctx.startRendering();
+  return rendered.getChannelData(0);
+}
+
+// --- Envelopes ---------------------------------------------------------------
+
+function envelopes(mono: Float32Array) {
+  const blocks = Math.floor(mono.length / BLOCK);
+  const energy = new Float32Array(blocks);
+  for (let b = 0; b < blocks; b++) {
+    let sum = 0;
+    for (let i = b * BLOCK, end = i + BLOCK; i < end; i++) sum += mono[i] * mono[i];
+    energy[b] = sum / BLOCK;
+  }
+
+  // Onset strength: the rise in log energy, half-wave rectified. Cheap, and
+  // for drums (the beat stem) it lands squarely on the hits.
+  const onsets = new Float32Array(blocks);
+  let previous = Math.log10(energy[0] + 1e-9);
+  for (let b = 1; b < blocks; b++) {
+    const current = Math.log10(energy[b] + 1e-9);
+    onsets[b] = Math.max(0, current - previous);
+    previous = current;
+  }
+  return { energy, onsets };
+}
+
+function percentile(values: Float32Array, p: number) {
+  const sorted = Float32Array.from(values).sort();
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))] ?? 0;
+}
+
+/** First block where the stem is clearly sounding, ignoring stem bleed. */
+function findEntry(energy: Float32Array) {
+  const threshold = percentile(energy, 0.95) * 0.04; // ~-14 dB below loud parts
+  // Require a few loud blocks in a row so a stray click isn't the "entry".
+  let run = 0;
+  for (let b = 0; b < energy.length; b++) {
+    run = energy[b] > threshold ? run + 1 : 0;
+    if (run >= 4) return b - 3;
+  }
+  return 0;
+}
+
+function activeLoudness(energy: Float32Array) {
+  const floor = percentile(energy, 0.95) * 0.01; // -20 dB: counts as silence
+  let sum = 0;
+  let count = 0;
+  for (const e of energy) {
+    if (e > floor) {
+      sum += e;
+      count++;
+    }
+  }
+  return count > 0 ? Math.sqrt(sum / count) : 0;
+}
+
+// --- Rhythm ------------------------------------------------------------------
+
+function onsetAt(onsets: Float32Array, index: number) {
+  // A little spread either side tolerates timing jitter between hits.
+  const i = Math.round(index);
+  return (onsets[i] ?? 0) + 0.5 * ((onsets[i - 1] ?? 0) + (onsets[i + 1] ?? 0));
+}
+
+/**
+ * Where the beat falls within one period: tries every offset in [0, period)
+ * and keeps the one whose grid collects the most onset energy.
+ * Returns seconds from the start of the stem.
+ */
+export function beatPhase(analysis: StemAnalysis, periodSeconds: number) {
+  const { onsets, onsetRate } = analysis;
+  const period = periodSeconds * onsetRate;
+  if (!(period > 1)) return 0;
+  let best = -1;
+  let bestPhase = 0;
+  for (let phase = 0; phase < period; phase++) {
+    let score = 0;
+    for (let t = phase; t < onsets.length; t += period) score += onsetAt(onsets, t);
+    if (score > best) {
+      best = score;
+      bestPhase = phase;
+    }
+  }
+  return bestPhase / onsetRate;
+}
+
+/** Autocorrelation tempo in 70–180 BPM, for stems with no stored BPM. */
+function estimateBpm(onsets: Float32Array, onsetRate: number): number | null {
+  const minLag = Math.floor((60 / 180) * onsetRate);
+  const maxLag = Math.ceil((60 / 70) * onsetRate);
+  if (onsets.length < maxLag * 4) return null;
+  let best = 0;
+  let bestLag = 0;
+  const scores = new Float32Array(maxLag + 2);
+  for (let lag = minLag; lag <= maxLag + 1; lag++) {
+    let sum = 0;
+    for (let i = 0; i + lag < onsets.length; i++) sum += onsets[i] * onsets[i + lag];
+    scores[lag] = sum;
+    if (lag <= maxLag && sum > best) {
+      best = sum;
+      bestLag = lag;
+    }
+  }
+  if (bestLag === 0) return null;
+  // Parabolic interpolation between neighbouring lags for sub-block accuracy.
+  const a = scores[bestLag - 1];
+  const b = scores[bestLag];
+  const c = scores[bestLag + 1];
+  const denominator = a - 2 * b + c;
+  const refined = denominator !== 0 ? bestLag + (0.5 * (a - c)) / denominator : bestLag;
+  return Math.round((60 * onsetRate * 10) / refined) / 10;
+}
+
+// --- Key ---------------------------------------------------------------------
+
+// Krumhansl–Kessler key profiles: how strongly each scale degree is felt
+// in a major and a minor key, from listening experiments.
+const MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88];
+const MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.6, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
+
+async function detectKey(mono: Float32Array): Promise<{ key: MusicalKey; confidence: number }> {
+  const chroma = await chromagram(mono);
+
+  const scores: { key: MusicalKey; score: number }[] = [];
+  for (let tonic = 0; tonic < 12; tonic++) {
+    const rotated = Array.from({ length: 12 }, (_, i) => chroma[(i + tonic) % 12]);
+    scores.push({ key: { tonic, mode: "major" }, score: correlation(rotated, MAJOR_PROFILE) });
+    scores.push({ key: { tonic, mode: "minor" }, score: correlation(rotated, MINOR_PROFILE) });
+  }
+  scores.sort((a, b) => b.score - a.score);
+  const confidence = Math.max(0, Math.min(1, (scores[0].score - scores[1].score) * 5));
+  return { key: scores[0].key, confidence };
+}
+
+function correlation(a: number[], b: number[]) {
+  const meanA = a.reduce((s, v) => s + v, 0) / a.length;
+  const meanB = b.reduce((s, v) => s + v, 0) / b.length;
+  let num = 0;
+  let denA = 0;
+  let denB = 0;
+  for (let i = 0; i < a.length; i++) {
+    num += (a[i] - meanA) * (b[i] - meanB);
+    denA += (a[i] - meanA) ** 2;
+    denB += (b[i] - meanB) ** 2;
+  }
+  return denA > 0 && denB > 0 ? num / Math.sqrt(denA * denB) : 0;
+}
+
+/** Average pitch-class profile over the whole stem. */
+async function chromagram(mono: Float32Array): Promise<number[]> {
+  // Which pitch class each FFT bin belongs to; bins outside ~A1–B6 (where
+  // bass rumble and hi-hat noise live) are left out.
+  const binClass = new Int8Array(FFT_SIZE / 2).fill(-1);
+  for (let k = 1; k < FFT_SIZE / 2; k++) {
+    const freq = (k * RATE) / FFT_SIZE;
+    if (freq < 55 || freq > 2000) continue;
+    const midi = 69 + 12 * Math.log2(freq / 440);
+    binClass[k] = ((Math.round(midi) % 12) + 12) % 12;
+  }
+
+  const window = new Float64Array(FFT_SIZE);
+  for (let i = 0; i < FFT_SIZE; i++) window[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / FFT_SIZE);
+
+  const re = new Float64Array(FFT_SIZE);
+  const im = new Float64Array(FFT_SIZE);
+  const total = new Array(12).fill(0);
+  const frame = new Array(12).fill(0);
+  let frames = 0;
+
+  for (let start = 0; start + FFT_SIZE <= mono.length; start += FFT_HOP) {
+    let energy = 0;
+    for (let i = 0; i < FFT_SIZE; i++) {
+      const sample = mono[start + i];
+      re[i] = sample * window[i];
+      im[i] = 0;
+      energy += sample * sample;
+    }
+    if (energy / FFT_SIZE < 1e-6) continue; // silence — says nothing about key
+
+    fft(re, im);
+    frame.fill(0);
+    for (let k = 1; k < FFT_SIZE / 2; k++) {
+      const pc = binClass[k];
+      if (pc >= 0) frame[pc] += Math.sqrt(re[k] * re[k] + im[k] * im[k]);
+    }
+    // Normalise each frame so loud sections don't outvote the rest.
+    const sum = frame.reduce((s, v) => s + v, 0);
+    if (sum > 0) for (let pc = 0; pc < 12; pc++) total[pc] += frame[pc] / sum;
+
+    if (++frames % 64 === 0) await yieldToUI();
+  }
+  return total;
+}
+
+/** In-place iterative radix-2 FFT. */
+function fft(re: Float64Array, im: Float64Array) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      [re[i], re[j]] = [re[j], re[i]];
+      [im[i], im[j]] = [im[j], im[i]];
+    }
+  }
+  for (let size = 2; size <= n; size <<= 1) {
+    const half = size >> 1;
+    const angle = (-2 * Math.PI) / size;
+    const wRe = Math.cos(angle);
+    const wIm = Math.sin(angle);
+    for (let start = 0; start < n; start += size) {
+      let curRe = 1;
+      let curIm = 0;
+      for (let k = 0; k < half; k++) {
+        const a = start + k;
+        const b = a + half;
+        const tRe = re[b] * curRe - im[b] * curIm;
+        const tIm = re[b] * curIm + im[b] * curRe;
+        re[b] = re[a] - tRe;
+        im[b] = im[a] - tIm;
+        re[a] += tRe;
+        im[a] += tIm;
+        const nextRe = curRe * wRe - curIm * wIm;
+        curIm = curRe * wIm + curIm * wRe;
+        curRe = nextRe;
+      }
+    }
+  }
+}

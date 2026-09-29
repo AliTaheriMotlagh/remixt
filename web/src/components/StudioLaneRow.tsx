@@ -6,8 +6,11 @@ import LaneFxPanel from "./LaneFxPanel";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { exportLane } from "@/lib/client/mixdown";
 import { previewPlayer } from "@/lib/client/previewPlayer";
+import { ALL_KEYS, camelotCode, keyId, keyLabel, parseKeyId } from "@/lib/client/musicKey";
 import {
   beatLength,
+  effectiveKey,
+  referenceLane,
   useStudioStore,
   viewDuration,
   type StudioLane,
@@ -38,6 +41,9 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
   const setOffset = useStudioStore((s) => s.setOffset);
   const nudgeOffset = useStudioStore((s) => s.nudgeOffset);
   const matchLaneToProject = useStudioStore((s) => s.matchLaneToProject);
+  const setLaneKey = useStudioStore((s) => s.setLaneKey);
+  const matchLaneKey = useStudioStore((s) => s.matchLaneKey);
+  const keyReference = useStudioStore((s) => referenceLane(s.lanes, (l) => !!l.musicalKey));
 
   const [showFx, setShowFx] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -94,6 +100,8 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
   const bar = beat * 4;
   const effectiveBpm = lane.bpm ? lane.bpm * lane.tempoRatio : null;
   const isStretched = Math.abs(lane.tempoRatio - 1) > 0.001;
+  const soundingKey = effectiveKey(lane);
+  const isReference = keyReference?.laneId === lane.laneId;
   const laneProgress =
     lane.duration > 0
       ? Math.min(1, Math.max(0, (playhead - lane.offsetSeconds) / lane.duration))
@@ -123,7 +131,10 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
     if (!state.moved && Math.abs(dx) < 3) return;
     state.moved = true;
     const deltaSeconds = (dx / state.width) * state.span;
-    setOffset(lane.laneId, Math.max(0, snap(state.startOffset + deltaSeconds)));
+    // Snap the *movement* to whole beats rather than the absolute position,
+    // so a clip that was lined up off-grid (auto-match does this to put a
+    // vocal on the beat's downbeat) keeps its phase while it's dragged.
+    setOffset(lane.laneId, Math.max(0, state.startOffset + snap(deltaSeconds)));
   }
 
   function handleClipPointerUp(e: React.PointerEvent<HTMLDivElement>) {
@@ -173,6 +184,20 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
                   }
                 >
                   {effectiveBpm.toFixed(1)} BPM
+                </span>
+              )}
+              {soundingKey && (
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                    lane.pitchSemitones !== 0 ? "bg-success/15 text-success" : "bg-surface-raised text-muted"
+                  }`}
+                  title={
+                    lane.pitchSemitones !== 0
+                      ? `Shifted from ${keyLabel(lane.musicalKey!)}`
+                      : "Key of the source material"
+                  }
+                >
+                  {keyLabel(soundingKey)} · {camelotCode(soundingKey)}
                 </span>
               )}
               {isRendering && (
@@ -294,6 +319,38 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
             </button>
           </div>
 
+          <div className="flex items-center gap-1.5">
+            <span className="w-9 shrink-0 text-[10px] text-muted" title="Source key — detected automatically, fix it if it's wrong">
+              Key
+            </span>
+            <select
+              value={lane.musicalKey ? keyId(lane.musicalKey) : ""}
+              onChange={(e) => setLaneKey(lane.laneId, parseKeyId(e.target.value))}
+              className="input !w-16 !px-1 !py-0.5 text-[11px]"
+            >
+              <option value="">{lane.musicalKey ? "—" : "…"}</option>
+              {ALL_KEYS.map((key) => (
+                <option key={keyId(key)} value={keyId(key)}>
+                  {keyLabel(key)}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => matchLaneKey(lane.laneId)}
+              disabled={!lane.musicalKey || !keyReference || isReference}
+              className="flex-1 rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted transition-colors hover:border-brand/60 hover:text-foreground disabled:opacity-40"
+              title={
+                isReference
+                  ? "This lane sets the project key"
+                  : keyReference && effectiveKey(keyReference)
+                    ? `Pitch-shift into ${keyLabel(effectiveKey(keyReference)!)} (from “${keyReference.trackTitle}”)`
+                    : "Waiting for key detection"
+              }
+            >
+              {isReference ? "Project key" : "Match"}
+            </button>
+          </div>
+
           <div className="flex items-center gap-1">
             <button
               onClick={() => setShowFx((v) => !v)}
@@ -392,13 +449,13 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
                 left: `${(lane.offsetSeconds / span) * 100}%`,
                 width: `${(lane.duration / span) * 100}%`,
                 borderColor: accent,
-                background: `${accent}12`,
+                background: `color-mix(in srgb, ${accent} 14%, transparent)`,
               }}
               title="Drag to move this lane in time · click to seek"
             >
               <Waveform
                 peaks={lane.peaks}
-                color={`${accent}55`}
+                color={`${accent}99`}
                 progressColor={accent}
                 progress={laneProgress}
                 height={66}

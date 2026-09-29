@@ -93,11 +93,25 @@ against a project tempo you set (type it, or tap it in).
 
 - **Timing** — each lane has its own start position on the timeline. Drag
   the clip, nudge it by a beat or a bar, or drop it at the playhead; with
-  Snap on, everything lands on the beat grid.
+  Snap on, drags move in whole beats. Moving a clip while the transport
+  runs is heard immediately — no need to pause and play again.
 - **Tempo & key** — per-lane BPM (editable, since detection sometimes
   halves or doubles), "Match" to stretch one lane to the project tempo,
   "Match all lanes" for the whole project, plus pitch in semitones and a
   free speed control.
+- **Key** — each lane's key is detected in the browser when it's added
+  (shown as e.g. "A min · 8A" with its Camelot code, and editable), and
+  "Match" / "Match keys" pitch-shifts lanes onto the project key — the
+  key of the first beat lane. Relative major/minor count as a match.
+- **✨ AI Match** — one button that analyses every lane and fits them
+  together: locks tempo to the beat (reading a vocal as half/double time
+  when that needs less stretching), shifts keys (taking a Camelot
+  neighbour when it saves a big, artefact-prone shift), slides the beat
+  onto the project grid and drops each vocal's first phrase on a bar
+  line, loudness-matches the lanes, and gives untouched lanes a starting
+  FX chain. It lists every change and can be undone. It's signal analysis
+  (`web/src/lib/client/analysis.ts`), not a remote model — nothing leaves
+  the browser.
 - **Mixing** — volume, mute, solo, pan, stereo width, a 3-band EQ, high-
   and low-pass filters, saturation, fades in/out, and a master fader that
   runs into a safety limiter.

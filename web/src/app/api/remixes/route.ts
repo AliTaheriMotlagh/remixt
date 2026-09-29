@@ -13,6 +13,10 @@ const laneSettingsSchema = z
   .object({
     fx: z.record(z.string(), z.union([z.number(), z.boolean(), z.string()])).optional(),
     bpm: z.number().positive().max(400).nullable().optional(),
+    key: z
+      .object({ tonic: z.number().int().min(0).max(11), mode: z.enum(["major", "minor"]) })
+      .nullable()
+      .optional(),
   })
   .default({});
 

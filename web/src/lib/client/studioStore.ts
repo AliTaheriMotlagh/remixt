@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { semitonesToMatch, transposeKey, type MusicalKey } from "./musicKey";
 
 export type LaneKind = "vocals" | "beat";
 
@@ -62,10 +63,17 @@ export type StudioLane = {
   /** Where this lane starts on the project timeline, in seconds. */
   offsetSeconds: number;
   bpm: number | null;
+  /** Key of the source material (before pitch shift); detected or set by hand. */
+  musicalKey: MusicalKey | null;
   pitchSemitones: number;
   tempoRatio: number;
   fx: LaneFx;
 };
+
+/** The fields a bulk edit (auto-match, or undoing one) may change. */
+export type LanePatch = Partial<
+  Pick<StudioLane, "bpm" | "musicalKey" | "pitchSemitones" | "tempoRatio" | "offsetSeconds" | "volume" | "fx">
+>;
 
 export type LoadableStem = {
   id: string;
@@ -186,6 +194,10 @@ type StudioState = {
   setPitchSemitones: (laneId: string, semitones: number) => void;
   setTempoRatio: (laneId: string, ratio: number) => void;
   setLaneBpm: (laneId: string, bpm: number | null) => void;
+  setLaneKey: (laneId: string, key: MusicalKey | null) => void;
+  matchLaneKey: (laneId: string) => void;
+  matchAllKeys: () => void;
+  applyLanePatches: (patches: Record<string, LanePatch>, projectBpm?: number) => void;
   setOffset: (laneId: string, offsetSeconds: number) => void;
   nudgeOffset: (laneId: string, deltaSeconds: number) => void;
   setFx: (laneId: string, patch: Partial<LaneFx>) => void;
@@ -257,6 +269,29 @@ export function resolveDelayTime(fx: LaneFx, projectBpm: number) {
   return Math.max(0.01, division.beats * beatLength(projectBpm));
 }
 
+/**
+ * The lane everything else is matched to: the first beat that has the
+ * property in question, else the first lane of any kind that has it.
+ * Beats win because a vocal is far easier to stretch and re-key cleanly.
+ */
+export function referenceLane(
+  lanes: StudioLane[],
+  has: (lane: StudioLane) => boolean
+): StudioLane | undefined {
+  return lanes.find((l) => l.kind === "beat" && has(l)) ?? lanes.find(has);
+}
+
+/** The key a lane is sounding in right now, after its pitch shift. */
+export function effectiveKey(lane: StudioLane): MusicalKey | null {
+  return lane.musicalKey ? transposeKey(lane.musicalKey, lane.pitchSemitones) : null;
+}
+
+function withKeyMatched(lane: StudioLane, reference: StudioLane | undefined): StudioLane {
+  const target = reference && effectiveKey(reference);
+  if (!target || !lane.musicalKey || lane.laneId === reference.laneId) return lane;
+  return { ...lane, pitchSemitones: semitonesToMatch(lane.musicalKey, target) };
+}
+
 function defaultProjectBpm(lanes: StudioLane[], fallback: number) {
   const beat = lanes.find((l) => l.kind === "beat" && l.bpm);
   if (beat?.bpm) return Math.round(beat.bpm * 10) / 10;
@@ -298,6 +333,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       duration: originalDuration,
       offsetSeconds: 0,
       bpm: stem.track_bpm ?? null,
+      musicalKey: null,
       pitchSemitones: 0,
       tempoRatio: 1,
       fx: { ...DEFAULT_FX },
@@ -388,6 +424,49 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     set((state) => ({
       lanes: state.lanes.map((l) => (l.laneId === laneId ? { ...l, bpm } : l)),
     }));
+  },
+
+  setLaneKey: (laneId, musicalKey) => {
+    set((state) => ({
+      lanes: state.lanes.map((l) => (l.laneId === laneId ? { ...l, musicalKey } : l)),
+    }));
+  },
+
+  // Shifts one lane's pitch so it plays in the same notes as the reference
+  // lane (relative major/minor count as a match — they share every note).
+  matchLaneKey: (laneId) => {
+    set((state) => {
+      const reference = referenceLane(state.lanes, (l) => !!l.musicalKey);
+      return {
+        lanes: state.lanes.map((l) => (l.laneId === laneId ? withKeyMatched(l, reference) : l)),
+      };
+    });
+  },
+
+  matchAllKeys: () => {
+    set((state) => {
+      const reference = referenceLane(state.lanes, (l) => !!l.musicalKey);
+      return { lanes: state.lanes.map((l) => withKeyMatched(l, reference)) };
+    });
+  },
+
+  applyLanePatches: (patches, projectBpm) => {
+    set((state) => {
+      const lanes = state.lanes.map((l) => {
+        const patch = patches[l.laneId];
+        if (!patch) return l;
+        return withEffectiveDuration({
+          ...l,
+          ...patch,
+          offsetSeconds: Math.max(0, patch.offsetSeconds ?? l.offsetSeconds),
+        });
+      });
+      return {
+        lanes,
+        duration: recomputeDuration(lanes),
+        projectBpm: projectBpm ?? state.projectBpm,
+      };
+    });
   },
 
   setOffset: (laneId, offsetSeconds) => {

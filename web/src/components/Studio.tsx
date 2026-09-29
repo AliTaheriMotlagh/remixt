@@ -8,6 +8,7 @@ import StudioLaneRow from "./StudioLaneRow";
 import StudioLibraryPanel from "./StudioLibraryPanel";
 import BpmSyncPanel from "./BpmSyncPanel";
 import { audioEngine } from "@/lib/client/audioEngine";
+import { detectMissingKeys } from "@/lib/client/autoMatch";
 import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/remixLanes";
 import { useStudioStore } from "@/lib/client/studioStore";
 import type { User } from "@/lib/auth";
@@ -45,6 +46,12 @@ export default function Studio({ user }: { user: User | null }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [remixId]);
+
+  // Lanes load in the background as they're added; once they have, work
+  // out each one's key so it can be shown and matched without a click.
+  useEffect(() => {
+    if (lanes.length > 0) void detectMissingKeys();
+  }, [lanes]);
 
   // Transport shortcuts. They're skipped while a form control has focus so
   // that typing a title or a BPM doesn't start playback.

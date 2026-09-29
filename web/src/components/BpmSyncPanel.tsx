@@ -1,7 +1,14 @@
 "use client";
 
-import { useRef } from "react";
-import { beatLength, useStudioStore } from "@/lib/client/studioStore";
+import { useRef, useState } from "react";
+import { autoMatch, type AutoMatchResult } from "@/lib/client/autoMatch";
+import { camelotCode, keyLabel } from "@/lib/client/musicKey";
+import {
+  beatLength,
+  effectiveKey,
+  referenceLane,
+  useStudioStore,
+} from "@/lib/client/studioStore";
 
 /**
  * Project tempo: the grid every other timing control is measured against
@@ -17,8 +24,35 @@ export default function BpmSyncPanel() {
   const matchAllToBpm = useStudioStore((s) => s.matchAllToBpm);
   const resetAllTempo = useStudioStore((s) => s.resetAllTempo);
   const setLoop = useStudioStore((s) => s.setLoop);
+  const matchAllKeys = useStudioStore((s) => s.matchAllKeys);
+  const applyLanePatches = useStudioStore((s) => s.applyLanePatches);
 
   const tapTimes = useRef<number[]>([]);
+  const [matching, setMatching] = useState(false);
+  const [report, setReport] = useState<AutoMatchResult | null>(null);
+  const [matchError, setMatchError] = useState<string | null>(null);
+
+  const keyReference = referenceLane(lanes, (l) => !!l.musicalKey);
+  const projectKey = keyReference ? effectiveKey(keyReference) : null;
+  const keyedLanes = lanes.filter((l) => l.musicalKey);
+
+  async function handleAutoMatch() {
+    setMatching(true);
+    setMatchError(null);
+    try {
+      setReport(await autoMatch());
+    } catch (err) {
+      setMatchError(err instanceof Error ? err.message : "Couldn't analyse the lanes");
+    } finally {
+      setMatching(false);
+    }
+  }
+
+  function handleUndo() {
+    if (!report) return;
+    applyLanePatches(report.undo.patches, report.undo.projectBpm);
+    setReport(null);
+  }
 
   const isStretched = lanes.some((l) => Math.abs(l.tempoRatio - 1) > 0.001);
   const withBpm = lanes.filter((l) => l.bpm && l.bpm > 0);
@@ -42,8 +76,18 @@ export default function BpmSyncPanel() {
   if (lanes.length === 0) return null;
 
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-surface p-3">
+    <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-3">
+    <div className="flex flex-wrap items-center gap-3">
       <span className="text-xs font-semibold uppercase tracking-wide text-muted">Project</span>
+
+      <button
+        onClick={handleAutoMatch}
+        disabled={matching}
+        className="rounded-lg bg-gradient-to-r from-brand to-vocals px-3 py-1.5 text-xs font-bold text-white shadow-[0_0_16px_-4px_var(--brand)] transition-opacity hover:opacity-90 disabled:opacity-60"
+        title="Analyse every lane and match tempo, key, beat alignment, levels and a starting FX chain"
+      >
+        {matching ? "Listening…" : "✨ AI Match"}
+      </button>
 
       <label className="flex items-center gap-1.5 text-xs text-muted">
         Tempo
@@ -76,6 +120,29 @@ export default function BpmSyncPanel() {
         Match all lanes
       </button>
 
+      <span
+        className="rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted"
+        title={
+          keyReference
+            ? `Key of “${keyReference.trackTitle}” — the lane others are matched to`
+            : "Detecting keys…"
+        }
+      >
+        Key{" "}
+        <span className="font-semibold text-foreground">
+          {projectKey ? `${keyLabel(projectKey)} · ${camelotCode(projectKey)}` : "…"}
+        </span>
+      </span>
+
+      <button
+        onClick={matchAllKeys}
+        disabled={keyedLanes.length < 2}
+        className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-surface-hover disabled:opacity-40"
+        title="Pitch-shift every lane into the project key"
+      >
+        Match keys
+      </button>
+
       {isStretched && (
         <button
           onClick={resetAllTempo}
@@ -90,6 +157,7 @@ export default function BpmSyncPanel() {
           <span key={lane.laneId}>
             {i > 0 && <span className="mr-2 text-border">·</span>}
             {lane.trackTitle}: {lane.bpm ? `${(lane.bpm * lane.tempoRatio).toFixed(1)} BPM` : "BPM unknown"}
+            {lane.musicalKey && ` · ${keyLabel(effectiveKey(lane)!)}`}
           </span>
         ))}
       </div>
@@ -116,6 +184,30 @@ export default function BpmSyncPanel() {
           <span>Drag across the timeline to set a loop region</span>
         )}
       </div>
+    </div>
+
+      {matchError && <p className="text-xs text-danger">{matchError}</p>}
+
+      {report && (
+        <div className="rounded-lg border border-brand/40 bg-brand/10 p-3">
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-xs font-semibold">✨ AI Match: here&apos;s what changed</span>
+            <div className="flex gap-1.5">
+              <button onClick={handleUndo} className="nudge">
+                undo
+              </button>
+              <button onClick={() => setReport(null)} className="nudge">
+                dismiss
+              </button>
+            </div>
+          </div>
+          <ul className="list-disc space-y-0.5 pl-4 text-[11px] leading-relaxed text-muted">
+            {report.lines.map((line, i) => (
+              <li key={i}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

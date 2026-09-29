@@ -139,7 +139,7 @@ export default function LibraryBrowser({
                   </button>
                   <Waveform
                     peaks={peaks}
-                    color={`${accent}55`}
+                    color={`${accent}99`}
                     progressColor={accent}
                     progress={isCurrent ? preview.progress : 0}
                     height={36}

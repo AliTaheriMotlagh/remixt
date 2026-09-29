@@ -78,6 +78,11 @@ class AudioEngine {
     return this.lanes.get(laneId)?.processedBuffer ?? null;
   }
 
+  /** The decoded stem before any pitch/tempo render — what analysis reads. */
+  getRawBuffer(laneId: string): AudioBuffer | null {
+    return this.lanes.get(laneId)?.rawBuffer ?? null;
+  }
+
   // Renders a fresh pitch/tempo-shifted buffer for a lane if its settings
   // have changed since the last render. If the transport is currently
   // playing, restarts playback from the current position once done so the
@@ -271,6 +276,67 @@ class AudioEngine {
     }
   }
 
+  /**
+   * Re-schedules one lane against the running transport, e.g. while its
+   * clip is being dragged. The other lanes keep playing untouched; this
+   * one is restarted a few milliseconds ahead at the position the
+   * transport will have reached by then, so it lands sample-aligned.
+   */
+  rescheduleLane(laneId: string) {
+    const ctx = this.ctx;
+    const state = useStudioStore.getState();
+    if (!ctx || !state.isPlaying) return;
+    const lane = state.lanes.find((l) => l.laneId === laneId);
+    const entry = this.lanes.get(laneId);
+    if (!lane || !entry) return;
+
+    const now = ctx.currentTime;
+    const startTime = now + 0.02;
+    if (entry.source) {
+      // Duck the outgoing source over a few ms instead of cutting it
+      // mid-waveform, which would click on every drag step.
+      const fade = entry.chain.fadeGain.gain;
+      fade.cancelScheduledValues(now);
+      fade.setTargetAtTime(0, now, 0.004);
+      try {
+        entry.source.stop(startTime);
+      } catch {
+        // already stopped
+      }
+      entry.source = null;
+    }
+
+    const playhead = this.startedAtPlayhead + (startTime - this.startedAtContextTime);
+    const audible = getAudibleLaneIds(state.lanes);
+    entry.chain.volumeGain.gain.value = audible.has(laneId) ? lane.volume : 0;
+    entry.source = scheduleLane({
+      ctx,
+      lane,
+      buffer: entry.processedBuffer,
+      chain: entry.chain,
+      startTime,
+      playhead,
+    });
+  }
+
+  /**
+   * Loads a lane that was added to the project in the background, so its
+   * audio (and key analysis) is ready before the next play — and, if the
+   * transport is already running, joins it in straight away.
+   */
+  async prefetchLane(laneId: string, stemId: string) {
+    try {
+      await this.ensureLane(laneId, stemId);
+      await this.ensureTransform(laneId);
+    } catch {
+      // Play retries the load and surfaces the failure then.
+      return;
+    }
+    if (useStudioStore.getState().isPlaying && !this.lanes.get(laneId)?.source) {
+      this.rescheduleLane(laneId);
+    }
+  }
+
   seek(seconds: number) {
     const wasPlaying = useStudioStore.getState().isPlaying;
     if (wasPlaying) this.pause();
@@ -358,6 +424,23 @@ export const audioEngine = new AudioEngine();
 
 if (typeof window !== "undefined") {
   const lastTransforms = new Map<string, { tempo: number; pitch: number }>();
+  // Everything scheduleLane bakes into a source when it starts: changing
+  // any of these while playing means that lane has to be re-scheduled.
+  const lastPlacement = new Map<string, string>();
+  const pendingReschedule = new Set<string>();
+  let rescheduleFrame: number | null = null;
+
+  // A drag fires far more pointer events than there are frames; coalesce
+  // them so each lane is re-scheduled at most once per frame.
+  function queueReschedule(laneId: string) {
+    pendingReschedule.add(laneId);
+    if (rescheduleFrame !== null) return;
+    rescheduleFrame = requestAnimationFrame(() => {
+      rescheduleFrame = null;
+      for (const id of pendingReschedule) audioEngine.rescheduleLane(id);
+      pendingReschedule.clear();
+    });
+  }
 
   useStudioStore.subscribe((state, prevState) => {
     if (state.lanes !== prevState.lanes) {
@@ -367,6 +450,17 @@ if (typeof window !== "undefined") {
       }
     }
     audioEngine.applyMixState();
+
+    for (const lane of state.lanes) {
+      const placement = `${lane.offsetSeconds}|${lane.fx.fadeIn}|${lane.fx.fadeOut}`;
+      const lastPlaced = lastPlacement.get(lane.laneId);
+      lastPlacement.set(lane.laneId, placement);
+      if (lastPlaced === undefined) {
+        void audioEngine.prefetchLane(lane.laneId, lane.stemId);
+      } else if (lastPlaced !== placement && state.isPlaying && audioEngine.isReady(lane.laneId)) {
+        queueReschedule(lane.laneId);
+      }
+    }
 
     for (const lane of state.lanes) {
       const last = lastTransforms.get(lane.laneId);
@@ -387,6 +481,11 @@ if (typeof window !== "undefined") {
     for (const laneId of Array.from(lastTransforms.keys())) {
       if (!state.lanes.some((l) => l.laneId === laneId)) {
         lastTransforms.delete(laneId);
+      }
+    }
+    for (const laneId of Array.from(lastPlacement.keys())) {
+      if (!state.lanes.some((l) => l.laneId === laneId)) {
+        lastPlacement.delete(laneId);
       }
     }
   });
