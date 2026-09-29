@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import NavBar from "@/components/NavBar";
 import PreviewBar from "@/components/PreviewBar";
+import SplitterStatus from "@/components/SplitterStatus";
 import { getCurrentUser } from "@/lib/auth";
 
 const geistSans = Geist({
@@ -37,6 +38,7 @@ export default async function RootLayout({
         <NavBar user={user} />
         <div className="flex flex-1 flex-col">{children}</div>
         <PreviewBar />
+        <SplitterStatus signedIn={!!user} />
       </body>
     </html>
   );

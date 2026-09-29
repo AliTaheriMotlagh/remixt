@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Waveform from "./Waveform";
+import { formatMB } from "./SplitterStatus";
+import { uploadSong, useSplitter, type UploadStage } from "@/lib/client/splitter";
 import { useStudioStore } from "@/lib/client/studioStore";
 
 type Stem = {
@@ -26,8 +28,9 @@ export default function UploadManager() {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [loadingList, setLoadingList] = useState(true);
   const [dragOver, setDragOver] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [job, setJob] = useState<{ name: string; stage: UploadStage } | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const splitterState = useSplitter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const addStem = useStudioStore((s) => s.addStem);
@@ -55,61 +58,26 @@ export default function UploadManager() {
     return () => clearInterval(interval);
   }, [tracks, fetchTracks]);
 
+  // Splitting takes minutes and lives in this tab, so warn before leaving.
+  useEffect(() => {
+    if (!job) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [job]);
+
   async function uploadFile(file: File) {
+    if (job) return;
     setUploadError(null);
-    setUploadProgress(0);
-
+    setJob({ name: file.name, stage: { stage: "decoding" } });
     try {
-      // XHR rather than fetch: it reports upload progress, which fetch still
-      // can't do. The file goes up as the raw request body; the server
-      // streams it straight to local storage.
-      const key = await new Promise<string>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open(
-          "POST",
-          `/api/tracks/upload?filename=${encodeURIComponent(file.name)}`
-        );
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) {
-            setUploadProgress(Math.round((e.loaded / e.total) * 100));
-          }
-        };
-        xhr.onload = () => {
-          let data: { key?: string; error?: string } = {};
-          try {
-            data = JSON.parse(xhr.responseText);
-          } catch {
-            /* fall through to the generic error below */
-          }
-          if (xhr.status >= 200 && xhr.status < 300 && data.key) {
-            resolve(data.key);
-          } else {
-            reject(new Error(data.error ?? `Upload failed (${xhr.status})`));
-          }
-        };
-        xhr.onerror = () => reject(new Error("Upload failed"));
-        xhr.send(file);
-      });
-
-      const res = await fetch("/api/tracks/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          key,
-          filename: file.name,
-          title: file.name.replace(/\.[^/.]+$/, ""),
-        }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        setUploadError(data?.error ?? "Could not register upload");
-        return;
-      }
+      await uploadSong(file, (stage) => setJob({ name: file.name, stage }));
       fetchTracks();
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Upload failed");
+      fetchTracks();
     } finally {
-      setUploadProgress(null);
+      setJob(null);
     }
   }
 
@@ -144,16 +112,20 @@ export default function UploadManager() {
           setDragOver(false);
           handleFiles(e.dataTransfer.files);
         }}
-        onClick={() => fileInputRef.current?.click()}
-        className={`flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-14 text-center transition-colors ${
-          dragOver ? "border-brand bg-brand/5" : "border-border bg-surface hover:bg-surface-hover"
+        onClick={() => !job && fileInputRef.current?.click()}
+        className={`flex flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-14 text-center transition-colors ${
+          job
+            ? "cursor-default border-border bg-surface opacity-60"
+            : dragOver
+              ? "cursor-pointer border-brand bg-brand/5"
+              : "cursor-pointer border-border bg-surface hover:bg-surface-hover"
         }`}
       >
         <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-vocals to-beat text-xl">
           🎵
         </div>
         <p className="font-medium">Drop an audio file here, or click to browse</p>
-        <p className="mt-1 text-sm text-muted">MP3, WAV, M4A, FLAC, OGG, AAC — up to 60MB</p>
+        <p className="mt-1 text-sm text-muted">MP3, WAV, M4A, FLAC, OGG, AAC — up to 15 minutes</p>
         <input
           ref={fileInputRef}
           type="file"
@@ -163,17 +135,9 @@ export default function UploadManager() {
         />
       </div>
 
-      {uploadProgress !== null && (
-        <div className="mt-4">
-          <div className="h-2 w-full overflow-hidden rounded-full bg-surface">
-            <div
-              className="h-full bg-brand transition-all"
-              style={{ width: `${uploadProgress}%` }}
-            />
-          </div>
-          <p className="mt-1 text-xs text-muted">Uploading… {uploadProgress}%</p>
-        </div>
-      )}
+      <SplitterInfo state={splitterState} />
+
+      {job && <JobProgress name={job.name} stage={job.stage} splitterState={splitterState} />}
       {uploadError && <p className="mt-3 text-sm text-danger">{uploadError}</p>}
 
       <div className="mt-10">
@@ -285,7 +249,88 @@ function StatusBadge({ status }: { status: Track["status"] }) {
   return (
     <span className="flex items-center gap-1.5 rounded-full bg-brand/15 px-2.5 py-1 text-xs font-medium text-brand-strong">
       <span className="h-1.5 w-1.5 animate-pulse-glow rounded-full bg-brand-strong" />
-      Splitting…
+      Uploading…
     </span>
+  );
+}
+
+function SplitterInfo({ state }: { state: ReturnType<typeof useSplitter> }) {
+  let text: string;
+  if (state.status === "ready") {
+    text =
+      state.backend === "webgpu"
+        ? "Song splitter ready · running on your GPU — a song takes about a minute or two"
+        : `Song splitter ready · running on your CPU (${state.threads} ${
+            state.threads === 1 ? "core" : "cores"
+          }) — a song takes a few minutes; Chrome or Edge with WebGPU is much faster`;
+  } else if (state.status === "error") {
+    text = `Song splitter failed to load: ${state.error}`;
+  } else if (state.status === "idle") {
+    text = "The song splitter loads when you pick a file (a one-time ~200 MB download)";
+  } else {
+    text = "Loading the song splitter…";
+  }
+  return <p className={`mt-3 text-xs ${state.status === "error" ? "text-danger" : "text-muted"}`}>{text}</p>;
+}
+
+function JobProgress({
+  name,
+  stage,
+  splitterState,
+}: {
+  name: string;
+  stage: UploadStage;
+  splitterState: ReturnType<typeof useSplitter>;
+}) {
+  let label: string;
+  let progress: number | null = null;
+  switch (stage.stage) {
+    case "decoding":
+      label = "Reading the file…";
+      break;
+    case "loading-model":
+      if (splitterState.status === "downloading") {
+        label = `Downloading the song splitter — ${formatMB(splitterState.loaded)} of ${formatMB(
+          splitterState.total
+        )} (one time only)`;
+        progress = splitterState.loaded / Math.max(1, splitterState.total);
+      } else {
+        label = "Starting the song splitter…";
+      }
+      break;
+    case "splitting":
+      label = "Separating the vocals from the beat…";
+      progress = stage.progress;
+      break;
+    case "encoding":
+      label = "Encoding the stems…";
+      progress = stage.progress;
+      break;
+    case "uploading":
+      label = "Uploading the stems…";
+      progress = stage.progress;
+      break;
+    case "saving":
+      label = "Saving to your library…";
+      break;
+  }
+  return (
+    <div className="mt-4 rounded-xl border border-brand/40 bg-brand/10 p-4">
+      <div className="flex items-center justify-between gap-3 text-sm">
+        <span className="truncate font-medium">{name}</span>
+        {progress !== null && (
+          <span className="shrink-0 tabular-nums text-muted">{Math.round(progress * 100)}%</span>
+        )}
+      </div>
+      <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-surface">
+        <div
+          className={`h-full bg-gradient-to-r from-brand to-vocals transition-all ${
+            progress === null ? "w-full animate-pulse-glow" : ""
+          }`}
+          style={progress !== null ? { width: `${Math.round(progress * 100)}%` } : undefined}
+        />
+      </div>
+      <p className="mt-1.5 text-xs text-muted">{label} Keep this tab open until it&apos;s done.</p>
+    </div>
   );
 }

@@ -1,9 +1,9 @@
 #!/bin/bash
 # Starts everything Remixt needs, locally:
 #   - Postgres (Docker container `remixt-test-pg`, port 5433)
-#   - the separation service (port 8000)
 #   - the Next.js app (port 3000)
-# Ctrl+C stops the two app processes; the database container keeps running.
+# Ctrl+C stops the app; the database container keeps running.
+# (Songs are split in the browser, so there's no separation service to run.)
 set -e
 cd "$(dirname "$0")"
 
@@ -30,18 +30,14 @@ fi
 # --- app processes ----------------------------------------------------------
 cleanup() {
   echo "Stopping…"
-  kill "$SEP_PID" "$WEB_PID" 2>/dev/null
+  kill "$WEB_PID" 2>/dev/null
 }
 trap cleanup EXIT INT TERM
-
-./separation-service/run.sh &
-SEP_PID=$!
 
 (cd web && npm run dev) &
 WEB_PID=$!
 
 echo "Postgres:           127.0.0.1:5433 (docker: remixt-test-pg)"
-echo "Separation service: http://127.0.0.1:8000  (pid $SEP_PID)"
 echo "Web app:            http://localhost:3000  (pid $WEB_PID)"
 
 wait

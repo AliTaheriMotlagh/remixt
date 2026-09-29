@@ -36,7 +36,12 @@ export async function createSessionCookie(userId: string) {
   store.set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    // Secure in production, since browsers drop secure cookies over plain
+    // HTTP. COOKIE_SECURE=false lets a production build be tried on
+    // http://<server-ip> before HTTPS is set up.
+    secure: process.env.COOKIE_SECURE
+      ? process.env.COOKIE_SECURE === "true"
+      : process.env.NODE_ENV === "production",
     path: "/",
     maxAge: 60 * 60 * 24 * 30,
   });

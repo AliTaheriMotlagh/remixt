@@ -1,0 +1,12 @@
+# Whitelist: send Docker only what the image needs. Everything else —
+# storage/ (your uploads), .share.env (tunnel token), node_modules, venvs,
+# git history — stays out of the build context.
+*
+!Dockerfile
+!docker/
+!web/
+web/node_modules
+web/.next
+web/.env*
+web/.agents
+web/public/ort

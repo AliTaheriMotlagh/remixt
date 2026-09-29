@@ -154,31 +154,68 @@ export function beatPhase(analysis: StemAnalysis, periodSeconds: number) {
   return bestPhase / onsetRate;
 }
 
-/** Autocorrelation tempo in 70–180 BPM, for stems with no stored BPM. */
+function autocorrelation(onsets: Float32Array, lag: number) {
+  let sum = 0;
+  for (let i = 0; i + lag < onsets.length; i++) sum += onsets[i] * onsets[i + lag];
+  return sum;
+}
+
+/** Peak position near `lag`, interpolated between blocks. */
+function refinePeak(onsets: Float32Array, lag: number, radius: number) {
+  let best = lag;
+  let bestScore = -Infinity;
+  for (let l = Math.max(1, lag - radius); l <= lag + radius; l++) {
+    const score = autocorrelation(onsets, l);
+    if (score > bestScore) {
+      bestScore = score;
+      best = l;
+    }
+  }
+  const a = autocorrelation(onsets, best - 1);
+  const c = autocorrelation(onsets, best + 1);
+  const denominator = a - 2 * bestScore + c;
+  return denominator !== 0 ? best + (0.5 * (a - c)) / denominator : best;
+}
+
+/** Autocorrelation tempo in 70–180 BPM. */
 function estimateBpm(onsets: Float32Array, onsetRate: number): number | null {
   const minLag = Math.floor((60 / 180) * onsetRate);
   const maxLag = Math.ceil((60 / 70) * onsetRate);
   if (onsets.length < maxLag * 4) return null;
   let best = 0;
   let bestLag = 0;
-  const scores = new Float32Array(maxLag + 2);
-  for (let lag = minLag; lag <= maxLag + 1; lag++) {
-    let sum = 0;
-    for (let i = 0; i + lag < onsets.length; i++) sum += onsets[i] * onsets[i + lag];
-    scores[lag] = sum;
-    if (lag <= maxLag && sum > best) {
+  for (let lag = minLag; lag <= maxLag; lag++) {
+    const sum = autocorrelation(onsets, lag);
+    if (sum > best) {
       best = sum;
       bestLag = lag;
     }
   }
   if (bestLag === 0) return null;
-  // Parabolic interpolation between neighbouring lags for sub-block accuracy.
-  const a = scores[bestLag - 1];
-  const b = scores[bestLag];
-  const c = scores[bestLag + 1];
-  const denominator = a - 2 * b + c;
-  const refined = denominator !== 0 ? bestLag + (0.5 * (a - c)) / denominator : bestLag;
+  // One beat is only ~40 blocks long, so a one-block error is ~2.5% of
+  // the tempo. Measuring the peak four beats out and dividing by four
+  // gets four times the precision.
+  const beats = onsets.length > bestLag * 12 ? 4 : 1;
+  const refined = refinePeak(onsets, bestLag * beats, beats) / beats;
   return Math.round((60 * onsetRate * 10) / refined) / 10;
+}
+
+/**
+ * Tempo of raw mono PCM, without Web Audio — the song splitter calls this
+ * from a worker, where OfflineAudioContext doesn't exist everywhere.
+ * Averaging down to the analysis rate is a crude resample, but onset
+ * energy doesn't need a clean one.
+ */
+export function estimateTempo(mono: Float32Array, sampleRate: number): number | null {
+  const factor = Math.max(1, Math.round(sampleRate / RATE));
+  const decimated = new Float32Array(Math.floor(mono.length / factor));
+  for (let i = 0; i < decimated.length; i++) {
+    let sum = 0;
+    for (let j = 0; j < factor; j++) sum += mono[i * factor + j];
+    decimated[i] = sum / factor;
+  }
+  const { onsets } = envelopes(decimated);
+  return estimateBpm(onsets, sampleRate / factor / BLOCK);
 }
 
 // --- Key ---------------------------------------------------------------------

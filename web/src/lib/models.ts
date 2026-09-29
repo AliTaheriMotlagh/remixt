@@ -35,11 +35,10 @@ export async function getTrackById(id: string): Promise<TrackRow | undefined> {
 }
 
 export async function getTracksByOwner(ownerId: string): Promise<TrackRow[]> {
-  // Separation runs as a fire-and-forget background job (see startSeparation)
-  // with no persisted job state, so a dev-server restart or a crashed
-  // separation service leaves the row in 'processing' forever with nothing
-  // left to flip it. Sweep those out here, on every read, instead of
-  // building out job tracking for what's still a single-process local app.
+  // A track sits in 'processing' from the moment the browser creates it
+  // until both stems are uploaded (POST /api/tracks → .../complete). If the
+  // tab is closed half-way, nothing is left to flip it, so sweep those out
+  // here on every read rather than running a background job.
   await sql`
     UPDATE tracks
     SET status = 'failed',

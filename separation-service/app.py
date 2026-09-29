@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -19,6 +20,13 @@ app = FastAPI(title="Remix Studio Separation Service")
 MODEL_NAME = "htdemucs"
 FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 FFMPEG_DIR = os.path.dirname(FFMPEG_EXE)
+
+# Demucs takes 2-4 GB of RAM and every CPU core it can get, so running
+# several at once doesn't finish any sooner — it just risks the server
+# running out of memory. FastAPI runs this sync endpoint on a thread pool,
+# so a semaphore is enough to queue the extra requests behind it.
+MAX_CONCURRENT = max(1, int(os.environ.get("MAX_CONCURRENT_SEPARATIONS", "1")))
+separation_slots = threading.BoundedSemaphore(MAX_CONCURRENT)
 
 
 class SeparateRequest(BaseModel):
@@ -123,7 +131,8 @@ def separate(req: SeparateRequest):
             tmp,
             str(input_path),
         ]
-        result = subprocess.run(cmd, env=env, capture_output=True, text=True)
+        with separation_slots:
+            result = subprocess.run(cmd, env=env, capture_output=True, text=True)
         if result.returncode != 0:
             raise HTTPException(
                 status_code=500,

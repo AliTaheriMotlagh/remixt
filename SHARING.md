@@ -1,7 +1,7 @@
 # Sharing Remixt with someone else
 
 Remixt normally runs only on your machine. `./share.sh` keeps it that way —
-the app, the database, the audio files and the separation all stay local —
+the app, the database and the audio files all stay local —
 and only puts a public HTTPS address in front of the web app on `:3000`, so
 a friend's browser can reach it while the script is running.
 
@@ -97,8 +97,9 @@ click-through warning page first.
 - **Anyone with the link can sign up.** There's no invite system — the app's
   own email/password signup is the only gate, and the link is unguessable but
   public. Don't post it anywhere.
-- **Uploads are capped at 60MB** and separation runs on *your* CPU, so two
-  people uploading at once means both wait longer.
+- **Songs are split on your friend's device**, in their browser. The first
+  visit downloads the ~200 MB splitter once, and a split takes a minute or
+  several depending on their hardware. Only the finished stems reach you.
 - **Their uploads land in your `storage/`** and their account in your local
   Postgres. Sharing the link is sharing your library.
 - **The session cookie isn't marked `secure` in dev mode**, which is what lets

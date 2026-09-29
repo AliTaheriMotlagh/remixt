@@ -8,6 +8,24 @@ import path from "path";
 const tunnelHost = process.env.TUNNEL_HOSTNAME?.trim();
 
 const nextConfig: NextConfig = {
+  // Emits .next/standalone — a self-contained server.js plus only the
+  // node_modules it uses — which is what the Docker image ships.
+  output: "standalone",
+  // Cross-origin isolation lets the song splitter use SharedArrayBuffer,
+  // i.e. every CPU core instead of one when there's no WebGPU. The
+  // `credentialless` flavour still lets the page load cross-origin audio
+  // (stems on R2) and the model (Hugging Face) without them opting in.
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+          { key: "Cross-Origin-Embedder-Policy", value: "credentialless" },
+        ],
+      },
+    ];
+  },
   turbopack: {
     root: path.join(__dirname),
   },

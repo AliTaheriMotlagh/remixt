@@ -6,62 +6,67 @@ shared library, and the Studio lets you pull any vocal onto any beat, match
 their BPMs, adjust pitch, mix levels, and publish the result as a remix
 under your artist name.
 
-Everything runs on your own machine — local Postgres, local file storage,
-local separation. No cloud accounts, no API keys, nothing leaves the
-computer.
+Songs are split **in the browser** — the same Demucs model the project
+used to run in Python, exported to ONNX and run with ONNX Runtime Web
+(WebGPU where available, WebAssembly otherwise). The server never touches
+an AI model, which is what lets the whole thing run on free hosting.
 
 ## Architecture
 
 - **`web/`** — Next.js (TypeScript) app: auth, upload, library, the Studio
   DAW UI (Web Audio API + SoundTouch for pitch/tempo), remix gallery, artist
-  profiles. Data lives in a local Postgres running in Docker.
-- **`separation-service/`** — Python FastAPI microservice that runs
-  [Demucs](https://github.com/facebookresearch/demucs) (`htdemucs`, two-stem
-  mode) to split a song into vocals and beat, and detects BPM with
-  `librosa`. It's stateless: given a URL, it downloads the audio, runs
-  Demucs, and returns both stems as base64 mp3 plus waveform peaks and BPM.
-- **`storage/`** — where audio actually lives: `uploads/` for the originals
-  you upload, `stems/<track-id>/` for the separated vocals and beat. Git
-  ignores it.
+  profiles, and the in-browser song splitter.
+- **Postgres** — accounts, tracks, stems, remixes. Local Docker container
+  in development; Neon (or the one inside the Docker image) when deployed.
+- **Stem storage** — Vercel Blob when `BLOB_READ_WRITE_TOKEN` is set,
+  Cloudflare R2 when `R2_*` is, otherwise local disk under
+  `storage/stems/<track-id>/` (gitignored).
+- **`separation-service/`** — the old Python/Demucs splitter. Nothing uses
+  it any more; it's kept only for reference and can be deleted.
 
-Upload flow: the browser posts the file to `/api/tracks/upload`, which
-streams it to `storage/uploads/`. `/api/tracks/register` then creates the
-track row and calls the separation service with a `http://127.0.0.1:3000/api/files/…`
-URL pointing back at that file. When Demucs finishes, Next.js writes the two
-stems to `storage/stems/<track-id>/` and records their keys. The UI polls
-track status and flips to "ready" once both stems exist. Playback goes
-through `/api/audio/stem/<id>`, which serves the file from disk with HTTP
-Range support so seeking and scrubbing work.
+Upload flow, all in the browser tab:
+
+1. The file is decoded and resampled to 44.1 kHz (`lib/client/splitter.ts`).
+2. A Web Worker (`lib/client/splitter.worker.ts`) runs Demucs, sums
+   drums + bass + other into the beat, encodes both stems to 192 kbps MP3,
+   and computes waveform peaks and the BPM.
+3. `POST /api/tracks` creates the track and returns an upload URL per stem
+   — a signed R2 URL, or `PUT /api/tracks/<id>/stems/<kind>` locally.
+4. The browser uploads both MP3s, then `POST /api/tracks/<id>/complete`
+   checks they're there and marks the track ready.
+
+The original song never leaves the user's device. The model (~172 MB) and
+ONNX Runtime (~28 MB) download once — a signed-in user's browser starts
+fetching them on any page, with a progress pill in the corner — and are
+kept in Cache Storage, so later visits load them from disk. Playback goes
+through `/api/audio/stem/<id>`: a redirect to R2's public URL, or a
+Range-capable stream from disk.
+
+Pages are served cross-origin isolated (COOP `same-origin`, COEP
+`credentialless`, in `next.config.ts`) so the WebAssembly fallback can use
+every CPU core.
+
+## Deploying it
+
+Free on Vercel (with Neon and Vercel Blob, all from Vercel's dashboard),
+or as one Docker image on any server — step by step in [DEPLOY.md](DEPLOY.md).
 
 ## Running it
 
-You need Docker (for Postgres) and Python 3.9+ with the separation
-service's virtualenv already created (`separation-service/venv`).
+You need Docker (for Postgres) and Node 20+.
 
 ```bash
 ./start-dev.sh
 ```
 
 That starts the Postgres container (creating it and applying the schema on
-first run), the separation service on `:8000`, and the Next.js app on
-`:3000`. Open http://localhost:3000.
+first run) and the Next.js app on `:3000`. Open http://localhost:3000.
 
 To run the pieces separately instead:
 
 ```bash
 docker start remixt-test-pg      # Postgres on :5433
-./separation-service/run.sh      # separation API on :8000
 cd web && npm run dev            # Next.js app on :3000
-```
-
-### First-time setup
-
-If `separation-service/venv` doesn't exist yet:
-
-```bash
-cd separation-service
-python3 -m venv venv
-venv/bin/pip install -r requirements.txt
 ```
 
 If the database container doesn't exist yet, `start-dev.sh` creates it and
@@ -75,16 +80,18 @@ cd web && node scripts/migrate.mjs
 
 ### Configuration
 
-`web/.env.local` holds everything, and the defaults already match the setup
-above:
+`web/.env.local` holds everything:
 
 | Variable | Meaning |
 | --- | --- |
-| `DATABASE_URL` | local Postgres connection string |
-| `STORAGE_DIR` | where uploads and stems are written (`../storage`) |
-| `PUBLIC_BASE_URL` | this app's URL, used by the separation service to fetch originals |
-| `SEPARATION_SERVICE_URL` | the separation service's URL |
+| `DATABASE_URL` | Postgres connection string |
 | `SESSION_SECRET` | signs session cookies |
+| `STORAGE_DIR` | where stems go when R2 isn't configured (`../storage`) |
+| `BLOB_READ_WRITE_TOKEN` | store stems in Vercel Blob (Vercel sets it when a Blob store is connected) |
+| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_PUBLIC_URL` | store stems in Cloudflare R2 instead (see DEPLOY.md) |
+| `NEXT_PUBLIC_STEM_BITRATE` | MP3 bitrate of the stems, kbit/s (default 192; 128 saves ~30% space) |
+| `NEXT_PUBLIC_DEMUCS_MODEL_URL` | where browsers download the model (default: Hugging Face) |
+| `NEXT_PUBLIC_ORT_BASE_URL` | where browsers load ONNX Runtime from (default: `/ort/`, copied from `node_modules` before dev/build) |
 
 ## The Studio
 
@@ -134,16 +141,15 @@ window always has a stop button for it.
 
 ## Notes
 
-- Separation runs on CPU. A ~3-4 minute song takes roughly 1-3 minutes to
-  split; a track stuck in "processing" for over 20 minutes is swept to
-  "failed" so it doesn't hang around forever.
-- The `htdemucs` model (~80MB) downloads on the first separation request and
-  is cached in `~/.cache/torch/` after that.
+- Splitting speed depends on the visitor's device: about 1–2 minutes per
+  song with WebGPU, several minutes on the CPU. A track whose upload never
+  finishes (tab closed mid-way) is swept to "failed" after 20 minutes.
 - `web/.npmrc` points npm's cache at a project-local folder — this repo's
   dev environment had a permissions issue with the global npm cache; this
   sidesteps it and isn't required elsewhere.
 - Sessions are a signed JWT in an HTTP-only cookie.
-- Max upload size is 60MB, audio formats: mp3, wav, m4a, flac, ogg, aac.
+- Songs can be up to 15 minutes; any format the browser can decode (mp3,
+  wav, m4a, flac, ogg, aac in current browsers).
 - Remix lanes persist their effect rack and BPM override in
   `remix_lanes.settings_json`, and the project tempo, master level and loop
   region live in `remixes.project_json` — JSON columns so the mixer can

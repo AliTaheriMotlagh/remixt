@@ -3,20 +3,27 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "node scripts/copy-ort.mjs",
     "dev": "next dev",
+    "prebuild": "node scripts/copy-ort.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
+    "@vercel/blob": "^2.8.0",
+    "aws4fetch": "^1.0.20",
     "bcryptjs": "^3.0.3",
+    "demucs-web": "^1.0.2",
     "jose": "^6.2.12",
     "next": "16.3.5",
+    "onnxruntime-web": "^1.30.0",
     "postgres": "^3.4.9",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "soundtouchjs": "^0.3.0",
     "uuid": "^14.0.2",
+    "wasm-media-encoders": "^0.7.0",
     "zod": "^4.6.5",
     "zustand": "^5.0.15"
   },

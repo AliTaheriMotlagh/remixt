@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# ONNX Runtime files for the song splitter — copied from node_modules by
+# scripts/copy-ort.mjs before dev/build.
+/public/ort/
