@@ -4,7 +4,7 @@ import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import sql from "@/lib/db";
 import { getTracksByOwner, getStemsByTrack } from "@/lib/models";
-import { createUploadTarget } from "@/lib/storage";
+import { createUploadTarget, storageProblem } from "@/lib/storage";
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -40,6 +40,9 @@ const createSchema = z.object({
 export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Sign in required" }, { status: 401 });
+
+  const problem = storageProblem();
+  if (problem) return NextResponse.json({ error: problem }, { status: 503 });
 
   const parsed = createSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {

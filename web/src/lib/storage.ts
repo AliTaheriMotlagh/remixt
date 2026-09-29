@@ -21,7 +21,27 @@ import { generateClientTokenFromReadWriteToken } from "@vercel/blob/client";
 // never passes through the web server — which is what lets the app run on
 // free serverless hosting with its small request-size limits.
 
-const blobToken = process.env.R2_BUCKET ? undefined : process.env.BLOB_READ_WRITE_TOKEN;
+// Vercel names the variable BLOB_READ_WRITE_TOKEN, unless the store was
+// connected with a custom prefix (e.g. STEMS_READ_WRITE_TOKEN) — so accept
+// any variable that holds a Blob read-write token.
+function findBlobToken(): string | undefined {
+  if (process.env.BLOB_READ_WRITE_TOKEN) return process.env.BLOB_READ_WRITE_TOKEN;
+  return Object.entries(process.env).find(
+    ([name, value]) => name.endsWith("READ_WRITE_TOKEN") && value?.startsWith("vercel_blob_rw_")
+  )?.[1];
+}
+
+const blobToken = process.env.R2_BUCKET ? undefined : findBlobToken();
+
+/**
+ * Why uploads can't work in this environment, if they can't. Serverless
+ * hosts like Vercel have no writable disk, so the local backend is only
+ * usable on a real server; say so plainly instead of failing mid-upload.
+ */
+export function storageProblem(): string | null {
+  if (blobToken || r2 || !process.env.VERCEL) return null;
+  return "File storage isn't set up: connect a Vercel Blob store to this project (Storage tab), then redeploy.";
+}
 
 /** Largest stem accepted: 20 minutes of 192 kbps MP3 is ~29 MB. */
 export const MAX_STEM_BYTES = 40 * 1024 * 1024;
