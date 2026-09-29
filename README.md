@@ -89,12 +89,7 @@ cd web && node scripts/migrate.mjs
 | Variable | Meaning |
 | --- | --- |
 | `DATABASE_URL` | Postgres connection string |
-| `SESSION_SECRET` | signs session cookies (and, unless `AI_KEY_SECRET` is set, encrypts users' AI keys) |
-| `FREE_AI_KEY` | optional: a free Google Gemini (or Groq) API key that gives every signed-in user a free AI producer with no key of their own |
-| `FREE_AI_PROVIDER` | `gemini` (default) or `groq` — which service `FREE_AI_KEY` is for |
-| `FREE_AI_MODEL` | optional: model for the free AI (default `gemini-2.5-flash` / `openai/gpt-oss-120b`) |
-| `FREE_AI_DAILY_LIMIT` | model calls per user per day on the free AI (default 60; one message uses a few) |
-| `AI_KEY_SECRET` | optional: its own secret for encrypting users' ChatGPT/Claude keys. Changing it (or `SESSION_SECRET` without it) makes saved keys unreadable — users re-enter them |
+| `SESSION_SECRET` | signs session cookies |
 | `STORAGE_DIR` | where stems go when R2 isn't configured (`../storage`) |
 | `BLOB_READ_WRITE_TOKEN` | store stems in Vercel Blob (Vercel sets it when a Blob store is connected) |
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_PUBLIC_URL` | store stems in Cloudflare R2 instead (see DEPLOY.md) |
@@ -142,27 +137,14 @@ against a project tempo you set (type it, or tap it in).
   breath every couple of bars so they stay locked too, and the report
   warns when it couldn't tell which beat is the "one" (the lane's ±½bar
   nudges fix that in one click).
-- **✨ AI producer** — a chat in the Studio's sidebar (and a ✨ AI
-  button on every lane that drafts a request for it) where the user's own
-  model — Claude, ChatGPT, Google Gemini or Groq, or a free one built in —
-  edits the open remix. Gemini and Groq hand out free API keys; and when
-  the server has `FREE_AI_KEY` set, users can pick "Free — built into
-  Remixt" and need no key at all (a daily allowance per user is counted in
-  `ai_free_usage`). Each user saves their
-  API key in AI settings; it's stored in their account encrypted with
-  AES-256-GCM (`user_ai_settings`, `lib/aiKeys.ts`) and never sent back to
-  the browser. `/api/ai/chat` makes one model call per turn with that key;
-  the browser runs the loop, carrying out the model's tool calls on the
-  live project (`lib/client/aiAgent.ts`) and sending back the results
-  until it's done. The tools (`lib/aiTools.ts`) let it read the project,
-  hear a vocal/beat pair through the studio's analysis (it can't hear
-  audio: it gets tempos, keys, the beat's bars with a loudness digit per
-  bar, its intro, level changes and ending, and the vocal in ~8-bar
-  sections with which ones repeat), arrange a vocal section by section on
-  the beat (`lib/client/aiMatch.ts`, through the same engine as AI Match),
-  run AI Match, set levels and effects, move lanes, split/move/delete/
-  duplicate clips, cut silences and set a loop. It never changes pitch.
-  Every turn can be undone in one click.
+- **🎚 Match on each lane** — pair a vocal with a beat and pick how they
+  fit: which tempo to keep (or meet in the middle — pitch never changes),
+  when the vocal comes in, the song's shape (as sung, no long breaks,
+  chorus first, fill the beat with the chorus, a short version, or the
+  chorus looped), a timing fix of a beat or half a bar, vocal level and
+  sound. The chorus is found as the section whose notes come back most.
+  Apply, change a choice and apply again to compare, undo to go back.
+  (`lib/client/matchOptions.ts`, `pairMatch.ts`, `components/LaneMatchPanel.tsx`)
 - **Editing** — a lane can be cut into clips: split at the playhead, "cut
   silences" (every phrase becomes a clip, left where it was), drag a clip
   to move it, drag its edges to trim, duplicate or delete the selected
@@ -187,6 +169,28 @@ against a project tempo you set (type it, or tap it in).
 Previews (the ▶ buttons in the library) all run through one shared player,
 so only one thing plays at a time and the bar along the bottom of the
 window always has a stop button for it.
+
+## Community
+
+- **Follow artists** — a follow button and follower counts on every artist
+  page; the Remixes page has Latest, 🔥 Trending (likes and comments from
+  others in the last 7 days) and Following tabs.
+- **Comments** on remixes — anyone can read, signed-in listeners can post
+  (up to 500 characters, 5 a minute); authors and the remix's owner can
+  delete them.
+- **XP and levels** — worked out live from what an artist has done:
+  publishing a remix 100, uploading a song 25, a like from someone else 15,
+  a follower 20, liking others' remixes 2, commenting on others' remixes 5,
+  every 5 plays 1. Nothing done to your own work counts. Eleven levels,
+  Newcomer to Icon, with a progress bar on the artist page.
+- **Badges** — First Remix, Prolific, Crate Digger, First Fan, Hit Maker,
+  Crowd Pleaser, Viral, Scene Builder, Tastemaker, In the Mix; artists see
+  their progress towards the ones they don't have yet.
+- **Leaderboard** (`/leaderboard`, "Top" in the nav) — top artists by XP,
+  trending remixes this week and the most played.
+
+All of it is in `web/src/lib/social.ts`; the `follows` and `remix_comments`
+tables are created on first use (and are in `schema.sql`).
 
 ## Notes
 

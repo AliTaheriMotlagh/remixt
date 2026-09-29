@@ -8,6 +8,7 @@ const links = [
   { href: "/library", label: "Library" },
   { href: "/studio", label: "Studio" },
   { href: "/remixes", label: "Remixes" },
+  { href: "/leaderboard", label: "Top" },
   { href: "/upload", label: "Upload" },
 ];
 

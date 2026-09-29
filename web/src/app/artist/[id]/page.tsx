@@ -4,6 +4,9 @@ import sql from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { getTracksByOwner, getStemsByTrack } from "@/lib/models";
 import ArtistBioEditor from "@/components/ArtistBioEditor";
+import ArtistProgressCard from "@/components/ArtistProgressCard";
+import FollowButton from "@/components/FollowButton";
+import { getArtistProgress, getFollowState } from "@/lib/social";
 import type { Metadata } from "next";
 
 type ArtistRow = {
@@ -48,6 +51,11 @@ export default async function ArtistPage({
   const currentUser = await getCurrentUser();
   const isOwner = currentUser?.id === artist.id;
 
+  const [follow, progress] = await Promise.all([
+    getFollowState(artist.id, currentUser?.id ?? null),
+    getArtistProgress(artist.id),
+  ]);
+
   const ownedTracks = await getTracksByOwner(artist.id);
   const tracks = await Promise.all(
     ownedTracks.map(async (t) => ({
@@ -76,9 +84,14 @@ export default async function ArtistPage({
         <div>
           <h1 className="text-2xl font-bold">{artist.artist_name}</h1>
           <p className="text-sm text-muted">
+            {progress && `Level ${progress.level.level} ${progress.level.title} · `}
             Joined {new Date(artist.created_at).toLocaleDateString()}
           </p>
         </div>
+      </div>
+
+      <div className="mt-4">
+        <FollowButton artistId={artist.id} initial={follow} signedIn={!!currentUser} isSelf={isOwner} />
       </div>
 
       <div className="mt-4 max-w-xl">
@@ -88,6 +101,8 @@ export default async function ArtistPage({
           <p className="text-sm text-muted">{artist.bio || "No bio yet."}</p>
         )}
       </div>
+
+      {progress && <ArtistProgressCard progress={progress} isOwner={isOwner} />}
 
       <section className="mt-12">
         <h2 className="text-lg font-semibold">

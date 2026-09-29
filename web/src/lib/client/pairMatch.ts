@@ -26,11 +26,11 @@ import {
   type LanePatch,
 } from "./studioStore";
 
-// Matching one vocal with one beat for the AI producer (see aiAgent.ts).
-// preparePair listens to both and describes them the way a model can
-// use — it can't hear audio — and applyPairPlan carries out the
-// arrangement the model chose, through the same engine as AI Match.
-// Pitch is never changed.
+// Matching one vocal with one beat, the way the lane's Match panel asks
+// for it (see matchOptions.ts): preparePair listens to both — tempos,
+// keys, the beat's bars, the vocal's sections and which ones repeat — and
+// applyPairPlan lays the vocal on the beat as chosen, through the same
+// engine as AI Match. Pitch is never changed.
 
 const VOCAL_PRESETS = FX_PRESETS.filter((p) => p.kind === "vocals");
 const BEAT_PRESETS = FX_PRESETS.filter((p) => p.kind === "beat");
@@ -70,8 +70,8 @@ function digits(values: number[]) {
   return values.map((v) => (v > 0 && max > 0 ? Math.max(0, Math.min(9, Math.round(9 + 3 * Math.log10(v / max)))) : 0));
 }
 
-/** What the model is told about the vocal's sections. */
-function describeSections(vocal: StemAnalysis, heard: HeardVocal) {
+/** Each section's length, loudness, pickup, and which other sections share its notes. */
+export function describeSections(vocal: StemAnalysis, heard: HeardVocal) {
   const { sections } = heard;
   const spans = sections.map((s) => ({ from: s.phrases[0].start, to: s.phrases[s.phrases.length - 1].end }));
   // Compare sections on what sets them apart: remove the profile they all
@@ -108,21 +108,6 @@ function describeSections(vocal: StemAnalysis, heard: HeardVocal) {
   });
 }
 
-/** Bars where the beat's level jumps or drops — where its sections change. */
-function levelChanges(structure: BeatStructure) {
-  const { barEnergy, endBar } = structure;
-  const log = barEnergy.map((e) => Math.log10(e + 1e-10));
-  const changes: { bar: number; change: "up" | "down" }[] = [];
-  for (let j = 2; j + 2 <= endBar; j++) {
-    const before = (log[j - 2] + log[j - 1]) / 2;
-    const after = (log[j] + log[j + 1]) / 2;
-    const jump = after - before;
-    if (Math.abs(jump) >= 0.25 && (changes.length === 0 || j - changes[changes.length - 1].bar >= 2)) {
-      changes.push({ bar: j, change: jump > 0 ? "up" : "down" });
-    }
-  }
-  return changes;
-}
 
 /** Reads the vocal's tempo as written, half or double — whichever is nearest `target`. */
 function nearestReading(bpm: number, target: number) {
@@ -132,6 +117,9 @@ function nearestReading(bpm: number, target: number) {
 }
 
 const clampRatio = (r: number) => Math.min(2, Math.max(0.5, r));
+
+/** Which song keeps its tempo — or both move halfway. */
+export type TempoChoice = "beat" | "vocal" | "middle";
 
 /** Everything known about a vocal/beat pair, ready to describe or arrange. */
 export type PairContext = {
@@ -143,7 +131,7 @@ export type PairContext = {
   beatBpm: number;
   /** The vocal's tempo as read against the beat (half/double resolved). */
   reading: number;
-  tempos: Record<"beat" | "vocal", { projectBpm: number; beatRatio: number; vocalRatio: number }>;
+  tempos: Record<TempoChoice, { projectBpm: number; beatRatio: number; vocalRatio: number }>;
   structure: BeatStructure;
   heard: HeardVocal;
   suggestion: SuggestedLayout;
@@ -178,6 +166,11 @@ export async function preparePair(vocalLaneId: string, beatLaneId: string): Prom
   const tempos = {
     beat: { projectBpm: beatTempo, beatRatio: beatLane.tempoRatio, vocalRatio: clampRatio(beatTempo / reading) },
     vocal: { projectBpm: reading, beatRatio: clampRatio(reading / beatBpm), vocalRatio: 1 },
+    // Halfway on a log scale, so each is stretched by the same amount.
+    middle: (() => {
+      const target = Math.sqrt(beatTempo * reading);
+      return { projectBpm: target, beatRatio: clampRatio(target / beatBpm), vocalRatio: clampRatio(target / reading) };
+    })(),
   };
 
   const structure = beatStructure(beatAnalysis, beatBpm);
@@ -211,48 +204,8 @@ export async function preparePair(vocalLaneId: string, beatLaneId: string): Prom
   };
 }
 
-/** What a model is told about the pair (the analyze_pair tool's answer). */
-export function describePair(ctx: PairContext) {
-  const lanes = useStudioStore.getState().lanes;
-  const vocalLane = lanes.find((l) => l.laneId === ctx.vocalLaneId);
-  const beatLane = lanes.find((l) => l.laneId === ctx.beatLaneId);
-  const { structure, heard, tempos, suggestion } = ctx;
-  return {
-    beat: {
-      title: beatLane?.trackTitle,
-      bpm: Math.round(ctx.beatBpm * 100) / 100,
-      key: keyLabel(ctx.beatKey),
-      bars: structure.bars,
-      introBars: structure.introBars,
-      musicEndsAtBar: structure.endBar,
-      barLoudness: digits(structure.barEnergy).join(""),
-      levelChanges: levelChanges(structure),
-      downbeatCertain: structure.downbeatConfidence >= 0.15,
-    },
-    vocal: {
-      title: vocalLane?.trackTitle,
-      bpm: Math.round(ctx.reading * 100) / 100,
-      key: keyLabel(ctx.vocalKey),
-      barLinesFrom: heard.guided ? "its original beat (exact)" : "the voice alone (a guess)",
-      downbeatCertain: heard.downbeatConfidence >= 0.15,
-      sections: describeSections(ctx.vocalAnalysis, heard),
-    },
-    keys: ctx.keys,
-    tempoOptions: {
-      beat: `keep the beat at ${tempos.beat.projectBpm.toFixed(1)} BPM, stretch the vocal ${tempos.beat.vocalRatio.toFixed(3)}x`,
-      vocal: `keep the vocal at ${tempos.vocal.projectBpm.toFixed(1)} BPM, stretch the beat ${tempos.vocal.beatRatio.toFixed(3)}x`,
-    },
-    suggested: {
-      follow: Math.abs(Math.log(tempos.beat.vocalRatio)) <= Math.abs(Math.log(tempos.vocal.beatRatio)) ? "beat" : "vocal",
-      sections: suggestion.placements,
-      leftOut: suggestion.dropped,
-    },
-    barsNote: "Bars here are the beat's own bars from 0; get_project shows where they fall on the ruler.",
-  };
-}
-
 export type PairPlan = {
-  follow: "beat" | "vocal";
+  follow: TempoChoice;
   sections: SectionPlacement[];
   shift_beats?: number;
   vocal_gain_db?: number;
@@ -352,7 +305,9 @@ export function applyPairPlan(ctx: PairContext, plan: PairPlan): string[] {
   lines.unshift(
     plan.follow === "beat"
       ? `Tempo: the beat stays at ${tempo.projectBpm.toFixed(1)} BPM; the vocal plays at ${tempo.vocalRatio.toFixed(3)}× speed (pitch unchanged)`
-      : `Tempo: the vocal stays at ${tempo.projectBpm.toFixed(1)} BPM; the beat plays at ${tempo.beatRatio.toFixed(3)}× speed (pitch unchanged)`,
+      : plan.follow === "vocal"
+        ? `Tempo: the vocal stays at ${tempo.projectBpm.toFixed(1)} BPM; the beat plays at ${tempo.beatRatio.toFixed(3)}× speed (pitch unchanged)`
+        : `Tempo: both meet at ${tempo.projectBpm.toFixed(1)} BPM — vocal ${tempo.vocalRatio.toFixed(3)}×, beat ${tempo.beatRatio.toFixed(3)}× (pitch unchanged)`,
     `Placed: ${placements
       .map((p) => `section ${p.section} on ruler bar ${rulerBar(beatInput, structure, p.bar, bar)}`)
       .join(", ")} — ${placement.clips.length} clips`
@@ -361,6 +316,7 @@ export function applyPairPlan(ctx: PairContext, plan: PairPlan): string[] {
   lines.push(`Vocal level ${Math.round(volume * 100)}%`);
   if (vocalPreset) lines.push(`Vocal effects: ${vocalPreset.label}`);
   if (beatPreset) lines.push(`Beat effects: ${beatPreset.label}`);
+  lines.push(`Keys: ${keyLabel(ctx.vocalKey)} on ${keyLabel(ctx.beatKey)} — ${ctx.keys}`);
   lines.push(...placementNotes(vocalInput, beatInput, structure, heard, placement));
   return lines;
 }

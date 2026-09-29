@@ -76,29 +76,21 @@ CREATE TABLE IF NOT EXISTS remix_likes (
 );
 CREATE INDEX IF NOT EXISTS idx_remix_likes_user ON remix_likes(user_id);
 
--- AI producer: each user's own ChatGPT / Claude API key, encrypted with a
--- key derived from AI_KEY_SECRET (or SESSION_SECRET). lib/aiKeys.ts also
--- creates this on first use.
-CREATE TABLE IF NOT EXISTS user_ai_settings (
-  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  provider TEXT NOT NULL DEFAULT 'anthropic',
-  anthropic_model TEXT NOT NULL DEFAULT '',
-  openai_model TEXT NOT NULL DEFAULT '',
-  anthropic_key TEXT NOT NULL DEFAULT '',
-  openai_key TEXT NOT NULL DEFAULT '',
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+-- Social: following artists and commenting on remixes. XP, levels, badges
+-- and leaderboards are worked out from these and the tables above (see
+-- lib/social.ts, which also creates these on first use).
+CREATE TABLE IF NOT EXISTS follows (
+  follower_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  followee_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (follower_id, followee_id)
 );
-
--- AI producer, free options: users can also bring a free Google Gemini or
--- Groq key, and the site can offer a shared free AI (FREE_AI_KEY) with a
--- daily allowance per user, counted here.
-ALTER TABLE user_ai_settings ADD COLUMN IF NOT EXISTS gemini_model TEXT NOT NULL DEFAULT '';
-ALTER TABLE user_ai_settings ADD COLUMN IF NOT EXISTS groq_model TEXT NOT NULL DEFAULT '';
-ALTER TABLE user_ai_settings ADD COLUMN IF NOT EXISTS gemini_key TEXT NOT NULL DEFAULT '';
-ALTER TABLE user_ai_settings ADD COLUMN IF NOT EXISTS groq_key TEXT NOT NULL DEFAULT '';
-CREATE TABLE IF NOT EXISTS ai_free_usage (
+CREATE INDEX IF NOT EXISTS idx_follows_followee ON follows(followee_id);
+CREATE TABLE IF NOT EXISTS remix_comments (
+  id TEXT PRIMARY KEY,
+  remix_id TEXT NOT NULL REFERENCES remixes(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  day DATE NOT NULL,
-  calls INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (user_id, day)
+  body TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_comments_remix ON remix_comments(remix_id, created_at);

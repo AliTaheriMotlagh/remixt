@@ -5,6 +5,8 @@ import { getCurrentUser } from "@/lib/auth";
 import RemixDetailPlayer from "@/components/RemixDetailPlayer";
 import RemixOwnerControls from "@/components/RemixOwnerControls";
 import RemixStatsBar from "@/components/RemixStatsBar";
+import RemixComments from "@/components/RemixComments";
+import { getArtistProgress, getComments } from "@/lib/social";
 import { getRemixCard, getRemixStats } from "@/lib/models";
 import type { Metadata } from "next";
 
@@ -54,7 +56,11 @@ export default async function RemixDetailPage({
   const isOwner = user?.id === remix.owner_id;
 
   if (!remix.published && !isOwner) notFound();
-  const stats = await getRemixStats(remix.id, user?.id ?? null);
+  const [stats, comments, artistProgress] = await Promise.all([
+    getRemixStats(remix.id, user?.id ?? null),
+    getComments(remix.id),
+    getArtistProgress(remix.artist_id),
+  ]);
 
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-12 sm:px-6">
@@ -66,6 +72,11 @@ export default async function RemixDetailPage({
             <Link href={`/artist/${remix.artist_id}`} className="text-brand-strong hover:underline">
               {remix.artist_name}
             </Link>
+            {artistProgress && (
+              <span className="ml-2 rounded-full bg-surface-raised px-2 py-0.5 text-[11px]">
+                Lv {artistProgress.level.level} · {artistProgress.level.title}
+              </span>
+            )}
           </p>
         </div>
         {isOwner && (
@@ -76,6 +87,8 @@ export default async function RemixDetailPage({
       <RemixStatsBar remixId={remix.id} title={remix.title} initial={stats} signedIn={!!user} />
 
       <RemixDetailPlayer remixId={remix.id} title={remix.title} user={user} />
+
+      <RemixComments remixId={remix.id} initial={comments} userId={user?.id ?? null} isRemixOwner={isOwner} />
     </div>
   );
 }
