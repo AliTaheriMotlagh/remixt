@@ -295,10 +295,6 @@ class Splitter {
           sampleRate: SAMPLE_RATE,
           bitrate: STEM_BITRATE,
           parts: SPLIT_PARTS,
-          // The parallel nested-worker encoder path added in fb58108 caused
-          // some desktop splits to stall/crash before completion.
-          // Keep encoding inside the main splitter worker for stability.
-          parallelEncode: false,
         } satisfies SplitterRequest,
         [left.buffer, right.buffer]
       );

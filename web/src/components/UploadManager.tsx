@@ -7,8 +7,8 @@ import TagInput from "./TagInput";
 import { KIND_INFO, STEM_KINDS, type StemKind } from "@/lib/stemKinds";
 import { isConstrainedDevice, useSplitter } from "@/lib/client/splitter";
 import { useStudioStore } from "@/lib/client/studioStore";
-import { isYouTubeLink, YOUTUBE_UNAVAILABLE } from "@/lib/linkHosts";
-import { uploads, useUploadsFinished } from "@/lib/client/uploads";
+import { isYouTubeLink, splitLinks, YOUTUBE_UNAVAILABLE } from "@/lib/linkHosts";
+import { filesFromDrop, uploads, useUploadsFinished, type AddResult } from "@/lib/client/uploads";
 import { HelperPanel, QueuedSongs, QueueNotice } from "./SplitQueue";
 import { UploadList } from "./UploadActivity";
 
@@ -32,6 +32,25 @@ type Track = {
 
 const noSubscription = () => () => {};
 
+/** "“a.pdf”", "“a.pdf” and “b.jpg”", "“a.pdf”, “b.jpg” and 3 more". */
+function nameList(names: string[]) {
+  const quoted = names.slice(0, 2).map((n) => `“${n}”`);
+  if (names.length > 2) return `${quoted.join(", ")} and ${names.length - 2} more`;
+  return quoted.join(" and ");
+}
+
+/** What to tell the user about files that weren't added, if any. */
+function skippedMessage({ notAudio, duplicates }: AddResult): string | null {
+  const notes: string[] = [];
+  if (notAudio.length) {
+    notes.push(`Skipped ${nameList(notAudio)} — only audio files (MP3, M4A, WAV, FLAC, OGG, AAC) can be added.`);
+  }
+  if (duplicates.length) {
+    notes.push(`${nameList(duplicates)} ${duplicates.length === 1 ? "is" : "are"} already being added.`);
+  }
+  return notes.length ? notes.join(" ") : null;
+}
+
 export default function UploadManager({ youtubeImport }: { youtubeImport: boolean }) {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [loadingList, setLoadingList] = useState(true);
@@ -53,7 +72,11 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
   const [tryAnyway, setTryAnyway] = useState(false);
   // …and so their songs go to the split queue, for a computer to split.
   const queueMode = onPhone && !tryAnyway;
-  const youtubeBlocked = !youtubeImport && isYouTubeLink(link);
+  // Several links can be pasted at once; YouTube ones are left out where
+  // YouTube can't be reached.
+  const links = useMemo(() => splitLinks(link), [link]);
+  const youtubeLinks = youtubeImport ? [] : links.filter(isYouTubeLink);
+  const youtubeBlocked = links.length > 0 && youtubeLinks.length === links.length;
 
   const fetchTracks = useCallback(async () => {
     const res = await fetch("/api/tracks").catch(() => null);
@@ -98,19 +121,24 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
     return false;
   }
 
-  function handleFiles(list: FileList | null) {
-    const files = Array.from(list ?? []);
+  function handleFiles(files: File[]) {
     if (files.length === 0 || !confirmRights()) return;
-    setUploadError(null);
-    uploads.addFiles(files, { tags: newTags, mode: queueMode ? "queue" : "split" });
+    const result = uploads.addFiles(files, { tags: newTags, mode: queueMode ? "queue" : "split" });
+    setUploadError(skippedMessage(result));
   }
 
   function handleLink(e: React.FormEvent) {
     e.preventDefault();
-    const url = link.trim();
-    if (!url || youtubeBlocked || !confirmRights()) return;
+    if (!link.trim() || youtubeBlocked || !confirmRights()) return;
+    if (links.length === 0) {
+      setUploadError("That doesn't look like a link — paste the song's whole address, starting with https://");
+      return;
+    }
     setUploadError(null);
-    uploads.addLink(url, { tags: newTags, mode: queueMode ? "queue" : "split" });
+    uploads.addLinks(
+      links.filter((l) => !youtubeLinks.includes(l)),
+      { tags: newTags, mode: queueMode ? "queue" : "split" }
+    );
     setLink("");
   }
 
@@ -164,7 +192,7 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
         onDrop={(e) => {
           e.preventDefault();
           setDragOver(false);
-          handleFiles(e.dataTransfer.files);
+          void filesFromDrop(e.dataTransfer).then(handleFiles);
         }}
         onClick={() => fileInputRef.current?.click()}
         onKeyDown={(e) => {
@@ -181,24 +209,24 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
           🎵
         </div>
         <p className="font-medium">
-          <span className="pointer-coarse:hidden">Drop audio files here, or click to browse</span>
+          <span className="pointer-coarse:hidden">Drop songs or a whole folder here, or click to browse</span>
           <span className="hidden pointer-coarse:inline">
             {queueMode ? "Tap to choose songs for the split queue" : "Tap to choose songs"}
           </span>
         </p>
         <p className="mt-1 text-sm text-muted">
           {queueMode
-            ? "MP3, M4A, WAV, FLAC, OGG, AAC — up to 15 minutes"
-            : "MP3, WAV, M4A, FLAC, OGG, AAC — up to 15 minutes (10 on a phone or tablet). Add several at once."}
+            ? "Pick as many as you like · MP3, M4A, WAV, FLAC, OGG, AAC — up to 15 minutes each"
+            : "Add as many as you like · MP3, WAV, M4A, FLAC, OGG, AAC — up to 15 minutes each (10 on a phone or tablet)"}
         </p>
         <input
           ref={fileInputRef}
           type="file"
           multiple
-          accept=".mp3,.wav,.m4a,.flac,.ogg,.aac,audio/*"
+          accept=".mp3,.wav,.m4a,.flac,.ogg,.aac,.opus,audio/*"
           className="hidden"
           onChange={(e) => {
-            handleFiles(e.target.files);
+            handleFiles(Array.from(e.target.files ?? []));
             // So picking the same file again (after an error) still fires.
             e.target.value = "";
           }}
@@ -207,11 +235,12 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
 
       <form onSubmit={handleLink} className="mt-4 flex flex-col gap-2 sm:flex-row">
         <label htmlFor="song-link" className="sr-only">
-          Link to a song
+          Links to songs
         </label>
         <input
           id="song-link"
-          type="url"
+          // Not type="url": that refuses a pasted list of links.
+          type="text"
           inputMode="url"
           autoComplete="off"
           autoCapitalize="none"
@@ -219,7 +248,7 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
           spellCheck={false}
           enterKeyHint="go"
           placeholder={
-            youtubeImport ? "…or paste a link (YouTube, SoundCloud…)" : "…or paste a link (SoundCloud, Bandcamp…)"
+            youtubeImport ? "…or paste links (YouTube, SoundCloud…)" : "…or paste links (SoundCloud, Bandcamp…)"
           }
           value={link}
           onChange={(e) => setLink(e.target.value)}
@@ -230,16 +259,23 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
           disabled={!link.trim() || youtubeBlocked}
           className="shrink-0 rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-strong disabled:opacity-40"
         >
-          {queueMode ? "Queue it" : "Get song"}
+          {links.length > 1
+            ? `${queueMode ? "Queue" : "Get"} ${links.length - youtubeLinks.length} songs`
+            : queueMode
+              ? "Queue it"
+              : "Get song"}
         </button>
       </form>
-      {youtubeBlocked ? (
-        <p className="mt-2 text-sm text-danger">{YOUTUBE_UNAVAILABLE}</p>
+      {youtubeLinks.length > 0 ? (
+        <p className="mt-2 text-sm text-danger">
+          {youtubeBlocked ? "" : `${youtubeLinks.length} of these ${youtubeLinks.length === 1 ? "is a YouTube link" : "are YouTube links"} and will be left out. `}
+          {YOUTUBE_UNAVAILABLE}
+        </p>
       ) : (
         !youtubeImport && (
           <p className="mt-2 text-xs text-muted">
-            Works with SoundCloud, Bandcamp, Vimeo, direct MP3 links and many more sites. YouTube isn&apos;t
-            supported yet.
+            Paste one link or several at once. Works with SoundCloud, Bandcamp, Vimeo, direct MP3 links and many
+            more sites. YouTube isn&apos;t supported yet.
           </p>
         )
       )}

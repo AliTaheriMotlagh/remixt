@@ -6,7 +6,7 @@ import { encodeMp3Bytes } from "./mp3";
 import { fetchInSlices } from "./stemFetch";
 import { useStudioStore } from "./studioStore";
 import { keepScreenOn } from "./wakeLock";
-import { upload, type UploadTarget } from "./directUpload";
+import { untilVisible, upload, type UploadTarget } from "./directUpload";
 import { isConstrainedDevice, splitSong, splitter, splitTrackPayload, uploadStems, type UploadStage } from "./splitter";
 
 // The browser side of the split queue (see lib/splitQueue.ts on the
@@ -84,16 +84,35 @@ async function shrinkForQueue(file: File, onStage: (stage: UploadStage) => void)
   if (!duration || duration > SHRINK_MAX_SECONDS) return file;
   if ((file.size * 8) / duration / 1000 < SHRINK_ABOVE_KBPS) return file;
   onStage({ stage: "compressing" });
-  const deadline = AbortSignal.timeout(SHRINK_DEADLINE_MS);
-  try {
+  // Several songs can be on their way to the queue at once, but only one
+  // is shrunk at a time: each needs the whole decoded song in memory.
+  const turn = shrinking.then(async () => {
+    const deadline = AbortSignal.timeout(SHRINK_DEADLINE_MS);
     const ctx = new OfflineAudioContext(2, 1, 44100);
     const buffer = await ctx.decodeAudioData(await file.arrayBuffer());
     deadline.throwIfAborted();
     const bytes = await encodeMp3Bytes(buffer, { bitrate: 256, workerOnly: true, signal: deadline });
     if (bytes.length > file.size * 0.8) return file;
     return new File([bytes as BlobPart], `${file.name.replace(/\.[^/.]+$/, "")}.mp3`, { type: "audio/mpeg" });
-  } catch {
-    return file;
+  });
+  shrinking = turn.catch(() => {});
+  return turn.catch(() => file);
+}
+let shrinking: Promise<unknown> = Promise.resolve();
+
+/**
+ * A POST to this app, sent again if the connection drops — a phone whose
+ * screen turned off mid-request, say (once it's back on).
+ */
+async function postRetrying(url: string, init: RequestInit = {}): Promise<Response> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fetch(url, { ...init, method: "POST" });
+    } catch (err) {
+      if (attempt >= 3) throw err;
+      await untilVisible();
+      await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+    }
   }
 }
 
@@ -102,8 +121,7 @@ export async function queueFile(original: File, tags: string[], onStage: (stage:
   const file = await shrinkForQueue(original, onStage);
   onStage({ stage: "queueing", progress: 0 });
   const created = await json<{ id: string; upload: UploadTarget }>(
-    await fetch("/api/split-jobs", {
-      method: "POST",
+    await postRetrying("/api/split-jobs", {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         title: file.name.replace(/\.[^/.]+$/, "").slice(0, 200) || "Untitled",
@@ -122,7 +140,7 @@ export async function queueFile(original: File, tags: string[], onStage: (stage:
     await upload(created.upload, file, (sent) =>
       onStage({ stage: "queueing", progress: Math.min(1, sent / Math.max(1, file.size)) })
     );
-    await json(await fetch(`/api/split-jobs/${created.id}/queued`, { method: "POST" }), "Couldn't queue the song");
+    await json(await postRetrying(`/api/split-jobs/${created.id}/queued`), "Couldn't queue the song");
   } catch (err) {
     void fetch(`/api/split-jobs/${created.id}`, { method: "DELETE" }).catch(() => {});
     throw err;

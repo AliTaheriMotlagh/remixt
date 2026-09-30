@@ -20,6 +20,11 @@
 //
 // These are the same requests the library itself sends from Safari (XHR,
 // same headers, same API version).
+//
+// The screen is allowed to turn off meanwhile. A phone pauses the page when
+// it does, and whatever was in flight is lost — so a request that failed
+// because of that isn't held against the upload: it waits for the page to
+// be back, then carries on from the part it had reached.
 
 export type UploadTarget =
   | { type: "put"; url: string; headers: Record<string, string> }
@@ -51,6 +56,47 @@ const MULTIPART_ABOVE = 2 * PART_BYTES;
 const PARTS_AT_ONCE = 4;
 const BLOB_API_VERSION = "12";
 
+// --- The screen turning off ---------------------------------------------------
+
+/** How many times the page has been hidden, and since when (null while it's visible). */
+let hides = 0;
+let hiddenAt: number | null = null;
+const onVisible = new Set<() => void>();
+let watching = false;
+
+function watchVisibility() {
+  if (watching || typeof document === "undefined") return;
+  watching = true;
+  if (document.hidden) hiddenAt = Date.now();
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      hides++;
+      hiddenAt = Date.now();
+      return;
+    }
+    for (const resume of [...onVisible]) resume();
+    hiddenAt = null;
+  });
+}
+
+const isHidden = () => typeof document !== "undefined" && document.hidden;
+
+/** Resolves once the page is on screen (at once if it is). */
+export function untilVisible(): Promise<void> {
+  watchVisibility();
+  if (!isHidden()) return Promise.resolve();
+  return new Promise((resolve) => {
+    const resume = () => {
+      onVisible.delete(resume);
+      resolve();
+    };
+    onVisible.add(resume);
+  });
+}
+
+/** Whether the page has been hidden since `mark` (a value of `hides`), or is now. */
+const pausedSince = (mark: number) => hides !== mark || isHidden();
+
 const retryWait = (attempt: number) => new Promise((resolve) => setTimeout(resolve, Math.min(8000, 1000 * attempt)));
 
 // --- Transport ---------------------------------------------------------------
@@ -62,23 +108,40 @@ export type SendRequest = {
   body: Blob | string | null;
 };
 export type SendResponse = { status: number; text: string };
-/** Sends one request; `onProgress` gets the bytes sent so far. Rejects on network failure or a stall. */
+/**
+ * Sends one request; `onProgress` gets the bytes sent so far. Rejects with
+ * a NetworkError when there's no answer (offline, dropped, stalled).
+ */
 export type Send = (request: SendRequest, onProgress: (loaded: number) => void) => Promise<SendResponse>;
 
-/** Thrown when a request never got an answer (offline, dropped, stalled). */
-class NetworkError extends Error {}
+/** A request that never got an answer (offline, dropped, stalled). */
+export class NetworkError extends Error {}
 
 const xhrSend: Send = (request, onProgress) =>
   new Promise((resolve, reject) => {
+    watchVisibility();
     const xhr = new XMLHttpRequest();
     xhr.open(request.method, request.url);
     for (const [name, value] of Object.entries(request.headers)) xhr.setRequestHeader(name, value);
     const size = request.body instanceof Blob ? request.body.size : (request.body?.length ?? 0);
     xhr.timeout = timeLimit(size);
     let stall = setTimeout(() => xhr.abort(), STALL_MS);
+    let lastActive = Date.now();
     const alive = () => {
+      lastActive = Date.now();
       clearTimeout(stall);
       stall = setTimeout(() => xhr.abort(), STALL_MS);
+    };
+    // Back from a screen that was off: a request that hasn't moved since
+    // is dead (the phone dropped it), so it's retried now rather than
+    // after the stall timer runs out.
+    const resumed = () => {
+      if (hiddenAt !== null && lastActive < hiddenAt && Date.now() - hiddenAt > 3000) xhr.abort();
+    };
+    onVisible.add(resumed);
+    const settle = () => {
+      clearTimeout(stall);
+      onVisible.delete(resumed);
     };
     xhr.upload.onprogress = (e) => {
       alive();
@@ -86,11 +149,11 @@ const xhrSend: Send = (request, onProgress) =>
     };
     xhr.onprogress = alive;
     xhr.onload = () => {
-      clearTimeout(stall);
+      settle();
       resolve({ status: xhr.status, text: xhr.responseText });
     };
     const fail = (message: string) => () => {
-      clearTimeout(stall);
+      settle();
       reject(new NetworkError(message));
     };
     xhr.onerror = fail("Upload failed — check your connection");
@@ -113,12 +176,20 @@ async function putWhole(
   send: Send
 ) {
   for (let attempt = 1; ; attempt++) {
+    const mark = hides;
     try {
       const res = await send({ method: "PUT", url: target.url, headers: target.headers, body }, onProgress);
       if (res.status >= 200 && res.status < 300) return;
       const message = `Upload failed (HTTP ${res.status})`;
       throw isFinalStatus(res.status) ? new FinalUploadError(message) : new Error(message);
     } catch (err) {
+      if (err instanceof NetworkError && pausedSince(mark)) {
+        // Lost to the screen turning off: doesn't count as a try.
+        attempt--;
+        onProgress(0);
+        await untilVisible();
+        continue;
+      }
       if (attempt >= ATTEMPTS || err instanceof FinalUploadError) throw err;
       onProgress(0);
       await retryWait(attempt);
@@ -144,7 +215,8 @@ async function blobRequest<T>(
   const storeId = target.token.split("_")[3] ?? "";
   // The same id on every try, so the store can tell a retry from a new request.
   const requestId = `${storeId}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
-  for (let attempt = 1; ; attempt++) {
+  for (let attempt = 1, tries = 1; ; attempt++, tries++) {
+    const mark = hides;
     try {
       const res = await send(
         {
@@ -180,9 +252,16 @@ async function blobRequest<T>(
         !isFinalStatus(res.status) || ["unknown_error", "service_unavailable", "internal_server_error"].includes(code);
       throw retryable ? new Error(text) : new FinalUploadError(text);
     } catch (err) {
-      if (attempt >= attempts || err instanceof FinalUploadError) throw err;
+      if (err instanceof NetworkError && pausedSince(mark)) {
+        // Lost to the screen turning off: doesn't count as a try.
+        tries--;
+        onProgress(0);
+        await untilVisible();
+        continue;
+      }
+      if (tries >= attempts || err instanceof FinalUploadError) throw err;
       onProgress(0);
-      await retryWait(attempt);
+      await retryWait(tries);
     }
   }
 }

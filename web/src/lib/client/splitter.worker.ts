@@ -11,7 +11,6 @@ import { CONSTANTS } from "demucs-web/constants";
 import { prepareModelInput, standaloneIspec, standaloneMask } from "demucs-web/processor";
 import { createMp3Encoder } from "wasm-media-encoders";
 import { estimateTempoDecimated, tempoDecimation } from "./analysis";
-import type { Mp3StreamRequest, Mp3StreamResponse } from "./mp3Stream.worker";
 import type { SplitOutput, SplitResult, SplitterRequest, SplitterResponse, StemBitrate } from "./splitterProtocol";
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -249,7 +248,7 @@ const MP3_DELAY = 576 + 529;
 
 type StemEncoder = { add(left: Float32Array, right: Float32Array): void; finish(): Promise<Uint8Array> };
 
-/** An MP3 encoder fed a piece at a time, as the splitter finishes them — here, on this thread. */
+/** An MP3 encoder fed a piece at a time, as the splitter finishes them. */
 async function inlineMp3(sampleRate: number, bitrate: StemBitrate): Promise<StemEncoder> {
   const encoder = await createMp3Encoder();
   encoder.configure({ sampleRate, channels: 2, bitrate });
@@ -279,75 +278,6 @@ async function inlineMp3(sampleRate: number, bitrate: StemBitrate): Promise<Stem
       return out;
     },
   };
-}
-
-/** How long a stem encoder's worker gets to start before this thread encodes instead. */
-const ENCODER_START_MS = 10_000;
-/** The current split's encoder workers, stopped when it ends — however it ends. */
-const encoderWorkers = new Set<Worker>();
-
-/**
- * The same, in a worker of its own (mp3Stream.worker.ts), so encoding runs
- * on another core alongside the splitting instead of taking turns with it.
- * Null if the worker doesn't start (no nested workers, say) — the caller
- * then encodes here.
- */
-function workerMp3(sampleRate: number, bitrate: StemBitrate): Promise<StemEncoder | null> {
-  let worker: Worker;
-  try {
-    worker = new Worker(new URL("./mp3Stream.worker.ts", import.meta.url), { type: "module" });
-  } catch {
-    return Promise.resolve(null);
-  }
-  encoderWorkers.add(worker);
-  return new Promise((resolve) => {
-    let result: { resolve: (bytes: Uint8Array) => void; reject: (err: Error) => void } | null = null;
-    let failure: Error | null = null;
-    const fail = (err: Error) => {
-      failure ??= err;
-      worker.terminate();
-      result?.reject(err);
-    };
-    const timer = setTimeout(() => {
-      worker.terminate();
-      resolve(null);
-    }, ENCODER_START_MS);
-
-    worker.onmessage = (event: MessageEvent<Mp3StreamResponse>) => {
-      const message = event.data;
-      if (message.type === "ready") {
-        clearTimeout(timer);
-        resolve({
-          add(left, right) {
-            if (failure) return;
-            // These buffers are fresh for each stretch, so they can be handed over rather than copied.
-            worker.postMessage({ type: "add", left, right } satisfies Mp3StreamRequest, [left.buffer, right.buffer]);
-          },
-          finish() {
-            if (failure) return Promise.reject(failure);
-            return new Promise<Uint8Array>((res, rej) => {
-              result = { resolve: res, reject: rej };
-              worker.postMessage({ type: "finish" } satisfies Mp3StreamRequest);
-            });
-          },
-        });
-      } else if (message.type === "done") {
-        worker.terminate();
-        result?.resolve(message.bytes);
-      } else {
-        clearTimeout(timer);
-        fail(new Error(`Couldn't encode a stem: ${message.message}`));
-        resolve(null);
-      }
-    };
-    worker.onerror = (event) => {
-      event.preventDefault();
-      clearTimeout(timer);
-      fail(new Error("A stem's encoder crashed — the browser may be out of memory"));
-      resolve(null);
-    };
-    worker.postMessage({ type: "start", sampleRate, bitrate, skip: MP3_DELAY } satisfies Mp3StreamRequest);
-  });
 }
 
 const { TRAINING_SAMPLES, MODEL_SPEC_BINS, MODEL_SPEC_FRAMES, SEGMENT_OVERLAP } = CONSTANTS;
@@ -428,408 +358,116 @@ async function separateSegment(
  * only ever holds one segment's worth.
  */
 async function split(request: Extract<SplitterRequest, { type: "split" }>) {
-  const {
-    jobId,
-    left,
-    right,
-    sampleRate,
-    bitrate,
-    parts,
-    parallelEncode,
-  } = request;
-
+  const { jobId, left, right, sampleRate, bitrate, parts } = request;
   const session = processor?.session;
-
-  if (!session) {
-    throw new Error("The splitter isn't loaded yet");
-  }
-
-  const ort = (
-    processor as unknown as {
-      ort: Parameters<typeof separateSegment>[1];
-    }
-  ).ort;
-
-  const outputs: SplitOutput[] = parts
-    ? ["vocals", "beat", "drums", "bass", "other"]
-    : ["vocals", "beat"];
+  if (!session) throw new Error("The splitter isn't loaded yet");
+  const ort = (processor as unknown as { ort: Parameters<typeof separateSegment>[1] }).ort;
+  const outputs: SplitOutput[] = parts ? ["vocals", "beat", "drums", "bass", "other"] : ["vocals", "beat"];
+  const stopIfCancelled = () => {
+    if (cancelled.has(jobId)) throw new Error("Cancelled");
+  };
 
   const total = left.length;
+  const stride = Math.floor(TRAINING_SAMPLES * (1 - SEGMENT_OVERLAP));
+  const segments = Math.max(1, Math.ceil(total / stride));
 
-  const stride = Math.floor(
-    TRAINING_SAMPLES * (1 - SEGMENT_OVERLAP)
-  );
-
-  const segments = Math.max(
-    1,
-    Math.ceil(total / stride)
-  );
-
-  /*
-   * Pending overlapping output.
-   *
-   * Each Demucs segment overlaps with the next segment.
-   * We accumulate the samples here and divide them by their
-   * overlap weights before passing them to the encoder.
-   */
-  const pending = Object.fromEntries(
-    outputs.map((output) => [
-      output,
-      stereo(TRAINING_SAMPLES),
-    ])
-  ) as Record<SplitOutput, Stereo>;
-
+  // Output that isn't final yet, from the current segment's start on: the
+  // running cross-faded sums and the fade weights they get divided by.
+  const pending = Object.fromEntries(outputs.map((o) => [o, stereo(TRAINING_SAMPLES)])) as Record<SplitOutput, Stereo>;
   const weights = new Float32Array(TRAINING_SAMPLES);
 
-  /*
-   * IMPORTANT:
-   *
-   * Keep the encoders inline.
-   *
-   * The parallel nested-worker encoder introduced in
-   * fb58108c8ceaed203bb3006ffe3f5e21c7ccb105
-   * caused some desktop splits to stall/crash before
-   * completing.
-   *
-   * Stability is more important here than the small
-   * encoding speed improvement.
-   */
+  // Encoded on this thread, one segment at a time. (Encoding in workers of
+  // their own, and starting the model on the next segment before this one
+  // was encoded, were tried for speed — and left some splits stalled or
+  // crashed before the end. A split that finishes beats a faster one that
+  // doesn't.)
   const encoders = {} as Record<SplitOutput, StemEncoder>;
   const meters = {} as Record<SplitOutput, PeakMeter>;
-
-  for (const output of outputs) {
-    encoders[output] = await inlineMp3(
-      sampleRate,
-      bitrate
-    );
-
-    meters[output] = new PeakMeter(total);
+  for (const o of outputs) {
+    encoders[o] = await inlineMp3(sampleRate, bitrate);
+    meters[o] = new PeakMeter(total);
   }
-
-  /*
-   * BPM analysis is calculated from the reconstructed beat.
-   */
   const factor = tempoDecimation(sampleRate);
-
-  const tempo = new Float32Array(
-    Math.floor(total / factor)
-  );
-
+  const tempo = new Float32Array(Math.floor(total / factor));
   let tempoSum = 0;
   let tempoCount = 0;
   let tempoLength = 0;
 
-  /**
-   * Flush samples that can no longer be modified by
-   * a later overlapping segment.
-   */
+  /** Passes on the first `count` pending samples, which are final. */
   const flush = (count: number) => {
-    for (const output of outputs) {
+    for (const o of outputs) {
       const out = stereo(count);
-
-      const buffer = pending[output];
-
-      /*
-       * Normalize overlapping samples using their
-       * accumulated fade weights.
-       */
+      const buffer = pending[o];
       for (let i = 0; i < count; i++) {
-        const weight =
-          weights[i] > 0
-            ? weights[i]
-            : 1;
-
-        out.left[i] =
-          buffer.left[i] / weight;
-
-        out.right[i] =
-          buffer.right[i] / weight;
+        const weight = weights[i] > 0 ? weights[i] : 1;
+        out.left[i] = buffer.left[i] / weight;
+        out.right[i] = buffer.right[i] / weight;
       }
-
-      /*
-       * Feed the reconstructed beat to the BPM detector.
-       */
-      if (output === "beat") {
+      if (o === "beat") {
         for (let i = 0; i < count; i++) {
-          tempoSum +=
-            (out.left[i] + out.right[i]) / 2;
-
-          tempoCount++;
-
-          if (tempoCount === factor) {
-            if (tempoLength < tempo.length) {
-              tempo[tempoLength] =
-                tempoSum / factor;
-
-              tempoLength++;
-            }
-
+          tempoSum += (out.left[i] + out.right[i]) / 2;
+          if (++tempoCount === factor) {
+            if (tempoLength < tempo.length) tempo[tempoLength++] = tempoSum / factor;
             tempoSum = 0;
             tempoCount = 0;
           }
         }
       }
-
-      /*
-       * Calculate waveform preview BEFORE encoding.
-       */
-      meters[output].add(
-        out.left,
-        out.right
-      );
-
-      /*
-       * Encode sequentially inside this worker.
-       *
-       * Do not transfer the buffers to nested workers.
-       */
-      encoders[output].add(
-        out.left,
-        out.right
-      );
-
-      /*
-       * Slide pending audio towards the beginning
-       * so it is ready for the next Demucs segment.
-       */
-      buffer.left.copyWithin(0, count);
-      buffer.right.copyWithin(0, count);
-
-      buffer.left.fill(
-        0,
-        buffer.left.length - count
-      );
-
-      buffer.right.fill(
-        0,
-        buffer.right.length - count
-      );
+      meters[o].add(out.left, out.right);
+      encoders[o].add(out.left, out.right);
+      // Slide the window along.
+      for (const channel of [buffer.left, buffer.right]) {
+        channel.copyWithin(0, count);
+        channel.fill(0, channel.length - count);
+      }
     }
-
-    /*
-     * Slide overlap weights in exactly the same way
-     * as the pending audio.
-     */
     weights.copyWithin(0, count);
-
-    weights.fill(
-      0,
-      weights.length - count
-    );
+    weights.fill(0, weights.length - count);
   };
 
-  /*
-   * Reusable model input buffers.
-   */
-  const segLeft =
-    new Float32Array(TRAINING_SAMPLES);
-
-  const segRight =
-    new Float32Array(TRAINING_SAMPLES);
-
+  const segLeft = new Float32Array(TRAINING_SAMPLES);
+  const segRight = new Float32Array(TRAINING_SAMPLES);
   let done = 0;
-
-  /*
-   * IMPORTANT:
-   *
-   * Process Demucs segments sequentially.
-   *
-   * Do NOT start inference for the next segment while
-   * processing the current result.
-   *
-   * That pipelining was introduced in fb58108 and is
-   * one of the regression candidates.
-   */
-  for (
-    let start = 0;
-    start < total;
-    start += stride
-  ) {
-    /*
-     * Cancellation is checked between Demucs segments.
-     */
-    if (cancelled.has(jobId)) {
-      throw new Error("Cancelled");
-    }
-
-    const length = Math.min(
-      TRAINING_SAMPLES,
-      total - start
-    );
-
-    /*
-     * Clear old samples.
-     */
+  for (let start = 0; start < total; start += stride) {
+    stopIfCancelled();
+    const length = Math.min(TRAINING_SAMPLES, total - start);
     segLeft.fill(0);
     segRight.fill(0);
+    segLeft.set(left.subarray(start, start + length));
+    segRight.set(right.subarray(start, start + length));
 
-    /*
-     * Copy this segment of the song.
-     *
-     * The final segment is zero padded automatically.
-     */
-    segLeft.set(
-      left.subarray(
-        start,
-        start + length
-      )
-    );
+    const separated = await separateSegment(session, ort, segLeft, segRight, outputs);
+    // A segment can take seconds: it may have been cancelled meanwhile.
+    stopIfCancelled();
 
-    segRight.set(
-      right.subarray(
-        start,
-        start + length
-      )
-    );
-
-    /*
-     * Wait for this inference to fully complete before
-     * starting another one.
-     */
-    const separated =
-      await separateSegment(
-        session,
-        ort,
-        segLeft,
-        segRight,
-        outputs
-      );
-
-    /*
-     * Check again because one model segment may take
-     * several seconds.
-     */
-    if (cancelled.has(jobId)) {
-      throw new Error("Cancelled");
-    }
-
-    /*
-     * Crossfade neighboring Demucs windows.
-     */
     const fade = stride * 0.5;
-
     for (let i = 0; i < length; i++) {
-      const fadeIn = Math.min(
-        i / fade,
-        1
-      );
-
-      const fadeOut = Math.min(
-        (length - i) / fade,
-        1
-      );
-
-      const weight = Math.min(
-        fadeIn,
-        fadeOut
-      );
-
-      for (const output of outputs) {
-        pending[output].left[i] +=
-          separated[output].left[i] *
-          weight;
-
-        pending[output].right[i] +=
-          separated[output].right[i] *
-          weight;
+      const weight = Math.min(Math.min(i / fade, 1), Math.min((length - i) / fade, 1));
+      for (const o of outputs) {
+        pending[o].left[i] += separated[o].left[i] * weight;
+        pending[o].right[i] += separated[o].right[i] * weight;
       }
-
       weights[i] += weight;
     }
 
-    /*
-     * Anything before the next stride can no longer
-     * be affected by another overlapping segment.
-     */
-    const last =
-      start + stride >= total;
-
-    flush(
-      last
-        ? length
-        : stride
-    );
+    // The next segment starts `stride` further on, so everything before
+    // that is final; after the last segment, all of it is.
+    const last = start + stride >= total;
+    flush(last ? length : stride);
 
     done++;
-
-    post({
-      type: "progress",
-      jobId,
-      stage: "splitting",
-      value: Math.min(
-        1,
-        done / segments
-      ),
-    });
+    post({ type: "progress", jobId, stage: "splitting", value: Math.min(1, done / segments) });
   }
 
-  /*
-   * Model inference is complete.
-   */
-  post({
-    type: "progress",
-    jobId,
-    stage: "encoding",
-    value: 0,
-  });
-
+  post({ type: "progress", jobId, stage: "encoding", value: 0 });
   const mp3 = {} as SplitResult["mp3"];
-  const peaks =
-    {} as SplitResult["peaks"];
-
-  /*
-   * Finish MP3 files one by one.
-   *
-   * Sequential finalization is intentionally used here
-   * for predictable memory usage.
-   */
-  for (let i = 0; i < outputs.length; i++) {
-    const output = outputs[i];
-
-    if (cancelled.has(jobId)) {
-      throw new Error("Cancelled");
-    }
-
-    mp3[output] =
-      await encoders[output].finish();
-
-    peaks[output] =
-      meters[output].result();
-
-    post({
-      type: "progress",
-      jobId,
-      stage: "encoding",
-      value:
-        (i + 1) /
-        outputs.length,
-    });
+  const peaks = {} as SplitResult["peaks"];
+  for (const [i, o] of outputs.entries()) {
+    stopIfCancelled();
+    mp3[o] = await encoders[o].finish();
+    peaks[o] = meters[o].result();
+    post({ type: "progress", jobId, stage: "encoding", value: (i + 1) / outputs.length });
   }
-
-  const bpm =
-    estimateTempoDecimated(
-      tempo.subarray(
-        0,
-        tempoLength
-      ),
-      sampleRate / factor
-    );
-
-  /*
-   * Transfer MP3 buffers instead of copying them back
-   * to the UI thread.
-   */
-  const transfer = Object.values(mp3)
-    .filter(
-      (
-        bytes
-      ): bytes is Uint8Array =>
-        !!bytes
-    )
-    .map(
-      (bytes) =>
-        bytes.buffer
-    );
 
   post(
     {
@@ -837,9 +475,9 @@ async function split(request: Extract<SplitterRequest, { type: "split" }>) {
       jobId,
       mp3,
       peaks,
-      bpm,
+      bpm: estimateTempoDecimated(tempo.subarray(0, tempoLength), sampleRate / factor),
     },
-    transfer
+    Object.values(mp3).map((bytes) => bytes!.buffer)
   );
 }
 
@@ -864,8 +502,6 @@ self.onmessage = async (event: MessageEvent<SplitterRequest>) => {
       });
     } finally {
       cancelled.delete(request.jobId);
-      for (const worker of encoderWorkers) worker.terminate();
-      encoderWorkers.clear();
     }
   }
 };

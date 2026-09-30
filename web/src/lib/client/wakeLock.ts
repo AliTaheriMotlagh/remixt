@@ -7,8 +7,9 @@ import { useEffect, useId } from "react";
 //
 //   - playback: the Studio mix, a remix, a library preview
 //   - recording a vocal, and saving the take
-//   - adding a song: fetching a link, splitting, uploading the stems, or
-//     sending it to the split queue
+//   - adding a song split on this device: fetching a link, splitting,
+//     uploading the stems (not sending one to the split queue: that pauses
+//     with the screen and carries on after — see directUpload.ts)
 //   - a computer splitting a queued song for someone (the helper)
 //   - exporting the mix or a lane, rendering a social clip, AI Match
 //

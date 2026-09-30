@@ -26,7 +26,7 @@ export function QueueNotice({ onTryAnyway }: { onTryAnyway: () => void }) {
       <p className="font-semibold">📱 → 💻 A computer splits it for you</p>
       <ol className="mt-2 grid gap-1.5 text-muted sm:grid-cols-3 sm:gap-3">
         <li>
-          <span className="font-semibold text-foreground">1.</span> Pick a song — it&apos;s sent to the split queue.
+          <span className="font-semibold text-foreground">1.</span> Pick songs — as many as you like. They&apos;re sent to the split queue.
         </li>
         <li>
           <span className="font-semibold text-foreground">2.</span> The next computer helping out splits it, usually

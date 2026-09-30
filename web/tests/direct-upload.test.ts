@@ -10,7 +10,14 @@ import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, beforeEach, describe, test } from "node:test";
-import { FinalUploadError, upload, type Send, type UploadTarget } from "../src/lib/client/directUpload.ts";
+import {
+  FinalUploadError,
+  NetworkError,
+  untilVisible,
+  upload,
+  type Send,
+  type UploadTarget,
+} from "../src/lib/client/directUpload.ts";
 
 const TOKEN = "vercel_blob_client_store123_payload";
 const MB = 1024 * 1024;
@@ -84,14 +91,31 @@ before(async () => {
 });
 after(() => new Promise<void>((resolve) => server.close(() => resolve())));
 beforeEach(() => {
+  drop = () => false;
+  screen(true);
   seen = [];
   stored = new Map();
   multipart = new Map();
   sabotage = () => null;
 });
 
+/** A page that can be hidden and shown again, like a phone's when its screen turns off and on. */
+const visibility = new Set<() => void>();
+const page = {
+  hidden: false,
+  addEventListener: (_type: string, listener: () => void) => visibility.add(listener),
+};
+(globalThis as { document?: unknown }).document = page;
+function screen(on: boolean) {
+  page.hidden = !on;
+  for (const listener of visibility) listener();
+}
+/** Lets a test cut a request off before it reaches the store: return true to drop it. */
+let drop: (request: Parameters<Send>[0]) => boolean = () => false;
+
 /** The browser's XHR, played by fetch: progress arrives all at once, when the body's sent. */
 const send: Send = async (request, onProgress) => {
+  if (drop(request)) throw new NetworkError("Upload failed — check your connection");
   const res = await fetch(request.url, { method: request.method, headers: request.headers, body: request.body });
   const text = await res.text();
   if (request.body instanceof Blob) onProgress(request.body.size);
@@ -158,6 +182,32 @@ describe("upload to Vercel Blob", () => {
       two.map((r) => r.headers["x-api-blob-request-attempt"]),
       ["0", "1"]
     );
+  });
+
+  test("a screen turning off mid-upload doesn't use up its tries: it carries on once it's back", async () => {
+    await untilVisible(); // starts watching the page
+    const bytes = randomBytes(20 * MB);
+    // Part 2 is cut off by the screen turning off — more times than a part
+    // may fail for any other reason — and the screen comes back each time.
+    let offs = 0;
+    drop = (request) => {
+      if (request.headers["x-mpu-part-number"] !== "2" || offs >= 7) return false;
+      offs++;
+      screen(false);
+      setTimeout(() => screen(true), 20);
+      return true;
+    };
+    await run(blobTarget("queue/u/screen-off.wav"), bytes);
+    assert.equal(offs, 7);
+    assert.ok(stored.get("queue/u/screen-off.wav")?.equals(bytes));
+    // Parts 1 and 3 weren't sent again.
+    const sends = seen.filter((r) => r.headers["x-mpu-action"] === "upload").map((r) => r.headers["x-mpu-part-number"]);
+    assert.deepEqual(sends.sort(), ["1", "2", "3"]);
+  });
+
+  test("a dropped connection with the screen on still gives up after its tries", async () => {
+    drop = (request) => request.headers["x-mpu-part-number"] === "2";
+    await assert.rejects(run(blobTarget("queue/u/offline.wav"), randomBytes(20 * MB)), NetworkError);
   });
 
   test("a refusal (403) fails at once rather than retrying", async () => {

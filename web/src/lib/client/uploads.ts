@@ -13,9 +13,10 @@ import { keepScreenOn } from "./wakeLock";
 
 // The songs this browser is adding to the library — split here, or sent to
 // the split queue from a phone — kept outside any page, so they carry on
-// while the user goes anywhere else on the site. Several can be added at
-// once; they're split one at a time (the model can only do one), but the
-// next song starts splitting while the last one's stems upload.
+// while the user goes anywhere else on the site. Any number can be added
+// at once; they're split one at a time (the model can only do one), but the
+// next song starts splitting while the last one's stems upload. Songs for
+// the queue are only sent, so several go up at once.
 
 export type UploadMode = "split" | "queue";
 
@@ -47,10 +48,68 @@ function rememberInFlight(name: string | null) {
 
 let nextId = 1;
 
+/** What a song can be: what browsers can decode and the split queue can store. */
+const AUDIO_EXTENSIONS = ["mp3", "wav", "m4a", "flac", "ogg", "aac", "webm", "opus", "mp4"];
+
+export function isAudioFile(file: File): boolean {
+  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+  return AUDIO_EXTENSIONS.includes(ext);
+}
+
+/** The same file picked twice (the same name, size and date) is only added once. */
+const fileKey = (file: File) => `${file.name}:${file.size}:${file.lastModified}`;
+
+/**
+ * The files dropped on the page — including everything inside a dropped
+ * folder (and its folders), in name order, so an album keeps its track
+ * order. Hidden files (.DS_Store and the like) are left out. Must be called
+ * during the drop event itself: the browser forgets what was dropped once
+ * it's over.
+ */
+export function filesFromDrop(data: DataTransfer): Promise<File[]> {
+  const entries = Array.from(data.items ?? [])
+    .map((item) => item.webkitGetAsEntry?.())
+    .filter((entry): entry is FileSystemEntry => !!entry);
+  if (!entries.some((entry) => entry.isDirectory)) return Promise.resolve(Array.from(data.files));
+
+  const byName = (a: FileSystemEntry, b: FileSystemEntry) => a.name.localeCompare(b.name, undefined, { numeric: true });
+  const files: File[] = [];
+  const walk = async (entry: FileSystemEntry): Promise<void> => {
+    if (entry.name.startsWith(".")) return;
+    if (entry.isFile) {
+      files.push(await new Promise<File>((resolve, reject) => (entry as FileSystemFileEntry).file(resolve, reject)));
+      return;
+    }
+    const reader = (entry as FileSystemDirectoryEntry).createReader();
+    const children: FileSystemEntry[] = [];
+    // A folder is read a batch at a time, until an empty one.
+    for (;;) {
+      const batch = await new Promise<FileSystemEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
+      if (batch.length === 0) break;
+      children.push(...batch);
+    }
+    for (const child of children.sort(byName)) await walk(child);
+  };
+  return (async () => {
+    for (const entry of entries.sort(byName)) await walk(entry).catch(() => {});
+    return files;
+  })();
+}
+
+/** Why some of the files picked weren't added. */
+export type AddResult = { added: number; notAudio: string[]; duplicates: string[] };
+
+/**
+ * Songs going up to the split queue at once: enough to keep the
+ * connection busy between one song's requests, without splitting it so
+ * thin that none finishes for ages.
+ */
+const QUEUE_SENDS_AT_ONCE = 3;
+
 class Uploads {
   private listeners = new Set<() => void>();
   private entries: Entry[] = [];
-  private active = 0;
+  private active: Record<UploadMode, number> = { split: 0, queue: 0 };
   /** Bumped whenever a song lands in the library (or the queue), so lists can refresh. */
   finishedCount = 0;
   items: UploadItem[] = [];
@@ -71,9 +130,14 @@ class Uploads {
       finishedAt: e.finishedAt,
     }));
     const busy = this.entries.some((e) => e.status === "working" || e.status === "waiting");
-    // Fetching, splitting and uploading need the page awake: a phone that
-    // locks itself pauses the page, and the work with it.
-    keepScreenOn("uploads", busy);
+    // Splitting a song here needs the page awake: a phone that locks
+    // itself pauses the page and the split with it, and it would start over.
+    // Sending songs to the queue doesn't: the screen may turn off, and the
+    // upload carries on from where it was once it's back (see directUpload.ts).
+    keepScreenOn(
+      "uploads",
+      this.entries.some((e) => e.mode === "split" && (e.status === "working" || e.status === "waiting"))
+    );
     this.warnOnLeave(busy);
     for (const listener of this.listeners) listener();
   }
@@ -97,16 +161,46 @@ class Uploads {
     this.emit();
   }
 
-  /** Songs from this device. */
-  addFiles(files: File[], { tags, mode }: { tags: string[]; mode: UploadMode }) {
-    for (const file of files) this.push({ kind: "file", file }, file.name, tags, mode);
+  /**
+   * Songs from this device. Anything that isn't audio is left out, and so
+   * is a file already on its way (picked twice); the result says which.
+   */
+  addFiles(files: File[], { tags, mode }: { tags: string[]; mode: UploadMode }): AddResult {
+    const result: AddResult = { added: 0, notAudio: [], duplicates: [] };
+    const pending = new Set(
+      this.entries
+        .filter((e) => e.source.kind === "file" && e.status !== "done" && e.status !== "failed")
+        .map((e) => fileKey((e.source as { file: File }).file))
+    );
+    for (const file of files) {
+      if (!isAudioFile(file)) {
+        result.notAudio.push(file.name);
+      } else if (pending.has(fileKey(file))) {
+        result.duplicates.push(file.name);
+      } else {
+        pending.add(fileKey(file));
+        this.push({ kind: "file", file }, file.name, tags, mode);
+        result.added++;
+      }
+    }
     this.pump();
+    return result;
   }
 
-  /** The song behind a link. */
-  addLink(url: string, { tags, mode }: { tags: string[]; mode: UploadMode }) {
-    this.push({ kind: "link", url }, url, tags, mode);
+  /** The songs behind some links (a link already on its way is left out). */
+  addLinks(urls: string[], { tags, mode }: { tags: string[]; mode: UploadMode }): number {
+    const pending = new Set(
+      this.entries.filter((e) => e.source.kind === "link" && e.status !== "failed").map((e) => (e.source as { url: string }).url)
+    );
+    let added = 0;
+    for (const url of urls) {
+      if (pending.has(url)) continue;
+      pending.add(url);
+      this.push({ kind: "link", url }, url, tags, mode);
+      added++;
+    }
     this.pump();
+    return added;
   }
 
   private push(source: Source, name: string, tags: string[], mode: UploadMode) {
@@ -135,6 +229,21 @@ class Uploads {
     this.pump();
   }
 
+  /** Tries every failed song again, in the order they were added. */
+  retryFailed() {
+    this.entries = this.entries.map((e) =>
+      e.status === "failed" ? { ...e, status: "waiting", stage: null, error: null, finishedAt: null } : e
+    );
+    this.emit();
+    this.pump();
+  }
+
+  /** Forgets every song that hasn't started yet. */
+  removeWaiting() {
+    this.entries = this.entries.filter((e) => e.status !== "waiting");
+    this.emit();
+  }
+
   /** Forgets a song that's finished, failed or not started yet. */
   remove(id: string) {
     this.entries = this.entries.filter((e) => e.id !== id || e.status === "working");
@@ -147,19 +256,24 @@ class Uploads {
   }
 
   /**
-   * Starts waiting songs while there's room: two at a time on a computer
-   * (one splitting while the other's stems upload), one on a phone, where
-   * memory is tight.
+   * Starts waiting songs, in order, while there's room. Songs split here:
+   * two at a time on a computer (one splitting while the other's stems
+   * upload), one on a phone, where memory is tight. Songs for the queue
+   * are only sent, so a few at once on any device.
    */
   private pump() {
-    const limit = isConstrainedDevice() ? 1 : 2;
-    while (this.active < limit) {
-      const next = this.entries.find((e) => e.status === "waiting");
+    const limits: Record<UploadMode, number> = {
+      split: isConstrainedDevice() ? 1 : 2,
+      queue: QUEUE_SENDS_AT_ONCE,
+    };
+    for (;;) {
+      const next = this.entries.find((e) => e.status === "waiting" && this.active[e.mode] < limits[e.mode]);
       if (!next) return;
-      this.active++;
+      const { mode } = next;
+      this.active[mode]++;
       this.update(next.id, { status: "working", stage: null });
       void this.run(next).finally(() => {
-        this.active--;
+        this.active[mode]--;
         this.pump();
       });
     }

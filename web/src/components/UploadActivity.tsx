@@ -76,19 +76,34 @@ export function UploadList() {
   const items = useUploads();
   if (items.length === 0) return null;
   const active = items.filter((i) => i.status === "working" || i.status === "waiting").length;
-  const hasDone = items.some((i) => i.status === "done");
+  const done = items.filter((i) => i.status === "done").length;
+  const waiting = items.filter((i) => i.status === "waiting").length;
+  const failed = items.filter((i) => i.status === "failed").length;
   const queue = items.some((i) => i.mode === "queue" && i.status !== "done");
   return (
     <section className="mt-6">
-      <div className="mb-2 flex items-center justify-between gap-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
         <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">
           {active ? `Adding ${active} ${active === 1 ? "song" : "songs"}` : "Added"}
+          {active > 0 && done > 0 && <span className="font-normal normal-case"> · {done} done</span>}
         </h2>
-        {hasDone && (
-          <button onClick={() => uploads.clearFinished()} className="text-xs text-muted hover:text-foreground">
-            Clear finished
-          </button>
-        )}
+        <div className="flex gap-3 text-xs">
+          {failed > 1 && (
+            <button onClick={() => uploads.retryFailed()} className="font-medium text-brand-strong hover:underline">
+              Try all {failed} again
+            </button>
+          )}
+          {waiting > 1 && (
+            <button onClick={() => uploads.removeWaiting()} className="text-muted hover:text-foreground">
+              Remove {waiting} waiting
+            </button>
+          )}
+          {done > 0 && (
+            <button onClick={() => uploads.clearFinished()} className="text-muted hover:text-foreground">
+              Clear finished
+            </button>
+          )}
+        </div>
       </div>
       <ul className="flex flex-col gap-2">
         {items.map((item) => (
@@ -98,7 +113,7 @@ export function UploadList() {
       {active > 0 && (
         <p className="mt-2 text-xs text-muted">
           {queue
-            ? "Keep Remixt open until it’s sent — you can use the rest of the site meanwhile."
+            ? "You can use the rest of the site meanwhile. If your screen turns off, sending pauses and carries on when you’re back — just don’t close Remixt."
             : "This carries on in the background — feel free to use the rest of the site. Just don’t close the tab."}
         </p>
       )}
@@ -181,24 +196,30 @@ export function BackgroundActivity({ signedIn }: { signedIn: boolean }) {
             <ProgressBar progress={own.progress} />
             <p className="mt-1.5 truncate text-muted">
               {own.label}
-              {active.length > 1 ? ` · ${active.length - 1} more after this` : ""}
+              {active.length > 1 ? ` · ${active.length - 1} more to go` : ""}
             </p>
           </div>
         )}
         {!current && active.length > 0 && <p className="font-semibold">🎵 {active.length} songs waiting to be added</p>}
-        {justDone.map((item) => (
-          <p key={item.id} className="truncate font-semibold text-success">
-            ✓ “{item.name}” — {doneText(item).toLowerCase()}
-          </p>
-        ))}
-        {failed.map((item) => (
-          <p key={item.id} className="text-danger">
-            <span className="font-semibold">Couldn&apos;t add “{item.name}”.</span>{" "}
+        {justDone.length > 2 ? (
+          <p className="truncate font-semibold text-success">✓ {justDone.length} songs added</p>
+        ) : (
+          justDone.map((item) => (
+            <p key={item.id} className="truncate font-semibold text-success">
+              ✓ “{item.name}” — {doneText(item).toLowerCase()}
+            </p>
+          ))
+        )}
+        {failed.length > 0 && (
+          <p className="text-danger">
+            <span className="font-semibold">
+              {failed.length === 1 ? `Couldn’t add “${failed[0].name}”.` : `Couldn’t add ${failed.length} songs.`}
+            </span>{" "}
             <Link href="/upload" className="underline underline-offset-2">
               See why
             </Link>
           </p>
-        ))}
+        )}
         {helping && helperStage && (
           <Link href="/upload" className="block rounded-lg hover:bg-surface-hover">
             <div className="flex items-center justify-between gap-2">

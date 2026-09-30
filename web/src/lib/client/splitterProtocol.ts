@@ -23,8 +23,6 @@ export type SplitterRequest =
       bitrate: StemBitrate;
       /** Also keep the beat's drums, bass and other parts as stems of their own. */
       parts: boolean;
-      /** Encode each stem in a worker of its own (faster; each costs a little memory). */
-      parallelEncode: boolean;
     }
   /** Stop a split at the next segment; it ends with a split-error. */
   | { type: "cancel"; jobId: number };
