@@ -6,16 +6,8 @@ import { encodeMp3Bytes } from "./mp3";
 import { fetchInSlices } from "./stemFetch";
 import { useStudioStore } from "./studioStore";
 import { keepScreenOn } from "./wakeLock";
-import {
-  isConstrainedDevice,
-  splitSong,
-  splitter,
-  splitTrackPayload,
-  upload,
-  uploadStems,
-  type UploadStage,
-  type UploadTarget,
-} from "./splitter";
+import { upload, type UploadTarget } from "./directUpload";
+import { isConstrainedDevice, splitSong, splitter, splitTrackPayload, uploadStems, type UploadStage } from "./splitter";
 
 // The browser side of the split queue (see lib/splitQueue.ts on the
 // server). A phone sends its song to the queue; a computer whose owner has
@@ -52,10 +44,12 @@ export async function fetchQueue(): Promise<{ jobs: QueuedJob[]; stats: QueueSta
 
 /** Worth shrinking before sending: lossless (WAV, FLAC, ALAC) or otherwise very high bitrate. */
 const SHRINK_ABOVE_KBPS = 400;
-/** Small files go up quickly anyway. */
-const SHRINK_MIN_BYTES = 8 * 1024 * 1024;
+/** Smaller files go up about as fast as they'd take to shrink. */
+const SHRINK_MIN_BYTES = 16 * 1024 * 1024;
 /** Longer songs would need more memory to re-encode than a phone gives a page. */
 const SHRINK_MAX_SECONDS = 7 * 60;
+/** A slow phone that hasn't shrunk it by now just sends the original. */
+const SHRINK_DEADLINE_MS = 60_000;
 
 /** A song's length from its header, without decoding it (null if the browser can't tell). */
 function audioDuration(file: File): Promise<number | null> {
@@ -80,7 +74,8 @@ function audioDuration(file: File): Promise<number | null> {
  * A lossless file is 5–10× the size it needs to be for splitting, and a
  * phone's upload is usually the slowest link there is — so a big, high-
  * bitrate song is re-encoded here as a 256 kbps MP3 (far above what the
- * splitter can tell apart) before it's sent. Anything that goes wrong
+ * splitter can tell apart) before it's sent. Only ever in a worker, so the
+ * page stays responsive, and only for so long. Anything that goes wrong
  * just sends the original.
  */
 async function shrinkForQueue(file: File, onStage: (stage: UploadStage) => void): Promise<File> {
@@ -89,10 +84,12 @@ async function shrinkForQueue(file: File, onStage: (stage: UploadStage) => void)
   if (!duration || duration > SHRINK_MAX_SECONDS) return file;
   if ((file.size * 8) / duration / 1000 < SHRINK_ABOVE_KBPS) return file;
   onStage({ stage: "compressing" });
+  const deadline = AbortSignal.timeout(SHRINK_DEADLINE_MS);
   try {
     const ctx = new OfflineAudioContext(2, 1, 44100);
     const buffer = await ctx.decodeAudioData(await file.arrayBuffer());
-    const bytes = await encodeMp3Bytes(buffer, { bitrate: 256 });
+    deadline.throwIfAborted();
+    const bytes = await encodeMp3Bytes(buffer, { bitrate: 256, workerOnly: true, signal: deadline });
     if (bytes.length > file.size * 0.8) return file;
     return new File([bytes as BlobPart], `${file.name.replace(/\.[^/.]+$/, "")}.mp3`, { type: "audio/mpeg" });
   } catch {
@@ -120,11 +117,10 @@ export async function queueFile(original: File, tags: string[], onStage: (stage:
     "Couldn't add the song to the queue"
   );
   try {
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    // (Straight to Blob, how far along it is can't be seen until it's done.)
-    onStage({ stage: "queueing", progress: created.upload.type === "blob" ? null : 0 });
-    await upload(created.upload, bytes, (sent) =>
-      onStage({ stage: "queueing", progress: sent === bytes.length || created.upload.type !== "blob" ? sent / bytes.length : null })
+    // The file itself, not its bytes: it's read from disk as it's sent,
+    // so even a big WAV never has to fit in the phone's memory.
+    await upload(created.upload, file, (sent) =>
+      onStage({ stage: "queueing", progress: Math.min(1, sent / Math.max(1, file.size)) })
     );
     await json(await fetch(`/api/split-jobs/${created.id}/queued`, { method: "POST" }), "Couldn't queue the song");
   } catch (err) {

@@ -2,7 +2,7 @@
 
 import { audioEngine } from "./audioEngine";
 import { encodeMp3Bytes } from "./mp3";
-import { upload, type UploadTarget } from "./splitter";
+import { upload, type UploadTarget } from "./directUpload";
 
 // Records a vocal over the Studio mix. The microphone is read inside the
 // Studio's own audio graph (an AudioWorklet), so every block of samples
