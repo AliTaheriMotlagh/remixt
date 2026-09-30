@@ -130,8 +130,8 @@ export type UploadTarget =
 
 /**
  * How the browser should upload the file for `key`. With Blob that's a
- * client token that can only write that one path, with that type and up to
- * MAX_STEM_BYTES, for an hour. With R2 it's a signed bucket URL valid for
+ * client token that can only write that one path (as often as it takes),
+ * with that type and up to MAX_STEM_BYTES, for an hour. With R2 it's a signed bucket URL valid for
  * an hour; locally it's `localPath`, a route on this app that checks
  * ownership and streams the body to disk.
  */
@@ -149,6 +149,12 @@ export async function createUploadTarget(
       maximumSizeInBytes: maxBytes,
       validUntil: Date.now() + 60 * 60 * 1000,
       addRandomSuffix: false,
+      // Uploads are retried — by the browser after a timeout, and by the
+      // Blob library itself after a dropped connection — and a first try
+      // may have landed even though its answer never arrived. Without
+      // this, every retry after that fails with "this blob already
+      // exists", and the stem (or queued song) can never be uploaded.
+      allowOverwrite: true,
     });
     return { type: "blob", pathname: key, token, contentType, access: await blobAccess() };
   }

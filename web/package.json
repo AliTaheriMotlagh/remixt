@@ -8,7 +8,8 @@
     "prebuild": "node scripts/copy-ort.mjs && node scripts/fetch-ytdlp.mjs",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node scripts/test.mjs"
   },
   "dependencies": {
     "@vercel/blob": "^2.8.0",

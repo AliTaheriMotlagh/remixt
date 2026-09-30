@@ -229,6 +229,30 @@ type ClaimedJob = { id: string; title: string; filename: string; forSomeoneElse:
 
 class LostJob extends Error {}
 
+/**
+ * Helping is switched on for the whole browser, so it runs in every open
+ * tab — and each tab would load its own ~500 MB model and split a song of
+ * its own at the same time, fighting over the one GPU and the memory until
+ * they all crawl or crash. So a tab only asks for a song while it holds
+ * this lock, and keeps it until that song is done: one song at a time per
+ * browser, however many tabs. (A browser without Web Locks just goes ahead.)
+ */
+const HELPER_LOCK = "remixt-split-helper";
+
+/** Runs `work` if no other tab is helping right now; false if one is. */
+async function ifNoOtherTabHelping(work: () => Promise<void>): Promise<boolean> {
+  const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+  if (!locks) {
+    await work();
+    return true;
+  }
+  return locks.request(HELPER_LOCK, { ifAvailable: true }, async (lock) => {
+    if (!lock) return false;
+    await work();
+    return true;
+  });
+}
+
 function stageName(stage: UploadStage) {
   return stage.stage === "uploading" || stage.stage === "saving" ? "uploading" : stage.stage;
 }
@@ -280,10 +304,13 @@ class SplitHelper {
     } catch {
       // Storage blocked — helping just doesn't survive a reload.
     }
-    if (saved && !this.state.enabled) this.setEnabled(true);
+    // Not loading the model up front here: this runs in every tab on every
+    // page load, and each would hold its own ~500 MB copy. The tab whose
+    // turn it is loads it (from Cache Storage) when a song arrives.
+    if (saved && !this.state.enabled) this.setEnabled(true, { preload: false });
   }
 
-  setEnabled(on: boolean) {
+  setEnabled(on: boolean, { preload = true }: { preload?: boolean } = {}) {
     if (on && !this.canHelp()) return;
     try {
       if (on) localStorage.setItem(ENABLED_KEY, "on");
@@ -297,7 +324,7 @@ class SplitHelper {
     if (on) {
       // Have the model loaded before the first song arrives, rather than
       // making its owner wait for it (not on a page playing music).
-      if (!this.pageReason) void splitter.load().catch(() => {});
+      if (preload && !this.pageReason) void splitter.load().catch(() => {});
       void this.run();
     }
   }
@@ -344,28 +371,37 @@ class SplitHelper {
           await this.wait(5_000);
           continue;
         }
-        let claim: { job: ClaimedJob | null; stats: QueueStats };
-        try {
-          claim = await json(
-            await fetch("/api/split-jobs/claim", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ session: await tabSession() }),
-            }),
-            "Couldn't reach the queue"
-          );
-        } catch {
-          this.set({ status: "waiting", message: "Can't reach the queue — trying again shortly" });
-          await this.wait(POLL_MS * 2);
-          continue;
+        let pause = 0;
+        const ours = await ifNoOtherTabHelping(async () => {
+          let claim: { job: ClaimedJob | null; stats: QueueStats };
+          try {
+            claim = await json(
+              await fetch("/api/split-jobs/claim", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ session: await tabSession() }),
+              }),
+              "Couldn't reach the queue"
+            );
+          } catch {
+            this.set({ status: "waiting", message: "Can't reach the queue — trying again shortly" });
+            pause = POLL_MS * 2;
+            return;
+          }
+          this.set({ stats: claim.stats });
+          if (!claim.job) {
+            this.set({ status: "waiting", message: null });
+            pause = POLL_MS;
+            return;
+          }
+          await this.process(claim.job);
+        });
+        if (!ours) {
+          this.set({ status: "paused", message: "another tab is splitting a song" });
+          pause = POLL_MS;
         }
-        this.set({ stats: claim.stats });
-        if (!claim.job) {
-          this.set({ status: "waiting", message: null });
-          await this.wait(POLL_MS);
-          continue;
-        }
-        await this.process(claim.job);
+        // Waited for outside the lock, so another tab can take a turn meanwhile.
+        if (pause) await this.wait(pause);
       }
     } finally {
       this.running = false;
