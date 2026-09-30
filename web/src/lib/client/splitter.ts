@@ -386,33 +386,71 @@ export async function upload(target: UploadTarget, body: Uint8Array, onProgress:
  * upload works everywhere. The library's own retries can't be interrupted
  * mid-wait, so the time limit races it rather than relying on the abort.
  */
-async function putToBlob(target: Extract<UploadTarget, { type: "blob" }>, body: Uint8Array) {
+async function putToBlob(
+  target: Extract<UploadTarget, { type: "blob" }>,
+  body: Uint8Array
+) {
   const { put } = await import("@vercel/blob/client");
+
   const controller = new AbortController();
-  const request = put(target.pathname, new Blob([body as BlobPart], { type: target.contentType }), {
-    access: target.access,
-    token: target.token,
-    contentType: target.contentType,
-    // Blob's parts are 8 MB, so a file of two or more goes up in parallel
-    // parts. (Smaller, it'd be one part plus two extra round trips to
-    // start and finish it: slower than a plain upload.)
-    multipart: body.length > 16 * 1024 * 1024,
-    abortSignal: controller.signal,
-  });
-  // Settled either way below; this only stops a late failure after a
-  // timeout being reported as unhandled.
+
+  const blob = new Blob(
+    [body as BlobPart],
+    {
+      type: target.contentType,
+    }
+  );
+
+  const request = put(
+    target.pathname,
+    blob,
+    {
+      access: target.access,
+      token: target.token,
+      contentType: target.contentType,
+
+      // Use multipart earlier for better throughput
+      // on larger stems.
+      multipart:
+        body.length >
+        8 * 1024 * 1024,
+
+      abortSignal: controller.signal,
+    }
+  );
+
   request.catch(() => {});
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      controller.abort();
-      reject(new Error("The upload took too long — check your connection"));
-    }, uploadTimeLimit(body.length));
-  });
+
+  let timer:
+    | ReturnType<typeof setTimeout>
+    | undefined;
+
+  const timeout = new Promise<never>(
+    (_, reject) => {
+      timer = setTimeout(
+        () => {
+          controller.abort();
+
+          reject(
+            new Error(
+              "The upload took too long — check your connection"
+            )
+          );
+        },
+        uploadTimeLimit(body.length)
+      );
+    }
+  );
+
   try {
-    await Promise.race([request, timeout]);
+    await Promise.race([
+      request,
+      timeout,
+    ]);
   } finally {
-    clearTimeout(timer);
+    if (timer) {
+      clearTimeout(timer);
+    }
   }
 }
 
@@ -532,22 +570,116 @@ export async function uploadStems(
   result: SplitResult,
   onStage: (stage: UploadStage) => void
 ) {
+  const STEMS_AT_ONCE = 4;
+
   const files = (Object.entries(uploads) as [SplitOutput, UploadTarget][])
-    .map(([kind, target]) => ({ kind, target, bytes: result.mp3[kind] }))
-    .filter((f): f is { kind: SplitOutput; target: UploadTarget; bytes: Uint8Array } => !!f.bytes);
-  const total = files.reduce((n, f) => n + f.bytes.length, 0);
-  const sent: Partial<Record<SplitOutput, number>> = {};
-  const report = () =>
-    onStage({ stage: "uploading", progress: Object.values(sent).reduce((a, b) => a + (b ?? 0), 0) / total });
-  report();
-  const waiting = [...files];
-  const next = async (): Promise<void> => {
-    const f = waiting.shift();
-    if (!f) return;
-    await upload(f.target, f.bytes, (n) => ((sent[f.kind] = n), report()));
-    return next();
+    .map(([kind, target]) => ({
+      kind,
+      target,
+      bytes: result.mp3[kind],
+    }))
+    .filter(
+      (
+        file
+      ): file is {
+        kind: SplitOutput;
+        target: UploadTarget;
+        bytes: Uint8Array;
+      } => !!file.bytes
+    );
+
+  if (files.length === 0) {
+    onStage({
+      stage: "uploading",
+      progress: 1,
+    });
+
+    return;
+  }
+
+  const totalBytes = files.reduce(
+    (sum, file) => sum + file.bytes.length,
+    0
+  );
+
+  const uploadedBytes: Partial<Record<SplitOutput, number>> = {};
+
+  for (const file of files) {
+    uploadedBytes[file.kind] = 0;
+  }
+
+  const reportProgress = () => {
+    const uploaded = Object.values(uploadedBytes).reduce(
+      (sum, value) => sum + (value ?? 0),
+      0
+    );
+
+    const progress =
+      totalBytes > 0
+        ? Math.min(1, uploaded / totalBytes)
+        : 1;
+
+    onStage({
+      stage: "uploading",
+      progress,
+    });
   };
-  await Promise.all(Array.from({ length: Math.min(STEMS_AT_ONCE, files.length) }, next));
+
+  reportProgress();
+
+  const waiting = [...files];
+
+  const uploadNext = async (): Promise<void> => {
+    while (true) {
+      const file = waiting.shift();
+
+      if (!file) {
+        return;
+      }
+
+      try {
+        await upload(
+          file.target,
+          file.bytes,
+          (loaded) => {
+            uploadedBytes[file.kind] = Math.min(
+              loaded,
+              file.bytes.length
+            );
+
+            reportProgress();
+          }
+        );
+
+        uploadedBytes[file.kind] = file.bytes.length;
+
+        reportProgress();
+      } catch (error) {
+        uploadedBytes[file.kind] = 0;
+
+        reportProgress();
+
+        throw error;
+      }
+    }
+  };
+
+  const workerCount = Math.min(
+    STEMS_AT_ONCE,
+    files.length
+  );
+
+  await Promise.all(
+    Array.from(
+      { length: workerCount },
+      () => uploadNext()
+    )
+  );
+
+  onStage({
+    stage: "uploading",
+    progress: 1,
+  });
 }
 
 /**
