@@ -6,6 +6,7 @@ import Waveform from "../Waveform";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { prepareRecording, startRecording, uploadTake, type Recording, type Take } from "@/lib/client/recorder";
 import { useStudioStore } from "@/lib/client/studioStore";
+import { useKeepScreenOn } from "@/lib/client/wakeLock";
 
 function formatTime(seconds: number) {
   const m = Math.floor(seconds / 60);
@@ -53,6 +54,8 @@ export default function VocalRecorder({ signedIn }: { signedIn: boolean }) {
   const recording = useRef<Recording | null>(null);
   const [active, setActive] = useState<Recording | null>(null);
   const preview = useRef<{ ctx: AudioContext; source: AudioBufferSourceNode } | null>(null);
+  // Getting ready, singing and saving the take: a locked phone would cut any of them off.
+  useKeepScreenOn("recording", state === "starting" || state === "recording" || state === "saving");
 
   async function begin() {
     setError(null);

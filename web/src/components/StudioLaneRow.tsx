@@ -25,6 +25,7 @@ import {
   type LaneClip,
   type StudioLane,
 } from "@/lib/client/studioStore";
+import { useKeepScreenOn } from "@/lib/client/wakeLock";
 
 function formatOffset(seconds: number) {
   const sign = seconds < 0 ? "-" : "";
@@ -125,6 +126,8 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
   const [exporting, setExporting] = useState(false);
   const [selectedClip, setSelectedClip] = useState<number | null>(null);
   const [cutting, setCutting] = useState(false);
+  // Exporting this lane or cutting its silences.
+  useKeepScreenOn("lane-work", exporting || cutting);
   const [editNote, setEditNote] = useState<string | null>(null);
   const [pitchDraft, setPitchDraft] = useState(lane.pitchSemitones);
   const [lastSeenPitch, setLastSeenPitch] = useState(lane.pitchSemitones);

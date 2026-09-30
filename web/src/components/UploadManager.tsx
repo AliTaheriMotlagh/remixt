@@ -17,6 +17,7 @@ import { useStudioStore } from "@/lib/client/studioStore";
 import { isYouTubeLink, YOUTUBE_UNAVAILABLE } from "@/lib/linkHosts";
 import { queueFile, queueLink } from "@/lib/client/splitQueue";
 import { HelperPanel, QueuedSongs, QueueNotice } from "./SplitQueue";
+import { useKeepScreenOn } from "@/lib/client/wakeLock";
 
 type Stem = {
   id: string;
@@ -115,6 +116,11 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
     const interval = setInterval(fetchTracks, 3000);
     return () => clearInterval(interval);
   }, [tracks, fetchTracks]);
+
+  // Fetching, splitting and uploading take minutes and live in this tab:
+  // keep the screen on meanwhile (a phone that locks itself pauses the
+  // page, and the work with it) — only while it runs, not just for being here.
+  useKeepScreenOn("upload", busy);
 
   // Splitting takes minutes and lives in this tab, so warn before leaving.
   useEffect(() => {

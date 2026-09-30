@@ -10,6 +10,7 @@ import {
 } from "@/lib/client/matchOptions";
 import { applyPairPlan, preparePair } from "@/lib/client/pairMatch";
 import { FX_PRESETS, useStudioStore, type LanePatch, type StudioLane } from "@/lib/client/studioStore";
+import { useKeepScreenOn } from "@/lib/client/wakeLock";
 
 type Baseline = { patches: Record<string, LanePatch>; projectBpm: number };
 
@@ -71,6 +72,7 @@ export default function LaneMatchPanel({ lane }: { lane: StudioLane }) {
   const [partnerId, setPartnerId] = useState("");
   const [options, setOptions] = useState<MatchOptions>(DEFAULT_OPTIONS);
   const [busy, setBusy] = useState(false);
+  useKeepScreenOn("lane-match", busy);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string[] | null>(null);
   const [baseline, setBaseline] = useState<Baseline | null>(null);

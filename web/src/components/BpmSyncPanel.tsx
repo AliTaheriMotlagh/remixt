@@ -15,6 +15,7 @@ import {
   referenceLane,
   useStudioStore,
 } from "@/lib/client/studioStore";
+import { useKeepScreenOn } from "@/lib/client/wakeLock";
 
 /**
  * Project tempo: the grid every other timing control is measured against
@@ -37,6 +38,7 @@ export default function BpmSyncPanel() {
   const [showAi, setShowAi] = useState(false);
   const [steps, setSteps] = useState<MatchSteps>(ALL_STEPS);
   const [matching, setMatching] = useState(false);
+  useKeepScreenOn("ai-match", matching);
   const [suggestions, setSuggestions] = useState<MatchSuggestions | null>(null);
   const [appliedId, setAppliedId] = useState<string | null>(null);
   const [matchError, setMatchError] = useState<string | null>(null);

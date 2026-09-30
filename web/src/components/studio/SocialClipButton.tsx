@@ -5,6 +5,7 @@ import { downloadBlob, safeFilename } from "@/lib/client/mixdown";
 import { canMakeClips, makeSocialClip, MAX_CLIP_SECONDS, type SocialClip } from "@/lib/client/socialClip";
 import { useStudioStore } from "@/lib/client/studioStore";
 import { shortPath } from "@/lib/shareLinks";
+import { useKeepScreenOn } from "@/lib/client/wakeLock";
 
 const noSubscription = () => () => {};
 
@@ -35,6 +36,7 @@ export default function SocialClipButton({ title, artist, remixId }: { title: st
   const [stage, setStage] = useState<{ label: string; fraction: number } | null>(null);
   const [clip, setClip] = useState<{ clip: SocialClip; url: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  useKeepScreenOn("social-clip", stage !== null);
   const abort = useRef<AbortController | null>(null);
 
   useEffect(() => () => {

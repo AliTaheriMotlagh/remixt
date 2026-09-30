@@ -4,6 +4,7 @@ import { useSyncExternalStore } from "react";
 import { previewPlayer } from "./previewPlayer";
 import { fetchInSlices } from "./stemFetch";
 import { useStudioStore } from "./studioStore";
+import { keepScreenOn } from "./wakeLock";
 import {
   isConstrainedDevice,
   splitSong,
@@ -146,6 +147,8 @@ class SplitHelper {
 
   private set(patch: Partial<HelperState>) {
     this.state = { ...this.state, ...patch };
+    // Only while a song is actually being split — waiting for one doesn't need the screen.
+    keepScreenOn("split-helper", this.state.status === "working");
     for (const listener of this.listeners) listener();
   }
 

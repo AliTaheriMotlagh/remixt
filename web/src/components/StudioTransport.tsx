@@ -11,6 +11,7 @@ import { markDraftClean } from "@/lib/client/studioDraft";
 import type { User } from "@/lib/auth";
 import TagInput from "./TagInput";
 import SocialClipButton from "./studio/SocialClipButton";
+import { useKeepScreenOn } from "@/lib/client/wakeLock";
 
 function formatTime(seconds: number) {
   const m = Math.floor(seconds / 60);
@@ -139,6 +140,7 @@ export default function StudioTransport({
   const [savedId, setSavedId] = useState<string | null>(null);
   const [exportStage, setExportStage] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
+  useKeepScreenOn("export", exportStage !== null);
   // Read after mount: the server has no idea what this browser picked.
   const [exportFormat, setFormat] = useState<ExportFormat | null>(null);
   const format = exportFormat ?? "mp3";
