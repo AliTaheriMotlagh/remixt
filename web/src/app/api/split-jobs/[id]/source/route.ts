@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { getJob, MAX_SOURCE_BYTES } from "@/lib/splitQueue";
+import { getJob, isWorkerOf, MAX_SOURCE_BYTES, SESSION_HEADER } from "@/lib/splitQueue";
 import { serveObject, writeStorageStream } from "@/lib/storage";
 
 // The queued song itself: the helper splitting it downloads it from here
@@ -11,8 +11,12 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Sign in required" }, { status: 401 });
   const job = await getJob((await params).id);
-  const allowed = job && job.status === "working" && job.worker_id === user.id;
-  if (!job || !allowed) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  // In the query rather than a header: this may redirect to the storage's
+  // CDN, and a custom header would make that a request it has to approve.
+  const session = req.nextUrl.searchParams.get("session") ?? req.headers.get(SESSION_HEADER);
+  if (!isWorkerOf(job, user.id, session)) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
   return serveObject(job.source_key, req.headers.get("range"));
 }
 

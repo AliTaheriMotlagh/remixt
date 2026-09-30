@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { attachTrack, getJob } from "@/lib/splitQueue";
+import { attachTrack, getJob, isWorkerOf, SESSION_HEADER } from "@/lib/splitQueue";
 import { createTrackForUpload, splitTrackSchema } from "@/lib/trackUpload";
 
 /**
@@ -12,7 +12,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Sign in required" }, { status: 401 });
   const job = await getJob((await params).id);
-  if (!job || job.status !== "working" || job.worker_id !== user.id) {
+  if (!isWorkerOf(job, user.id, req.headers.get(SESSION_HEADER))) {
     return NextResponse.json({ error: "This song isn't yours to split any more" }, { status: 409 });
   }
   const parsed = splitTrackSchema.safeParse(await req.json().catch(() => null));

@@ -392,11 +392,19 @@ export async function deleteObject(key: string): Promise<void> {
 }
 
 /**
- * Serves a stored object to the browser, with Range support: from R2's
- * public URL, in slices through this app for Blob, or from disk.
+ * Serves a stored object to the browser, with Range support: from the
+ * CDN for R2 and a public Blob store (straight there, at full speed), in
+ * slices through this app for a private Blob store, or from disk.
  */
-export function serveObject(key: string, rangeHeader: string | null): Promise<Response> | Response {
-  if (blobToken) return serveBlobRange(key, rangeHeader);
+export async function serveObject(key: string, rangeHeader: string | null): Promise<Response> {
+  if (blobToken) {
+    if ((await blobAccess()) === "public") {
+      const stored = await storedObject(key);
+      if (!stored?.url) return new Response("Not found", { status: 404 });
+      return Response.redirect(stored.url, 302);
+    }
+    return serveBlobRange(key, rangeHeader);
+  }
   const remote = publicUrl(key);
   if (remote) return Response.redirect(remote, 302);
   return serveStorageFile(key, rangeHeader);

@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { completeJob, getJob } from "@/lib/splitQueue";
+import { completeJob, getJob, isWorkerOf, SESSION_HEADER } from "@/lib/splitQueue";
 
 /** The helper has uploaded every stem: the song lands in its owner's library. */
-export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Sign in required" }, { status: 401 });
   const job = await getJob((await params).id);
-  if (!job || job.status !== "working" || job.worker_id !== user.id) {
+  if (!isWorkerOf(job, user.id, req.headers.get(SESSION_HEADER))) {
     return NextResponse.json({ error: "This song isn't yours to split any more" }, { status: 409 });
   }
   if (!(await completeJob(job))) {

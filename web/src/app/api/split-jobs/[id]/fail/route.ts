@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
-import { failJob, getJob } from "@/lib/splitQueue";
+import { failJob, getJob, isWorkerOf, SESSION_HEADER } from "@/lib/splitQueue";
 
 const bodySchema = z.object({ error: z.string().max(300).default("The split didn't finish") });
 
@@ -10,7 +10,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Sign in required" }, { status: 401 });
   const job = await getJob((await params).id);
-  if (!job || job.status !== "working" || job.worker_id !== user.id) {
+  if (!isWorkerOf(job, user.id, req.headers.get(SESSION_HEADER))) {
     return NextResponse.json({ ok: true });
   }
   const parsed = bodySchema.safeParse(await req.json().catch(() => ({})));

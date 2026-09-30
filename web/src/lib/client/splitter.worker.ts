@@ -11,6 +11,7 @@ import { CONSTANTS } from "demucs-web/constants";
 import { prepareModelInput, standaloneIspec, standaloneMask } from "demucs-web/processor";
 import { createMp3Encoder } from "wasm-media-encoders";
 import { estimateTempoDecimated, tempoDecimation } from "./analysis";
+import type { Mp3StreamRequest, Mp3StreamResponse } from "./mp3Stream.worker";
 import type { SplitOutput, SplitResult, SplitterRequest, SplitterResponse, StemBitrate } from "./splitterProtocol";
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -19,6 +20,8 @@ declare const self: DedicatedWorkerGlobalScope;
 const CACHE_NAME = "remixt-splitter-v1";
 
 let processor: DemucsProcessor | null = null;
+/** Splits asked to stop (checked between segments). */
+const cancelled = new Set<number>();
 
 function post(message: SplitterResponse, transfer: Transferable[] = []) {
   self.postMessage(message, transfer);
@@ -167,10 +170,11 @@ async function init(request: Extract<SplitterRequest, { type: "init" }>) {
   ort.env.wasm.wasmBinary = wasm;
   // Threads need SharedArrayBuffer, which needs a cross-origin isolated
   // page (see the COOP/COEP headers in next.config.ts). Without it the CPU
-  // path still works, just on one core.
-  const threads = self.crossOriginIsolated
-    ? Math.max(1, Math.min(8, navigator.hardwareConcurrency || 4))
-    : 1;
+  // path still works, just on one core. With it: every core but one (big
+  // desktops have 10–16), which is left for the page, so the rest of the
+  // site stays smooth while a song splits.
+  const cores = navigator.hardwareConcurrency || 4;
+  const threads = self.crossOriginIsolated ? Math.max(1, Math.min(16, cores - 1)) : 1;
   ort.env.wasm.numThreads = threads;
 
   const gpu = (navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;
@@ -243,15 +247,17 @@ class PeakMeter {
  */
 const MP3_DELAY = 576 + 529;
 
-/** An MP3 encoder fed a piece at a time, as the splitter finishes them. */
-async function streamingMp3(sampleRate: number, bitrate: StemBitrate) {
+type StemEncoder = { add(left: Float32Array, right: Float32Array): void; finish(): Promise<Uint8Array> };
+
+/** An MP3 encoder fed a piece at a time, as the splitter finishes them — here, on this thread. */
+async function inlineMp3(sampleRate: number, bitrate: StemBitrate): Promise<StemEncoder> {
   const encoder = await createMp3Encoder();
   encoder.configure({ sampleRate, channels: 2, bitrate });
   const parts: Uint8Array[] = [];
   let skip = MP3_DELAY;
   const CHUNK = 1152 * 64;
   return {
-    add(fullLeft: Float32Array, fullRight: Float32Array) {
+    add(fullLeft, fullRight) {
       const from = Math.min(skip, fullLeft.length);
       skip -= from;
       const left = fullLeft.subarray(from);
@@ -262,7 +268,7 @@ async function streamingMp3(sampleRate: number, bitrate: StemBitrate) {
         parts.push(encoder.encode([left.subarray(start, end), right.subarray(start, end)]).slice());
       }
     },
-    finish() {
+    async finish() {
       parts.push(encoder.finalize().slice());
       const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
       let offset = 0;
@@ -273,6 +279,75 @@ async function streamingMp3(sampleRate: number, bitrate: StemBitrate) {
       return out;
     },
   };
+}
+
+/** How long a stem encoder's worker gets to start before this thread encodes instead. */
+const ENCODER_START_MS = 10_000;
+/** The current split's encoder workers, stopped when it ends — however it ends. */
+const encoderWorkers = new Set<Worker>();
+
+/**
+ * The same, in a worker of its own (mp3Stream.worker.ts), so encoding runs
+ * on another core alongside the splitting instead of taking turns with it.
+ * Null if the worker doesn't start (no nested workers, say) — the caller
+ * then encodes here.
+ */
+function workerMp3(sampleRate: number, bitrate: StemBitrate): Promise<StemEncoder | null> {
+  let worker: Worker;
+  try {
+    worker = new Worker(new URL("./mp3Stream.worker.ts", import.meta.url), { type: "module" });
+  } catch {
+    return Promise.resolve(null);
+  }
+  encoderWorkers.add(worker);
+  return new Promise((resolve) => {
+    let result: { resolve: (bytes: Uint8Array) => void; reject: (err: Error) => void } | null = null;
+    let failure: Error | null = null;
+    const fail = (err: Error) => {
+      failure ??= err;
+      worker.terminate();
+      result?.reject(err);
+    };
+    const timer = setTimeout(() => {
+      worker.terminate();
+      resolve(null);
+    }, ENCODER_START_MS);
+
+    worker.onmessage = (event: MessageEvent<Mp3StreamResponse>) => {
+      const message = event.data;
+      if (message.type === "ready") {
+        clearTimeout(timer);
+        resolve({
+          add(left, right) {
+            if (failure) return;
+            // These buffers are fresh for each stretch, so they can be handed over rather than copied.
+            worker.postMessage({ type: "add", left, right } satisfies Mp3StreamRequest, [left.buffer, right.buffer]);
+          },
+          finish() {
+            if (failure) return Promise.reject(failure);
+            return new Promise<Uint8Array>((res, rej) => {
+              result = { resolve: res, reject: rej };
+              worker.postMessage({ type: "finish" } satisfies Mp3StreamRequest);
+            });
+          },
+        });
+      } else if (message.type === "done") {
+        worker.terminate();
+        result?.resolve(message.bytes);
+      } else {
+        clearTimeout(timer);
+        fail(new Error(`Couldn't encode a stem: ${message.message}`));
+        resolve(null);
+      }
+    };
+    worker.onerror = (event) => {
+      event.preventDefault();
+      clearTimeout(timer);
+      fail(new Error("A stem's encoder crashed — the browser may be out of memory"));
+      resolve(null);
+    };
+    worker.postMessage({ type: "start", sampleRate, bitrate, skip: MP3_DELAY } satisfies Mp3StreamRequest);
+  });
 }
 
 const { TRAINING_SAMPLES, MODEL_SPEC_BINS, MODEL_SPEC_FRAMES, SEGMENT_OVERLAP } = CONSTANTS;
@@ -353,7 +428,7 @@ async function separateSegment(
  * only ever holds one segment's worth.
  */
 async function split(request: Extract<SplitterRequest, { type: "split" }>) {
-  const { jobId, left, right, sampleRate, bitrate, parts } = request;
+  const { jobId, left, right, sampleRate, bitrate, parts, parallelEncode } = request;
   const session = processor?.session;
   if (!session) throw new Error("The splitter isn't loaded yet");
   const ort = (processor as unknown as { ort: Parameters<typeof separateSegment>[1] }).ort;
@@ -368,10 +443,15 @@ async function split(request: Extract<SplitterRequest, { type: "split" }>) {
   const pending = Object.fromEntries(outputs.map((o) => [o, stereo(TRAINING_SAMPLES)])) as Record<SplitOutput, Stereo>;
   const weights = new Float32Array(TRAINING_SAMPLES);
 
-  const encoders = {} as Record<SplitOutput, Awaited<ReturnType<typeof streamingMp3>>>;
+  // Each stem encodes in a worker of its own where it can (not on phones,
+  // where every worker's memory counts), on this thread otherwise.
+  const started = parallelEncode
+    ? await Promise.all(outputs.map(() => workerMp3(sampleRate, bitrate)))
+    : outputs.map(() => null);
+  const encoders = {} as Record<SplitOutput, StemEncoder>;
   const meters = {} as Record<SplitOutput, PeakMeter>;
-  for (const o of outputs) {
-    encoders[o] = await streamingMp3(sampleRate, bitrate);
+  for (const [i, o] of outputs.entries()) {
+    encoders[o] = started[i] ?? (await inlineMp3(sampleRate, bitrate));
     meters[o] = new PeakMeter(total);
   }
   const factor = tempoDecimation(sampleRate);
@@ -400,8 +480,9 @@ async function split(request: Extract<SplitterRequest, { type: "split" }>) {
           }
         }
       }
-      encoders[o].add(out.left, out.right);
+      // Metered first: a worker encoder takes the buffers over.
       meters[o].add(out.left, out.right);
+      encoders[o].add(out.left, out.right);
       // Slide the window along.
       for (const channel of [buffer.left, buffer.right]) {
         channel.copyWithin(0, count);
@@ -414,15 +495,31 @@ async function split(request: Extract<SplitterRequest, { type: "split" }>) {
 
   const segLeft = new Float32Array(TRAINING_SAMPLES);
   const segRight = new Float32Array(TRAINING_SAMPLES);
-  let done = 0;
-  for (let start = 0; start < total; start += stride) {
+  /** Starts the model on the segment at `start` (its input is copied before this returns). */
+  const run = (start: number) => {
     const length = Math.min(TRAINING_SAMPLES, total - start);
     segLeft.fill(0);
     segRight.fill(0);
     segLeft.set(left.subarray(start, start + length));
     segRight.set(right.subarray(start, start + length));
+    return separateSegment(session, ort, segLeft, segRight, outputs);
+  };
 
-    const separated = await separateSegment(session, ort, segLeft, segRight, outputs);
+  let done = 0;
+  let next = run(0);
+  for (let start = 0; start < total; start += stride) {
+    const length = Math.min(TRAINING_SAMPLES, total - start);
+    const separated = await next;
+    if (cancelled.has(jobId)) throw new Error("Cancelled");
+    // Get the model going on the next segment before cross-fading and
+    // encoding this one, so the GPU works while this thread does — rather
+    // than each waiting for the other in turn.
+    if (start + stride < total) {
+      next = run(start + stride);
+      // Awaited next time round; this only stops an early failure here
+      // being reported as unhandled if this segment fails first.
+      next.catch(() => {});
+    }
 
     const fade = stride * 0.5;
     for (let i = 0; i < length; i++) {
@@ -446,8 +543,9 @@ async function split(request: Extract<SplitterRequest, { type: "split" }>) {
   post({ type: "progress", jobId, stage: "encoding", value: 1 });
   const mp3 = {} as SplitResult["mp3"];
   const peaks = {} as SplitResult["peaks"];
-  for (const o of outputs) {
-    mp3[o] = encoders[o].finish();
+  const finished = await Promise.all(outputs.map((o) => encoders[o].finish()));
+  for (const [i, o] of outputs.entries()) {
+    mp3[o] = finished[i];
     peaks[o] = meters[o].result();
   }
 
@@ -471,6 +569,8 @@ self.onmessage = async (event: MessageEvent<SplitterRequest>) => {
     } catch (err) {
       post({ type: "init-error", message: err instanceof Error ? err.message : String(err) });
     }
+  } else if (request.type === "cancel") {
+    cancelled.add(request.jobId);
   } else if (request.type === "split") {
     try {
       await split(request);
@@ -480,6 +580,10 @@ self.onmessage = async (event: MessageEvent<SplitterRequest>) => {
         jobId: request.jobId,
         message: err instanceof Error ? err.message : String(err),
       });
+    } finally {
+      cancelled.delete(request.jobId);
+      for (const worker of encoderWorkers) worker.terminate();
+      encoderWorkers.clear();
     }
   }
 };

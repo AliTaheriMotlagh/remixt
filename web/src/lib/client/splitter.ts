@@ -80,12 +80,27 @@ type Job = {
   onProgress: (stage: "splitting" | "encoding", value: number) => void;
 };
 
+/**
+ * A split reports progress every segment (seconds apart even on one CPU
+ * core); this long without a word and its worker is taken to have died
+ * without saying so — which is what running out of memory looks like.
+ */
+const SILENT_FOR_MS = 4 * 60_000;
+
+/** Someone waiting for the splitter; your own songs go before songs split for others. */
+type Turn = { own: boolean; start: () => void };
+
 class Splitter {
   private worker: Worker | null = null;
   private ready: Promise<void> | null = null;
   private jobs = new Map<number, Job>();
   private nextJobId = 1;
   private listeners = new Set<() => void>();
+  /** A song is being decoded, split or encoded (one at a time: two would share one model). */
+  private holding = false;
+  private turns: Turn[] = [];
+  private lastHeard = 0;
+  private watchdog: ReturnType<typeof setInterval> | null = null;
   state: SplitterState = {
     status: "idle",
     loaded: 0,
@@ -140,6 +155,7 @@ class Splitter {
             reject(new Error(message.message));
             break;
           case "progress":
+            this.lastHeard = Date.now();
             this.jobs.get(message.jobId)?.onProgress(message.stage, message.value);
             break;
           case "result": {
@@ -158,10 +174,8 @@ class Splitter {
       };
       worker.onerror = (event) => {
         const message = event.message || "The splitter crashed — the browser may be out of memory";
-        this.fail(message);
         reject(new Error(message));
-        for (const job of this.jobs.values()) job.reject(new Error(message));
-        this.jobs.clear();
+        this.fail(message);
       };
 
       // Absolute, because the worker resolves relative URLs against its
@@ -192,28 +206,86 @@ class Splitter {
     this.set({ status: "idle", backend: null });
   }
 
-  /** Whether a song is being split right now (the helper waits for the user's own uploads). */
+  /** Whether a song is being split right now, or waiting to be (the helper waits for the user's own). */
   get busy() {
-    return this.jobs.size > 0;
+    return this.holding || this.jobs.size > 0;
+  }
+
+  /**
+   * Runs `work` once no other song is using the splitter — the model can
+   * only split one at a time, and two at once would also need twice the
+   * memory. Your own songs (`own`) go ahead of any waiting to be split for
+   * someone else; `onWait` is called if there's a wait.
+   */
+  async exclusive<T>(own: boolean, onWait: () => void, work: () => Promise<T>): Promise<T> {
+    if (this.holding) {
+      onWait();
+      await new Promise<void>((start) => {
+        const turn = { own, start };
+        const before = own ? this.turns.findIndex((t) => !t.own) : -1;
+        if (before === -1) this.turns.push(turn);
+        else this.turns.splice(before, 0, turn);
+      });
+    }
+    // Handed over directly by whoever finished (see below), so nobody can
+    // slip in between.
+    this.holding = true;
+    try {
+      return await work();
+    } finally {
+      const next = this.turns.shift();
+      if (next) next.start();
+      else this.holding = false;
+    }
   }
 
   private fail(message: string) {
     this.worker?.terminate();
     this.worker = null;
     this.ready = null; // let "Try again" start over
+    this.stopWatchdog();
+    for (const job of this.jobs.values()) job.reject(new Error(message));
+    this.jobs.clear();
     this.set({ status: "error", error: message });
   }
 
+  private startWatchdog() {
+    this.lastHeard = Date.now();
+    this.watchdog ??= setInterval(() => {
+      if (this.jobs.size === 0) return this.stopWatchdog();
+      if (Date.now() - this.lastHeard > SILENT_FOR_MS) {
+        this.fail("The splitter stopped responding — the browser may have run out of memory");
+      }
+    }, 15_000);
+  }
+
+  private stopWatchdog() {
+    if (this.watchdog) clearInterval(this.watchdog);
+    this.watchdog = null;
+  }
+
+  /**
+   * Splits one song. Aborting `signal` stops it at the next segment (it
+   * then rejects) — not at once, so it's never still running when the
+   * next song starts.
+   */
   async split(
     left: Float32Array,
     right: Float32Array,
-    onProgress: Job["onProgress"]
+    onProgress: Job["onProgress"],
+    signal?: AbortSignal
   ): Promise<SplitResult> {
     await this.load();
+    const worker = this.worker;
+    if (!worker) throw new Error(this.state.error ?? "The splitter isn't running");
+    signal?.throwIfAborted();
     const jobId = this.nextJobId++;
-    return new Promise((resolve, reject) => {
+    const cancel = () => worker.postMessage({ type: "cancel", jobId } satisfies SplitterRequest);
+    signal?.addEventListener("abort", cancel, { once: true });
+    return new Promise<SplitResult>((resolve, reject) => {
       this.jobs.set(jobId, { resolve, reject, onProgress });
-      this.worker!.postMessage(
+      this.startWatchdog();
+      worker.postMessage(
         {
           type: "split",
           jobId,
@@ -222,10 +294,11 @@ class Splitter {
           sampleRate: SAMPLE_RATE,
           bitrate: STEM_BITRATE,
           parts: SPLIT_PARTS,
+          parallelEncode: !isConstrainedDevice(),
         } satisfies SplitterRequest,
         [left.buffer, right.buffer]
       );
-    });
+    }).finally(() => signal?.removeEventListener("abort", cancel));
   }
 }
 
@@ -252,7 +325,11 @@ export type UploadStage =
   | { stage: "uploading"; progress: number }
   | { stage: "saving" }
   /** A phone sending the song to the split queue (see splitQueue.ts). */
-  | { stage: "queueing"; progress: number };
+  | { stage: "queueing"; progress: number }
+  /** A phone shrinking a big lossless file before sending it to the queue. */
+  | { stage: "compressing" }
+  /** Waiting for the splitter to finish another song first. */
+  | { stage: "waiting" };
 
 export type UploadTarget =
   | { type: "put"; url: string; headers: Record<string, string> }
@@ -274,9 +351,11 @@ export async function upload(target: UploadTarget, body: Uint8Array, onProgress:
       access: target.access,
       token: target.token,
       contentType: target.contentType,
-      // Bigger stems go up in parallel parts that retry on their own —
-      // kinder to a shaky connection.
-      multipart: body.length > 8 * 1024 * 1024,
+      // Blob's parts are 8 MB, so a file of two or more goes up in
+      // parallel parts that retry on their own — faster, and kinder to a
+      // shaky connection. (Smaller, it'd be one part plus two extra round
+      // trips to start and finish it: slower than a plain upload.)
+      multipart: body.length > 16 * 1024 * 1024,
       onUploadProgress: ({ loaded }) => onProgress(loaded),
     });
     return;
@@ -330,26 +409,31 @@ async function decode(file: File): Promise<{ left: Float32Array; right: Float32A
 
 /**
  * Decodes and splits one song, and encodes its stems — everything that
- * happens on this device, before anything is sent anywhere.
+ * happens on this device, before anything is sent anywhere. One song at a
+ * time: `own` songs (the user's) go before ones split for someone else.
  */
 export async function splitSong(
   file: File,
-  onStage: (stage: UploadStage) => void
+  onStage: (stage: UploadStage) => void,
+  { own = true, signal }: { own?: boolean; signal?: AbortSignal } = {}
 ): Promise<{ result: SplitResult; duration: number }> {
-  onStage({ stage: "decoding" });
-  const { left, right, duration } = await decode(file);
+  return splitter.exclusive(own, () => onStage({ stage: "waiting" }), async () => {
+    signal?.throwIfAborted();
+    onStage({ stage: "decoding" });
+    const { left, right, duration } = await decode(file);
 
-  if (splitter.state.status !== "ready") onStage({ stage: "loading-model" });
-  await splitter.load();
+    if (splitter.state.status !== "ready") onStage({ stage: "loading-model" });
+    await splitter.load();
 
-  onStage({ stage: "splitting", progress: 0 });
-  try {
-    const result = await splitter.split(left, right, (stage, value) => onStage({ stage, progress: value }));
-    return { result, duration };
-  } finally {
-    // Give the memory back before uploading, and to the rest of the app.
-    if (isConstrainedDevice()) splitter.unload();
-  }
+    onStage({ stage: "splitting", progress: 0 });
+    try {
+      const result = await splitter.split(left, right, (stage, value) => onStage({ stage, progress: value }), signal);
+      return { result, duration };
+    } finally {
+      // Give the memory back before uploading, and to the rest of the app.
+      if (isConstrainedDevice()) splitter.unload();
+    }
+  });
 }
 
 /** What POST /api/tracks (or a split-queue job's /track) needs to know about a split song. */

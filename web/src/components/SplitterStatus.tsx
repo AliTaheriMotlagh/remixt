@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { isConstrainedDevice, splitter, useSplitter } from "@/lib/client/splitter";
+import { useUploads } from "@/lib/client/uploads";
 
 export function formatMB(bytes: number) {
   return `${Math.round(bytes / 1_000_000)} MB`;
@@ -17,6 +18,9 @@ export function formatMB(bytes: number) {
  */
 export default function SplitterStatus({ signedIn }: { signedIn: boolean }) {
   const state = useSplitter();
+  // A song being added shows the download in its own progress (on phones,
+  // where there's only room for one card at the bottom of the screen).
+  const uploading = useUploads().some((i) => i.status === "working");
   const [justFinished, setJustFinished] = useState(false);
   const pathname = usePathname();
   // Starting the model reads ~200 MB and busies the GPU for a few seconds;
@@ -58,7 +62,9 @@ export default function SplitterStatus({ signedIn }: { signedIn: boolean }) {
   return (
     <div
       role="status"
-      className="bottom-float fixed left-3 right-3 z-40 rounded-xl border border-border bg-surface/95 p-3 text-xs shadow-lg backdrop-blur-md sm:left-4 sm:right-auto sm:w-72"
+      className={`bottom-float fixed left-3 right-3 z-40 rounded-xl border border-border bg-surface/95 p-3 text-xs shadow-lg backdrop-blur-md sm:left-4 sm:right-auto sm:block sm:w-72 ${
+        uploading ? "hidden" : ""
+      }`}
       style={{ marginLeft: "env(safe-area-inset-left)" }}
     >
       {state.status === "error" ? (

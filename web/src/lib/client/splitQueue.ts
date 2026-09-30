@@ -2,6 +2,7 @@
 
 import { useSyncExternalStore } from "react";
 import { previewPlayer } from "./previewPlayer";
+import { encodeMp3Bytes } from "./mp3";
 import { fetchInSlices } from "./stemFetch";
 import { useStudioStore } from "./studioStore";
 import { keepScreenOn } from "./wakeLock";
@@ -31,6 +32,7 @@ export type QueuedJob = {
   error: string | null;
   attempts: number;
   created_at: string;
+  updated_at: string;
   position: number | null;
   helper_name: string | null;
 };
@@ -48,8 +50,59 @@ export async function fetchQueue(): Promise<{ jobs: QueuedJob[]; stats: QueueSta
   return json(await fetch("/api/split-jobs"), "Couldn't load the split queue");
 }
 
+/** Worth shrinking before sending: lossless (WAV, FLAC, ALAC) or otherwise very high bitrate. */
+const SHRINK_ABOVE_KBPS = 400;
+/** Small files go up quickly anyway. */
+const SHRINK_MIN_BYTES = 8 * 1024 * 1024;
+/** Longer songs would need more memory to re-encode than a phone gives a page. */
+const SHRINK_MAX_SECONDS = 7 * 60;
+
+/** A song's length from its header, without decoding it (null if the browser can't tell). */
+function audioDuration(file: File): Promise<number | null> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const audio = new Audio();
+    const done = (value: number | null) => {
+      clearTimeout(timer);
+      URL.revokeObjectURL(url);
+      audio.removeAttribute("src");
+      resolve(value);
+    };
+    const timer = setTimeout(() => done(null), 5000);
+    audio.preload = "metadata";
+    audio.onloadedmetadata = () => done(Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : null);
+    audio.onerror = () => done(null);
+    audio.src = url;
+  });
+}
+
+/**
+ * A lossless file is 5–10× the size it needs to be for splitting, and a
+ * phone's upload is usually the slowest link there is — so a big, high-
+ * bitrate song is re-encoded here as a 256 kbps MP3 (far above what the
+ * splitter can tell apart) before it's sent. Anything that goes wrong
+ * just sends the original.
+ */
+async function shrinkForQueue(file: File, onStage: (stage: UploadStage) => void): Promise<File> {
+  if (file.size < SHRINK_MIN_BYTES) return file;
+  const duration = await audioDuration(file);
+  if (!duration || duration > SHRINK_MAX_SECONDS) return file;
+  if ((file.size * 8) / duration / 1000 < SHRINK_ABOVE_KBPS) return file;
+  onStage({ stage: "compressing" });
+  try {
+    const ctx = new OfflineAudioContext(2, 1, 44100);
+    const buffer = await ctx.decodeAudioData(await file.arrayBuffer());
+    const bytes = await encodeMp3Bytes(buffer, { bitrate: 256 });
+    if (bytes.length > file.size * 0.8) return file;
+    return new File([bytes as BlobPart], `${file.name.replace(/\.[^/.]+$/, "")}.mp3`, { type: "audio/mpeg" });
+  } catch {
+    return file;
+  }
+}
+
 /** Sends a song from this device to the queue, for a helper's computer to split. */
-export async function queueFile(file: File, tags: string[], onStage: (stage: UploadStage) => void) {
+export async function queueFile(original: File, tags: string[], onStage: (stage: UploadStage) => void) {
+  const file = await shrinkForQueue(original, onStage);
   onStage({ stage: "queueing", progress: 0 });
   const created = await json<{ id: string; upload: UploadTarget }>(
     await fetch("/api/split-jobs", {
@@ -91,28 +144,84 @@ export async function queueLink(link: string, tags: string[], onStage: (stage: U
 }
 
 export async function cancelQueued(id: string) {
-  await fetch(`/api/split-jobs/${id}`, { method: "DELETE" });
+  const res = await fetch(`/api/split-jobs/${id}`, { method: "DELETE" });
+  if (!res.ok && res.status !== 404) await json(res, "Couldn't take the song out of the queue");
+}
+
+/** Puts a song that couldn't be split back in the queue. */
+export async function retryQueued(id: string) {
+  await json(await fetch(`/api/split-jobs/${id}/retry`, { method: "POST" }), "Couldn't retry the song");
 }
 
 // --- Helping: splitting other people's songs ------------------------------------------
 
 const ENABLED_KEY = "remixt-split-helper";
+const SESSION_KEY = "remixt-split-session";
 /** How often an idle helper looks for work. */
-const POLL_MS = 20_000;
+const POLL_MS = 5_000;
 /** How often a busy helper checks in (the server hands a job on after 3 quiet minutes). */
 const HEARTBEAT_MS = 15_000;
+/** Splitter crashes in a row before helping switches itself off. */
+const MAX_CRASHES = 2;
+
+/**
+ * This tab's name to the queue. Kept for the tab's life (sessionStorage
+ * survives a reload), so a tab that reloads mid-song gets it straight back
+ * instead of leaving it stuck until the server gives up on it. A duplicated
+ * tab starts with a copy of the original's sessionStorage, so a new tab
+ * first asks the others whether its name is taken, and picks a new one if so.
+ */
+function tabSession(): Promise<string> {
+  sessionName ??= (async () => {
+    let id: string | null = null;
+    try {
+      id = sessionStorage.getItem(SESSION_KEY);
+    } catch {
+      // Storage blocked — a name for this page load only.
+    }
+    const renew = () => {
+      id = crypto.randomUUID();
+      try {
+        sessionStorage.setItem(SESSION_KEY, id);
+      } catch {
+        // As above.
+      }
+    };
+    if (!id) renew();
+    if (typeof BroadcastChannel !== "undefined") {
+      const channel = new BroadcastChannel(SESSION_KEY);
+      const me = crypto.randomUUID();
+      let taken = false;
+      // Kept open for the tab's life, to answer tabs duplicated from this one.
+      channel.onmessage = (event: MessageEvent<{ type: string; session: string; from: string }>) => {
+        const message = event.data;
+        if (message?.session !== id || message.from === me) return;
+        if (message.type === "probe") channel.postMessage({ type: "taken", session: id, from: me });
+        else if (message.type === "taken") taken = true;
+      };
+      channel.postMessage({ type: "probe", session: id, from: me });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      if (taken) renew();
+    }
+    return id!;
+  })();
+  return sessionName;
+}
+let sessionName: Promise<string> | null = null;
 
 export type HelperState = {
   enabled: boolean;
   status: "off" | "waiting" | "paused" | "working" | "error";
-  /** Why it's paused, or what went wrong. */
+  /** Why it's paused ("music is playing"), or what went wrong. */
   message: string | null;
-  job: { id: string; title: string; forSomeoneElse: boolean } | null;
+  job: { id: string; title: string; forSomeoneElse: boolean; startedAt: number } | null;
   stage: UploadStage | null;
   stats: QueueStats | null;
   /** The last song finished, for a moment's "done" in the corner. */
   finished: { title: string; forSomeoneElse: boolean; at: number } | null;
 };
+
+type ClaimedJob = { id: string; title: string; filename: string; forSomeoneElse: boolean; sourceUrl: string };
 
 class LostJob extends Error {}
 
@@ -130,6 +239,7 @@ class SplitHelper {
   private wakeUp: (() => void) | null = null;
   /** Set by the page: the helper doesn't start songs where audio is played. */
   private pageReason: string | null = null;
+  private crashes = 0;
   state: HelperState = {
     enabled: false,
     status: "off",
@@ -177,9 +287,15 @@ class SplitHelper {
     } catch {
       // Storage blocked — fine for this visit.
     }
+    if (on) this.crashes = 0;
     this.set({ enabled: on, message: null, status: on ? "waiting" : this.state.job ? "working" : "off" });
     this.wake();
-    if (on) void this.run();
+    if (on) {
+      // Have the model loaded before the first song arrives, rather than
+      // making its owner wait for it (not on a page playing music).
+      if (!this.pageReason) void splitter.load().catch(() => {});
+      void this.run();
+    }
   }
 
   /** The page says why songs shouldn't start here (the Studio, a remix playing), or null. */
@@ -188,7 +304,8 @@ class SplitHelper {
     this.wake();
   }
 
-  private wake() {
+  /** Stops waiting and looks at the queue now (e.g. the user just queued a song). */
+  wake() {
     this.wakeUp?.();
   }
 
@@ -207,8 +324,8 @@ class SplitHelper {
   private pausedFor(): string | null {
     if (this.pageReason) return this.pageReason;
     // Splitting uses the whole GPU or every CPU core: it would stutter the audio.
-    if (useStudioStore.getState().isPlaying || previewPlayer.getState().playing) return "Paused while music plays";
-    if (splitter.busy) return "Paused while your own song splits";
+    if (useStudioStore.getState().isPlaying || previewPlayer.getState().playing) return "music is playing";
+    if (splitter.busy) return "your own song is splitting first";
     return null;
   }
 
@@ -223,9 +340,16 @@ class SplitHelper {
           await this.wait(5_000);
           continue;
         }
-        let claim: { job: { id: string; title: string; filename: string; forSomeoneElse: boolean; sourceUrl: string } | null; stats: QueueStats };
+        let claim: { job: ClaimedJob | null; stats: QueueStats };
         try {
-          claim = await json(await fetch("/api/split-jobs/claim", { method: "POST" }), "Couldn't reach the queue");
+          claim = await json(
+            await fetch("/api/split-jobs/claim", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ session: await tabSession() }),
+            }),
+            "Couldn't reach the queue"
+          );
         } catch {
           this.set({ status: "waiting", message: "Can't reach the queue — trying again shortly" });
           await this.wait(POLL_MS * 2);
@@ -245,39 +369,43 @@ class SplitHelper {
     }
   }
 
-  private async process(job: { id: string; title: string; filename: string; forSomeoneElse: boolean; sourceUrl: string }) {
+  private async process(job: ClaimedJob) {
     this.set({
       status: "working",
       message: null,
-      job: { id: job.id, title: job.title, forSomeoneElse: job.forSomeoneElse },
+      job: { id: job.id, title: job.title, forSomeoneElse: job.forSomeoneElse, startedAt: Date.now() },
       stage: { stage: "downloading", progress: 0 },
     });
-    let lost = false;
+    const session = await tabSession();
+    const headers = { "x-split-session": session };
+    // Aborted when the job stops being ours, which stops the split too.
+    const lost = new AbortController();
     const checkIn = async () => {
       const stage = this.state.stage ?? { stage: "decoding" };
       const res = await fetch(`/api/split-jobs/${job.id}/heartbeat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { ...headers, "Content-Type": "application/json" },
         body: JSON.stringify({ progress: stageProgress(stage), stage: stageName(stage) }),
       }).catch(() => null);
       // Cancelled by its owner, or handed on after this tab went quiet.
-      if (res?.status === 409) lost = true;
+      if (res?.status === 409) lost.abort(new LostJob());
     };
     const heartbeat = setInterval(() => void checkIn(), HEARTBEAT_MS);
-    // (Progress arrives from the splitter's worker, where throwing would
-    // go nowhere — so losing the job is checked between steps instead.)
-    const onStage = (stage: UploadStage) => this.set({ stage });
+    const onStage = (stage: UploadStage) => {
+      if (!lost.signal.aborted) this.set({ stage });
+    };
     const stillOurs = () => {
-      if (lost) throw new LostJob();
+      if (lost.signal.aborted) throw new LostJob();
     };
 
     try {
-      const bytes = await fetchInSlices(job.sourceUrl, (loaded, total) =>
+      const bytes = await fetchInSlices(`${job.sourceUrl}?session=${encodeURIComponent(session)}`, (loaded, total) =>
         onStage({ stage: "downloading", progress: loaded / Math.max(1, total) })
       );
       stillOurs();
       const file = new File([bytes], job.filename);
-      const { result, duration } = await splitSong(file, onStage);
+      // The user's own uploads go first; this waits for them.
+      const { result, duration } = await splitSong(file, onStage, { own: false, signal: lost.signal });
       await checkIn();
       stillOurs();
 
@@ -285,7 +413,7 @@ class SplitHelper {
       const track = await json<{ id: string; uploads: Record<string, UploadTarget> }>(
         await fetch(`/api/split-jobs/${job.id}/track`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { ...headers, "Content-Type": "application/json" },
           body: JSON.stringify(splitTrackPayload(file, result, duration, [])),
         }),
         "Couldn't save the split"
@@ -293,24 +421,33 @@ class SplitHelper {
       await uploadStems(track.uploads, result, onStage);
       stillOurs();
       onStage({ stage: "saving" });
-      await json(await fetch(`/api/split-jobs/${job.id}/complete`, { method: "POST" }), "Couldn't finish the split");
+      await json(
+        await fetch(`/api/split-jobs/${job.id}/complete`, { method: "POST", headers }),
+        "Couldn't finish the split"
+      );
 
+      this.crashes = 0;
       const stats = this.state.stats;
       this.set({
         finished: { title: job.title, forSomeoneElse: job.forSomeoneElse, at: Date.now() },
         stats: stats && job.forSomeoneElse ? { ...stats, helped: stats.helped + 1 } : stats,
       });
     } catch (err) {
-      if (!(err instanceof LostJob) && !lost) {
+      if (!lost.signal.aborted) {
         const message = err instanceof Error ? err.message : "The split didn't finish";
         await fetch(`/api/split-jobs/${job.id}/fail`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { ...headers, "Content-Type": "application/json" },
           body: JSON.stringify({ error: message.slice(0, 300) }),
         }).catch(() => {});
         this.set({ message: `Couldn't split “${job.title}”: ${message}` });
-        // The splitter itself broke (out of memory, no WebGPU/WASM): stop, don't loop on it.
-        if (splitter.state.status === "error") this.setEnabled(false);
+        // The splitter itself broke (out of memory, say). It starts afresh
+        // for the next song — but if it keeps breaking, stop rather than
+        // crash on every song in the queue.
+        if (splitter.state.status === "error" && ++this.crashes >= MAX_CRASHES) {
+          this.setEnabled(false);
+          this.set({ message: `Stopped helping: the splitter keeps crashing on this computer (${message})` });
+        }
       }
     } finally {
       clearInterval(heartbeat);
