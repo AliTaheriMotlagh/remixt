@@ -7,6 +7,7 @@ import StudioTimeline from "./StudioTimeline";
 import StudioLaneRow from "./StudioLaneRow";
 import BpmSyncPanel from "./BpmSyncPanel";
 import MixWaveform from "./MixWaveform";
+import StudioShortcuts from "./studio/StudioShortcuts";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/remixLanes";
 import { useStudioStore } from "@/lib/client/studioStore";
@@ -76,6 +77,7 @@ export default function RemixDetailPlayer({
   return (
     <div className="touch-targets mt-6 flex flex-col gap-4">
       <StudioTransport user={user} remixId={remixId} defaultTitle={title} viewing artistName={artistName} />
+      <StudioShortcuts mode="remix" className="-my-2 self-end" />
       <div className="rounded-xl border border-border bg-surface p-3">
         <MixWaveform />
       </div>

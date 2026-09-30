@@ -118,6 +118,14 @@ export function withoutRecording(apply: () => void) {
   }
 }
 
+/**
+ * Makes the next edit a step of its own even if it comes hard on the heels
+ * of the last one — a key press is one deliberate edit, not part of a drag.
+ */
+export function startNewStep() {
+  lastEditAt = 0;
+}
+
 /** Forgets all history — when a different project is loaded. */
 export function resetHistory() {
   useStudioHistory.setState({ past: [], future: [] });

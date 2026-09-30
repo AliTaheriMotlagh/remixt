@@ -60,7 +60,32 @@ function TransportPosition({ empty }: { empty: boolean }) {
           />
         </div>
       </div>
+
+      {loopEnabled && hasLoop && <LoopChip start={loopStart} end={loopEnd} />}
     </div>
+  );
+}
+
+/**
+ * Shown whenever a loop is on, on every screen size, so playback jumping
+ * back is never a mystery — and one tap plays straight through again.
+ */
+function LoopChip({ start, end }: { start: number; end: number }) {
+  const setLoop = useStudioStore((s) => s.setLoop);
+  return (
+    <button
+      onClick={() => setLoop({ enabled: false })}
+      className="flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-brand bg-brand/15 px-2.5 text-xs font-medium text-foreground transition-colors hover:border-danger"
+      title="Playback repeats this region — tap to turn the loop off (L)"
+      aria-label={`Looping ${formatTime(start)} to ${formatTime(end)} — turn loop off`}
+    >
+      🔁
+      {/* On phones the range is on the timeline; here it's just on/off. */}
+      <span className="font-mono tabular-nums max-sm:hidden">
+        {formatTime(start)}–{formatTime(end)}
+      </span>
+      <span className="text-muted">✕</span>
+    </button>
   );
 }
 
@@ -294,11 +319,15 @@ export default function StudioTransport({
             className={`rounded-lg border px-2.5 py-2 text-sm transition-colors disabled:opacity-40 ${
               loopEnabled ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted hover:text-foreground"
             }`}
-            title="Loop the region marked on the timeline (L)"
+            title={
+              hasLoop
+                ? `Loop ${formatTime(loopStart)}–${formatTime(loopEnd)} (L)`
+                : "Loop the first bars — or drag across the timeline to pick a region (L)"
+            }
             aria-label="Loop"
             aria-pressed={loopEnabled}
           >
-            🔁
+            🔁 <span className="text-xs">{loopEnabled ? "Loop on" : "Loop"}</span>
           </button>
 
           <button

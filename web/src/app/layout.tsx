@@ -5,6 +5,7 @@ import NavBar from "@/components/NavBar";
 import MobileTabBar from "@/components/MobileTabBar";
 import PreviewBar from "@/components/PreviewBar";
 import SplitterStatus from "@/components/SplitterStatus";
+import { SplitHelperStatus } from "@/components/SplitQueue";
 import { getCurrentUser } from "@/lib/auth";
 import { isAdmin } from "@/lib/admin";
 import { SITE_DESCRIPTION, SITE_NAME, SITE_TAGLINE, siteUrl } from "@/lib/site";
@@ -77,6 +78,7 @@ export default async function RootLayout({
         </main>
         <PreviewBar />
         <SplitterStatus signedIn={!!user} />
+        <SplitHelperStatus signedIn={!!user} />
         <MobileTabBar user={user} isAdmin={isAdmin(user)} />
       </body>
     </html>

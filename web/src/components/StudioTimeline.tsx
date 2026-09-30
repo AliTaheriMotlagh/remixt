@@ -4,6 +4,9 @@ import { useRef } from "react";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { beatLength, useStudioStore, viewDuration } from "@/lib/client/studioStore";
 
+/** How far a finger or the mouse has to travel along the ruler before it's marking a loop. */
+const LOOP_DRAG_PX = 10;
+
 function formatTime(seconds: number) {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
@@ -108,7 +111,7 @@ export default function StudioTimeline() {
   const snapToGrid = useStudioStore((s) => s.snapToGrid);
   const setLoop = useStudioStore((s) => s.setLoop);
   const ref = useRef<HTMLDivElement>(null);
-  const dragStart = useRef<number | null>(null);
+  const dragStart = useRef<{ time: number; x: number; looping: boolean } | null>(null);
 
   if (projectDuration <= 0) return null;
 
@@ -128,30 +131,32 @@ export default function StudioTimeline() {
   }
 
   function handlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
-    const time = timeAt(e.clientX);
-    dragStart.current = time;
+    dragStart.current = { time: timeAt(e.clientX), x: e.clientX, looping: false };
     e.currentTarget.setPointerCapture(e.pointerId);
   }
 
   function handlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
-    if (dragStart.current === null) return;
+    const drag = dragStart.current;
+    if (!drag) return;
+    // Only a deliberate sideways drag marks a loop. On a phone half a beat
+    // is less than a pixel, so measuring in time turned an ordinary tap
+    // (the finger always wobbles a little) into a loop nobody asked for.
+    if (!drag.looping && Math.abs(e.clientX - drag.x) < LOOP_DRAG_PX) return;
     const time = timeAt(e.clientX);
-    if (Math.abs(time - dragStart.current) < beat / 2) return;
-    // Dragging across the ruler defines the loop region.
+    if (Math.abs(time - drag.time) < beat / 2) return;
+    drag.looping = true;
     setLoop({
       enabled: true,
-      start: Math.min(dragStart.current, time),
-      end: Math.max(dragStart.current, time),
+      start: Math.min(drag.time, time),
+      end: Math.max(drag.time, time),
     });
   }
 
   function handlePointerUp(e: React.PointerEvent<HTMLDivElement>) {
-    const start = dragStart.current;
+    const drag = dragStart.current;
     dragStart.current = null;
-    if (start === null) return;
-    const time = timeAt(e.clientX);
-    // A click (rather than a drag) just moves the playhead.
-    if (Math.abs(time - start) < beat / 2) audioEngine.seek(time);
+    // A tap (rather than a drag) just moves the playhead.
+    if (drag && !drag.looping) audioEngine.seek(timeAt(e.clientX));
   }
 
   const showLoop = loopEnd > loopStart;
@@ -160,10 +165,36 @@ export default function StudioTimeline() {
     <div className="rounded-xl border border-border bg-surface px-3 py-2">
       <div className="mb-1 flex items-center justify-between gap-2 text-[10px] uppercase tracking-wide text-muted">
         <span className="shrink-0">Timeline · {projectBpm.toFixed(1)} BPM</span>
-        <span className="truncate">
-          {snapToGrid ? "Snap: beat" : "Snap: off"}
-          <span className="hidden sm:inline"> · drag here to set a loop</span>
-        </span>
+        {showLoop ? (
+          <span className="flex shrink-0 items-center gap-1 normal-case tracking-normal">
+            <button
+              onClick={() => setLoop({ enabled: !loopEnabled })}
+              aria-pressed={loopEnabled}
+              className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                loopEnabled ? "border-brand bg-brand/20 text-foreground" : "border-border text-muted hover:text-foreground"
+              }`}
+              title={loopEnabled ? "Looping this region — tap to play straight through" : "Tap to loop this region"}
+            >
+              🔁 {loopEnabled ? "Loop on" : "Loop off"}
+              <span className="font-mono tabular-nums text-muted">
+                {formatTime(loopStart)}–{formatTime(loopEnd)}
+              </span>
+            </button>
+            <button
+              onClick={() => setLoop({ enabled: false, start: 0, end: 0 })}
+              className="rounded-full px-1.5 py-0.5 text-[11px] text-muted hover:text-danger"
+              title="Remove the loop region"
+              aria-label="Remove the loop region"
+            >
+              ✕
+            </button>
+          </span>
+        ) : (
+          <span className="truncate">
+            {snapToGrid ? "Snap: beat" : "Snap: off"}
+            <span className="hidden sm:inline"> · drag here to set a loop</span>
+          </span>
+        )}
       </div>
       <div
         ref={ref}

@@ -47,7 +47,8 @@ export default function ArtistProgressCard({ progress, isOwner }: { progress: Ar
       {isOwner && (
         <p className="mt-4 text-[11px] leading-relaxed text-muted">
           Earn XP by publishing remixes (100), uploading songs (25), getting likes (15) and followers (20), liking (2) and
-          commenting on (5) other people&apos;s remixes, and every 5 plays (1).
+          commenting on (5) other people&apos;s remixes, splitting songs for people on phones (10), and every
+          5 plays (1).
         </p>
       )}
     </section>

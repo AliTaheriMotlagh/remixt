@@ -110,6 +110,11 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
   const stutterAt = useStudioStore((s) => s.stutterAt);
   const addPad = useStudioStore((s) => s.addPad);
   const padCount = useStudioStore((s) => s.pads.length);
+  const isSelected = useStudioStore((s) => s.selectedLaneIds.includes(lane.laneId));
+  const groupSize = useStudioStore((s) => (s.selectedLaneIds.includes(lane.laneId) ? s.selectedLaneIds.length : 0));
+  const toggleLaneSelected = useStudioStore((s) => s.toggleLaneSelected);
+  const moveLanes = useStudioStore((s) => s.moveLanes);
+  const setLaneOffsets = useStudioStore((s) => s.setLaneOffsets);
 
   const [showFx, setShowFx] = useState(false);
   const [showMatch, setShowMatch] = useState(false);
@@ -138,6 +143,8 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
     width: number;
     span: number;
     moved: boolean;
+    /** Where each lane of the selection started, when they're dragged as a group. */
+    group: Record<string, number> | null;
   } | null>(null);
 
   // Keep the sliders in sync if these change from outside this component
@@ -183,6 +190,26 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
     return snapToGrid ? Math.round(seconds / beat) * beat : seconds;
   }
 
+  /** The lanes this lane moves with: the selection, when it's part of one. */
+  function movingGroup(): string[] | null {
+    const selection = useStudioStore.getState().selectedLaneIds;
+    return selection.length > 1 && selection.includes(lane.laneId) ? selection : null;
+  }
+
+  /** Nudges this lane — or, when it's selected with others, the whole group. */
+  function nudge(deltaSeconds: number) {
+    const group = movingGroup();
+    if (group) moveLanes(group, deltaSeconds);
+    else nudgeOffset(lane.laneId, deltaSeconds);
+  }
+
+  /** Starts this lane at `seconds`, bringing the rest of its group along. */
+  function startAt(seconds: number) {
+    const group = movingGroup();
+    if (group) moveLanes(group, seconds - lane.offsetSeconds);
+    else setOffset(lane.laneId, seconds);
+  }
+
   const clips = clipsOf(lane);
   const arranged = !!lane.clips?.length;
   const selected = arranged && selectedClip !== null && selectedClip < clips.length ? selectedClip : null;
@@ -202,7 +229,14 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
       width: trackRef.current.clientWidth,
       span,
       moved: false,
+      group: null,
     };
+    // Grabbing any clip of a selected lane moves the whole selection.
+    const group = mode === "move" ? movingGroup() : null;
+    if (group) {
+      const lanes = useStudioStore.getState().lanes.filter((l) => group.includes(l.laneId));
+      drag.current.group = Object.fromEntries(lanes.map((l) => [l.laneId, l.offsetSeconds]));
+    }
     e.currentTarget.setPointerCapture(e.pointerId);
   }
 
@@ -217,6 +251,13 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
       // Snap the *movement* to whole beats rather than the absolute position,
       // so a clip that was lined up off-grid (AI Match puts each phrase at
       // its own spot in the bar) keeps its feel while it's dragged.
+      if (state.group) {
+        // Same shift for every lane, stopped where the earliest hits zero.
+        const earliest = Math.min(...Object.values(state.group));
+        const shift = Math.max(-earliest, snap(deltaSeconds));
+        setLaneOffsets(Object.fromEntries(Object.entries(state.group).map(([id, start]) => [id, start + shift])));
+        return;
+      }
       const position = Math.max(0, state.startPosition + snap(deltaSeconds));
       if (arranged) moveClip(lane.laneId, state.index, position);
       else setOffset(lane.laneId, position);
@@ -327,7 +368,12 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
   }
 
   return (
-    <div className="rounded-xl border border-border bg-surface p-3">
+    <div
+      id={`lane-${lane.laneId}`}
+      className={`scroll-mt-40 rounded-xl border bg-surface p-3 transition-colors ${
+        isSelected ? "border-brand ring-1 ring-brand/40" : "border-border"
+      }`}
+    >
       {/* Phones stack it — name, levels, waveform, then the controls — by
           dissolving the side column (display: contents) and ordering its
           parts; from md up it's the side column beside the track. */}
@@ -335,6 +381,17 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
         <div className="flex flex-col justify-between gap-2 max-md:contents md:w-56 md:shrink-0 md:border-r md:border-border md:pr-3">
           <div>
             <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                onClick={() => toggleLaneSelected(lane.laneId)}
+                aria-pressed={isSelected}
+                aria-label={isSelected ? "Deselect this lane" : "Select this lane to move it with others"}
+                title={isSelected ? "Selected — moves with the other selected lanes" : "Select to move together with other lanes"}
+                className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border text-[11px] font-bold transition-colors pointer-coarse:h-8 pointer-coarse:w-8 pointer-coarse:rounded-lg ${
+                  isSelected ? "border-brand bg-brand text-white" : "border-border text-transparent hover:border-brand"
+                }`}
+              >
+                ✓
+              </button>
               <span
                 className="inline-block rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white"
                 style={{ background: accent }}
@@ -627,7 +684,10 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
           <div
             className={`${expanded ? "flex" : "hidden"} mb-1 flex-wrap items-center gap-1 text-[10px] text-muted max-md:order-2 max-md:mt-2 md:flex`}
           >
-            <span className="mr-0.5">Start</span>
+            <span className="mr-0.5">
+              Start
+              {groupSize > 1 && <span className="ml-1 text-brand-strong">· moves {groupSize} lanes</span>}
+            </span>
             <input
               type="number"
               min={0}
@@ -637,34 +697,34 @@ export default function StudioLaneRow({ lane }: { lane: StudioLane }) {
               className="input !w-20 !px-1.5 !py-0.5 text-[11px]"
               title="Where this lane starts on the timeline, in seconds"
             />
-            <button onClick={() => nudgeOffset(lane.laneId, -bar)} className="nudge" title="Back one bar">
+            <button onClick={() => nudge(-bar)} className="nudge" title="Back one bar">
               −bar
             </button>
             <button
-              onClick={() => nudgeOffset(lane.laneId, -2 * beat)}
+              onClick={() => nudge(-2 * beat)}
               className="nudge"
               title="Back half a bar — when the phrasing lands on the 3 instead of the 1"
             >
               −½bar
             </button>
-            <button onClick={() => nudgeOffset(lane.laneId, -beat)} className="nudge" title="Back one beat">
+            <button onClick={() => nudge(-beat)} className="nudge" title="Back one beat">
               −beat
             </button>
-            <button onClick={() => nudgeOffset(lane.laneId, beat)} className="nudge" title="Forward one beat">
+            <button onClick={() => nudge(beat)} className="nudge" title="Forward one beat">
               +beat
             </button>
             <button
-              onClick={() => nudgeOffset(lane.laneId, 2 * beat)}
+              onClick={() => nudge(2 * beat)}
               className="nudge"
               title="Forward half a bar — when the phrasing lands on the 3 instead of the 1"
             >
               +½bar
             </button>
-            <button onClick={() => nudgeOffset(lane.laneId, bar)} className="nudge" title="Forward one bar">
+            <button onClick={() => nudge(bar)} className="nudge" title="Forward one bar">
               +bar
             </button>
             <button
-              onClick={() => setOffset(lane.laneId, snap(useStudioStore.getState().playhead))}
+              onClick={() => startAt(snap(useStudioStore.getState().playhead))}
               className="nudge"
               title="Move this lane's start to the playhead"
             >

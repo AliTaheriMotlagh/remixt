@@ -1,6 +1,7 @@
 import sql from "./db";
 import { ensureRemixStats } from "./models";
 import { ensureSchema } from "./schema";
+import { ensureSplitQueueSchema } from "./splitQueue";
 
 // The social side of Remixt: following artists, commenting on remixes,
 // and the game layer on top — XP, levels, badges and leaderboards.
@@ -17,6 +18,7 @@ let schema: Promise<void> | null = null;
 export function ensureSocialSchema(): Promise<void> {
   schema ??= (async () => {
     await ensureRemixStats();
+    await ensureSplitQueueSchema();
     await sql`
       CREATE TABLE IF NOT EXISTS follows (
         follower_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -109,13 +111,24 @@ export type ArtistNumbers = {
   likesGiven: number;
   /** Other people's remixes they've commented on. */
   commentedOn: number;
+  /** Songs they split on their computer for someone on a phone. */
+  splitsForOthers: number;
   /** Most likes and most plays on any one of their remixes. */
   bestLikes: number;
   bestPlays: number;
 };
 
 /** XP per thing done — kept in one place so the leaderboard's SQL agrees with it. */
-const XP = { published: 100, track: 25, like: 15, followers: 20, likeGiven: 2, commentedOn: 5, playsPer: 5 };
+const XP = {
+  published: 100,
+  track: 25,
+  like: 15,
+  followers: 20,
+  likeGiven: 2,
+  commentedOn: 5,
+  splitForOthers: 10,
+  playsPer: 5,
+};
 
 export function xpFor(n: ArtistNumbers) {
   return (
@@ -125,6 +138,7 @@ export function xpFor(n: ArtistNumbers) {
     n.followers * XP.followers +
     n.likesGiven * XP.likeGiven +
     n.commentedOn * XP.commentedOn +
+    n.splitsForOthers * XP.splitForOthers +
     Math.floor(n.plays / XP.playsPer)
   );
 }
@@ -180,6 +194,7 @@ export function badgesFor(n: ArtistNumbers): Badge[] {
     badge("scene-builder", "🤝", "Scene Builder", "Have 10 followers", n.followers, 10),
     badge("tastemaker", "👍", "Tastemaker", "Like 20 remixes by others", n.likesGiven, 20),
     badge("in-the-mix", "💬", "In the Mix", "Comment on 10 remixes by others", n.commentedOn, 10),
+    badge("helping-hand", "⛏️", "Helping Hand", "Split 5 songs for people on phones", n.splitsForOthers, 5),
   ];
 }
 
@@ -197,6 +212,8 @@ function numbersQuery(userFilter: ReturnType<typeof sql>) {
         WHERE l.user_id = users.id AND r.owner_id <> users.id)::int AS "likesGiven",
       (SELECT COUNT(DISTINCT c.remix_id) FROM remix_comments c JOIN remixes r ON r.id = c.remix_id
         WHERE c.user_id = users.id AND r.owner_id <> users.id)::int AS "commentedOn",
+      (SELECT COUNT(*) FROM split_jobs j WHERE j.worker_id = users.id AND j.owner_id <> users.id
+        AND j.status = 'done')::int AS "splitsForOthers",
       (SELECT COALESCE(MAX(n), 0) FROM (
          SELECT COUNT(*) AS n FROM remix_likes l JOIN remixes r ON r.id = l.remix_id
          WHERE r.owner_id = users.id AND r.published AND l.user_id <> users.id GROUP BY r.id

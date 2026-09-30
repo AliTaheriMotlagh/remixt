@@ -14,8 +14,9 @@ import {
   type UploadStage,
 } from "@/lib/client/splitter";
 import { useStudioStore } from "@/lib/client/studioStore";
-import { keepScreenOn } from "@/lib/client/wakeLock";
 import { isYouTubeLink, YOUTUBE_UNAVAILABLE } from "@/lib/linkHosts";
+import { queueFile, queueLink } from "@/lib/client/splitQueue";
+import { HelperPanel, QueuedSongs, QueueNotice } from "./SplitQueue";
 
 type Stem = {
   id: string;
@@ -68,7 +69,9 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
   // model), so they get told that up front instead of a failure minutes in.
   const onPhone = useSyncExternalStore(noSubscription, isConstrainedDevice, () => false);
   const [tryAnyway, setTryAnyway] = useState(false);
-  const blockedHere = onPhone && !tryAnyway;
+  // …and so their songs go to the split queue, for a computer to split.
+  const queueMode = onPhone && !tryAnyway;
+  const [queueRefresh, setQueueRefresh] = useState(0);
   const youtubeBlocked = !youtubeImport && isYouTubeLink(link);
 
   const fetchTracks = useCallback(async () => {
@@ -121,43 +124,54 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
     return () => window.removeEventListener("beforeunload", warn);
   }, [busy]);
 
-  // …and keep the screen on meanwhile: a phone that locks itself pauses
-  // the page, and the split with it.
-  useEffect(() => {
-    keepScreenOn("upload", busy);
-    return () => keepScreenOn("upload", false);
-  }, [busy]);
-
-  async function runJob(name: string, getFile: (onStage: (stage: UploadStage) => void) => Promise<File>) {
-    if (running.current) return;
+  /**
+   * Runs one upload — split here, or sent to the queue — showing its
+   * progress. `work` reports each stage (and the song's real name, once
+   * a link has turned into one).
+   */
+  async function runJob(
+    name: string,
+    work: (report: (stage: UploadStage, newName?: string) => void) => Promise<void>
+  ) {
+    if (running.current) return false;
     if (!rights) {
       setUploadError("Tick the box to confirm you have the right to share this song first.");
-      return;
+      return false;
     }
     running.current = true;
     setUploadError(null);
+    let current = name;
     setJob({ name, stage: { stage: "decoding" } });
     try {
-      const file = await getFile((stage) => setJob({ name, stage }));
-      rememberInFlight(file.name);
-      await uploadSong(file, (stage) => setJob({ name: file.name, stage }), { tags: newTags });
-      fetchTracks();
+      await work((stage, newName) => {
+        current = newName ?? current;
+        setJob({ name: current, stage });
+      });
       return true;
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Upload failed");
-      fetchTracks();
       return false;
     } finally {
       rememberInFlight(null);
       running.current = false;
       setJob(null);
+      fetchTracks();
+      if (queueMode) setQueueRefresh((n) => n + 1);
     }
+  }
+
+  /** Splits a song on this device, then uploads its stems. */
+  async function splitHere(file: File, report: (stage: UploadStage, newName?: string) => void) {
+    rememberInFlight(file.name);
+    await uploadSong(file, (stage) => report(stage, file.name), { tags: newTags });
   }
 
   function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
     const file = files[0];
-    void runJob(file.name, async () => file);
+    void runJob(file.name, (report) =>
+      queueMode ? queueFile(file, newTags, report).then(() => {}) : splitHere(file, report)
+    );
   }
 
   async function handleLink(e: React.FormEvent) {
@@ -165,7 +179,14 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
     const url = link.trim();
     if (!url || busy) return;
     if (youtubeBlocked) return;
-    const ok = await runJob(url, (onStage) => fetchSongFromLink(url, onStage));
+    const ok = await runJob(url, async (report) => {
+      if (queueMode) {
+        await queueLink(url, newTags, report);
+        return;
+      }
+      const file = await fetchSongFromLink(url, report);
+      await splitHere(file, report);
+    });
     if (ok) setLink("");
   }
 
@@ -184,130 +205,134 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
 
   return (
     <div className="mt-8">
-      {blockedHere ? (
-        <PhoneNotice onTryAnyway={() => setTryAnyway(true)} />
+      {queueMode && <QueueNotice onTryAnyway={() => setTryAnyway(true)} />}
+      <label className="mb-4 flex items-start gap-2.5 rounded-xl border border-border bg-surface p-3 text-sm">
+        <input
+          type="checkbox"
+          checked={rights}
+          onChange={(e) => {
+            setRights(e.target.checked);
+            setUploadError(null);
+          }}
+          className="mt-0.5 h-4 w-4 shrink-0 accent-brand"
+        />
+        <span>
+          I made this song, or I have permission from whoever owns it to share it on Remixt for others to
+          remix. <span className="text-muted">Songs uploaded without the rights will be removed —</span>{" "}
+          <a href="/takedown" className="text-brand-strong hover:underline">
+            takedown requests
+          </a>
+          .
+        </span>
+      </label>
+      <div className="mb-4">
+        <p className="mb-1.5 text-xs font-medium text-muted">Tags for the next song (optional)</p>
+        <TagInput value={newTags} onChange={setNewTags} compact />
+      </div>
+      <div
+        role="button"
+        tabIndex={busy ? -1 : 0}
+        aria-disabled={busy}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          handleFiles(e.dataTransfer.files);
+        }}
+        onClick={() => !busy && fileInputRef.current?.click()}
+        onKeyDown={(e) => {
+          if (!busy && (e.key === "Enter" || e.key === " ")) {
+            e.preventDefault();
+            fileInputRef.current?.click();
+          }
+        }}
+        className={`flex flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-10 text-center transition-colors sm:py-14 ${
+          busy
+            ? "cursor-default border-border bg-surface opacity-60"
+            : dragOver
+              ? "cursor-pointer border-brand bg-brand/5"
+              : "cursor-pointer border-border bg-surface hover:bg-surface-hover"
+        }`}
+      >
+        <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-vocals to-beat text-xl">
+          🎵
+        </div>
+        <p className="font-medium">
+          <span className="pointer-coarse:hidden">Drop an audio file here, or click to browse</span>
+          <span className="hidden pointer-coarse:inline">
+            {queueMode ? "Tap to choose a song for the split queue" : "Tap to choose a song"}
+          </span>
+        </p>
+        <p className="mt-1 text-sm text-muted">
+          {queueMode
+            ? "MP3, M4A, WAV, FLAC, OGG, AAC — up to 15 minutes"
+            : "MP3, WAV, M4A, FLAC, OGG, AAC — up to 15 minutes (10 on a phone or tablet)"}
+        </p>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".mp3,.wav,.m4a,.flac,.ogg,.aac,audio/*"
+          className="hidden"
+          onChange={(e) => {
+            handleFiles(e.target.files);
+            // So picking the same file again (after an error) still fires.
+            e.target.value = "";
+          }}
+        />
+      </div>
+
+      <form onSubmit={handleLink} className="mt-4 flex flex-col gap-2 sm:flex-row">
+        <label htmlFor="song-link" className="sr-only">
+          Link to a song
+        </label>
+        <input
+          id="song-link"
+          type="url"
+          inputMode="url"
+          autoComplete="off"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          enterKeyHint="go"
+          placeholder={
+            youtubeImport ? "…or paste a link (YouTube, SoundCloud…)" : "…or paste a link (SoundCloud, Bandcamp…)"
+          }
+          value={link}
+          onChange={(e) => setLink(e.target.value)}
+          disabled={busy}
+          className="input min-w-0 flex-1 disabled:opacity-60"
+        />
+        <button
+          type="submit"
+          disabled={busy || !link.trim() || youtubeBlocked}
+          className="shrink-0 rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-strong disabled:opacity-40"
+        >
+          {queueMode ? "Queue it" : "Get song"}
+        </button>
+      </form>
+      {youtubeBlocked ? (
+        <p className="mt-2 text-sm text-danger">{YOUTUBE_UNAVAILABLE}</p>
       ) : (
+        !youtubeImport && (
+          <p className="mt-2 text-xs text-muted">
+            Works with SoundCloud, Bandcamp, Vimeo, direct MP3 links and many more sites. YouTube isn&apos;t
+            supported yet.
+          </p>
+        )
+      )}
+
+      {queueMode ? null : (
         <>
-          <label className="mb-4 flex items-start gap-2.5 rounded-xl border border-border bg-surface p-3 text-sm">
-            <input
-              type="checkbox"
-              checked={rights}
-              onChange={(e) => {
-                setRights(e.target.checked);
-                setUploadError(null);
-              }}
-              className="mt-0.5 h-4 w-4 shrink-0 accent-brand"
-            />
-            <span>
-              I made this song, or I have permission from whoever owns it to share it on Remixt for others to
-              remix. <span className="text-muted">Songs uploaded without the rights will be removed —</span>{" "}
-              <a href="/takedown" className="text-brand-strong hover:underline">
-                takedown requests
-              </a>
-              .
-            </span>
-          </label>
-          <div className="mb-4">
-            <p className="mb-1.5 text-xs font-medium text-muted">Tags for the next song (optional)</p>
-            <TagInput value={newTags} onChange={setNewTags} compact />
-          </div>
-          <div
-            role="button"
-            tabIndex={busy ? -1 : 0}
-            aria-disabled={busy}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragOver(true);
-            }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setDragOver(false);
-              handleFiles(e.dataTransfer.files);
-            }}
-            onClick={() => !busy && fileInputRef.current?.click()}
-            onKeyDown={(e) => {
-              if (!busy && (e.key === "Enter" || e.key === " ")) {
-                e.preventDefault();
-                fileInputRef.current?.click();
-              }
-            }}
-            className={`flex flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-10 text-center transition-colors sm:py-14 ${
-              busy
-                ? "cursor-default border-border bg-surface opacity-60"
-                : dragOver
-                  ? "cursor-pointer border-brand bg-brand/5"
-                  : "cursor-pointer border-border bg-surface hover:bg-surface-hover"
-            }`}
-          >
-            <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-vocals to-beat text-xl">
-              🎵
-            </div>
-            <p className="font-medium">
-              <span className="pointer-coarse:hidden">Drop an audio file here, or click to browse</span>
-              <span className="hidden pointer-coarse:inline">Tap to choose a song</span>
-            </p>
-            <p className="mt-1 text-sm text-muted">
-              MP3, WAV, M4A, FLAC, OGG, AAC — up to 15 minutes (10 on a phone or tablet)
-            </p>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".mp3,.wav,.m4a,.flac,.ogg,.aac,audio/*"
-              className="hidden"
-              onChange={(e) => {
-                handleFiles(e.target.files);
-                // So picking the same file again (after an error) still fires.
-                e.target.value = "";
-              }}
-            />
-          </div>
-
-          <form onSubmit={handleLink} className="mt-4 flex flex-col gap-2 sm:flex-row">
-            <label htmlFor="song-link" className="sr-only">
-              Link to a song
-            </label>
-            <input
-              id="song-link"
-              type="url"
-              inputMode="url"
-              autoComplete="off"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-              enterKeyHint="go"
-              placeholder={
-                youtubeImport ? "…or paste a link (YouTube, SoundCloud…)" : "…or paste a link (SoundCloud, Bandcamp…)"
-              }
-              value={link}
-              onChange={(e) => setLink(e.target.value)}
-              disabled={busy}
-              className="input min-w-0 flex-1 disabled:opacity-60"
-            />
-            <button
-              type="submit"
-              disabled={busy || !link.trim() || youtubeBlocked}
-              className="shrink-0 rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-strong disabled:opacity-40"
-            >
-              Get song
-            </button>
-          </form>
-          {youtubeBlocked ? (
-            <p className="mt-2 text-sm text-danger">{YOUTUBE_UNAVAILABLE}</p>
-          ) : (
-            !youtubeImport && (
-              <p className="mt-2 text-xs text-muted">
-                Works with SoundCloud, Bandcamp, Vimeo, direct MP3 links and many more sites. YouTube isn&apos;t
-                supported yet.
-              </p>
-            )
-          )}
-
           <SplitterInfo state={splitterState} />
+          <HelperPanel />
         </>
       )}
 
-      {job && <JobProgress name={job.name} stage={job.stage} splitterState={splitterState} />}
+      {job && <JobProgress name={job.name} stage={job.stage} splitterState={splitterState} queued={queueMode} />}
       {uploadError && <p className="mt-3 text-sm text-danger">{uploadError}</p>}
 
       <div className="mt-10">
@@ -316,6 +341,7 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
         </h2>
         <div className="mt-4 flex flex-col gap-3">
           {loadingList && <p className="text-sm text-muted">Loading…</p>}
+          <QueuedSongs refreshKey={queueRefresh} onFinished={fetchTracks} />
           {!loadingList && tracks.length === 0 && (
             <p className="text-sm text-muted">
               Nothing uploaded yet — your split tracks will show up here.
@@ -326,28 +352,6 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
           ))}
         </div>
       </div>
-    </div>
-  );
-}
-
-function PhoneNotice({ onTryAnyway }: { onTryAnyway: () => void }) {
-  return (
-    <div className="rounded-2xl border border-border bg-surface px-5 py-8 text-center sm:px-8">
-      <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-surface-raised text-xl">
-        💻
-      </div>
-      <p className="font-medium">Adding songs works on a computer for now</p>
-      <p className="mx-auto mt-2 max-w-md text-sm text-muted">
-        Splitting a song into vocals and beat happens on your own device, and phones and tablets
-        don&apos;t give a web page enough memory for it yet. Add songs from a computer — they&apos;ll
-        show up here and in the Library on every device, ready to play and remix.
-      </p>
-      <button
-        onClick={onTryAnyway}
-        className="mt-4 text-xs text-muted underline underline-offset-2 hover:text-foreground"
-      >
-        Try on this device anyway
-      </button>
     </div>
   );
 }
@@ -530,10 +534,13 @@ function JobProgress({
   name,
   stage,
   splitterState,
+  queued,
 }: {
   name: string;
   stage: UploadStage;
   splitterState: ReturnType<typeof useSplitter>;
+  /** Going to the split queue rather than being split here. */
+  queued: boolean;
 }) {
   let label: string;
   let progress: number | null = null;
@@ -573,6 +580,10 @@ function JobProgress({
     case "saving":
       label = "Saving to your library…";
       break;
+    case "queueing":
+      label = "Sending the song to the split queue…";
+      progress = stage.progress;
+      break;
   }
   return (
     <div className="mt-4 rounded-xl border border-brand/40 bg-brand/10 p-4">
@@ -592,7 +603,9 @@ function JobProgress({
       </div>
       <p className="mt-1.5 text-xs text-muted">
         {label}{" "}
-        {isConstrainedDevice()
+        {queued
+          ? "Keep this page open until it’s sent — after that you can close it."
+          : isConstrainedDevice()
           ? "Keep this screen open and stay on this page until it’s done — switching apps can stop it."
           : "Keep this tab open until it’s done."}
       </p>

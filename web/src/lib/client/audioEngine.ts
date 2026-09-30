@@ -87,6 +87,26 @@ class AudioEngine {
   private playRequest = 0;
   /** Set when resume() never came through; the next tap starts on a fresh context. */
   private staleContext = false;
+  /** The microphone is open on this context (recording a vocal). */
+  private micActive = false;
+
+  /**
+   * Recording keeps the phone's audio session in play-and-record mode —
+   * in "playback" mode iOS hands the page a silent microphone.
+   */
+  setMicActive(on: boolean) {
+    this.micActive = on;
+    this.applyAudioSession();
+  }
+
+  private applyAudioSession() {
+    // Web Audio on iOS follows the ringer switch unless the page asks for
+    // media playback, which is why the mix could be silent while library
+    // previews (an <audio> element) were not. Safari 16.4+.
+    const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+    const wanted = this.micActive ? "play-and-record" : "playback";
+    if (session && session.type !== wanted) session.type = wanted;
+  }
 
   private getContext(): AudioContext {
     if (!this.ctx) {
@@ -139,22 +159,20 @@ class AudioEngine {
    * Mobile Safari only lets audio start from inside a tap, so this must
    * run synchronously in the gesture, before anything is awaited.
    */
-  private unlock(): Promise<AudioContext> {
+  private unlock({ keepContext = false } = {}): Promise<AudioContext> {
     // After a call, Siri, backgrounding or another player (including our
     // own library preview) iOS can leave the context "interrupted" with
     // resume() never settling — play then did nothing until a reload. A
-    // context made inside this tap starts cleanly.
+    // context made inside this tap starts cleanly. (Not while the mic is
+    // open on the current one: opening it is itself what interrupts it on
+    // iOS, and a new context would leave the recording deaf.)
     const state = this.ctx?.state as string | undefined;
     const ctx =
-      this.staleContext || state === "interrupted" || state === "closed"
+      !keepContext && (this.staleContext || state === "interrupted" || state === "closed")
         ? this.resetContext()
         : this.getContext();
 
-    // Web Audio on iOS follows the ringer switch unless the page asks for
-    // media playback, which is why the mix could be silent while library
-    // previews (an <audio> element) were not. Safari 16.4+.
-    const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
-    if (session && session.type !== "playback") session.type = "playback";
+    this.applyAudioSession();
 
     // Besides "suspended", iOS has a non-standard "interrupted" state
     // that also needs resuming.
@@ -397,7 +415,7 @@ class AudioEngine {
     // iOS a playing <audio> element can hold the context interrupted.
     previewPlayer.stop();
 
-    const ctx = await this.unlock();
+    const ctx = await this.unlock({ keepContext: this.micActive });
     if (request !== this.playRequest) return;
     if (ctx.state !== "running") {
       // Scheduling now would show the transport as playing with a frozen

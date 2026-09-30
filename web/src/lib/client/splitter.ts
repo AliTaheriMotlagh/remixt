@@ -192,6 +192,11 @@ class Splitter {
     this.set({ status: "idle", backend: null });
   }
 
+  /** Whether a song is being split right now (the helper waits for the user's own uploads). */
+  get busy() {
+    return this.jobs.size > 0;
+  }
+
   private fail(message: string) {
     this.worker?.terminate();
     this.worker = null;
@@ -245,7 +250,9 @@ export type UploadStage =
   | { stage: "splitting"; progress: number }
   | { stage: "encoding"; progress: number }
   | { stage: "uploading"; progress: number }
-  | { stage: "saving" };
+  | { stage: "saving" }
+  /** A phone sending the song to the split queue (see splitQueue.ts). */
+  | { stage: "queueing"; progress: number };
 
 export type UploadTarget =
   | { type: "put"; url: string; headers: Record<string, string> }
@@ -322,6 +329,65 @@ async function decode(file: File): Promise<{ left: Float32Array; right: Float32A
 }
 
 /**
+ * Decodes and splits one song, and encodes its stems — everything that
+ * happens on this device, before anything is sent anywhere.
+ */
+export async function splitSong(
+  file: File,
+  onStage: (stage: UploadStage) => void
+): Promise<{ result: SplitResult; duration: number }> {
+  onStage({ stage: "decoding" });
+  const { left, right, duration } = await decode(file);
+
+  if (splitter.state.status !== "ready") onStage({ stage: "loading-model" });
+  await splitter.load();
+
+  onStage({ stage: "splitting", progress: 0 });
+  try {
+    const result = await splitter.split(left, right, (stage, value) => onStage({ stage, progress: value }));
+    return { result, duration };
+  } finally {
+    // Give the memory back before uploading, and to the rest of the app.
+    if (isConstrainedDevice()) splitter.unload();
+  }
+}
+
+/** What POST /api/tracks (or a split-queue job's /track) needs to know about a split song. */
+export function splitTrackPayload(file: { name: string }, result: SplitResult, duration: number, tags: string[]) {
+  return {
+    title: file.name.replace(/\.[^/.]+$/, "").slice(0, 200) || "Untitled",
+    filename: file.name,
+    duration,
+    bpm: result.bpm,
+    vocalsPeaks: result.peaks.vocals,
+    beatPeaks: result.peaks.beat,
+    partPeaks: {
+      drums: result.peaks.drums,
+      bass: result.peaks.bass,
+      other: result.peaks.other,
+    },
+    tags,
+  };
+}
+
+/** Uploads every stem the server made room for (older servers: two), in parallel. */
+export async function uploadStems(
+  uploads: Record<string, UploadTarget>,
+  result: SplitResult,
+  onStage: (stage: UploadStage) => void
+) {
+  const files = (Object.entries(uploads) as [SplitOutput, UploadTarget][])
+    .map(([kind, target]) => ({ kind, target, bytes: result.mp3[kind] }))
+    .filter((f): f is { kind: SplitOutput; target: UploadTarget; bytes: Uint8Array } => !!f.bytes);
+  const total = files.reduce((n, f) => n + f.bytes.length, 0);
+  const sent: Partial<Record<SplitOutput, number>> = {};
+  const report = () =>
+    onStage({ stage: "uploading", progress: Object.values(sent).reduce((a, b) => a + (b ?? 0), 0) / total });
+  report();
+  await Promise.all(files.map((f) => upload(f.target, f.bytes, (n) => ((sent[f.kind] = n), report()))));
+}
+
+/**
  * Decodes, splits, encodes and uploads one song; resolves with the new
  * track's id once it's ready in the library.
  */
@@ -330,40 +396,14 @@ export async function uploadSong(
   onStage: (stage: UploadStage) => void,
   { tags = [] }: { tags?: string[] } = {}
 ): Promise<string> {
-  onStage({ stage: "decoding" });
-  const { left, right, duration } = await decode(file);
-
-  if (splitter.state.status !== "ready") onStage({ stage: "loading-model" });
-  await splitter.load();
-
-  onStage({ stage: "splitting", progress: 0 });
-  let result: SplitResult;
-  try {
-    result = await splitter.split(left, right, (stage, value) =>
-      onStage({ stage, progress: value })
-    );
-  } finally {
-    // Give the memory back before uploading, and to the rest of the app.
-    if (isConstrainedDevice()) splitter.unload();
-  }
+  const { result, duration } = await splitSong(file, onStage);
 
   onStage({ stage: "saving" });
   const created = await fetch("/api/tracks", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      title: file.name.replace(/\.[^/.]+$/, "").slice(0, 200) || "Untitled",
-      filename: file.name,
-      duration,
-      bpm: result.bpm,
-      vocalsPeaks: result.peaks.vocals,
-      beatPeaks: result.peaks.beat,
-      partPeaks: {
-        drums: result.peaks.drums,
-        bass: result.peaks.bass,
-        other: result.peaks.other,
-      },
-      tags,
+      ...splitTrackPayload(file, result, duration, tags),
       // The upload form doesn't start without the box ticked.
       rightsConfirmed: true,
     }),
@@ -373,16 +413,7 @@ export async function uploadSong(
     throw new Error(track?.error ?? "Couldn't save the track");
   }
 
-  // One upload per stem the server made room for (older servers: two).
-  const files = (Object.entries(track.uploads) as [SplitOutput, UploadTarget][])
-    .map(([kind, target]) => ({ kind, target, bytes: result.mp3[kind] }))
-    .filter((f): f is { kind: SplitOutput; target: UploadTarget; bytes: Uint8Array } => !!f.bytes);
-  const total = files.reduce((n, f) => n + f.bytes.length, 0);
-  const sent: Partial<Record<SplitOutput, number>> = {};
-  const report = () =>
-    onStage({ stage: "uploading", progress: Object.values(sent).reduce((a, b) => a + (b ?? 0), 0) / total });
-  report();
-  await Promise.all(files.map((f) => upload(f.target, f.bytes, (n) => ((sent[f.kind] = n), report()))));
+  await uploadStems(track.uploads, result, onStage);
 
   onStage({ stage: "saving" });
   const done = await fetch(`/api/tracks/${track.id}/complete`, { method: "POST" });

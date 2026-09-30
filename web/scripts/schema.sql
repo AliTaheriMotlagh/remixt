@@ -169,3 +169,28 @@ CREATE TABLE IF NOT EXISTS project_members (
   PRIMARY KEY (project_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members(user_id);
+
+-- The split queue: songs queued from a phone, split by a helper's computer
+-- (see src/lib/splitQueue.ts).
+CREATE TABLE IF NOT EXISTS split_jobs (
+  id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  source_key TEXT NOT NULL,
+  tags TEXT[] NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'uploading', -- uploading | queued | working | done | failed
+  worker_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  heartbeat_at TIMESTAMPTZ,
+  progress REAL NOT NULL DEFAULT 0,
+  stage TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  failed_by TEXT[] NOT NULL DEFAULT '{}',
+  track_id TEXT REFERENCES tracks(id) ON DELETE SET NULL,
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_split_jobs_status ON split_jobs(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_split_jobs_owner ON split_jobs(owner_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_split_jobs_worker ON split_jobs(worker_id) WHERE status = 'done';

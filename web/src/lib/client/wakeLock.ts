@@ -1,9 +1,11 @@
 "use client";
 
-// Keeps the screen on while something needs it — music playing, a song
-// being split — the way a video player does, so a phone doesn't dim and
-// lock mid-song. Several parts of the app can ask at once; the lock is
-// held while any of them wants it. Browsers drop the lock whenever the
+// Keeps the screen on while something is playing — the mix, a remix, a
+// library preview — the way a video player does, so a phone doesn't dim
+// and lock mid-song. Nothing else holds it: the moment playback pauses or
+// stops, the screen follows the device's own sleep setting again.
+// Several players can ask at once; the lock is held while any of them
+// wants it. Browsers drop the lock whenever the
 // page is hidden, so it's taken again when the page comes back.
 
 const holders = new Set<string>();

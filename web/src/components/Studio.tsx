@@ -7,8 +7,10 @@ import StudioTimeline from "./StudioTimeline";
 import StudioLaneRow from "./StudioLaneRow";
 import StudioLibraryPanel from "./StudioLibraryPanel";
 import BpmSyncPanel from "./BpmSyncPanel";
-import SamplePads, { PAD_KEYS } from "./studio/SamplePads";
+import SamplePads from "./studio/SamplePads";
 import VocalRecorder from "./studio/VocalRecorder";
+import LaneGroupBar from "./studio/LaneGroupBar";
+import StudioShortcuts from "./studio/StudioShortcuts";
 import CollabBar from "./studio/CollabBar";
 import {
   connectCollab,
@@ -20,7 +22,7 @@ import { audioEngine } from "@/lib/client/audioEngine";
 import { detectMissingKeys } from "@/lib/client/autoMatch";
 import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/remixLanes";
 import { useStudioStore } from "@/lib/client/studioStore";
-import { redo, resetHistory, undo } from "@/lib/client/studioHistory";
+import { resetHistory } from "@/lib/client/studioHistory";
 import {
   clearDraft,
   markDraftClean,
@@ -100,7 +102,6 @@ export default function Studio({ user }: { user: User | null }) {
   const challenge = useStudioStore((s) => s.challenge);
   const lanes = useStudioStore((s) => s.lanes);
   const loadRemix = useStudioStore((s) => s.loadRemix);
-  const setLoop = useStudioStore((s) => s.setLoop);
   const sourceRemix = useStudioStore((s) => s.sourceRemix);
   const [loadingRemix, setLoadingRemix] = useState(!!remixId);
   const [draft, setDraft] = useState<StudioDraft | null>(null);
@@ -192,60 +193,6 @@ export default function Studio({ user }: { user: User | null }) {
     if (lanes.length > 0) void detectMissingKeys();
   }, [lanes]);
 
-  // Transport shortcuts. They're skipped while a form control has focus so
-  // that typing a title or a BPM doesn't start playback.
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      const target = event.target as HTMLElement | null;
-
-      // Undo/redo — except while typing, where the text box has its own.
-      if ((event.metaKey || event.ctrlKey) && !event.altKey) {
-        const key = event.key.toLowerCase();
-        const typing =
-          target?.isContentEditable ||
-          target?.tagName === "TEXTAREA" ||
-          (target instanceof HTMLInputElement && !["range", "checkbox", "button"].includes(target.type));
-        if (!typing && (key === "z" || key === "y")) {
-          event.preventDefault();
-          if (key === "y" || event.shiftKey) redo();
-          else undo();
-          return;
-        }
-      }
-
-      if (
-        target &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.tagName === "SELECT" ||
-          target.isContentEditable)
-      ) {
-        return;
-      }
-      const state = useStudioStore.getState();
-      if (event.code === "Space") {
-        event.preventDefault();
-        if (state.lanes.length === 0) return;
-        if (state.isPlaying) audioEngine.pause();
-        else void audioEngine.play().catch(() => {});
-      } else if (event.code === "Escape") {
-        audioEngine.stop();
-      } else if (event.key === "l" || event.key === "L") {
-        setLoop({ enabled: !state.loopEnabled });
-      } else if (event.key === "Home") {
-        audioEngine.seek(0);
-      } else if (!event.metaKey && !event.ctrlKey && !event.altKey && PAD_KEYS.includes(event.key)) {
-        const pad = state.pads[PAD_KEYS.indexOf(event.key)];
-        if (pad) {
-          event.preventDefault();
-          void audioEngine.triggerPad(pad).catch(() => {});
-        }
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [setLoop]);
-
   // Leaving the Studio shouldn't leave the mix playing behind you.
   useEffect(() => () => audioEngine.stop(), []);
 
@@ -297,10 +244,7 @@ export default function Studio({ user }: { user: User | null }) {
               )}
             </button>
           )}
-          <p className="hidden text-right text-[11px] leading-relaxed text-muted lg:block">
-            Space play/pause · Esc stop · L loop · 1–0 pads · ⌘/Ctrl+Z undo<br />
-            Drag a clip to move it in time
-          </p>
+          <StudioShortcuts mode="studio" />
         </div>
       </div>
 
@@ -358,6 +302,7 @@ export default function Studio({ user }: { user: User | null }) {
             </div>
           ) : (
             <div className="flex flex-col gap-3">
+              <LaneGroupBar />
               {lanes.map((lane) => (
                 <StudioLaneRow key={lane.laneId} lane={lane} />
               ))}

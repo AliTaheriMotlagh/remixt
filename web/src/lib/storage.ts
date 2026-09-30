@@ -135,14 +135,18 @@ export type UploadTarget =
  * an hour; locally it's `localPath`, a route on this app that checks
  * ownership and streams the body to disk.
  */
-export async function createUploadTarget(key: string, localPath: string): Promise<UploadTarget> {
+export async function createUploadTarget(
+  key: string,
+  localPath: string,
+  maxBytes = MAX_STEM_BYTES
+): Promise<UploadTarget> {
   const contentType = contentTypeFor(key);
   if (blobToken) {
     const token = await generateClientTokenFromReadWriteToken({
       token: blobToken,
       pathname: key,
       allowedContentTypes: [contentType],
-      maximumSizeInBytes: MAX_STEM_BYTES,
+      maximumSizeInBytes: maxBytes,
       validUntil: Date.now() + 60 * 60 * 1000,
       addRandomSuffix: false,
     });

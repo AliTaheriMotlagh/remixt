@@ -267,6 +267,14 @@ type StudioState = {
   /** The challenge this mix is an entry for, if it was started from one. */
   challenge: SourceRemix | null;
   setChallenge: (challenge: SourceRemix | null) => void;
+  /** Lanes picked to move together (not saved, not shared). */
+  selectedLaneIds: string[];
+  toggleLaneSelected: (laneId: string) => void;
+  setLaneSelection: (laneIds: string[]) => void;
+  /** Shifts every given lane by the same amount, keeping their spacing (none goes before 0). */
+  moveLanes: (laneIds: string[], deltaSeconds: number) => void;
+  /** Sets several lanes' starts at once — a group drag. */
+  setLaneOffsets: (offsets: Record<string, number>) => void;
 
   addStem: (stem: LoadableStem) => string;
   removeLane: (laneId: string) => void;
@@ -491,6 +499,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   pads: [],
   sourceRemix: null,
   challenge: null,
+  selectedLaneIds: [],
   setChallenge: (challenge) => set({ challenge }),
 
   addStem: (stem) => {
@@ -534,7 +543,11 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   removeLane: (laneId) => {
     set((state) => {
       const lanes = state.lanes.filter((l) => l.laneId !== laneId);
-      return { lanes, duration: recomputeDuration(lanes) };
+      return {
+        lanes,
+        duration: recomputeDuration(lanes),
+        selectedLaneIds: state.selectedLaneIds.filter((id) => id !== laneId),
+      };
     });
   },
 
@@ -647,6 +660,33 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         duration: recomputeDuration(lanes),
         projectBpm: projectBpm ?? state.projectBpm,
       };
+    });
+  },
+
+  toggleLaneSelected: (laneId) =>
+    set((state) => ({
+      selectedLaneIds: state.selectedLaneIds.includes(laneId)
+        ? state.selectedLaneIds.filter((id) => id !== laneId)
+        : [...state.selectedLaneIds, laneId],
+    })),
+
+  setLaneSelection: (laneIds) => set({ selectedLaneIds: laneIds }),
+
+  moveLanes: (laneIds, deltaSeconds) => {
+    const moving = get().lanes.filter((l) => laneIds.includes(l.laneId));
+    if (moving.length === 0) return;
+    // Stop the whole group at zero rather than squashing the first lane into it.
+    const earliest = Math.min(...moving.map((l) => l.offsetSeconds));
+    const delta = Math.max(-earliest, deltaSeconds);
+    get().setLaneOffsets(Object.fromEntries(moving.map((l) => [l.laneId, l.offsetSeconds + delta])));
+  },
+
+  setLaneOffsets: (offsets) => {
+    set((state) => {
+      const lanes = state.lanes.map((l) =>
+        l.laneId in offsets ? { ...l, offsetSeconds: Math.max(0, offsets[l.laneId]) } : l
+      );
+      return { lanes, duration: recomputeDuration(lanes) };
     });
   },
 
@@ -920,6 +960,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       pads: [],
       sourceRemix: null,
       challenge: null,
+      selectedLaneIds: [],
     }),
 
   loadRemix: (lanes, project, source = null) => {
@@ -932,7 +973,10 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       isPlaying: false,
       projectBpm: project?.projectBpm ?? defaultProjectBpm(withDurations, state.projectBpm),
       masterVolume: project?.masterVolume ?? 1,
-      loopEnabled: project?.loopEnabled ?? false,
+      // The region comes back, but switched off: a loop left on when the
+      // mix was saved made it repeat for everyone who opened it, with no
+      // idea why.
+      loopEnabled: false,
       loopStart: project?.loopStart ?? 0,
       loopEnd: project?.loopEnd ?? 0,
       markers: project?.markers ?? [],
@@ -940,6 +984,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       pads: project?.pads ?? [],
       sourceRemix: source,
       challenge: null,
+      selectedLaneIds: [],
     }));
   },
 
@@ -947,7 +992,10 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     set((state) => {
       const solo = new Set(state.lanes.filter((l) => l.solo).map((l) => l.laneId));
       const next = lanes.map((lane) => withClipsNormalised({ ...lane, solo: solo.has(lane.laneId) }));
-      return { ...project, lanes: next, duration: recomputeDuration(next) };
+      // Looping is for whoever's listening: a collaborator's loop shouldn't
+      // start (or stop) repeating this person's playback.
+      const { loopEnabled, loopStart, loopEnd } = state;
+      return { ...project, loopEnabled, loopStart, loopEnd, lanes: next, duration: recomputeDuration(next) };
     });
   },
 

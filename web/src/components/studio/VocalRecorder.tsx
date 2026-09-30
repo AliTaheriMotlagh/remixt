@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import Waveform from "../Waveform";
 import { audioEngine } from "@/lib/client/audioEngine";
-import { startRecording, uploadTake, type Recording, type Take } from "@/lib/client/recorder";
+import { prepareRecording, startRecording, uploadTake, type Recording, type Take } from "@/lib/client/recorder";
 import { useStudioStore } from "@/lib/client/studioStore";
 
 function formatTime(seconds: number) {
@@ -59,7 +59,7 @@ export default function VocalRecorder({ signedIn }: { signedIn: boolean }) {
     setTake(null);
     setState("starting");
     // Inside the tap: audio has to be unlocked before anything is awaited.
-    const ctx = audioEngine.prepareAudio();
+    const ctx = prepareRecording();
     try {
       const rec = await startRecording(ctx);
       recording.current = rec;

@@ -37,12 +37,15 @@ function describe(n: Notification) {
       );
     case "challenge":
       return <>{n.body ?? "A new remix challenge has started"}</>;
+    case "split":
+      return <>split “{n.track_title ?? n.body ?? "your song"}” for you — it&apos;s in your library, ready to remix</>;
   }
 }
 
 function hrefFor(n: Notification) {
   if (n.type === "follow" && n.actor_id) return `/artist/${n.actor_id}`;
   if (n.type === "challenge") return "/challenges";
+  if (n.type === "split") return "/upload";
   return n.remix_id ? `/remixes/${n.remix_id}` : "#";
 }
 

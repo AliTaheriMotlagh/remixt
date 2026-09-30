@@ -88,16 +88,59 @@ function peaksOf(left: Float32Array, buckets = 600) {
 }
 
 /**
+ * Gets audio ready for a take. Must run synchronously inside the tap on
+ * Record: it puts the phone's audio session into recording mode (iOS
+ * otherwise gives the page a silent mic) and unlocks the audio, before
+ * anything is awaited. Pass the result to startRecording.
+ */
+export function prepareRecording(): Promise<AudioContext> {
+  audioEngine.setMicActive(true);
+  return audioEngine.prepareAudio();
+}
+
+/** iOS can pause the audio for a moment while it switches the mic on. */
+async function ensureRunning(ctx: AudioContext) {
+  if (ctx.state === "running") return;
+  await Promise.race([ctx.resume().catch(() => {}), new Promise((resolve) => setTimeout(resolve, 1500))]);
+  // (Re-read: the await above is what changes it.)
+  if ((ctx.state as AudioContextState) !== "running") {
+    throw new Error("The phone paused the audio while turning the mic on — tap Record again");
+  }
+}
+
+/**
  * Starts recording and the mix together. `ctxPromise` must be the result
- * of audioEngine.prepareAudio() called inside the tap that started this.
+ * of prepareRecording() called inside the tap that started this.
  */
 export async function startRecording(ctxPromise: Promise<AudioContext>): Promise<Recording> {
-  const ctx = await ctxPromise;
+  try {
+    return await openTake(await ctxPromise);
+  } catch (err) {
+    audioEngine.setMicActive(false);
+    throw err;
+  }
+}
+
+async function openTake(ctx: AudioContext): Promise<Recording> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    // Browsers only offer the mic to pages on https (or localhost).
+    throw new Error(
+      window.isSecureContext
+        ? "This browser can't record here — try an up-to-date Chrome, Safari or Firefox"
+        : "Recording needs a secure (https) connection to the site"
+    );
+  }
   let stream: MediaStream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       // A singer wants their voice as it is, not phone-call processed.
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 2 },
+      // (Preferences, not requirements: a phone's mic is mono.)
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: { ideal: 2 },
+      },
     });
   } catch (err) {
     const name = err instanceof DOMException ? err.name : "";
@@ -106,15 +149,29 @@ export async function startRecording(ctxPromise: Promise<AudioContext>): Promise
         ? "Microphone access was blocked — allow it in the browser's site settings and try again"
         : name === "NotFoundError"
           ? "No microphone found"
-          : "Couldn't open the microphone"
+          : name === "NotReadableError"
+            ? "The microphone is busy — close other apps using it (a call, a voice memo) and try again"
+            : "Couldn't open the microphone"
     );
   }
-  await ensureWorklet(ctx);
 
-  const source = ctx.createMediaStreamSource(stream);
-  const tap = new AudioWorkletNode(ctx, "remixt-tap", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
-  // The tap has to be connected through to the output to be run; silently.
+  let source: MediaStreamAudioSourceNode;
+  let tap: AudioWorkletNode;
   const silent = ctx.createGain();
+  try {
+    await ensureRunning(ctx);
+    await ensureWorklet(ctx);
+    source = ctx.createMediaStreamSource(stream);
+    tap = new AudioWorkletNode(ctx, "remixt-tap", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
+  } catch (err) {
+    for (const track of stream.getTracks()) track.stop();
+    // Firefox refuses a mic whose sample rate differs from the output's.
+    if (err instanceof DOMException && err.name === "NotSupportedError") {
+      throw new Error("This browser can't record at your device's sample rate — try Chrome or Safari");
+    }
+    throw err;
+  }
+  // The tap has to be connected through to the output to be run; silently.
   silent.gain.value = 0;
   source.connect(tap);
   tap.connect(silent);
@@ -137,6 +194,7 @@ export async function startRecording(ctxPromise: Promise<AudioContext>): Promise
     tap.disconnect();
     silent.disconnect();
     for (const track of stream.getTracks()) track.stop();
+    audioEngine.setMicActive(false);
   };
 
   // What the singer hears comes out late by the output latency, and their

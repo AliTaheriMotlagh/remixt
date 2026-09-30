@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { getStemsByTrack, getTrackById } from "@/lib/models";
+import { isTrackWorker } from "@/lib/splitQueue";
 import { MAX_STEM_BYTES as MAX_BYTES, writeStorageStream } from "@/lib/storage";
 
 // Upload target for the local-disk storage backend. (With Blob or R2 the
 // browser uploads straight to the store and never calls this.) Only the
-// track's owner can write, only while the track is still being created.
+// track's owner (or its helper) can write, only while the track is still being created.
 export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ id: string; kind: string }> }
@@ -15,7 +16,8 @@ export async function PUT(
 
   const { id, kind } = await params;
   const track = await getTrackById(id);
-  if (!track || track.owner_id !== user.id) {
+  // Its owner — or the helper splitting it for them (see lib/splitQueue.ts).
+  if (!track || (track.owner_id !== user.id && !(await isTrackWorker(id, user.id)))) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   if (track.status !== "processing") {
