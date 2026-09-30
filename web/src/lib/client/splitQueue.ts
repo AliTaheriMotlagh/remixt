@@ -121,7 +121,11 @@ export async function queueFile(original: File, tags: string[], onStage: (stage:
   );
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    await upload(created.upload, bytes, (sent) => onStage({ stage: "queueing", progress: sent / bytes.length }));
+    // (Straight to Blob, how far along it is can't be seen until it's done.)
+    onStage({ stage: "queueing", progress: created.upload.type === "blob" ? null : 0 });
+    await upload(created.upload, bytes, (sent) =>
+      onStage({ stage: "queueing", progress: sent === bytes.length || created.upload.type !== "blob" ? sent / bytes.length : null })
+    );
     await json(await fetch(`/api/split-jobs/${created.id}/queued`, { method: "POST" }), "Couldn't queue the song");
   } catch (err) {
     void fetch(`/api/split-jobs/${created.id}`, { method: "DELETE" }).catch(() => {});
@@ -230,7 +234,7 @@ function stageName(stage: UploadStage) {
 }
 
 function stageProgress(stage: UploadStage) {
-  return "progress" in stage ? stage.progress : 0;
+  return "progress" in stage ? (stage.progress ?? 0) : 0;
 }
 
 class SplitHelper {

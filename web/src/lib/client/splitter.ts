@@ -324,8 +324,8 @@ export type UploadStage =
   | { stage: "encoding"; progress: number }
   | { stage: "uploading"; progress: number }
   | { stage: "saving" }
-  /** A phone sending the song to the split queue (see splitQueue.ts). */
-  | { stage: "queueing"; progress: number }
+  /** A phone sending the song to the split queue (see splitQueue.ts); null while how far can't be told. */
+  | { stage: "queueing"; progress: number | null }
   /** A phone shrinking a big lossless file before sending it to the queue. */
   | { stage: "compressing" }
   /** Waiting for the splitter to finish another song first. */
@@ -341,26 +341,76 @@ export type UploadTarget =
       access: "public" | "private";
     };
 
-/** Uploads one stem wherever the server said to (see lib/storage.ts). */
+/** Tries per file before an upload gives up. */
+const UPLOAD_ATTEMPTS = 3;
+/**
+ * How long one file may take before it's taken to be stuck and tried
+ * again: a minute, plus the time it'd take at a slow 30 KB/s.
+ */
+const uploadTimeLimit = (bytes: number) => 60_000 + (bytes / 30_000) * 1000;
+/** No bytes sent for this long and an upload is stuck (where progress can be seen). */
+const UPLOAD_STALL_MS = 45_000;
+
+class FinalUploadError extends Error {}
+
+/**
+ * Uploads one file wherever the server said to (see lib/storage.ts). An
+ * upload that fails, stalls or takes far too long is tried again from the
+ * start, up to UPLOAD_ATTEMPTS times. `onProgress` gets the bytes sent so
+ * far when that can be known, and always the whole size at the end.
+ */
 export async function upload(target: UploadTarget, body: Uint8Array, onProgress: (loaded: number) => void) {
-  if (target.type === "blob") {
-    // Vercel Blob: straight from the browser to the store, with a token
-    // the server scoped to exactly this file.
-    const { put } = await import("@vercel/blob/client");
-    await put(target.pathname, new Blob([body as BlobPart], { type: target.contentType }), {
-      access: target.access,
-      token: target.token,
-      contentType: target.contentType,
-      // Blob's parts are 8 MB, so a file of two or more goes up in
-      // parallel parts that retry on their own — faster, and kinder to a
-      // shaky connection. (Smaller, it'd be one part plus two extra round
-      // trips to start and finish it: slower than a plain upload.)
-      multipart: body.length > 16 * 1024 * 1024,
-      onUploadProgress: ({ loaded }) => onProgress(loaded),
-    });
-    return;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await (target.type === "blob" ? putToBlob(target, body) : putWithProgress(target, body, onProgress));
+      onProgress(body.length);
+      return;
+    } catch (err) {
+      if (attempt >= UPLOAD_ATTEMPTS || err instanceof FinalUploadError) throw err;
+      onProgress(0);
+      await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+    }
   }
-  return putWithProgress(target, body, onProgress);
+}
+
+/**
+ * Vercel Blob: straight from the browser to the store, with a token the
+ * server scoped to exactly this file. Deliberately without the library's
+ * upload progress: asking for it makes Chrome send the file as a streamed
+ * request, which only works over HTTP/2 — behind many proxies and VPNs it
+ * fails, and the library then retries with ever-longer waits (up to
+ * minutes each), which looks like an upload frozen part-way. A plain
+ * upload works everywhere. The library's own retries can't be interrupted
+ * mid-wait, so the time limit races it rather than relying on the abort.
+ */
+async function putToBlob(target: Extract<UploadTarget, { type: "blob" }>, body: Uint8Array) {
+  const { put } = await import("@vercel/blob/client");
+  const controller = new AbortController();
+  const request = put(target.pathname, new Blob([body as BlobPart], { type: target.contentType }), {
+    access: target.access,
+    token: target.token,
+    contentType: target.contentType,
+    // Blob's parts are 8 MB, so a file of two or more goes up in parallel
+    // parts. (Smaller, it'd be one part plus two extra round trips to
+    // start and finish it: slower than a plain upload.)
+    multipart: body.length > 16 * 1024 * 1024,
+    abortSignal: controller.signal,
+  });
+  // Settled either way below; this only stops a late failure after a
+  // timeout being reported as unhandled.
+  request.catch(() => {});
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error("The upload took too long — check your connection"));
+    }, uploadTimeLimit(body.length));
+  });
+  try {
+    await Promise.race([request, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** PUT with upload progress — fetch still can't report that, XHR can. */
@@ -373,12 +423,28 @@ function putWithProgress(
     const xhr = new XMLHttpRequest();
     xhr.open("PUT", target.url);
     for (const [name, value] of Object.entries(target.headers)) xhr.setRequestHeader(name, value);
-    xhr.upload.onprogress = (e) => onProgress(e.loaded);
-    xhr.onload = () =>
-      xhr.status >= 200 && xhr.status < 300
-        ? resolve()
-        : reject(new Error(`Upload failed (HTTP ${xhr.status})`));
-    xhr.onerror = () => reject(new Error("Upload failed — check your connection"));
+    xhr.timeout = uploadTimeLimit(body.length);
+    let stall = setTimeout(() => xhr.abort(), UPLOAD_STALL_MS);
+    const done = () => clearTimeout(stall);
+    xhr.upload.onprogress = (e) => {
+      clearTimeout(stall);
+      stall = setTimeout(() => xhr.abort(), UPLOAD_STALL_MS);
+      onProgress(e.loaded);
+    };
+    xhr.onload = () => {
+      done();
+      if (xhr.status >= 200 && xhr.status < 300) return resolve();
+      const message = `Upload failed (HTTP ${xhr.status})`;
+      // A refusal (not signed in, too big) won't change on a second try; a timeout or server hiccup might.
+      reject(
+        xhr.status >= 400 && xhr.status < 500 && xhr.status !== 408 && xhr.status !== 429
+          ? new FinalUploadError(message)
+          : new Error(message)
+      );
+    };
+    xhr.onerror = () => (done(), reject(new Error("Upload failed — check your connection")));
+    xhr.ontimeout = () => (done(), reject(new Error("The upload took too long — check your connection")));
+    xhr.onabort = () => (done(), reject(new Error("The upload stalled — check your connection")));
     xhr.send(new Blob([body as BlobPart]));
   });
 }
@@ -454,7 +520,10 @@ export function splitTrackPayload(file: { name: string }, result: SplitResult, d
   };
 }
 
-/** Uploads every stem the server made room for (older servers: two), in parallel. */
+/** Stems uploading at once: enough to fill the connection, and progress moves as each lands. */
+const STEMS_AT_ONCE = 2;
+
+/** Uploads every stem the server made room for (older servers: two), a couple at a time. */
 export async function uploadStems(
   uploads: Record<string, UploadTarget>,
   result: SplitResult,
@@ -468,7 +537,14 @@ export async function uploadStems(
   const report = () =>
     onStage({ stage: "uploading", progress: Object.values(sent).reduce((a, b) => a + (b ?? 0), 0) / total });
   report();
-  await Promise.all(files.map((f) => upload(f.target, f.bytes, (n) => ((sent[f.kind] = n), report()))));
+  const waiting = [...files];
+  const next = async (): Promise<void> => {
+    const f = waiting.shift();
+    if (!f) return;
+    await upload(f.target, f.bytes, (n) => ((sent[f.kind] = n), report()));
+    return next();
+  };
+  await Promise.all(Array.from({ length: Math.min(STEMS_AT_ONCE, files.length) }, next));
 }
 
 /**
