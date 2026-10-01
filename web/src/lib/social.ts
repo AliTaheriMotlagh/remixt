@@ -119,7 +119,7 @@ export type ArtistNumbers = {
 };
 
 /** XP per thing done — kept in one place so the leaderboard's SQL agrees with it. */
-const XP = {
+export const XP = {
   published: 100,
   track: 25,
   like: 15,
@@ -158,6 +158,11 @@ const TITLES = [
   "Legend",
   "Icon",
 ];
+
+/** Every level and where it starts, for showing the whole ladder. */
+export function levelLadder(): { level: number; title: string; from: number }[] {
+  return LEVELS.map((from, i) => ({ level: i + 1, title: TITLES[i], from }));
+}
 
 export type Level = { level: number; title: string; xp: number; from: number; to: number | null };
 

@@ -5,6 +5,7 @@ import NavBar from "@/components/NavBar";
 import MobileTabBar from "@/components/MobileTabBar";
 import PreviewBar from "@/components/PreviewBar";
 import SplitterStatus from "@/components/SplitterStatus";
+import PresenceHeartbeat from "@/components/PresenceHeartbeat";
 import { BackgroundActivity } from "@/components/UploadActivity";
 import { getCurrentUser } from "@/lib/auth";
 import { isAdmin } from "@/lib/admin";
@@ -77,6 +78,7 @@ export default async function RootLayout({
           {children}
         </main>
         <PreviewBar />
+        <PresenceHeartbeat />
         <SplitterStatus signedIn={!!user} />
         <BackgroundActivity signedIn={!!user} />
         <MobileTabBar user={user} isAdmin={isAdmin(user)} />

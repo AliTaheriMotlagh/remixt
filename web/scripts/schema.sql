@@ -194,3 +194,14 @@ CREATE TABLE IF NOT EXISTS split_jobs (
 CREATE INDEX IF NOT EXISTS idx_split_jobs_status ON split_jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_split_jobs_owner ON split_jobs(owner_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_split_jobs_worker ON split_jobs(worker_id) WHERE status = 'done';
+
+-- Who's online right now, for the live counts on the home page (see
+-- src/lib/presence.ts, which also creates this on first use). One row per
+-- browser; a row older than a minute or so means they've gone.
+CREATE TABLE IF NOT EXISTS presence (
+  session_id TEXT PRIMARY KEY,
+  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+  area TEXT NOT NULL DEFAULT 'browsing',
+  last_seen TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_presence_last_seen ON presence(last_seen);
