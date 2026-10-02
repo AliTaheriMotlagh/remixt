@@ -27,7 +27,7 @@ export default function KeyHelper({ lane }: { lane: StudioLane }) {
 
   const shifts = Array.from({ length: 13 }, (_, i) => i - 6);
   return (
-    <div className="mt-3 rounded-lg border border-border bg-background p-3">
+    <div className="rounded-lg border border-border bg-background p-3">
       <p className="text-[11px] text-muted">
         {target ? (
           <>

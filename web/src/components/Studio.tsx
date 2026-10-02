@@ -1,17 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import StudioTransport from "./StudioTransport";
-import StudioTimeline from "./StudioTimeline";
-import StudioLaneRow from "./StudioLaneRow";
 import StudioLibraryPanel from "./StudioLibraryPanel";
-import BpmSyncPanel from "./BpmSyncPanel";
 import SamplePads from "./studio/SamplePads";
 import VocalRecorder from "./studio/VocalRecorder";
-import LaneGroupBar from "./studio/LaneGroupBar";
 import StudioShortcuts from "./studio/StudioShortcuts";
 import CollabBar from "./studio/CollabBar";
+import Arrangement from "./studio/Arrangement";
+import LaneInspector from "./studio/LaneInspector";
+import AiProducer from "./studio/AiProducer";
+import ContextMenuHost from "./studio/ContextMenu";
+import StudioNotice from "./studio/StudioNotice";
 import {
   connectCollab,
   joinSharedSession,
@@ -22,6 +23,7 @@ import { audioEngine } from "@/lib/client/audioEngine";
 import { detectMissingKeys } from "@/lib/client/autoMatch";
 import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/remixLanes";
 import { useStudioStore } from "@/lib/client/studioStore";
+import { useStudioView } from "@/lib/client/studioView";
 import { resetHistory } from "@/lib/client/studioHistory";
 import {
   clearDraft,
@@ -105,9 +107,37 @@ export default function Studio({ user }: { user: User | null }) {
   const sourceRemix = useStudioStore((s) => s.sourceRemix);
   const [loadingRemix, setLoadingRemix] = useState(!!remixId);
   const [draft, setDraft] = useState<StudioDraft | null>(null);
-  // Below desktop width the stem library is a sheet that slides up.
+  // Below desktop width the stem library is a sheet that slides up; on a
+  // desktop it can be folded away to give the timeline the room.
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [libraryHidden, setLibraryHidden] = useState(false);
+  // Briefly ringed after "Add a vocal or beat", so it's clear where to pick from.
+  const [libraryFlash, setLibraryFlash] = useState(0);
+  const libraryRef = useRef<HTMLElement>(null);
+
+  /** Takes you to the stem library: a sheet on phones; on a desktop, shown, scrolled to and focused. */
+  function revealLibrary() {
+    if (!window.matchMedia("(min-width: 64rem)").matches) {
+      setLibraryOpen(true);
+      return;
+    }
+    setLibraryHidden(false);
+    setLibraryFlash((n) => n + 1);
+  }
+
+  // Runs once the library is on screen (it may have just been un-hidden).
+  useEffect(() => {
+    if (!libraryFlash) return;
+    const aside = libraryRef.current;
+    const rect = aside?.getBoundingClientRect();
+    // It's sticky, so usually already in view — only scroll when it isn't.
+    if (rect && (rect.top < 0 || rect.top > window.innerHeight)) aside!.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    aside?.querySelector<HTMLInputElement>('input[aria-label="Search stems"]')?.focus({ preventScroll: true });
+    const timer = setTimeout(() => setLibraryFlash(0), 1600);
+    return () => clearTimeout(timer);
+  }, [libraryFlash]);
   const remixTitle = sourceRemix?.title ?? null;
+  const aiOpen = useStudioView((s) => s.aiOpen);
 
   // Unsaved work from a previous visit (a reload, or the phone dropping
   // the tab): offer it back, but only to an empty Studio.
@@ -216,11 +246,16 @@ export default function Studio({ user }: { user: User | null }) {
   }, [libraryOpen]);
 
   return (
-    <div className="touch-targets mx-auto w-full max-w-7xl px-4 py-5 max-lg:pb-24 sm:px-6 sm:py-8">
+    // With the AI producer docked on the right, the Studio makes room for it.
+    <div
+      className={`touch-targets mx-auto w-full max-w-[110rem] px-3 py-4 max-lg:pb-24 sm:px-5 sm:py-5 ${
+        aiOpen ? "lg:max-w-none lg:pr-[26.25rem]" : ""
+      }`}
+    >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold">Studio</h1>
-          <p className="mt-1 text-sm text-muted">
+          <h1 className="text-xl font-bold tracking-tight">Studio</h1>
+          <p className="mt-0.5 truncate text-xs text-muted sm:text-sm">
             {challenge
               ? `🏁 Challenge: “${challenge.title}” — publish to enter`
               : remixTitle
@@ -228,12 +263,12 @@ export default function Studio({ user }: { user: User | null }) {
                 : "Mix vocals from one song with the beat from another."}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-3">
+        <div className="flex shrink-0 items-center gap-2">
           {!projectId && (
             <button
               onClick={startTogether}
               disabled={startingSession || lanes.length === 0}
-              className="rounded-lg border border-beat/60 px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-beat/15 disabled:opacity-40"
+              className="rounded-lg border border-beat/60 px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-beat/15 disabled:opacity-40"
               title="Invite other artists to edit this mix with you, live"
             >
               {startingSession ? "Starting…" : (
@@ -244,14 +279,22 @@ export default function Studio({ user }: { user: User | null }) {
               )}
             </button>
           )}
+          <button
+            onClick={() => setLibraryHidden((v) => !v)}
+            aria-pressed={!libraryHidden}
+            className="hidden rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted transition-colors hover:text-foreground lg:block"
+            title={libraryHidden ? "Show the stem library" : "Hide the stem library for a wider timeline"}
+          >
+            {libraryHidden ? "📚 Show library" : "📚 Hide library"}
+          </button>
           <StudioShortcuts mode="studio" />
         </div>
       </div>
 
       {collabError && <p className="mt-3 text-sm text-danger">{collabError}</p>}
 
-      <div className="mt-5 grid grid-cols-1 gap-6 sm:mt-6 lg:grid-cols-[minmax(0,1fr)_300px]">
-        <div className="flex min-w-0 flex-col gap-4">
+      <div className={`mt-4 grid grid-cols-1 gap-5 ${libraryHidden ? "" : "lg:grid-cols-[minmax(0,1fr)_280px]"}`}>
+        <div className="flex min-w-0 flex-col gap-3">
           {projectId && user && <CollabBar userId={user.id} onLeave={() => void leaveTogether()} />}
           {draft && lanes.length === 0 && (
             <div className="flex flex-wrap items-center gap-3 rounded-xl border border-brand/50 bg-brand/10 px-4 py-3 text-sm">
@@ -282,8 +325,6 @@ export default function Studio({ user }: { user: User | null }) {
             remixId={sourceRemix?.id ?? null}
             defaultTitle={remixTitle ? `${remixTitle} (remix)` : undefined}
           />
-          <BpmSyncPanel />
-          <StudioTimeline />
 
           {loadingRemix ? (
             <div className="rounded-xl border border-dashed border-border bg-surface p-12 text-center text-muted">
@@ -291,22 +332,24 @@ export default function Studio({ user }: { user: User | null }) {
             </div>
           ) : lanes.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-10 text-center text-muted sm:p-12">
-              No stems yet. Add a vocal and a beat
-              <span className="hidden lg:inline"> from the panel on the right</span> to start mixing.
+              <p className="text-3xl">🎛</p>
+              <p className="mt-2 font-medium text-foreground">Start with a vocal and a beat</p>
+              <p className="mt-1 text-sm">
+                Pick them <span className="hidden lg:inline">from the library on the right</span>
+                <span className="lg:hidden">from the library</span> — then cut, loop and arrange them here, and ask ✨ AI for ideas.
+              </p>
               <button
-                onClick={() => setLibraryOpen(true)}
-                className="mx-auto mt-4 flex h-11 items-center gap-2 rounded-xl bg-brand px-5 text-sm font-semibold text-white hover:bg-brand-strong lg:hidden"
+                onClick={revealLibrary}
+                className="mx-auto mt-4 flex h-11 items-center gap-2 rounded-xl bg-brand px-5 text-sm font-semibold text-white hover:bg-brand-strong"
               >
                 + Add a vocal or beat
               </button>
             </div>
           ) : (
-            <div className="flex flex-col gap-3">
-              <LaneGroupBar />
-              {lanes.map((lane) => (
-                <StudioLaneRow key={lane.laneId} lane={lane} />
-              ))}
-            </div>
+            <>
+              <Arrangement />
+              <LaneInspector />
+            </>
           )}
 
           <VocalRecorder signedIn={!!user} />
@@ -317,8 +360,13 @@ export default function Studio({ user }: { user: User | null }) {
           <div className="fixed inset-0 z-[60] bg-black/55 lg:hidden" onClick={() => setLibraryOpen(false)} />
         )}
         <aside
+          ref={libraryRef}
           aria-label="Stem library"
-          className={`flex flex-col lg:sticky lg:top-[calc(var(--header-h)+1.5rem)] lg:h-[calc(100dvh-var(--header-h)-3rem)] ${
+          className={`flex flex-col transition-shadow duration-500 lg:sticky lg:rounded-xl ${
+            libraryFlash > 0 ? "shadow-[0_0_0_2px_var(--brand),0_0_32px_-4px_var(--brand)]" : ""
+          } lg:top-[calc(var(--header-h)+1.5rem)] lg:h-[calc(100dvh-var(--header-h)-3rem)] ${
+            libraryHidden ? "lg:hidden" : ""
+          } ${
             libraryOpen
               ? "max-lg:fixed max-lg:inset-x-0 max-lg:bottom-0 max-lg:z-[61] max-lg:mx-auto max-lg:h-[85dvh] max-lg:max-w-2xl max-lg:rounded-t-2xl max-lg:border max-lg:border-b-0 max-lg:border-border max-lg:bg-background max-lg:px-3 max-lg:pb-[max(0.75rem,env(safe-area-inset-bottom))] max-lg:shadow-2xl"
               : "max-lg:hidden"
@@ -354,6 +402,9 @@ export default function Studio({ user }: { user: User | null }) {
           <span className="text-lg leading-none">+</span> Add stems
         </button>
       )}
+      <AiProducer />
+      <ContextMenuHost />
+      <StudioNotice />
     </div>
   );
 }

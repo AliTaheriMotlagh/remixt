@@ -25,6 +25,7 @@ import {
   effectiveKey,
   useStudioStore,
   type LanePatch,
+  type StudioLane,
 } from "./studioStore";
 
 // Matching one vocal with one beat, the way the lane's Match panel asks
@@ -220,7 +221,21 @@ export type PairPlan = {
  * fit the beat. Returns what changed.
  */
 export function applyPairPlan(ctx: PairContext, plan: PairPlan): string[] {
-  const lanes = useStudioStore.getState().lanes;
+  const { patches, projectBpm, lines } = pairPlanPatches(ctx, plan, useStudioStore.getState().lanes);
+  useStudioStore.getState().applyLanePatches(patches, projectBpm);
+  return lines;
+}
+
+/**
+ * Works out an arrangement without applying it: the lane patches and
+ * project tempo it comes to, and the report. `lanes` are the lanes as they
+ * are now (only the pair's offsets, titles and levels are read).
+ */
+export function pairPlanPatches(
+  ctx: PairContext,
+  plan: PairPlan,
+  lanes: StudioLane[]
+): { patches: Record<string, LanePatch>; projectBpm: number; lines: string[]; placements: SectionPlacement[] } {
   const vocalLane = lanes.find((l) => l.laneId === ctx.vocalLaneId);
   const beatLane = lanes.find((l) => l.laneId === ctx.beatLaneId);
   if (!vocalLane || !beatLane) throw new Error("One of those lanes is gone.");
@@ -300,7 +315,7 @@ export function applyPairPlan(ctx: PairContext, plan: PairPlan): string[] {
       ...(beatPreset ? { fx: { ...DEFAULT_FX, ...beatPreset.fx } } : {}),
     },
   };
-  useStudioStore.getState().applyLanePatches(patches, Math.round(tempo.projectBpm * 100) / 100);
+  const projectBpm = Math.round(tempo.projectBpm * 100) / 100;
 
   const bar = beatLength(tempo.projectBpm) * 4;
   lines.unshift(
@@ -319,6 +334,6 @@ export function applyPairPlan(ctx: PairContext, plan: PairPlan): string[] {
   if (beatPreset) lines.push(`Beat effects: ${beatPreset.label}`);
   lines.push(`Keys: ${keyLabel(ctx.vocalKey)} on ${keyLabel(ctx.beatKey)} — ${ctx.keys}`);
   lines.push(...placementNotes(vocalInput, beatInput, structure, heard, placement));
-  return lines;
+  return { patches, projectBpm, lines, placements };
 }
 

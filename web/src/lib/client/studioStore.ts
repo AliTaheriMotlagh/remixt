@@ -1,6 +1,22 @@
 import { create } from "zustand";
 import { semitonesToMatch, transposeKey, type MusicalKey } from "./musicKey";
 import { isBacking, type StemKind } from "@/lib/stemKinds";
+import {
+  MIN_CLIP,
+  WHOLE,
+  clipSpan,
+  clipStart,
+  clipsOf,
+  liveRefs,
+  normaliseLane,
+  splitClips,
+  stutterLane,
+  withEffectiveDuration,
+  type ClipRef,
+  type EditResult,
+} from "./clipEdit";
+
+export { clipSpan, clipStart, clipsOf, WHOLE, type ClipRef };
 
 export type LaneKind = StemKind;
 
@@ -125,6 +141,8 @@ export type Pad = {
  * arrangement stretches along with the lane when its tempo changes.
  */
 export type LaneClip = {
+  /** Stable while the clip exists, so a selection survives edits (not saved). */
+  id?: string;
   from: number;
   to: number;
   at: number;
@@ -137,16 +155,19 @@ export type LaneClip = {
   reverse?: boolean;
 };
 
-/** How long a clip plays, in the lane's (unstretched) seconds. */
-export function clipSpan(clip: LaneClip) {
-  return (clip.to - clip.from) / (clip.stretch ?? 1);
-}
-
 /** The fields a bulk edit (auto-match, or undoing one) may change. */
 export type LanePatch = Partial<
   Pick<
     StudioLane,
-    "bpm" | "musicalKey" | "pitchSemitones" | "tempoRatio" | "offsetSeconds" | "volume" | "fx" | "clips"
+    | "bpm"
+    | "musicalKey"
+    | "pitchSemitones"
+    | "tempoRatio"
+    | "offsetSeconds"
+    | "volume"
+    | "fx"
+    | "clips"
+    | "automation"
   >
 >;
 
@@ -338,6 +359,14 @@ type StudioState = {
    * touching playback, and keeping this person's own solo buttons.
    */
   applySharedState: (lanes: StudioLane[], project: ProjectSettings) => void;
+  /** Clips picked for editing together (not saved, not shared). */
+  selectedClips: ClipRef[];
+  setClipSelection: (refs: ClipRef[]) => void;
+  /**
+   * Runs a clip edit from clipEdit.ts on the lanes and the live selection;
+   * the edit returns the new lanes and what to select next (null: no change).
+   */
+  editClips: (edit: (lanes: StudioLane[], selection: ClipRef[]) => EditResult | null) => boolean;
   _setPlaybackState: (isPlaying: boolean, playhead: number) => void;
   _setLaneRendering: (laneId: string, rendering: boolean) => void;
 };
@@ -369,50 +398,6 @@ export const PROJECT_DEFAULTS: ProjectSettings = {
 
 function recomputeDuration(lanes: StudioLane[]) {
   return lanes.reduce((max, lane) => Math.max(max, lane.offsetSeconds + lane.duration), 0);
-}
-
-/** How much of the stem's own time the lane spans, start to end. */
-function sourceSpan(lane: StudioLane) {
-  if (!lane.clips?.length) return lane.originalDuration;
-  return lane.clips.reduce((max, c) => Math.max(max, c.at + clipSpan(c)), 0);
-}
-
-function withEffectiveDuration(lane: StudioLane): StudioLane {
-  return {
-    ...lane,
-    duration: sourceSpan(lane) / lane.tempoRatio,
-  };
-}
-
-/** Shortest a clip can be trimmed to, in stem seconds. */
-const MIN_CLIP = 0.05;
-
-/** A lane's clips — a lane that isn't arranged is one clip of its whole stem. */
-export function clipsOf(lane: StudioLane): LaneClip[] {
-  return lane.clips?.length ? lane.clips : [{ from: 0, to: lane.originalDuration, at: 0 }];
-}
-
-/** Where a clip starts on the timeline, in seconds. */
-export function clipStart(lane: StudioLane, clip: LaneClip) {
-  return lane.offsetSeconds + clip.at / lane.tempoRatio;
-}
-
-/**
- * Keeps the lane starting where its first clip starts, so dragging the
- * lane, its "Start" field and the nudges all mean the same thing with or
- * without an arrangement.
- */
-function withClipsNormalised(lane: StudioLane): StudioLane {
-  if (!lane.clips?.length) return withEffectiveDuration(lane);
-  const first = Math.min(...lane.clips.map((c) => c.at));
-  let offsetSeconds = lane.offsetSeconds + first / lane.tempoRatio;
-  let shift = first;
-  if (offsetSeconds < 0) {
-    shift += offsetSeconds * lane.tempoRatio;
-    offsetSeconds = 0;
-  }
-  const clips = lane.clips.map((c) => ({ ...c, at: c.at - shift }));
-  return withEffectiveDuration({ ...lane, offsetSeconds, clips });
 }
 
 /**
@@ -500,6 +485,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   sourceRemix: null,
   challenge: null,
   selectedLaneIds: [],
+  selectedClips: [],
   setChallenge: (challenge) => set({ challenge }),
 
   addStem: (stem) => {
@@ -547,6 +533,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         lanes,
         duration: recomputeDuration(lanes),
         selectedLaneIds: state.selectedLaneIds.filter((id) => id !== laneId),
+        selectedClips: state.selectedClips.filter((r) => r.laneId !== laneId),
       };
     });
   },
@@ -649,7 +636,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       const lanes = state.lanes.map((l) => {
         const patch = patches[l.laneId];
         if (!patch) return l;
-        return withClipsNormalised({
+        return normaliseLane({
           ...l,
           ...patch,
           offsetSeconds: Math.max(0, patch.offsetSeconds ?? l.offsetSeconds),
@@ -705,7 +692,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         if (l.laneId !== laneId || !l.clips?.[index]) return l;
         const at = (Math.max(0, timelineSeconds) - l.offsetSeconds) * l.tempoRatio;
         const clips = l.clips.map((c, i) => (i === index ? { ...c, at } : c));
-        return withClipsNormalised({ ...l, clips });
+        return normaliseLane({ ...l, clips });
       });
       return { lanes, duration: recomputeDuration(lanes) };
     });
@@ -728,28 +715,17 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   setClips: (laneId, clips) => {
     set((state) => {
       const lanes = state.lanes.map((l) =>
-        l.laneId === laneId && clips.length ? withClipsNormalised({ ...l, clips }) : l
+        l.laneId === laneId && clips.length ? normaliseLane({ ...l, clips }) : l
       );
       return { lanes, duration: recomputeDuration(lanes) };
     });
   },
 
   splitAt: (laneId, timelineSeconds) => {
-    const lane = get().lanes.find((l) => l.laneId === laneId);
-    if (!lane) return false;
-    const clips = clipsOf(lane);
-    const at = (timelineSeconds - lane.offsetSeconds) * lane.tempoRatio;
-    const index = clips.findIndex((c) => at > c.at + MIN_CLIP && at < c.at + clipSpan(c) - MIN_CLIP);
-    if (index < 0) return false;
-    const clip = clips[index];
-    const cut = clip.from + (at - clip.at) * (clip.stretch ?? 1);
-    const next = [
-      ...clips.slice(0, index),
-      { ...clip, to: cut },
-      { ...clip, from: cut, at },
-      ...clips.slice(index + 1),
-    ];
-    get().setClips(laneId, next);
+    const state = get();
+    const result = splitClips(state.lanes, [laneId], [], timelineSeconds);
+    if (!result.count) return false;
+    set({ lanes: result.lanes, duration: recomputeDuration(result.lanes) });
     return true;
   },
 
@@ -896,36 +872,24 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   stutterAt: (laneId, timelineSeconds, beats, repeats) => {
     const state = get();
     const lane = state.lanes.find((l) => l.laneId === laneId);
-    if (!lane || repeats < 2) return false;
-    const clips = clipsOf(lane);
-    const at = (timelineSeconds - lane.offsetSeconds) * lane.tempoRatio;
-    const index = clips.findIndex((c) => at >= c.at && at < c.at + clipSpan(c) - MIN_CLIP);
-    if (index < 0) return false;
-    const clip = clips[index];
-    const stretch = clip.stretch ?? 1;
-    // The slice, in the lane's (unstretched) seconds and in the stem's.
-    const sliceLane = beatLength(state.projectBpm) * beats * lane.tempoRatio;
-    const from = clip.from + (at - clip.at) * stretch;
-    const to = Math.min(clip.to, from + sliceLane * stretch);
-    if (to - from < MIN_CLIP) return false;
-    const span = (to - from) / stretch;
-    const end = at + span * repeats;
+    const clips = lane && stutterLane(lane, timelineSeconds, beatLength(state.projectBpm) * beats, repeats);
+    if (!clips) return false;
+    get().setClips(laneId, clips);
+    return true;
+  },
 
-    // Cut out what the repeats play over, keeping everything either side.
-    const kept: LaneClip[] = [];
-    for (const c of clips) {
-      const cEnd = c.at + clipSpan(c);
-      const cStretch = c.stretch ?? 1;
-      if (cEnd <= at || c.at >= end) {
-        kept.push(c);
-        continue;
-      }
-      if (c.at < at) kept.push({ ...c, to: c.from + (at - c.at) * cStretch });
-      if (cEnd > end) kept.push({ ...c, from: c.from + (end - c.at) * cStretch, at: end });
-    }
-    const repeated = Array.from({ length: repeats }, (_, i) => ({ ...clip, from, to, at: at + i * span }));
-    const next = [...kept, ...repeated].filter((c) => c.to - c.from >= MIN_CLIP / 2).sort((a, b) => a.at - b.at);
-    get().setClips(laneId, next);
+  setClipSelection: (refs) => set({ selectedClips: refs }),
+
+  editClips: (edit) => {
+    const state = get();
+    const result = edit(state.lanes, liveRefs(state.lanes, state.selectedClips));
+    if (!result) return false;
+    set({
+      lanes: result.lanes,
+      duration: recomputeDuration(result.lanes),
+      selectedClips: result.selection,
+      selectedLaneIds: state.selectedLaneIds.filter((id) => result.lanes.some((l) => l.laneId === id)),
+    });
     return true;
   },
 
@@ -961,10 +925,11 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       sourceRemix: null,
       challenge: null,
       selectedLaneIds: [],
+      selectedClips: [],
     }),
 
   loadRemix: (lanes, project, source = null) => {
-    const withDurations = lanes.map(withClipsNormalised);
+    const withDurations = lanes.map(normaliseLane);
     const duration = recomputeDuration(withDurations);
     set((state) => ({
       lanes: withDurations,
@@ -985,13 +950,14 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       sourceRemix: source,
       challenge: null,
       selectedLaneIds: [],
+      selectedClips: [],
     }));
   },
 
   applySharedState: (lanes, project) => {
     set((state) => {
       const solo = new Set(state.lanes.filter((l) => l.solo).map((l) => l.laneId));
-      const next = lanes.map((lane) => withClipsNormalised({ ...lane, solo: solo.has(lane.laneId) }));
+      const next = lanes.map((lane) => normaliseLane({ ...lane, solo: solo.has(lane.laneId) }));
       // Looping is for whoever's listening: a collaborator's loop shouldn't
       // start (or stop) repeating this person's playback.
       const { loopEnabled, loopStart, loopEnd } = state;

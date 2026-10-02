@@ -5,11 +5,15 @@ import { audioEngine } from "@/lib/client/audioEngine";
 import { beatLength, useStudioStore } from "@/lib/client/studioStore";
 import { redo, startNewStep, undo } from "@/lib/client/studioHistory";
 import { PAD_KEYS } from "./SamplePads";
+import * as commands from "@/lib/client/clipCommands";
+import { liveRefs } from "@/lib/client/clipEdit";
+import { useStudioView } from "@/lib/client/studioView";
 
 // Keyboard control of the mix, in the Studio and on a remix's page: the
-// transport, and the lanes — pick lanes with the arrow keys, then mute,
-// solo, nudge, split, duplicate or delete them. Every edit is undoable.
-// "?" shows the list.
+// transport, the lanes (pick with the arrow keys, then mute, solo, nudge)
+// and, in the Studio, the selected clips — copy, cut, paste, duplicate,
+// split, reverse, quantize, delete — through the same commands as the
+// right-click menu. Every edit is undoable. "?" shows the list.
 
 type Mode = "studio" | "remix";
 
@@ -20,7 +24,7 @@ const GROUPS: { title: string; items: Shortcut[] }[] = [
     title: "Playback",
     items: [
       { keys: ["Space"], label: "Play / pause" },
-      { keys: ["Esc"], label: "Stop · when stopped, deselect lanes" },
+      { keys: ["Esc"], label: "Stop · when stopped, deselect" },
       { keys: ["←", "→"], label: "Back / forward 5 seconds" },
       { keys: ["⇧ ←", "⇧ →"], label: "Back / forward one bar" },
       { keys: ["Home", "End"], label: "Jump to the start / near the end" },
@@ -28,29 +32,36 @@ const GROUPS: { title: string; items: Shortcut[] }[] = [
       { keys: ["+", "−"], label: "Master volume up / down" },
       { keys: ["K"], label: "Metronome on / off", studioOnly: true },
       { keys: ["N"], label: "Snap to beat on / off", studioOnly: true },
+      { keys: ["Z"], label: "Zoom to fit the song", studioOnly: true },
+      { keys: ["I"], label: "AI producer", studioOnly: true },
+    ],
+  },
+  {
+    title: "Clips",
+    items: [
+      { keys: ["Click", "⇧/⌘ Click"], label: "Select a clip / add to the selection", studioOnly: true },
+      { keys: ["Drag"], label: "Across empty space: select several", studioOnly: true },
+      { keys: ["⌥ Drag"], label: "Drag a copy", studioOnly: true },
+      { keys: ["Right-click"], label: "Every option for what's under the pointer", studioOnly: true },
+      { keys: ["⌘/Ctrl C", "X", "V"], label: "Copy / cut / paste at the playhead", studioOnly: true },
+      { keys: ["⌘/Ctrl D"], label: "Duplicate", studioOnly: true },
+      { keys: ["X"], label: "Split at the playhead", studioOnly: true },
+      { keys: ["R"], label: "Reverse", studioOnly: true },
+      { keys: ["Q", "⇧ Q"], label: "Quantize to the beat / bar", studioOnly: true },
+      { keys: ["⇧ L"], label: "Loop the selection", studioOnly: true },
+      { keys: ["[", "]"], label: "Nudge a beat earlier / later (⇧: a bar)" },
+      { keys: ["Delete"], label: "Delete", studioOnly: true },
     ],
   },
   {
     title: "Lanes",
     items: [
-      { keys: ["↑", "↓"], label: "Select the lane above / below" },
-      { keys: ["⇧ ↑", "⇧ ↓"], label: "Add the lane above / below to the selection" },
-      { keys: ["⌘/Ctrl A"], label: "Select every lane" },
-      { keys: ["M"], label: "Mute the selected lanes" },
-      { keys: ["S"], label: "Solo the selected lanes" },
-      { keys: ["[", "]"], label: "Nudge selected lanes a beat earlier / later" },
-      { keys: ["⇧ [", "⇧ ]"], label: "Nudge selected lanes a bar earlier / later" },
-      { keys: ["X"], label: "Split selected lanes at the playhead", studioOnly: true },
-      { keys: ["⌘/Ctrl D"], label: "Duplicate the selected lanes", studioOnly: true },
-      { keys: ["Delete"], label: "Remove the selected lanes", studioOnly: true },
-    ],
-  },
-  {
-    title: "Editing",
-    items: [
-      { keys: ["⌘/Ctrl Z"], label: "Undo" },
-      { keys: ["⇧ ⌘/Ctrl Z", "Ctrl Y"], label: "Redo" },
+      { keys: ["↑", "↓"], label: "Select the lane above / below (⇧ adds)" },
+      { keys: ["⌘/Ctrl A"], label: "Select everything" },
+      { keys: ["M", "S"], label: "Mute / solo the selected lanes" },
+      { keys: ["E"], label: "Lane settings", studioOnly: true },
       { keys: ["1 … 0"], label: "Play sample pads 1–10", studioOnly: true },
+      { keys: ["⌘/Ctrl Z"], label: "Undo (⇧ to redo)" },
       { keys: ["?"], label: "Show this list" },
     ],
   },
@@ -86,10 +97,14 @@ function handleKey(event: KeyboardEvent, mode: Mode, openHelp: () => void) {
   const typing = isTyping(event.target);
   const state = useStudioStore.getState();
   const selected = state.selectedLaneIds.filter((id) => state.lanes.some((l) => l.laneId === id));
+  const clipsSelected = liveRefs(state.lanes, state.selectedClips).length > 0;
+  // Mute/solo act on the selected lanes, or the lanes of the selected clips.
+  const laneTargets = selected.length ? selected : [...new Set(liveRefs(state.lanes, state.selectedClips).map((r) => r.laneId))];
   const beat = beatLength(state.projectBpm);
   const bar = beat * 4;
   const key = event.key;
   const lower = key.toLowerCase();
+  const studio = mode === "studio";
 
   // Undo/redo — except while typing, where the text box has its own.
   if (mod && !event.altKey && (lower === "z" || lower === "y")) {
@@ -102,6 +117,8 @@ function handleKey(event: KeyboardEvent, mode: Mode, openHelp: () => void) {
   // A range slider keeps its arrow keys; any other field keeps everything.
   if (typing) return;
   if (event.target instanceof HTMLInputElement && event.target.type === "range" && key.startsWith("Arrow")) return;
+  // An open menu or dialog has the keyboard.
+  if (document.querySelector('[role="menu"]')) return;
 
   const handled = () => event.preventDefault();
   // Each press is an undo step of its own (holding a key down repeats into one).
@@ -111,9 +128,20 @@ function handleKey(event: KeyboardEvent, mode: Mode, openHelp: () => void) {
     if (lower === "a" && state.lanes.length) {
       handled();
       state.setLaneSelection(state.lanes.map((l) => l.laneId));
-    } else if (lower === "d" && mode === "studio" && selected.length) {
+      if (studio) commands.selectAllClips();
+    } else if (lower === "d" && studio && (clipsSelected || selected.length)) {
       handled();
-      for (const id of selected) state.duplicateLane(id);
+      if (clipsSelected) commands.duplicate();
+      else for (const id of selected) state.duplicateLane(id);
+    } else if (studio && (lower === "c" || lower === "x") && (clipsSelected || selected.length)) {
+      // Leave copying text on the page alone when there's nothing of ours to copy.
+      if (window.getSelection()?.toString()) return;
+      handled();
+      if (lower === "c") commands.copy();
+      else commands.cut();
+    } else if (studio && lower === "v" && commands.hasClipboard()) {
+      handled();
+      commands.paste();
     }
     return;
   }
@@ -133,9 +161,11 @@ function handleKey(event: KeyboardEvent, mode: Mode, openHelp: () => void) {
       else void audioEngine.play().catch(() => {});
       return;
     case "Escape":
-      // Stops the mix; with it already stopped, lets go of the selected lanes.
-      if (!state.isPlaying && selected.length) state.setLaneSelection([]);
-      else audioEngine.stop();
+      // Stops the mix; with it already stopped, lets go of the selection.
+      if (!state.isPlaying && (clipsSelected || selected.length)) {
+        if (clipsSelected) commands.clearSelection();
+        else state.setLaneSelection([]);
+      } else audioEngine.stop();
       return;
     case "ArrowLeft":
     case "ArrowRight": {
@@ -159,16 +189,27 @@ function handleKey(event: KeyboardEvent, mode: Mode, openHelp: () => void) {
       audioEngine.seek(Math.max(0, state.duration - 10));
       return;
     case "BracketLeft":
-    case "BracketRight":
-      if (!selected.length) return;
-      handled();
-      state.moveLanes(selected, (event.shiftKey ? bar : beat) * (event.code === "BracketLeft" ? -1 : 1));
+    case "BracketRight": {
+      const delta = (event.shiftKey ? bar : beat) * (event.code === "BracketLeft" ? -1 : 1);
+      if (clipsSelected) {
+        handled();
+        commands.nudge(delta);
+      } else if (selected.length) {
+        handled();
+        state.moveLanes(selected, delta);
+      }
       return;
+    }
     case "Delete":
     case "Backspace":
-      if (mode !== "studio" || !selected.length) return;
-      handled();
-      for (const id of selected) state.removeLane(id);
+      if (!studio) return;
+      if (clipsSelected) {
+        handled();
+        commands.remove();
+      } else if (selected.length) {
+        handled();
+        for (const id of selected) state.removeLane(id);
+      }
       return;
   }
 
@@ -178,30 +219,54 @@ function handleKey(event: KeyboardEvent, mode: Mode, openHelp: () => void) {
     state.setMasterVolume(Math.max(0, Math.min(1.5, Math.round((state.masterVolume + (up ? 0.1 : -0.1)) * 10) / 10)));
     return;
   }
-  if (event.shiftKey) return;
+
+  if (event.shiftKey) {
+    if (!studio) return;
+    if (lower === "l" && (clipsSelected || selected.length)) commands.loopSelection();
+    else if (lower === "q" && (clipsSelected || selected.length)) commands.quantize("bar");
+    return;
+  }
 
   switch (lower) {
     case "l":
       state.setLoop({ enabled: !state.loopEnabled });
       return;
     case "m":
-      for (const id of selected) state.toggleMute(id);
+      for (const id of laneTargets) state.toggleMute(id);
       return;
     case "s":
-      for (const id of selected) state.toggleSolo(id);
+      for (const id of laneTargets) state.toggleSolo(id);
       return;
     case "k":
-      if (mode === "studio") state.toggleMetronome();
+      if (studio) state.toggleMetronome();
       return;
     case "n":
-      if (mode === "studio") state.toggleSnap();
+      if (studio) state.toggleSnap();
       return;
     case "x":
-      if (mode === "studio") for (const id of selected) state.splitAt(id, state.playhead);
+      if (studio) commands.splitAt();
+      return;
+    case "r":
+      if (studio && (clipsSelected || selected.length)) commands.reverse();
+      return;
+    case "q":
+      if (studio && (clipsSelected || selected.length)) commands.quantize("beat");
+      return;
+    case "z":
+      if (studio) useStudioView.getState().setZoom(1);
+      return;
+    case "i":
+      if (studio && state.lanes.length) {
+        const view = useStudioView.getState();
+        view.setAiOpen(!view.aiOpen);
+      }
+      return;
+    case "e":
+      if (studio && selected.length) useStudioView.getState().openInspector();
       return;
   }
 
-  if (mode === "studio" && PAD_KEYS.includes(key)) {
+  if (studio && PAD_KEYS.includes(key)) {
     const pad = state.pads[PAD_KEYS.indexOf(key)];
     if (pad) {
       handled();
@@ -269,14 +334,14 @@ export default function StudioShortcuts({ mode, className = "" }: { mode: Mode; 
               </button>
             </div>
             <p className="mt-1 text-xs text-muted">
-              Select lanes with ↑ ↓ (or tick their ✓), then act on them. Every edit can be undone.
+              Click clips (or drag across empty space) to select them, then act on them — or right-click anything for its options. Every edit can be undone.
             </p>
             <div className="mt-4 grid gap-5 sm:grid-cols-2">
               {GROUPS.map((group) => {
                 const items = group.items.filter((item) => mode === "studio" || !item.studioOnly);
                 if (items.length === 0) return null;
                 return (
-                  <section key={group.title} className={group.title === "Lanes" ? "sm:row-span-2" : ""}>
+                  <section key={group.title} className={group.title === "Clips" ? "sm:row-span-2" : ""}>
                     <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">{group.title}</h3>
                     <ul className="flex flex-col gap-1.5 text-sm">
                       {items.map((item) => (

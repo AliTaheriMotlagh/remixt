@@ -10,9 +10,23 @@ import {
 } from "@/lib/client/matchOptions";
 import { applyPairPlan, preparePair } from "@/lib/client/pairMatch";
 import { FX_PRESETS, useStudioStore, type LanePatch, type StudioLane } from "@/lib/client/studioStore";
+import { startNewStep } from "@/lib/client/studioHistory";
 import { useKeepScreenOn } from "@/lib/client/wakeLock";
 
-type Baseline = { patches: Record<string, LanePatch>; projectBpm: number };
+/**
+ * The two lanes as they were before the first Apply, and as Apply left
+ * them. "Apply again" and "undo" go back to the first only while the lanes
+ * are still exactly the second — any edit in between (or the lanes being
+ * swapped for others) makes the current mix the new starting point, so
+ * nothing the user did since is thrown away.
+ */
+type Baseline = { patches: Record<string, LanePatch>; projectBpm: number; after: StudioLane[] | null };
+
+function untouchedSince(base: Baseline | null, laneIds: string[]): base is Baseline {
+  if (!base?.after) return false;
+  const lanes = useStudioStore.getState().lanes;
+  return laneIds.every((id) => !!base.patches[id] && lanes.find((l) => l.laneId === id) === base.after!.find((l) => l.laneId === id));
+}
 
 function snapshot(lane: StudioLane): LanePatch {
   return {
@@ -87,20 +101,26 @@ export default function LaneMatchPanel({ lane }: { lane: StudioLane }) {
     setBusy(true);
     setError(null);
     try {
-      // Each try starts from the lanes as they were before the first one.
-      let base = baseline;
-      if (base && (!base.patches[vocal.laneId] || !base.patches[beat.laneId])) base = null;
-      if (base) applyLanePatches(base.patches, base.projectBpm);
-      else {
+      // Each try starts from the lanes as they were before the first one —
+      // as long as nothing else has touched them since.
+      let base: Baseline;
+      if (untouchedSince(baseline, [vocal.laneId, beat.laneId])) {
+        base = baseline;
+        applyLanePatches(base.patches, base.projectBpm);
+      } else {
         base = {
           patches: { [vocal.laneId]: snapshot(vocal), [beat.laneId]: snapshot(beat) },
           projectBpm: useStudioStore.getState().projectBpm,
+          after: null,
         };
-        setBaseline(base);
       }
       const ctx = await preparePair(vocal.laneId, beat.laneId);
       const { plan, notes } = planFromOptions(ctx, options);
-      setResult([...notes, ...applyPairPlan(ctx, plan)]);
+      startNewStep();
+      const lines = applyPairPlan(ctx, plan);
+      startNewStep();
+      setBaseline({ ...base, after: useStudioStore.getState().lanes });
+      setResult([...notes, ...lines]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't match these lanes");
     } finally {
@@ -109,7 +129,7 @@ export default function LaneMatchPanel({ lane }: { lane: StudioLane }) {
   }
 
   function handleUndo() {
-    if (!baseline) return;
+    if (!vocal || !beat || !untouchedSince(baseline, [vocal.laneId, beat.laneId])) return;
     applyLanePatches(baseline.patches, baseline.projectBpm);
     setBaseline(null);
     setResult(null);
@@ -119,7 +139,7 @@ export default function LaneMatchPanel({ lane }: { lane: StudioLane }) {
   const beatPresets = FX_PRESETS.filter((p) => p.kind === "beat");
 
   return (
-    <div className="mt-3 flex flex-col gap-3 rounded-lg border border-brand/40 bg-brand/10 p-3">
+    <div className="flex flex-col gap-3 rounded-lg border border-brand/40 bg-brand/10 p-3">
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="font-semibold">🎚 Match</span>
         {partners.length === 0 ? (
@@ -221,9 +241,9 @@ export default function LaneMatchPanel({ lane }: { lane: StudioLane }) {
               disabled={busy}
               className="rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-brand-strong disabled:opacity-50"
             >
-              {busy ? "Listening…" : baseline ? "Apply again" : "Apply"}
+              {busy ? "Listening…" : result ? "Apply again" : "Apply"}
             </button>
-            {baseline && !busy && (
+            {baseline && !busy && vocal && beat && untouchedSince(baseline, [vocal.laneId, beat.laneId]) && (
               <button onClick={handleUndo} className="nudge" title="Put both lanes back as they were before Apply">
                 undo
               </button>

@@ -100,7 +100,52 @@ cd web && node scripts/migrate.mjs
 ## The Studio
 
 Everything below the transport is a project on one timeline, measured
-against a project tempo you set (type it, or tap it in).
+against a project tempo you set (type it, or tap it in). It's laid out like
+a DAW: slim lane headers (name, mute, solo, level) beside one zoomable
+timeline, and an inspector under it for whichever lane you clicked — mix,
+tempo & key, effects, edit tools and matching (a sheet on phones).
+(`components/studio/Arrangement.tsx`, `LaneInspector.tsx`)
+
+- **Selecting and editing clips** — click a clip, Shift/⌘-click to add
+  more, or drag across empty space to lasso clips across lanes; on a touch
+  screen tap, or turn on ☑ Select to tap several. Then move them together,
+  Alt-drag a copy, or use the toolbar, the keyboard, or **right-click
+  (long-press on touch)** for everything: split here / at the playhead,
+  copy, cut, paste at the playhead, duplicate, repeat ×2/×4/×8 or loop to
+  fill 16 bars, reverse, ½×/2× speed, quantize to the beat or bar, stutter,
+  loop the selection, send to a sample pad, cut out silences, back to the
+  whole take, delete. Lanes, the empty timeline and the ruler have menus
+  of their own. Every edit is one undo step. The editing itself is pure
+  functions in `lib/client/clipEdit.ts` (tested in `tests/clip-edit.test.ts`),
+  shared by the menu, the toolbar and the shortcuts (`clipCommands.ts`).
+- **Zoom** — ⌘/Ctrl-scroll, a trackpad pinch or two fingers on a touch
+  screen; Z fits the whole song again. The view follows the playhead.
+- **✨ AI producer** — ideas from three points of view: a **remixer**
+  (radio edit, hook up front, a short version for socials, an extended
+  club mix, hook chops), a **sound engineer** (balanced, vocal upfront with
+  the beat ducking under it, big & spacious, lo-fi, punchy; a key-clash fix
+  when the keys fight) and a **beatmaker** (the other tempo choices, a
+  filter build into the vocal, looping the beat to fit a longer vocal,
+  locking every lane to one grid). Each says why, lists exactly what it
+  changes, can be heard in one tap, and applies as one undo step. Ideas
+  only set values, so trying one after another never stacks, and each
+  remembers which lanes it was made for: once lanes are swapped, removed
+  or re-tempoed it says so and won't apply until you ask again.
+  (`lib/client/aiIdeas.ts`, `components/studio/AiProducer.tsx`)
+- **🧠 Local AI (optional)** — connect a language model running on your
+  own computer and the AI producer asks it for more ideas, including ones
+  you request in words ("darker, trap feel", "open with the chorus"). It
+  runs through [Ollama](https://ollama.com) or anything with an
+  OpenAI-style API (LM Studio, llama.cpp's server), called straight from
+  the browser — no server, no account, no key, and the model only sees the
+  studio's measurements (tempos, keys, bars, sections), never the audio.
+  It answers in the studio's own building blocks (song shape, sections on
+  bars, tempo choice, mix settings, builds…), which are checked and carried
+  out by the same engine, so it can't produce a broken arrangement. A 3–8B
+  model is plenty (`qwen2.5:7b`, or `qwen2.5:3b` on a slower machine).
+  Ollama only answers pages it trusts, so start it with this site allowed:
+  `OLLAMA_ORIGINS="https://your-site" ollama serve` (localhost works out of
+  the box). Set it up from 🧠 Local AI in the panel. (`lib/client/localAi.ts`)
 
 - **Timing** — each lane has its own start position on the timeline. Drag
   the clip, nudge it by a beat or a bar, or drop it at the playhead; with
@@ -114,7 +159,8 @@ against a project tempo you set (type it, or tap it in).
   (shown as e.g. "A min · 8A" with its Camelot code, and editable), and
   "Match" / "Match keys" pitch-shifts lanes onto the project key — the
   key of the first beat lane. Relative major/minor count as a match.
-- **✨ AI Match** — listens to every lane once and fits them together,
+- **The arrangement engine** (behind the AI producer and each lane's
+  Match) — listens to every lane once and fits them together,
   without ever changing pitch (keys are only reported; the lane's Key →
   Match shifts one if you want). It sharpens each BPM against the song's
   real hits, locks tempo to the beat (reading a vocal as half/double time
@@ -145,11 +191,10 @@ against a project tempo you set (type it, or tap it in).
   sound. The chorus is found as the section whose notes come back most.
   Apply, change a choice and apply again to compare, undo to go back.
   (`lib/client/matchOptions.ts`, `pairMatch.ts`, `components/LaneMatchPanel.tsx`)
-- **Editing** — a lane can be cut into clips: split at the playhead, "cut
-  silences" (every phrase becomes a clip, left where it was), drag a clip
-  to move it, drag its edges to trim, duplicate or delete the selected
-  clip, and "whole take" to go back to the uncut stem. Arrangements are
-  saved with the remix.
+- **Clips** — a lane plays its whole stem until it's cut: then each clip
+  can be moved, trimmed by its edges, reversed or sped up on its own, and
+  "whole take" goes back to the uncut stem. Arrangements are saved with
+  the remix.
 - **Mixing** — volume, mute, solo, pan, stereo width, a 3-band EQ, high-
   and low-pass filters, saturation, fades in/out, and a master fader that
   runs into a safety limiter.
@@ -159,8 +204,10 @@ against a project tempo you set (type it, or tap it in).
   throw, Radio and Wide double for vocals; Punch, Lo-fi and Underbed for
   beats. Vocal presets also switch on a levelling compressor and a
   high-pass, which is what a raw separated vocal usually needs.
-- **Transport** — play/pause (space), stop (Esc), a loop region you drag
-  across the ruler (L toggles it), and a metronome click.
+- **Transport** — play/pause (space), stop (Esc), a bars.beats counter,
+  a loop region you drag across the ruler (L toggles it), a metronome
+  click, and the project tempo and key with one-tap "fit every lane". ?
+  lists every keyboard shortcut.
 - **Export** — "Export WAV" bounces the project through the same graph you
   just heard into a 16-bit stereo WAV, including the reverb/delay tails;
   with a loop set you can export just that region, and each lane has its

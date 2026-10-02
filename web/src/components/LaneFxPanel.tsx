@@ -73,7 +73,7 @@ export default function LaneFxPanel({ lane }: { lane: StudioLane }) {
   const presets = FX_PRESETS.filter((p) => p.kind === "any" || p.kind === presetKind);
 
   return (
-    <div className="mt-3 rounded-lg border border-border bg-background p-3">
+    <div className="rounded-lg border border-border bg-background p-3">
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="mr-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
           {lane.kind === "vocals" ? "Vocal presets" : `${kindLabel(lane.kind)} presets`}

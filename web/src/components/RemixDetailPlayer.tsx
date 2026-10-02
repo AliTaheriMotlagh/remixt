@@ -3,11 +3,12 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import StudioTransport from "./StudioTransport";
-import StudioTimeline from "./StudioTimeline";
-import StudioLaneRow from "./StudioLaneRow";
-import BpmSyncPanel from "./BpmSyncPanel";
 import MixWaveform from "./MixWaveform";
 import StudioShortcuts from "./studio/StudioShortcuts";
+import Arrangement from "./studio/Arrangement";
+import LaneInspector from "./studio/LaneInspector";
+import ContextMenuHost from "./studio/ContextMenu";
+import StudioNotice from "./studio/StudioNotice";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/remixLanes";
 import { useStudioStore } from "@/lib/client/studioStore";
@@ -98,14 +99,9 @@ export default function RemixDetailPlayer({
           <span className="text-muted">{showMixer ? "▾" : "▸"}</span>
         </button>
         {showMixer && (
-          <div className="flex flex-col gap-4 border-t border-border p-3">
-            <BpmSyncPanel />
-            <StudioTimeline />
-            <div className="flex flex-col gap-3">
-              {lanes.map((lane) => (
-                <StudioLaneRow key={lane.laneId} lane={lane} />
-              ))}
-            </div>
+          <div className="flex flex-col gap-3 border-t border-border p-3">
+            <Arrangement />
+            <LaneInspector />
           </div>
         )}
       </div>
@@ -116,6 +112,8 @@ export default function RemixDetailPlayer({
       >
         Remix it in the Studio →
       </Link>
+      <ContextMenuHost />
+      <StudioNotice />
     </div>
   );
 }

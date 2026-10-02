@@ -104,8 +104,9 @@ export default function AutomationLane({ lane, span, accent }: { lane: StudioLan
         ].join(" ");
 
   return (
-    <div className="mt-2">
-      <div className="mb-1 flex flex-wrap items-center gap-1 text-[10px] text-muted">
+    <div className="flex h-full flex-col gap-1 py-1">
+      {/* Stays in view while a zoomed timeline scrolls sideways. */}
+      <div className="sticky left-1 flex w-fit max-w-[calc(100vw-10rem)] flex-wrap items-center gap-1 text-[10px] text-muted">
         <span className="mr-0.5">Automate</span>
         {PARAMS.map((p) => (
           <button
@@ -143,7 +144,7 @@ export default function AutomationLane({ lane, span, accent }: { lane: StudioLan
         onPointerMove={handleMove}
         onPointerUp={handleUp}
         onPointerCancel={handleUp}
-        className="relative h-14 cursor-crosshair touch-none overflow-hidden rounded-lg border border-border bg-background"
+        className="relative min-h-0 flex-1 cursor-crosshair touch-none overflow-hidden rounded-md border border-border bg-background"
         title="Tap to add a point · drag points · double-click a point to delete it"
       >
         <svg viewBox="0 0 1000 100" preserveAspectRatio="none" className="absolute inset-0 h-full w-full">

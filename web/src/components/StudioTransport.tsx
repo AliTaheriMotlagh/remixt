@@ -4,10 +4,12 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { audioEngine, PlaybackBlockedError } from "@/lib/client/audioEngine";
 import { exportMixdown, getExportFormat, setExportFormat, type ExportFormat } from "@/lib/client/mixdown";
+import { camelotCode, keyLabel } from "@/lib/client/musicKey";
 import { lanesToPayload, projectToPayload } from "@/lib/client/remixLanes";
-import { useStudioStore } from "@/lib/client/studioStore";
-import { redo, undo, useStudioHistory } from "@/lib/client/studioHistory";
+import { beatLength, effectiveKey, referenceLane, useStudioStore } from "@/lib/client/studioStore";
+import { redo, startNewStep, undo, useStudioHistory } from "@/lib/client/studioHistory";
 import { markDraftClean } from "@/lib/client/studioDraft";
+import { useStudioView } from "@/lib/client/studioView";
 import type { User } from "@/lib/auth";
 import TagInput from "./TagInput";
 import SocialClipButton from "./studio/SocialClipButton";
@@ -19,25 +21,100 @@ function formatTime(seconds: number) {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-/** Clock and progress bar — the only parts of the transport that follow playback. */
+/** Bars and beats, the way a DAW counts: 1.1 is the very start. */
+function formatBars(seconds: number, bpm: number) {
+  const beat = beatLength(bpm);
+  const beats = Math.floor(seconds / beat + 1e-6);
+  return `${Math.floor(beats / 4) + 1}.${(beats % 4) + 1}`;
+}
+
+/** A button with a small panel under it (a sheet on phones), closed by tapping outside or Esc. */
+function Popover({
+  label,
+  title,
+  active,
+  align = "left",
+  children,
+  className = "",
+}: {
+  label: React.ReactNode;
+  title: string;
+  active?: boolean;
+  align?: "left" | "right";
+  children: (close: () => void) => React.ReactNode;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopImmediatePropagation();
+        setOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onDown);
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("keydown", onKey, { capture: true });
+    };
+  }, [open]);
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        title={title}
+        className={`flex h-9 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-colors ${
+          open || active ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted hover:text-foreground"
+        } ${className}`}
+      >
+        {label}
+      </button>
+      {open && (
+        <>
+          <div className="sheet-backdrop" onClick={() => setOpen(false)} />
+          <div
+            className={`popover-sheet absolute top-full z-50 mt-2 w-72 rounded-xl border border-border bg-surface-raised p-3 shadow-2xl shadow-black/40 ${
+              align === "right" ? "right-0" : "left-0"
+            }`}
+          >
+            {children(() => setOpen(false))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Clock, bar counter and progress bar — the only parts of the transport that follow playback. */
 function TransportPosition({ empty }: { empty: boolean }) {
   const playhead = useStudioStore((s) => s.playhead);
   const duration = useStudioStore((s) => s.duration);
+  const projectBpm = useStudioStore((s) => s.projectBpm);
   const loopEnabled = useStudioStore((s) => s.loopEnabled);
   const loopStart = useStudioStore((s) => s.loopStart);
   const loopEnd = useStudioStore((s) => s.loopEnd);
+  const setLoop = useStudioStore((s) => s.setLoop);
   const hasLoop = loopEnd > loopStart;
 
   return (
-    // Its own full-width row on phones; inline with the buttons from sm up.
-    <div className="flex items-center gap-3 max-sm:order-last max-sm:w-full sm:contents">
-      <div className="shrink-0 font-mono text-sm text-muted tabular-nums">
-        {formatTime(playhead)} / {formatTime(duration)}
+    // On larger screens the arrangement's ruler is the seek bar and shows the
+    // loop, so only the counter stays here; phones get the bar and loop chip.
+    <div className="flex min-w-0 items-center gap-3 max-sm:order-last max-sm:w-full sm:mr-auto">
+      <div className="flex shrink-0 flex-col items-start rounded-lg bg-background px-2.5 py-1 font-mono leading-none tabular-nums">
+        <span className="text-base font-semibold text-foreground">{formatBars(playhead, projectBpm)}</span>
+        <span className="mt-0.5 text-[10px] text-muted">
+          {formatTime(playhead)} / {formatTime(duration)}
+        </span>
       </div>
-
-      {/* A thin bar with a taller invisible hit area, so it's easy to tap. */}
       <div
-        className="-my-2 min-w-[120px] flex-1 cursor-pointer py-2"
+        className="-my-2 min-w-[80px] flex-1 cursor-pointer py-2 sm:hidden"
         onClick={(e) => {
           if (empty) return;
           const rect = e.currentTarget.getBoundingClientRect();
@@ -45,14 +122,11 @@ function TransportPosition({ empty }: { empty: boolean }) {
         }}
         title="Click to seek"
       >
-        <div className="group relative h-2 overflow-hidden rounded-full bg-surface-raised">
+        <div className="relative h-1.5 overflow-hidden rounded-full bg-surface-raised">
           {hasLoop && duration > 0 && (
             <div
-              className={`absolute inset-y-0 ${loopEnabled ? "bg-brand/30" : "bg-surface-hover"}`}
-              style={{
-                left: `${(loopStart / duration) * 100}%`,
-                width: `${((loopEnd - loopStart) / duration) * 100}%`,
-              }}
+              className={`absolute inset-y-0 ${loopEnabled ? "bg-brand/40" : "bg-surface-hover"}`}
+              style={{ left: `${(loopStart / duration) * 100}%`, width: `${((loopEnd - loopStart) / duration) * 100}%` }}
             />
           )}
           <div
@@ -61,32 +135,154 @@ function TransportPosition({ empty }: { empty: boolean }) {
           />
         </div>
       </div>
-
-      {loopEnabled && hasLoop && <LoopChip start={loopStart} end={loopEnd} />}
+      {loopEnabled && hasLoop && (
+        <button
+          onClick={() => setLoop({ enabled: false })}
+          className="flex h-7 shrink-0 items-center gap-1 rounded-full border border-brand bg-brand/15 px-2 text-[11px] font-medium hover:border-danger sm:hidden"
+          title="Playback repeats this region — click to turn the loop off (L)"
+        >
+          🔁 <span className="font-mono tabular-nums max-sm:hidden">{formatTime(loopStart)}–{formatTime(loopEnd)}</span>
+          <span className="text-muted">✕</span>
+        </button>
+      )}
     </div>
   );
 }
 
-/**
- * Shown whenever a loop is on, on every screen size, so playback jumping
- * back is never a mystery — and one tap plays straight through again.
- */
-function LoopChip({ start, end }: { start: number; end: number }) {
-  const setLoop = useStudioStore((s) => s.setLoop);
+/** Project tempo: type it, tap it, or fit every lane to it. */
+function TempoControl() {
+  const lanes = useStudioStore((s) => s.lanes);
+  const projectBpm = useStudioStore((s) => s.projectBpm);
+  const setProjectBpm = useStudioStore((s) => s.setProjectBpm);
+  const matchAllToBpm = useStudioStore((s) => s.matchAllToBpm);
+  const resetAllTempo = useStudioStore((s) => s.resetAllTempo);
+  const taps = useRef<number[]>([]);
+  const stretched = lanes.some((l) => Math.abs(l.tempoRatio - 1) > 0.001);
+
+  function tap() {
+    const now = performance.now();
+    const recent = taps.current.filter((t) => now - t < 2000);
+    const next = [...recent, now].slice(-6);
+    taps.current = next;
+    if (next.length >= 2) {
+      const gaps = next.slice(1).map((t, i) => t - next[i]);
+      const average = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+      if (average > 0) setProjectBpm(Math.round((60000 / average) * 10) / 10);
+    }
+  }
+
   return (
-    <button
-      onClick={() => setLoop({ enabled: false })}
-      className="flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-brand bg-brand/15 px-2.5 text-xs font-medium text-foreground transition-colors hover:border-danger"
-      title="Playback repeats this region — tap to turn the loop off (L)"
-      aria-label={`Looping ${formatTime(start)} to ${formatTime(end)} — turn loop off`}
+    <Popover
+      title="Project tempo — the grid, snap, metronome and synced delays follow it"
+      label={
+        <>
+          <span className="font-mono text-sm font-semibold text-foreground tabular-nums">{projectBpm.toFixed(1)}</span>
+          <span className="text-[10px] uppercase">bpm</span>
+        </>
+      }
     >
-      🔁
-      {/* On phones the range is on the timeline; here it's just on/off. */}
-      <span className="font-mono tabular-nums max-sm:hidden">
-        {formatTime(start)}–{formatTime(end)}
-      </span>
-      <span className="text-muted">✕</span>
-    </button>
+      {() => (
+        <div className="flex flex-col gap-3 text-xs">
+          <label className="flex items-center gap-2 text-muted">
+            Tempo
+            <input
+              type="number"
+              min={20}
+              max={300}
+              step={0.1}
+              value={projectBpm}
+              onChange={(e) => setProjectBpm(Number(e.target.value))}
+              className="input !w-24 !py-1 text-sm"
+            />
+            BPM
+            <button onClick={tap} className="ml-auto rounded-lg border border-border px-3 py-1.5 font-medium hover:border-brand" title="Tap in time to set the tempo">
+              Tap
+            </button>
+          </label>
+          <button
+            onClick={() => {
+              startNewStep();
+              matchAllToBpm(projectBpm);
+            }}
+            disabled={!lanes.some((l) => l.bpm)}
+            className="rounded-lg bg-brand px-3 py-2 font-semibold text-white hover:bg-brand-strong disabled:opacity-40"
+          >
+            Fit every lane to {projectBpm.toFixed(1)} BPM
+          </button>
+          {stretched && (
+            <button onClick={resetAllTempo} className="rounded-lg border border-border px-3 py-1.5 text-muted hover:text-foreground">
+              Back to every lane&apos;s own tempo
+            </button>
+          )}
+          <ul className="flex flex-col gap-0.5 text-[11px] text-muted">
+            {lanes.map((l) => (
+              <li key={l.laneId} className="flex justify-between gap-2">
+                <span className="truncate">{l.trackTitle}</span>
+                <span className="shrink-0 font-mono">{l.bpm ? (l.bpm * l.tempoRatio).toFixed(1) : "?"}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Popover>
+  );
+}
+
+/** Project key (from the reference lane) and every lane's, with one-tap matching. */
+function KeyControl() {
+  const lanes = useStudioStore((s) => s.lanes);
+  const matchAllKeys = useStudioStore((s) => s.matchAllKeys);
+  const reference = referenceLane(lanes, (l) => !!l.musicalKey);
+  const key = reference ? effectiveKey(reference) : null;
+  return (
+    <Popover
+      title="Project key"
+      label={
+        <>
+          <span className="text-sm font-semibold text-foreground">{key ? keyLabel(key) : "…"}</span>
+          {key && <span className="font-mono text-[10px]">{camelotCode(key)}</span>}
+        </>
+      }
+    >
+      {() => (
+        <div className="flex flex-col gap-3 text-xs">
+          <p className="text-muted">
+            {reference ? (
+              <>
+                Set by “{reference.trackTitle}”. Matching shifts the other lanes&apos; pitch into its notes — every shift costs a
+                little sound quality, so only do it when they clash.
+              </>
+            ) : (
+              "Detecting keys…"
+            )}
+          </p>
+          <ul className="flex flex-col gap-0.5 text-[11px] text-muted">
+            {lanes.map((l) => {
+              const k = effectiveKey(l);
+              return (
+                <li key={l.laneId} className="flex justify-between gap-2">
+                  <span className="truncate">{l.trackTitle}</span>
+                  <span className="shrink-0 font-mono">
+                    {k ? `${keyLabel(k)} · ${camelotCode(k)}` : "…"}
+                    {l.pitchSemitones ? ` (${l.pitchSemitones > 0 ? "+" : ""}${l.pitchSemitones})` : ""}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+          <button
+            onClick={() => {
+              startNewStep();
+              matchAllKeys();
+            }}
+            disabled={lanes.filter((l) => l.musicalKey).length < 2}
+            className="rounded-lg bg-brand px-3 py-2 font-semibold text-white hover:bg-brand-strong disabled:opacity-40"
+          >
+            Match every lane to {key ? keyLabel(key) : "the project key"}
+          </button>
+        </div>
+      )}
+    </Popover>
   );
 }
 
@@ -122,6 +318,8 @@ export default function StudioTransport({
   const crossfader = useStudioStore((s) => s.crossfader);
   const setCrossfader = useStudioStore((s) => s.setCrossfader);
   const hasXfade = useStudioStore((s) => s.lanes.some((l) => l.xfade));
+  const aiOpen = useStudioView((s) => s.aiOpen);
+  const setAiOpen = useStudioView((s) => s.setAiOpen);
 
   const canUndo = useStudioHistory((h) => h.past.length > 0);
   const canRedo = useStudioHistory((h) => h.future.length > 0);
@@ -237,129 +435,86 @@ export default function StudioTransport({
   }
 
   const empty = lanes.length === 0;
+  const toggle = (on: boolean) =>
+    `flex h-9 items-center gap-1 rounded-lg border px-2.5 text-xs font-medium transition-colors disabled:opacity-40 ${
+      on ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted hover:text-foreground"
+    }`;
 
   return (
     // On phones the backdrop blur is left off: it would trap the social-clip
     // sheet (position: fixed) inside this bar. While the save form is open
     // it scrolls away rather than covering the screen.
     <div
-      className={`sticky top-[var(--header-h)] z-40 rounded-xl border border-border bg-surface sm:bg-surface/95 sm:backdrop-blur-md ${
+      className={`sticky top-[var(--header-h)] z-40 rounded-xl border border-border bg-surface shadow-lg shadow-black/20 sm:bg-surface/95 sm:backdrop-blur-md ${
         showSave ? "max-sm:static" : ""
       }`}
     >
-      <div className="flex flex-wrap items-center gap-2 p-3 sm:gap-3 sm:p-4">
-        <button
-          onClick={handlePlayPause}
-          disabled={empty}
-          className="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-full bg-brand text-lg text-white transition-transform hover:scale-105 disabled:opacity-40 disabled:hover:scale-100"
-          title={starting ? "Preparing the audio… (tap to cancel)" : isPlaying ? "Pause (space)" : "Play (space)"}
-          aria-label={starting ? "Cancel" : isPlaying ? "Pause" : "Play"}
-          aria-busy={starting}
-        >
-          {starting ? (
-            <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-          ) : isPlaying ? (
-            "⏸"
-          ) : (
-            "▶"
-          )}
-        </button>
-
-        <button
-          onClick={() => audioEngine.stop()}
-          disabled={empty}
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-border text-sm text-muted transition-colors hover:border-danger hover:text-danger disabled:opacity-40 sm:h-9 sm:w-9"
-          title="Stop and return to the start (Esc)"
-          aria-label="Stop"
-        >
-          ■
-        </button>
-
-        <TransportPosition empty={empty} />
-
-        <div className="flex items-center gap-1">
+      <div className="flex flex-wrap items-center gap-1.5 p-2.5 sm:gap-2 sm:p-3">
+        <div className="flex shrink-0 items-center gap-1.5">
           <button
-            onClick={undo}
-            disabled={!canUndo}
-            className="h-10 rounded-lg border border-border px-3 text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40 sm:h-auto sm:px-2.5 sm:py-2"
-            title="Undo (⌘/Ctrl+Z)"
-            aria-label="Undo"
+            onClick={handlePlayPause}
+            disabled={empty}
+            className="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-full bg-brand text-lg text-white shadow-[0_0_20px_-6px_var(--brand)] transition-transform hover:scale-105 disabled:opacity-40 disabled:hover:scale-100"
+            title={starting ? "Preparing the audio… (tap to cancel)" : isPlaying ? "Pause (space)" : "Play (space)"}
+            aria-label={starting ? "Cancel" : isPlaying ? "Pause" : "Play"}
+            aria-busy={starting}
           >
-            ↶
+            {starting ? (
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+            ) : isPlaying ? (
+              "⏸"
+            ) : (
+              "▶"
+            )}
           </button>
           <button
-            onClick={redo}
-            disabled={!canRedo}
-            className="h-10 rounded-lg border border-border px-3 text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40 sm:h-auto sm:px-2.5 sm:py-2"
-            title="Redo (⇧⌘Z / Ctrl+Y)"
-            aria-label="Redo"
+            onClick={() => audioEngine.stop()}
+            disabled={empty}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border text-xs text-muted transition-colors hover:border-danger hover:text-danger disabled:opacity-40"
+            title="Stop and return to the start (Esc)"
+            aria-label="Stop"
           >
-            ↷
+            ■
           </button>
         </div>
 
-        <button
-          onClick={() => setShowTools((v) => !v)}
-          aria-expanded={showTools}
-          aria-label="More controls"
-          className={`h-10 rounded-lg border px-3 text-sm transition-colors sm:hidden ${
-            showTools ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted"
-          }`}
-        >
-          ⋯
-        </button>
+        <TransportPosition empty={empty} />
 
         {/* From sm up these sit inline (display: contents); on phones they're a row of their own. */}
         <div
-          className={`${
-            showTools ? "flex" : "hidden"
-          } w-full flex-wrap items-center gap-2 border-t border-border pt-3 max-sm:order-last sm:contents`}
+          className={`${showTools ? "flex" : "hidden"} w-full flex-wrap items-center gap-1.5 border-t border-border pt-2.5 max-sm:order-last sm:contents`}
         >
-          <button
-            onClick={() => setLoop({ enabled: !loopEnabled, start: hasLoop ? loopStart : 0, end: hasLoop ? loopEnd : Math.min(duration, 16) })}
-            disabled={empty}
-            className={`rounded-lg border px-2.5 py-2 text-sm transition-colors disabled:opacity-40 ${
-              loopEnabled ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted hover:text-foreground"
-            }`}
-            title={
-              hasLoop
-                ? `Loop ${formatTime(loopStart)}–${formatTime(loopEnd)} (L)`
-                : "Loop the first bars — or drag across the timeline to pick a region (L)"
-            }
-            aria-label="Loop"
-            aria-pressed={loopEnabled}
-          >
-            🔁 <span className="text-xs">{loopEnabled ? "Loop on" : "Loop"}</span>
-          </button>
-
-          <button
-            onClick={toggleMetronome}
-            className={`rounded-lg border px-2.5 py-2 text-sm transition-colors ${
-              metronome ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted hover:text-foreground"
-            }`}
-            title="Metronome click at the project tempo"
-            aria-label="Metronome"
-            aria-pressed={metronome}
-          >
-            🥁
-          </button>
-
-          <button
-            onClick={toggleSnap}
-            className={`rounded-lg border px-2.5 py-2 text-xs font-medium transition-colors ${
-              snapToGrid ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted hover:text-foreground"
-            }`}
-            title="Snap lane starts and loop points to the beat grid"
-            aria-pressed={snapToGrid}
-          >
-            Snap
-          </button>
-
-          {hasXfade && (
-            <label
-              className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted"
-              title="Crossfader: slide between the lanes on side A and side B (double-click to centre)"
+          {!empty && (
+            <div className="flex items-center gap-1.5">
+              <TempoControl />
+              <KeyControl />
+            </div>
+          )}
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() =>
+                setLoop({ enabled: !loopEnabled, start: hasLoop ? loopStart : 0, end: hasLoop ? loopEnd : Math.min(duration, 16) })
+              }
+              disabled={empty}
+              className={toggle(loopEnabled)}
+              title={hasLoop ? `Loop ${formatTime(loopStart)}–${formatTime(loopEnd)} (L)` : "Loop — or drag across the ruler to pick a region (L)"}
+              aria-pressed={loopEnabled}
             >
+              🔁<span className="xl:inline hidden">Loop</span>
+            </button>
+            {!viewing && (
+              <>
+                <button onClick={toggleMetronome} className={toggle(metronome)} title="Metronome (K)" aria-pressed={metronome}>
+                  🥁
+                </button>
+                <button onClick={toggleSnap} className={toggle(snapToGrid)} title="Snap to the beat (N)" aria-pressed={snapToGrid}>
+                  ⌗<span className="xl:inline hidden">Snap</span>
+                </button>
+              </>
+            )}
+          </div>
+          {hasXfade && (
+            <label className="flex items-center gap-1.5 text-[10px] font-semibold text-muted" title="Crossfader between side A and side B lanes (double-click to centre)">
               A
               <input
                 type="range"
@@ -369,15 +524,14 @@ export default function StudioTransport({
                 value={crossfader}
                 onChange={(e) => setCrossfader(Number(e.target.value))}
                 onDoubleClick={() => setCrossfader(0.5)}
-                className="h-1.5 w-24 accent-beat"
+                className="h-1.5 w-20 accent-beat"
                 aria-label="Crossfader"
               />
               B
             </label>
           )}
-
-          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted max-sm:min-w-[10rem] max-sm:flex-1" title="Master level">
-            Master
+          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted max-sm:min-w-[9rem] max-sm:flex-1" title="Master level (+ / −)">
+            Out
             <input
               type="range"
               min={0}
@@ -385,93 +539,148 @@ export default function StudioTransport({
               step={0.01}
               value={masterVolume}
               onChange={(e) => setMasterVolume(Number(e.target.value))}
-              className="h-1.5 w-20 accent-brand max-sm:flex-1"
+              onDoubleClick={() => setMasterVolume(1)}
+              className="h-1.5 w-16 accent-brand max-sm:flex-1"
               aria-label="Master level"
             />
           </label>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => handleExport("full")}
-              disabled={empty || exportStage !== null}
-              className="rounded-lg border border-border px-3 py-2 text-sm font-medium transition-colors hover:bg-surface-hover disabled:opacity-40"
-              title={format === "mp3" ? "Bounce the mix to an MP3 (256 kbps) — small, good for sharing" : "Bounce the mix to a lossless WAV file"}
-            >
-              {exportStage ?? `Export ${format.toUpperCase()}`}
-            </button>
-            <select
-              value={format}
-              onChange={(e) => {
-                const next = e.target.value as ExportFormat;
-                setFormat(next);
-                setExportFormat(next);
-              }}
-              disabled={exportStage !== null}
-              className="rounded-lg border border-border bg-surface px-1.5 py-2 text-xs text-muted"
-              aria-label="Export format"
-            >
-              <option value="mp3">MP3</option>
-              <option value="wav">WAV</option>
-            </select>
-            <SocialClipButton
-              title={title.trim() || defaultTitle || "Untitled remix"}
-              artist={artistName ?? user?.artist_name ?? "Remixt"}
-              remixId={savedId ?? (viewing ? remixId : null)}
-            />
-            {hasLoop && loopEnabled && (
-              <button
-                onClick={() => handleExport("loop")}
-                disabled={empty || exportStage !== null}
-                className="rounded-lg border border-border px-2.5 py-2 text-xs text-muted transition-colors hover:text-foreground disabled:opacity-40"
-                title="Export only the looped region"
-              >
-                Loop only
-              </button>
-            )}
-          </div>
-
-          <button
-            onClick={() => {
-              audioEngine.stop();
-              clearLanes();
-            }}
-            disabled={empty}
-            className="rounded-lg border border-border px-3 py-2 text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40"
+          <Popover
+            align="right"
+            title="Export the mix as an audio file"
+            label={exportStage ?? <>⤓ <span>Export</span></>}
+            active={exportStage !== null}
           >
-            Clear
+            {(close) => (
+              <div className="flex flex-col gap-2 text-xs">
+                <div className="flex gap-1">
+                  {(["mp3", "wav"] as const).map((f) => (
+                    <button
+                      key={f}
+                      onClick={() => {
+                        setFormat(f);
+                        setExportFormat(f);
+                      }}
+                      className={`flex-1 rounded-lg border px-2 py-1.5 font-medium ${format === f ? "border-brand bg-brand/15" : "border-border text-muted"}`}
+                    >
+                      {f === "mp3" ? "MP3 · small" : "WAV · lossless"}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={() => {
+                    close();
+                    void handleExport("full");
+                  }}
+                  disabled={empty || exportStage !== null}
+                  className="rounded-lg bg-brand px-3 py-2 font-semibold text-white hover:bg-brand-strong disabled:opacity-40"
+                >
+                  Export the whole mix
+                </button>
+                <button
+                  onClick={() => {
+                    close();
+                    void handleExport("loop");
+                  }}
+                  disabled={empty || !hasLoop || exportStage !== null}
+                  className="rounded-lg border border-border px-3 py-1.5 text-muted hover:text-foreground disabled:opacity-40"
+                  title={hasLoop ? undefined : "Set a loop on the ruler first"}
+                >
+                  Export just the loop
+                </button>
+                {!viewing && (
+                  <button
+                    onClick={() => {
+                      close();
+                      if (window.confirm("Clear the Studio? Undo can bring it back.")) {
+                        audioEngine.stop();
+                        startNewStep();
+                        clearLanes();
+                      }
+                    }}
+                    disabled={empty}
+                    className="mt-1 border-t border-border pt-2 text-left text-muted hover:text-danger disabled:opacity-40"
+                  >
+                    Clear the Studio…
+                  </button>
+                )}
+              </div>
+            )}
+          </Popover>
+          <SocialClipButton
+            title={title.trim() || defaultTitle || "Untitled remix"}
+            artist={artistName ?? user?.artist_name ?? "Remixt"}
+            remixId={savedId ?? (viewing ? remixId : null)}
+          />
+        </div>
+
+        <div className="flex items-center gap-1 max-sm:ml-auto">
+          <button
+            onClick={undo}
+            disabled={!canUndo}
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-border text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40"
+            title="Undo (⌘/Ctrl+Z)"
+            aria-label="Undo"
+          >
+            ↶
+          </button>
+          <button
+            onClick={redo}
+            disabled={!canRedo}
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-border text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40"
+            title="Redo (⇧⌘Z / Ctrl+Y)"
+            aria-label="Redo"
+          >
+            ↷
+          </button>
+          <button
+            onClick={() => setShowTools((v) => !v)}
+            aria-expanded={showTools}
+            aria-label="More controls"
+            className={`flex h-9 w-9 items-center justify-center rounded-lg border text-sm transition-colors sm:hidden ${
+              showTools ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted"
+            }`}
+          >
+            ⋯
           </button>
         </div>
+
+        {!viewing && (
+          <button
+            onClick={() => setAiOpen(!aiOpen)}
+            disabled={empty}
+            aria-pressed={aiOpen}
+            aria-label="AI producer"
+            className={`flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-bold text-white transition-all disabled:opacity-40 max-sm:px-2.5 ${
+              aiOpen ? "bg-brand ring-2 ring-brand-strong" : "bg-gradient-to-r from-brand to-vocals shadow-[0_0_18px_-6px_var(--vocals)] hover:brightness-110"
+            }`}
+            title="AI producer — ideas from a remixer, a sound engineer and a beatmaker (I)"
+          >
+            ✨ <span className="max-sm:hidden">AI</span>
+          </button>
+        )}
 
         <button
           onClick={() => setShowSave((v) => !v)}
           disabled={empty}
           aria-expanded={showSave}
-          className="h-10 rounded-lg bg-brand px-4 text-sm font-semibold text-white transition-colors hover:bg-brand-strong disabled:opacity-40 max-sm:ml-auto sm:h-auto sm:py-2"
+          className="h-9 rounded-lg bg-foreground px-3 text-xs font-semibold text-background transition-opacity hover:opacity-90 disabled:opacity-40 sm:px-3.5"
         >
-          <span className="sm:hidden">{remixId ? "Save new" : "Save"}</span>
+          <span className="sm:hidden">Save</span>
           <span className="hidden sm:inline">{remixId ? "Save as new remix" : "Save remix"}</span>
         </button>
       </div>
 
-      {playError && (
-        <p className="border-t border-border px-4 py-2 text-sm text-danger">{playError}</p>
-      )}
-
-      {exportError && (
-        <p className="border-t border-border px-4 py-2 text-sm text-danger">{exportError}</p>
-      )}
+      {playError && <p className="border-t border-border px-4 py-2 text-sm text-danger">{playError}</p>}
+      {exportError && <p className="border-t border-border px-4 py-2 text-sm text-danger">{exportError}</p>}
 
       {showSave && (
         <div className="border-t border-border p-4">
           {!user ? (
             <p className="text-sm text-muted">
-              <button
-                onClick={() => router.push("/login?next=/studio")}
-                className="font-medium text-brand-strong hover:underline"
-              >
+              <button onClick={() => router.push("/login?next=/studio")} className="font-medium text-brand-strong hover:underline">
                 Log in
               </button>{" "}
-              to save this remix under your artist name. You can still export a WAV without an account.
+              to save this remix under your artist name. You can still export it without an account.
             </p>
           ) : savedId ? (
             <p className="text-sm text-success">
@@ -483,14 +692,9 @@ export default function StudioTransport({
             </p>
           ) : (
             <div className="flex flex-wrap items-end gap-3">
-              <label className="flex flex-1 min-w-[180px] flex-col gap-1">
+              <label className="flex min-w-[180px] flex-1 flex-col gap-1">
                 <span className="text-xs font-medium text-muted">Title</span>
-                <input
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="Name your remix"
-                  className="input"
-                />
+                <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Name your remix" className="input" />
               </label>
               <div className="flex w-full flex-col gap-1">
                 <span className="text-xs font-medium text-muted">Tags — genre and mood, so people can find it</span>
@@ -503,12 +707,7 @@ export default function StudioTransport({
                 </p>
               )}
               <label className="flex items-center gap-2 pb-2.5 text-sm">
-                <input
-                  type="checkbox"
-                  checked={publish}
-                  onChange={(e) => setPublish(e.target.checked)}
-                  className="accent-brand"
-                />
+                <input type="checkbox" checked={publish} onChange={(e) => setPublish(e.target.checked)} className="accent-brand" />
                 Publish publicly
               </label>
               <button
