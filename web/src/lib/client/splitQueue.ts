@@ -1,6 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
+import type { MiningStats, Reward, TopMiner } from "@/lib/mining";
 import { previewPlayer } from "./previewPlayer";
 import { encodeMp3Bytes } from "./mp3";
 import { fetchInSlices } from "./stemFetch";
@@ -13,7 +14,8 @@ import { isConstrainedDevice, splitSong, splitter, splitTrackPayload, uploadStem
 // server). A phone sends its song to the queue; a computer whose owner has
 // switched on "Help split" takes songs off the queue one at a time, splits
 // each in this tab the same way as its own uploads, and uploads the stems
-// for the person who queued it — for XP, like a miner earning its keep.
+// for the person who queued it — for XP, like a miner earning its keep
+// (the rewards are in lib/mining.ts).
 
 export type QueuedJob = {
   id: string;
@@ -29,7 +31,7 @@ export type QueuedJob = {
   helper_name: string | null;
 };
 
-export type QueueStats = { waiting: number; working: number; helped: number };
+export type QueueStats = { waiting: number; working: number; helped: number; rigs: number };
 
 async function json<T>(res: Response, fallback: string): Promise<T> {
   const data = await res.json().catch(() => null);
@@ -37,8 +39,13 @@ async function json<T>(res: Response, fallback: string): Promise<T> {
   return data as T;
 }
 
-/** Your queued songs, and how busy the queue is. */
-export async function fetchQueue(): Promise<{ jobs: QueuedJob[]; stats: QueueStats }> {
+/** Your queued songs, how busy the queue is, what you've mined and this week's top miners. */
+export async function fetchQueue(): Promise<{
+  jobs: QueuedJob[];
+  stats: QueueStats;
+  mining: MiningStats;
+  miners: TopMiner[];
+}> {
   return json(await fetch("/api/split-jobs"), "Couldn't load the split queue");
 }
 
@@ -227,6 +234,17 @@ function tabSession(): Promise<string> {
 }
 let sessionName: Promise<string> | null = null;
 
+/** What this tab has mined since mining was switched on. */
+export type MiningSession = {
+  startedAt: number;
+  songs: number;
+  xp: number;
+  /** Seconds of music split. */
+  audioSeconds: number;
+  /** How many seconds of music the last song took a second to do, start to finish (download and upload included). */
+  speed: number | null;
+};
+
 export type HelperState = {
   enabled: boolean;
   status: "off" | "waiting" | "paused" | "working" | "error";
@@ -235,8 +253,9 @@ export type HelperState = {
   job: { id: string; title: string; forSomeoneElse: boolean; startedAt: number } | null;
   stage: UploadStage | null;
   stats: QueueStats | null;
-  /** The last song finished, for a moment's "done" in the corner. */
-  finished: { title: string; forSomeoneElse: boolean; at: number } | null;
+  /** The last song finished, for a moment's "done" in the corner — with what it paid. */
+  finished: { title: string; forSomeoneElse: boolean; at: number; reward: Reward | null } | null;
+  session: MiningSession | null;
 };
 
 type ClaimedJob = { id: string; title: string; filename: string; forSomeoneElse: boolean; sourceUrl: string };
@@ -244,12 +263,13 @@ type ClaimedJob = { id: string; title: string; filename: string; forSomeoneElse:
 class LostJob extends Error {}
 
 /**
- * Helping is switched on for the whole browser, so it runs in every open
- * tab — and each tab would load its own ~500 MB model and split a song of
- * its own at the same time, fighting over the one GPU and the memory until
- * they all crawl or crash. So a tab only asks for a song while it holds
- * this lock, and keeps it until that song is done: one song at a time per
- * browser, however many tabs. (A browser without Web Locks just goes ahead.)
+ * Mining can be on in more than one tab (started in each, or a tab
+ * duplicated from a mining one) — and each tab would load its own ~500 MB
+ * model and split a song of its own at the same time, fighting over the
+ * one GPU and the memory until they all crawl or crash. So a tab only
+ * asks for a song while it holds this lock, and keeps it until that song
+ * is done: one song at a time per browser, however many tabs. (A browser
+ * without Web Locks just goes ahead.)
  */
 const HELPER_LOCK = "remixt-split-helper";
 
@@ -290,6 +310,7 @@ class SplitHelper {
     stage: null,
     stats: null,
     finished: null,
+    session: null,
   };
 
   subscribe = (listener: () => void) => {
@@ -309,31 +330,49 @@ class SplitHelper {
     return typeof window !== "undefined" && !isConstrainedDevice();
   }
 
-  /** Picks up where this browser left off: helping resumes on every page load until switched off. */
+  /**
+   * Mining only ever starts because its owner pressed Start — never just
+   * for opening the site. Once started it carries on in this tab, through
+   * reloads (sessionStorage), until stopped or the tab is closed; a new
+   * visit, or another tab, starts with it off.
+   */
   restore() {
     if (!this.canHelp()) return;
     let saved = false;
     try {
-      saved = localStorage.getItem(ENABLED_KEY) === "on";
+      saved = sessionStorage.getItem(ENABLED_KEY) === "on";
+      // Older versions kept it on for good, in every tab, from every visit.
+      localStorage.removeItem(ENABLED_KEY);
     } catch {
-      // Storage blocked — helping just doesn't survive a reload.
+      // Storage blocked — mining just doesn't survive a reload.
     }
-    // Not loading the model up front here: this runs in every tab on every
-    // page load, and each would hold its own ~500 MB copy. The tab whose
-    // turn it is loads it (from Cache Storage) when a song arrives.
+    // The model loads (from Cache Storage) when a song arrives, not up front.
     if (saved && !this.state.enabled) this.setEnabled(true, { preload: false });
+    // A tab closed while mining stops counting as online straight away.
+    if (!this.listening) {
+      this.listening = true;
+      window.addEventListener("pagehide", () => this.state.enabled && void this.leave());
+    }
   }
+  private listening = false;
 
   setEnabled(on: boolean, { preload = true }: { preload?: boolean } = {}) {
     if (on && !this.canHelp()) return;
+    if (on === this.state.enabled) return;
     try {
-      if (on) localStorage.setItem(ENABLED_KEY, "on");
-      else localStorage.removeItem(ENABLED_KEY);
+      if (on) sessionStorage.setItem(ENABLED_KEY, "on");
+      else sessionStorage.removeItem(ENABLED_KEY);
     } catch {
       // Storage blocked — fine for this visit.
     }
     if (on) this.crashes = 0;
-    this.set({ enabled: on, message: null, status: on ? "waiting" : this.state.job ? "working" : "off" });
+    else void this.leave();
+    this.set({
+      enabled: on,
+      message: null,
+      status: on ? "waiting" : this.state.job ? "working" : "off",
+      session: on ? { startedAt: Date.now(), songs: 0, xp: 0, audioSeconds: 0, speed: null } : this.state.session,
+    });
     this.wake();
     if (on) {
       // Have the model loaded before the first song arrives, rather than
@@ -347,6 +386,16 @@ class SplitHelper {
   setPageReason(reason: string | null) {
     this.pageReason = reason;
     this.wake();
+  }
+
+  /** Tells the queue this tab has stopped, so it no longer counts as a rig online. */
+  private async leave() {
+    await fetch("/api/split-jobs/claim", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session: await tabSession() }),
+      keepalive: true,
+    }).catch(() => {});
   }
 
   /** Stops waiting and looks at the queue now (e.g. the user just queued a song). */
@@ -475,16 +524,25 @@ class SplitHelper {
       await uploadStems(track.uploads, result, onStage);
       stillOurs();
       onStage({ stage: "saving" });
-      await json(
+      const done = await json<{ reward?: Reward }>(
         await fetch(`/api/split-jobs/${job.id}/complete`, { method: "POST", headers }),
         "Couldn't finish the split"
       );
 
       this.crashes = 0;
-      const stats = this.state.stats;
+      const reward = job.forSomeoneElse && done.reward?.xp ? done.reward : null;
+      const { stats, session: mined } = this.state;
+      const elapsed = (Date.now() - (this.state.job?.startedAt ?? Date.now())) / 1000;
       this.set({
-        finished: { title: job.title, forSomeoneElse: job.forSomeoneElse, at: Date.now() },
+        finished: { title: job.title, forSomeoneElse: job.forSomeoneElse, at: Date.now(), reward },
         stats: stats && job.forSomeoneElse ? { ...stats, helped: stats.helped + 1 } : stats,
+        session: mined && {
+          ...mined,
+          songs: mined.songs + (job.forSomeoneElse ? 1 : 0),
+          xp: mined.xp + (reward?.xp ?? 0),
+          audioSeconds: mined.audioSeconds + duration,
+          speed: elapsed > 0 ? duration / elapsed : mined.speed,
+        },
       });
     } catch (err) {
       if (!lost.signal.aborted) {

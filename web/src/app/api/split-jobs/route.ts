@@ -8,20 +8,27 @@ import {
   jobsForOwner,
   markQueued,
   MAX_SOURCE_BYTES,
+  miningStats,
   queueStats,
   sourceExtension,
+  topMiners,
 } from "@/lib/splitQueue";
 import { createUploadTarget, putObject, storageProblem } from "@/lib/storage";
 
 // Fetching a song from a link can take a while on a slow site.
 export const maxDuration = 300;
 
-/** Your songs waiting in the split queue, and how busy the queue is. */
+/** Your songs waiting in the split queue, how busy the queue is, and what you've mined. */
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Sign in required" }, { status: 401 });
-  const [jobs, stats] = await Promise.all([jobsForOwner(user.id), queueStats(user.id)]);
-  return NextResponse.json({ jobs, stats });
+  const [jobs, stats, mining, miners] = await Promise.all([
+    jobsForOwner(user.id),
+    queueStats(user.id),
+    miningStats(user.id),
+    topMiners(5),
+  ]);
+  return NextResponse.json({ jobs, stats, mining, miners });
 }
 
 const rights = z.literal(true, { error: "Confirm you have the right to upload this song" });

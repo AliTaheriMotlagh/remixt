@@ -1,6 +1,7 @@
 import sql from "./db";
 import { ensureRemixStats } from "./models";
 import { ensureSchema } from "./schema";
+import { REWARD } from "./mining";
 import { ensureSplitQueueSchema } from "./splitQueue";
 
 // The social side of Remixt: following artists, commenting on remixes,
@@ -113,6 +114,8 @@ export type ArtistNumbers = {
   commentedOn: number;
   /** Songs they split on their computer for someone on a phone. */
   splitsForOthers: number;
+  /** XP those splits paid, bonuses and all (see lib/mining.ts). */
+  splitXp: number;
   /** Most likes and most plays on any one of their remixes. */
   bestLikes: number;
   bestPlays: number;
@@ -126,7 +129,8 @@ export const XP = {
   followers: 20,
   likeGiven: 2,
   commentedOn: 5,
-  splitForOthers: 10,
+  /** The base pay; each split's actual reward (with bonuses) is stored with it. */
+  splitForOthers: REWARD.base,
   playsPer: 5,
 };
 
@@ -138,7 +142,7 @@ export function xpFor(n: ArtistNumbers) {
     n.followers * XP.followers +
     n.likesGiven * XP.likeGiven +
     n.commentedOn * XP.commentedOn +
-    n.splitsForOthers * XP.splitForOthers +
+    n.splitXp +
     Math.floor(n.plays / XP.playsPer)
   );
 }
@@ -200,6 +204,8 @@ export function badgesFor(n: ArtistNumbers): Badge[] {
     badge("tastemaker", "👍", "Tastemaker", "Like 20 remixes by others", n.likesGiven, 20),
     badge("in-the-mix", "💬", "In the Mix", "Comment on 10 remixes by others", n.commentedOn, 10),
     badge("helping-hand", "⛏️", "Helping Hand", "Split 5 songs for people on phones", n.splitsForOthers, 5),
+    badge("rig-runner", "🖥️", "Rig Runner", "Split 25 songs for people on phones", n.splitsForOthers, 25),
+    badge("mining-legend", "💎", "Mining Legend", "Split 100 songs for people on phones", n.splitsForOthers, 100),
   ];
 }
 
@@ -219,6 +225,8 @@ function numbersQuery(userFilter: ReturnType<typeof sql>) {
         WHERE c.user_id = users.id AND r.owner_id <> users.id)::int AS "commentedOn",
       (SELECT COUNT(*) FROM split_jobs j WHERE j.worker_id = users.id AND j.owner_id <> users.id
         AND j.status = 'done')::int AS "splitsForOthers",
+      (SELECT COALESCE(SUM(j.reward), 0) FROM split_jobs j WHERE j.worker_id = users.id AND j.owner_id <> users.id
+        AND j.status = 'done')::int AS "splitXp",
       (SELECT COALESCE(MAX(n), 0) FROM (
          SELECT COUNT(*) AS n FROM remix_likes l JOIN remixes r ON r.id = l.remix_id
          WHERE r.owner_id = users.id AND r.published AND l.user_id <> users.id GROUP BY r.id

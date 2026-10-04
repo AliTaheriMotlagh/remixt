@@ -606,6 +606,7 @@ const NO_NUMBERS: ArtistNumbers = {
   likesGiven: 0,
   commentedOn: 0,
   splitsForOthers: 0,
+  splitXp: 0,
   bestLikes: 0,
   bestPlays: 0,
 };

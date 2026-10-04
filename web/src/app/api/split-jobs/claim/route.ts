@@ -1,7 +1,13 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { claimNext, queueStats } from "@/lib/splitQueue";
+import { claimNext, leaveRig, queueStats } from "@/lib/splitQueue";
+
+/** The helper tab's name from a request body, if it sent a valid one. */
+function sessionOf(body: unknown): string | null {
+  const session = (body as { session?: unknown } | null)?.session;
+  return typeof session === "string" && /^[\w-]{8,64}$/.test(session) ? session : null;
+}
 
 /**
  * A helper's computer asking for the next song to split. Hands back the
@@ -12,9 +18,7 @@ import { claimNext, queueStats } from "@/lib/splitQueue";
 export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Sign in required" }, { status: 401 });
-  const body = await req.json().catch(() => null);
-  const session =
-    typeof body?.session === "string" && /^[\w-]{8,64}$/.test(body.session) ? body.session : randomUUID();
+  const session = sessionOf(await req.json().catch(() => null)) ?? randomUUID();
   const job = await claimNext(user.id, session);
   const stats = await queueStats(user.id);
   if (!job) return NextResponse.json({ job: null, stats });
@@ -28,4 +32,13 @@ export async function POST(req: NextRequest) {
     },
     stats,
   });
+}
+
+/** The helper switched off: this tab stops counting as a rig online. */
+export async function DELETE(req: NextRequest) {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: "Sign in required" }, { status: 401 });
+  const session = sessionOf(await req.json().catch(() => null));
+  if (session) await leaveRig(user.id, session);
+  return NextResponse.json({ ok: true });
 }

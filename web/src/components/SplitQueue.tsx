@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import Link from "next/link";
 import {
   cancelQueued,
   fetchQueue,
@@ -12,11 +13,20 @@ import {
   type QueueStats,
 } from "@/lib/client/splitQueue";
 import { useSplitter } from "@/lib/client/splitter";
+import {
+  LONG_SONG_SECONDS,
+  MINING_TIERS,
+  REWARD,
+  RUSH_AFTER_MINUTES,
+  nextTier,
+  type MiningStats,
+  type TopMiner,
+} from "@/lib/mining";
 import { describeStage } from "@/lib/client/uploads";
 
 // The split queue's screens: what a phone sees instead of "use a
-// computer", the list of songs waiting for a helper, and the switch that
-// makes a computer a helper. (The corner status that follows the user
+// computer", the list of songs waiting for a helper, and the mining rig
+// that makes a computer a helper. (The corner status that follows the user
 // around the site is in UploadActivity.tsx.)
 
 /** Shown on phones above the upload form: songs go to the queue instead. */
@@ -267,46 +277,6 @@ export function QueuedSongs({ refreshKey, onFinished }: { refreshKey: number; on
   );
 }
 
-function Stat({ value, label }: { value: number; label: string }) {
-  return (
-    <div className="rounded-lg bg-surface-raised px-3 py-2">
-      <p className="text-base font-semibold tabular-nums">{value}</p>
-      <p className="text-[11px] text-muted">{label}</p>
-    </div>
-  );
-}
-
-function HelperStatusLine({ helper }: { helper: HelperState }) {
-  const splitterState = useSplitter();
-  if (helper.status === "working" && helper.job) {
-    const { label, progress } = describeStage(helper.stage, splitterState);
-    return (
-      <div className="mt-3 rounded-xl border border-success/30 bg-success/5 p-3">
-        <div className="flex items-center justify-between gap-3 text-xs">
-          <span className="min-w-0 truncate font-medium">
-            ⛏️ {helper.job.forSomeoneElse ? "Splitting for someone" : "Splitting your queued song"}: “{helper.job.title}”
-          </span>
-          {progress !== null && <span className="shrink-0 tabular-nums text-muted">{Math.round(progress * 100)}%</span>}
-        </div>
-        <ProgressBar progress={progress} tone="success" />
-        <p className="mt-1.5 text-[11px] text-muted">{label}…</p>
-      </div>
-    );
-  }
-  const [dot, text] =
-    helper.status === "paused"
-      ? ["bg-amber-400", `Paused — ${helper.message}. It picks up again by itself.`]
-      : helper.message
-        ? ["bg-danger", helper.message]
-        : ["bg-success animate-pulse-glow", "On — waiting for songs. Keep a Remixt tab open and they'll come to you."];
-  return (
-    <p className="mt-3 flex items-start gap-2 text-xs text-muted">
-      <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${dot}`} />
-      <span>{text}</span>
-    </p>
-  );
-}
-
 /** A thin progress bar; `null` progress pulses instead. */
 export function ProgressBar({ progress, tone = "brand" }: { progress: number | null; tone?: "brand" | "success" }) {
   const colors = tone === "success" ? "from-success to-brand" : "from-brand to-vocals";
@@ -324,18 +294,160 @@ export function ProgressBar({ progress, tone = "brand" }: { progress: number | n
 
 const noSubscription = () => () => {};
 
-/** The "Help split" switch on the Upload page, for computers. */
+function duration(seconds: number) {
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${Math.round(seconds % 60)}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+function Stat({ value, label, accent }: { value: string | number; label: string; accent?: boolean }) {
+  return (
+    <div className="min-w-0 rounded-lg bg-surface-raised px-3 py-2">
+      <p className={`truncate text-base font-semibold tabular-nums ${accent ? "text-success" : ""}`}>{value}</p>
+      <p className="truncate text-[11px] text-muted">{label}</p>
+    </div>
+  );
+}
+
+/** What the rig is doing right now: the song it's on, or why it's waiting. */
+function RigStatus({ helper }: { helper: HelperState }) {
+  const splitterState = useSplitter();
+  if (helper.status === "working" && helper.job) {
+    const { label, progress } = describeStage(helper.stage, splitterState);
+    return (
+      <div className="rounded-xl border border-success/30 bg-success/5 p-3">
+        <div className="flex items-center justify-between gap-3 text-xs">
+          <span className="min-w-0 truncate font-medium">
+            {helper.job.forSomeoneElse ? "Mining" : "Splitting your own queued song"}: “{helper.job.title}”
+          </span>
+          {progress !== null && <span className="shrink-0 tabular-nums text-muted">{Math.round(progress * 100)}%</span>}
+        </div>
+        <ProgressBar progress={progress} tone="success" />
+        <p className="mt-1.5 text-[11px] text-muted">{label}…</p>
+      </div>
+    );
+  }
+  const [dot, text] =
+    helper.status === "paused"
+      ? ["bg-amber-400", `Paused — ${helper.message}. It picks up again by itself.`]
+      : helper.message
+        ? ["bg-danger", helper.message]
+        : ["bg-success animate-pulse-glow", "Online — waiting for the next song. Keep this tab open; you can use the rest of the site meanwhile."];
+  return (
+    <p className="flex items-start gap-2 rounded-xl border border-border bg-background px-3 py-2.5 text-xs text-muted">
+      <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${dot}`} />
+      <span>{text}</span>
+    </p>
+  );
+}
+
+/** The last song this rig finished, with what it paid — for a few seconds. */
+function LastBlock({ finished }: { finished: NonNullable<HelperState["finished"]> }) {
+  return (
+    <p key={finished.at} className="flex flex-wrap items-baseline gap-x-2 text-xs">
+      <span className="font-medium text-success">✓ Split “{finished.title}”</span>
+      {finished.reward && (
+        <span className="animate-xp-pop font-bold text-success">
+          +{finished.reward.xp} XP
+          {finished.reward.bonuses.length > 0 && (
+            <span className="ml-1 font-normal text-muted">({finished.reward.bonuses.join(", ")})</span>
+          )}
+        </span>
+      )}
+    </p>
+  );
+}
+
+function RewardRules() {
+  return (
+    <div className="rounded-xl border border-border bg-background p-3 text-xs">
+      <h3 className="font-semibold">Block rewards</h3>
+      <ul className="mt-2 space-y-1.5 text-muted">
+        <li className="flex justify-between gap-3">
+          <span>Each song you split for someone</span>
+          <span className="shrink-0 font-semibold text-foreground">{REWARD.base} XP</span>
+        </li>
+        <li className="flex justify-between gap-3">
+          <span>Song longer than {LONG_SONG_SECONDS / 60} min</span>
+          <span className="shrink-0 font-semibold text-foreground">+{REWARD.longSong}</span>
+        </li>
+        <li className="flex justify-between gap-3">
+          <span>Your first song of the day</span>
+          <span className="shrink-0 font-semibold text-foreground">+{REWARD.firstToday}</span>
+        </li>
+        <li className="flex justify-between gap-3">
+          <span>🔥 Rush: it waited over {RUSH_AFTER_MINUTES} min</span>
+          <span className="shrink-0 font-semibold text-foreground">×{REWARD.rushMultiplier}</span>
+        </li>
+      </ul>
+      <p className="mt-2 text-[11px] text-muted">
+        XP counts towards your level and the leaderboard. Badges at{" "}
+        {MINING_TIERS.map((t) => `${t.songs} ${t.emoji}`).join(" · ")} songs.
+      </p>
+    </div>
+  );
+}
+
+function TopMinersList({ miners, me }: { miners: TopMiner[]; me: number | null }) {
+  return (
+    <div className="rounded-xl border border-border bg-background p-3 text-xs">
+      <div className="flex items-baseline justify-between gap-2">
+        <h3 className="font-semibold">Top miners this week</h3>
+        {me !== null && <span className="text-muted">you&apos;re #{me}</span>}
+      </div>
+      {miners.length === 0 ? (
+        <p className="mt-2 text-muted">Nobody yet this week — the first block is yours.</p>
+      ) : (
+        <ol className="mt-2 space-y-1.5">
+          {miners.map((m, i) => (
+            <li key={m.id} className="flex items-center gap-2">
+              <span className="w-5 shrink-0 text-center tabular-nums text-muted">{["🥇", "🥈", "🥉"][i] ?? i + 1}</span>
+              <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: m.avatar_color }} />
+              <Link href={`/artist/${m.id}`} className="min-w-0 flex-1 truncate hover:underline">
+                {m.artist_name}
+              </Link>
+              <span className="shrink-0 tabular-nums text-muted">
+                {m.songs} · <span className="font-semibold text-foreground">{m.xp} XP</span>
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+/** Re-renders every second while `on` (for the rig's uptime). */
+function useTick(on: boolean) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!on) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [on]);
+  return now;
+}
+
+/**
+ * The mining rig on the Upload page, for computers: Start lends this
+ * computer to the split queue (only ever when its owner presses it — and
+ * only for this tab and visit), and the rest shows what it's earning — this
+ * session, all told, and against everyone else mining this week.
+ */
 export function HelperPanel() {
   const helper = useSplitHelper();
   // Known only in the browser (it's about this device), so the server renders nothing.
   const canHelp = useSyncExternalStore(noSubscription, () => splitHelper.canHelp(), () => false);
-  const [stats, setStats] = useState<QueueStats | null>(null);
+  const [data, setData] = useState<{ stats: QueueStats; mining: MiningStats; miners: TopMiner[] } | null>(null);
+  const now = useTick(helper.enabled);
+  const lastFinish = helper.finished?.at ?? 0;
 
   useEffect(() => {
     let cancelled = false;
     const load = () =>
       fetchQueue()
-        .then((data) => !cancelled && setStats(data.stats))
+        .then(({ stats, mining, miners }) => !cancelled && setData({ stats, mining, miners }))
         .catch(() => {});
     void load();
     const timer = setInterval(() => document.visibilityState === "visible" && void load(), 15_000);
@@ -343,59 +455,126 @@ export function HelperPanel() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, []);
+    // Again after each song, for the new totals and rank.
+  }, [lastFinish]);
 
   if (!canHelp) return null;
-  const shown = helper.stats ?? stats;
+  const pool = helper.stats ?? data?.stats ?? null;
+  const mining = data?.mining ?? null;
+  const session = helper.session;
+  const working = helper.status === "working" && !!helper.job?.forSomeoneElse;
+  const next = mining ? nextTier(mining.songs) : null;
+  const previous = mining ? [...MINING_TIERS].reverse().find((t) => t.songs <= mining.songs)?.songs ?? 0 : 0;
+  const showFinished = helper.finished && now - helper.finished.at < 15_000;
 
   return (
     <section
-      className={`mt-6 rounded-2xl border p-4 text-sm transition-colors ${
+      aria-label="Mining rig"
+      className={`mt-6 rounded-2xl border p-4 text-sm transition-colors sm:p-5 ${
         helper.enabled ? "border-success/50 bg-success/5" : "border-border bg-surface"
       }`}
     >
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h2 className="font-semibold">⛏️ Help split songs for people on phones</h2>
+      <div className="flex flex-wrap items-start gap-3">
+        <span
+          className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-2xl ${
+            helper.enabled ? "bg-success/15" : "bg-surface-raised"
+          }`}
+          aria-hidden
+        >
+          <span className={working ? "animate-mine" : ""}>⛏️</span>
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="font-semibold">
+            Mining rig{" "}
+            <span className={`ml-1 text-xs font-medium ${helper.enabled ? "text-success" : "text-muted"}`}>
+              {helper.enabled ? (working ? "● mining" : helper.status === "paused" ? "● paused" : "● online") : "○ off"}
+            </span>
+          </h2>
           <p className="mt-1 text-xs text-muted">
-            Phones can&apos;t split songs, so they queue them. While this is on, this browser takes them one at a time
-            and splits them in the background — on any page, while you do other things. It pauses while music plays
-            and lets your own uploads go first. Each song you split for someone earns you 10 XP.
+            People on phones can&apos;t split songs, so they queue them. Lend this computer and it splits them one at a
+            time in this tab — and you earn XP for every song. It pauses while music plays, your own uploads go
+            first, and nothing starts until you press Start.
           </p>
         </div>
         <button
-          role="switch"
-          aria-checked={helper.enabled}
           onClick={() => splitHelper.setEnabled(!helper.enabled)}
-          className={`relative h-7 w-12 shrink-0 rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand ${
-            helper.enabled ? "bg-success" : "bg-surface-raised ring-1 ring-border"
+          className={`w-full shrink-0 rounded-xl px-5 py-2.5 text-sm font-bold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand sm:w-auto ${
+            helper.enabled
+              ? "border border-border bg-background text-foreground hover:border-danger/60 hover:text-danger"
+              : "bg-success text-white hover:opacity-90"
           }`}
-          aria-label="Help split songs"
         >
-          <span
-            className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-all ${
-              helper.enabled ? "left-6" : "left-1"
-            }`}
-          />
+          {helper.enabled ? "Stop mining" : "⛏️ Start mining"}
         </button>
       </div>
 
-      {shown && (
-        <div className="mt-3 grid grid-cols-3 gap-2">
-          <Stat value={shown.waiting} label="waiting" />
-          <Stat value={shown.working} label="being split" />
-          <Stat value={shown.helped} label="split by you" />
+      {pool && (
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          <Stat value={pool.waiting} label="songs waiting" accent={pool.waiting > 0} />
+          <Stat value={pool.working} label="being split" />
+          <Stat value={pool.rigs} label={pool.rigs === 1 ? "rig online" : "rigs online"} />
+        </div>
+      )}
+      {!helper.enabled && !!pool?.waiting && (
+        <p className="mt-2 text-xs font-medium text-brand-strong">
+          {pool.waiting === 1 ? "A song is" : `${pool.waiting} songs are`} waiting for a rig right now — start mining
+          to pick {pool.waiting === 1 ? "it" : "them"} up.
+        </p>
+      )}
+      {!helper.enabled && helper.message && <p className="mt-2 text-xs text-danger">{helper.message}</p>}
+
+      {helper.enabled && (
+        <div className="mt-3 flex flex-col gap-2">
+          <RigStatus helper={helper} />
+          {showFinished && <LastBlock finished={helper.finished!} />}
+          {session && (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <Stat value={duration((now - session.startedAt) / 1000)} label="uptime" />
+              <Stat value={session.songs} label="songs this session" />
+              <Stat value={`+${session.xp}`} label="XP this session" accent={session.xp > 0} />
+              <Stat
+                value={session.speed ? `${session.speed.toFixed(1)}×` : "—"}
+                label={session.speed ? "speed (× realtime)" : "speed — after 1st song"}
+              />
+            </div>
+          )}
         </div>
       )}
 
-      {helper.enabled && <HelperStatusLine helper={helper} />}
-      {!helper.enabled && helper.message && <p className="mt-3 text-xs text-danger">{helper.message}</p>}
-      {!helper.enabled && !!shown?.waiting && (
-        <p className="mt-3 text-xs font-medium text-brand-strong">
-          {shown.waiting === 1 ? "A song is" : `${shown.waiting} songs are`} waiting for a computer right now — switch
-          this on to help.
-        </p>
+      {mining && (
+        <div className="mt-4">
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Your mining</h3>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <Stat value={`${mining.xp.toLocaleString()} XP`} label={`from ${mining.songs} ${mining.songs === 1 ? "song" : "songs"}`} />
+            <Stat value={`+${mining.todayXp}`} label={`today · ${mining.today} ${mining.today === 1 ? "song" : "songs"}`} />
+            <Stat value={mining.streak ? `🔥 ${mining.streak}` : "—"} label={mining.streak === 1 ? "day streak" : "days streak"} />
+            <Stat value={mining.weekRank ? `#${mining.weekRank}` : "—"} label="rank this week" />
+          </div>
+          {next && (
+            <div className="mt-3">
+              <div className="flex justify-between gap-2 text-[11px] text-muted">
+                <span>
+                  Next badge: {next.emoji} <span className="font-medium text-foreground">{next.label}</span>
+                </span>
+                <span className="tabular-nums">
+                  {mining.songs} / {next.songs} songs
+                </span>
+              </div>
+              <ProgressBar progress={(mining.songs - previous) / Math.max(1, next.songs - previous)} tone="success" />
+            </div>
+          )}
+          {mining.audioSeconds > 0 && (
+            <p className="mt-2 text-[11px] text-muted">
+              You&apos;ve split {duration(mining.audioSeconds)} of music for other people.
+            </p>
+          )}
+        </div>
       )}
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <RewardRules />
+        <TopMinersList miners={data?.miners ?? []} me={mining?.weekRank ?? null} />
+      </div>
     </section>
   );
 }

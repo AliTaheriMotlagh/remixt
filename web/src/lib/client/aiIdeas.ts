@@ -42,6 +42,11 @@ import { isBacking, kindLabel } from "@/lib/stemKinds";
 // applying one, then another, never stacks; each is one undo step. Every
 // idea records which lanes it was made for, and refuses to apply once the
 // mix has moved on (lanes swapped, removed, re-tempoed) — ask again then.
+// Some ideas are worked out from where things are on the timeline (a
+// filter that opens as the vocal comes in, a beat looped until the vocal
+// ends); when the timing changes — another idea applied, a clip moved —
+// they're re-worked for the mix as it is now (reworkIdeas), from the same
+// analysis, so they never land where the vocal used to be.
 
 export type Role = "remixer" | "engineer" | "beatmaker";
 
@@ -66,6 +71,8 @@ export type Idea = {
   source: "studio" | "local-ai";
   /** The lanes it was worked out for, and the stem each was playing. */
   stems: Record<string, string>;
+  /** The model's own answer, kept so the idea can be re-worked when the mix moves. */
+  spec?: ModelIdea;
 };
 
 /** What the ideas are worked out from — the mix as it was when asked. */
@@ -79,6 +86,8 @@ export type Session = {
   /** Things worth telling the user (e.g. why there are no arrangement ideas). */
   notes: string[];
   signature: string;
+  /** Where everything was on the timeline (see timingSignature). */
+  timing: string;
 };
 
 /**
@@ -88,6 +97,16 @@ export type Session = {
  */
 export function mixSignature(lanes: StudioLane[]) {
   return lanes.map((l) => `${l.laneId}:${l.stemId}:${l.bpm?.toFixed(2) ?? "-"}`).join("|");
+}
+
+/**
+ * What timeline-dependent ideas depend on: where each lane's audio sits,
+ * how fast and at what pitch it plays, and the project tempo.
+ */
+export function timingSignature(lanes: StudioLane[], projectBpm: number) {
+  return `${projectBpm.toFixed(3)}#${lanes
+    .map((l) => `${l.laneId}:${l.offsetSeconds.toFixed(3)}:${l.tempoRatio.toFixed(4)}:${l.pitchSemitones}:${JSON.stringify(l.clips ?? null)}`)
+    .join("|")}`;
 }
 
 /** The vocal and beat to work on: the selected ones, else the first of each. */
@@ -129,7 +148,65 @@ export async function prepareSession(vocalId?: string | null, beatId?: string | 
   } else {
     notes.push(vocal ? "Add a beat to get arrangement ideas." : "Add a vocal to get arrangement ideas.");
   }
-  return { lanes, projectBpm: state.projectBpm, analyses, vocal, beat, pair, notes, signature: mixSignature(lanes) };
+  return {
+    lanes,
+    projectBpm: state.projectBpm,
+    analyses,
+    vocal,
+    beat,
+    pair,
+    notes,
+    signature: mixSignature(lanes),
+    timing: timingSignature(lanes, state.projectBpm),
+  };
+}
+
+/**
+ * The session moved onto the mix as it is now — same lanes playing the
+ * same stems, but timing, pitch or levels may have changed — keeping what
+ * was heard, so nothing has to be listened to again.
+ */
+export function rebaseSession(session: Session): Session {
+  const { lanes, projectBpm } = useStudioStore.getState();
+  const current = (lane: StudioLane | null) => (lane && lanes.find((l) => l.laneId === lane.laneId)) ?? null;
+  return {
+    ...session,
+    lanes,
+    projectBpm,
+    vocal: current(session.vocal),
+    beat: current(session.beat),
+    signature: mixSignature(lanes),
+    timing: timingSignature(lanes, projectBpm),
+  };
+}
+
+/**
+ * The same ideas, worked out again for `session` (a rebased one): each
+ * studio idea from scratch, each of the model's from its answer. One that
+ * no longer makes sense (the key clash is fixed, say) drops out — unless
+ * it's `keep`, the one just applied — and one that now does joins in.
+ */
+export function reworkIdeas(session: Session, ideas: Idea[], keep?: string): Idea[] {
+  const fresh = new Map(studioIdeas(session).map((idea) => [idea.id, idea]));
+  const out: Idea[] = [];
+  for (const idea of ideas) {
+    let again: Idea | null | undefined;
+    if (idea.spec) {
+      try {
+        again = compileModelIdea(session, idea.spec, idea.id);
+      } catch {
+        again = null;
+      }
+    } else {
+      again = fresh.get(idea.id);
+      fresh.delete(idea.id);
+    }
+    // Locking every lane to one tempo sets all their timing outright: it holds.
+    if (again) out.push(again);
+    else if (idea.id === keep || idea.id === SYNC_ID) out.push(idea);
+  }
+  out.push(...fresh.values());
+  return out;
 }
 
 // --- Drafting -------------------------------------------------------------------------
@@ -571,6 +648,8 @@ export function studioIdeas(session: Session): Idea[] {
  * With more than one beat or vocal, every lane locked to one tempo and
  * grid — the classic one-click AI Match. Slower (it listens to every lane).
  */
+const SYNC_ID = "beatmaker-sync";
+
 export async function syncEverythingIdea(session: Session): Promise<Idea | null> {
   if (session.lanes.length < 3 && session.pair) return null;
   const { plans } = await suggestMatches({ tempo: true, arrange: true, levels: false, fx: false });
@@ -586,7 +665,7 @@ export async function syncEverythingIdea(session: Session): Promise<Idea | null>
   draft.projectBpm = plan.projectBpm;
   draft.lines.push(...plan.lines.filter((l) => !/level|chain|dipped/.test(l)));
   return draft.idea({
-    id: "beatmaker-sync",
+    id: SYNC_ID,
     role: "beatmaker",
     title: `Lock every lane to ${plan.projectBpm.toFixed(1)} BPM`,
     why: `${plan.title}: every lane stretched to one tempo, the beat's downbeats on the bar lines and each vocal laid phrase by phrase.`,
@@ -788,7 +867,7 @@ function mixFrom(spec: z.infer<typeof laneMix> | undefined): Partial<LaneFx> | n
 }
 
 /** Turns one of the model's ideas into changes, through the studio's own engine. */
-function compileModelIdea(session: Session, idea: ModelIdea, index: number): Idea | null {
+function compileModelIdea(session: Session, idea: ModelIdea, id: string): Idea | null {
   const draft = new Draft(session);
   const { pair } = session;
   const wantsArrangement = idea.structure || idea.sections?.length || idea.tempo || idea.entry_bar !== undefined || idea.shift_beats;
@@ -853,14 +932,17 @@ function compileModelIdea(session: Session, idea: ModelIdea, index: number): Ide
   }
   if (draft.empty) return null;
   const vocal = session.vocal && draft.lane(session.vocal.laneId);
-  return draft.idea({
-    id: `ai-${Date.now().toString(36)}-${index}`,
-    role: idea.role,
-    title: idea.title.slice(0, 60),
-    why: idea.why.slice(0, 400),
-    source: "local-ai",
-    listenAt: vocal ? Math.max(0, entryOf(vocal) - beatLength(draft.bpm) * 4) : 0,
-  });
+  return {
+    ...draft.idea({
+      id,
+      role: idea.role,
+      title: idea.title.slice(0, 60),
+      why: idea.why.slice(0, 400),
+      source: "local-ai",
+      listenAt: vocal ? Math.max(0, entryOf(vocal) - beatLength(draft.bpm) * 4) : 0,
+    }),
+    spec: idea,
+  };
 }
 
 export type AskOptions = {
@@ -894,6 +976,7 @@ export async function askLocalModel(settings: LocalAiSettings, session: Session,
   if (!answer.success) throw new LocalAiError("The model answered in the wrong shape — try again, or a larger model.");
   const ideas: Idea[] = [];
   let skipped = 0;
+  const batch = Date.now().toString(36);
   answer.data.ideas.forEach((entry, i) => {
     const parsed = modelIdea.safeParse(entry);
     if (!parsed.success) {
@@ -901,7 +984,7 @@ export async function askLocalModel(settings: LocalAiSettings, session: Session,
       return;
     }
     try {
-      const idea = compileModelIdea(session, parsed.data, i);
+      const idea = compileModelIdea(session, parsed.data, `ai-${batch}-${i}`);
       if (idea) ideas.push(idea);
       else skipped++;
     } catch {

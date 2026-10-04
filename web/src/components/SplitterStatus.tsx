@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { usePathname } from "next/navigation";
-import { isConstrainedDevice, splitter, useSplitter } from "@/lib/client/splitter";
+import { splitter, useSplitter } from "@/lib/client/splitter";
 import { useUploads } from "@/lib/client/uploads";
 
 export function formatMB(bytes: number) {
@@ -10,11 +9,13 @@ export function formatMB(bytes: number) {
 }
 
 /**
- * Loads the song splitter in the background as soon as a signed-in user
- * opens any page, so by the time they reach Upload it's ready. The first
- * visit downloads ~200 MB once (the model and its runtime) and shows
- * progress here; after that it comes out of the browser's cache in a few
- * seconds and this stays out of sight.
+ * Shows the song splitter loading, wherever the user is. It only ever
+ * loads because they asked for it — picked a song to add, or started
+ * mining — never just for opening a page: that busied the GPU and pulled
+ * ~200 MB the moment anyone signed in, which looked (and felt) like the
+ * site had started splitting by itself. The first time is a one-time
+ * download, shown here; after that it comes out of the browser's cache in
+ * a few seconds and this stays out of sight.
  */
 export default function SplitterStatus({ signedIn }: { signedIn: boolean }) {
   const state = useSplitter();
@@ -22,26 +23,6 @@ export default function SplitterStatus({ signedIn }: { signedIn: boolean }) {
   // where there's only room for one card at the bottom of the screen).
   const uploading = useUploads().some((i) => i.status === "working");
   const [justFinished, setJustFinished] = useState(false);
-  const pathname = usePathname();
-  // Starting the model reads ~200 MB and busies the GPU for a few seconds;
-  // on the pages that play audio that's heard as stutter, so wait for
-  // another page (or the upload itself).
-  const playsAudio =
-    pathname.startsWith("/studio") || pathname.startsWith("/remixes/") || pathname.startsWith("/embed/");
-
-  useEffect(() => {
-    if (!signedIn) return;
-    // Respect data-saver: don't pull 200 MB unasked; the Upload page
-    // still loads it on demand.
-    const connection = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection;
-    if (connection?.saveData) return;
-    // On phones and tablets, holding the model in memory on every page gets
-    // the tab killed (iOS reloads it, e.g. while the file picker is open),
-    // so there it only loads for an actual upload.
-    if (isConstrainedDevice()) return;
-    if (playsAudio) return;
-    void splitter.load();
-  }, [signedIn, playsAudio]);
 
   // After a real download (not a cache hit), say so briefly.
   const downloadedFresh = state.status === "ready" && !state.fromCache;
@@ -53,6 +34,7 @@ export default function SplitterStatus({ signedIn }: { signedIn: boolean }) {
     return () => clearTimeout(timer);
   }, [downloadedFresh]);
 
+  if (!signedIn) return null;
   const showProgress =
     (state.status === "downloading" && !state.fromCache) || state.status === "starting";
   if (!showProgress && state.status !== "error" && !justFinished) return null;

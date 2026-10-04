@@ -40,9 +40,9 @@ Upload flow, all in the browser tab:
    checks they're there and marks the track ready.
 
 The original song never leaves the user's device. The model (~172 MB) and
-ONNX Runtime (~28 MB) download once — a signed-in user's browser starts
-fetching them on any page, with a progress pill in the corner — and are
-kept in Cache Storage, so later visits load them from disk. Playback goes
+ONNX Runtime (~28 MB) download once — only when the user adds a song or
+starts mining, never just for opening a page, with a progress pill in the
+corner — and are kept in Cache Storage, so later visits load them from disk. Playback goes
 through `/api/audio/stem/<id>`: a redirect to R2's public URL, or a
 Range-capable stream from disk.
 

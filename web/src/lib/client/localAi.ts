@@ -89,8 +89,13 @@ export async function listModels(settings: LocalAiSettings): Promise<string[]> {
   return (data.data ?? []).map((m) => m.id);
 }
 
-/** Pulls the JSON object out of a reply, even one wrapped in ``` fences or chatter. */
+/**
+ * Pulls the JSON object out of a reply, even one wrapped in ``` fences or
+ * chatter, or after a reasoning model's <think>…</think> (whose own braces
+ * would otherwise be mistaken for the answer).
+ */
 export function parseJsonReply(text: string): unknown {
+  text = text.replace(/<think>[\s\S]*?(<\/think>|$)/g, "").trim();
   const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(text);
   const body = (fenced ? fenced[1] : text).trim();
   try {
@@ -151,38 +156,65 @@ export async function chatJson(
     const decoder = new TextDecoder();
     let buffered = "";
     let content = "";
+    const take = (line: string) => {
+      if (!line.trim()) return;
+      let chunk: { message?: { content?: string }; error?: string };
+      try {
+        chunk = JSON.parse(line);
+      } catch {
+        return; // A proxy's keep-alive or other noise between lines.
+      }
+      if (chunk.error) throw new LocalAiError(chunk.error);
+      content += chunk.message?.content ?? "";
+    };
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
       buffered += decoder.decode(value, { stream: true });
       const lines = buffered.split("\n");
       buffered = lines.pop() ?? "";
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        const chunk = JSON.parse(line) as { message?: { content?: string }; error?: string };
-        if (chunk.error) throw new LocalAiError(chunk.error);
-        content += chunk.message?.content ?? "";
-      }
+      lines.forEach(take);
       onProgress?.(content.length);
     }
+    // The last line, if the server didn't end it with a newline.
+    take(buffered + decoder.decode());
+    if (!content.trim()) throw new LocalAiError("The model gave an empty answer — try again, or another model.");
     return parseJsonReply(content);
   }
 
-  const res = await request(settings, "/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    signal,
-    body: JSON.stringify({
-      model: settings.model,
-      messages,
-      temperature,
-      stream: false,
-      response_format: { type: "json_schema", json_schema: { name: "ideas", schema, strict: false } },
-    }),
-  });
+  // Servers differ in how they can be held to JSON: a schema (LM Studio,
+  // llama.cpp, vLLM), JSON mode only (some proxies and older servers), or
+  // not at all — so each is tried in turn when the last one is refused.
+  // Without a schema the model still has the format in its instructions.
+  const formats = [
+    { type: "json_schema", json_schema: { name: "ideas", schema, strict: false } },
+    { type: "json_object" },
+    undefined,
+  ];
+  const withSchema = `${user}\n\nAnswer with only the JSON object, matching this JSON Schema:\n${JSON.stringify(schema)}`;
+  const send = (i: number) =>
+    request(settings, "/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal,
+      body: JSON.stringify({
+        model: settings.model,
+        messages: i === 0 ? messages : [messages[0], { role: "user", content: withSchema }],
+        temperature,
+        stream: false,
+        ...(formats[i] ? { response_format: formats[i] } : {}),
+      }),
+    });
+  let res = await send(0);
+  // 400/422: the request was understood but that format wasn't — try the next.
+  for (let i = 1; i < formats.length && (res.status === 400 || res.status === 422); i++) res = await send(i);
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    throw new LocalAiError(`The model server answered ${res.status}. ${detail.slice(0, 200)}`);
+    throw new LocalAiError(
+      res.status === 404
+        ? `The server doesn't have “${settings.model}” loaded — load it, then press Refresh.`
+        : `The model server answered ${res.status}. ${detail.slice(0, 200)}`
+    );
   }
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
   const content = data.choices?.[0]?.message?.content ?? "";

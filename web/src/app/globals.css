@@ -311,3 +311,26 @@ body {
 .animate-float {
   animation: float-y 4s ease-in-out infinite;
 }
+
+/* --- Mining (Upload page) -------------------------------------------------- */
+
+/* The pickaxe while a song is being split for someone. */
+@keyframes mine-swing {
+  0%, 100% { transform: rotate(-20deg); }
+  40% { transform: rotate(25deg); }
+}
+.animate-mine {
+  display: inline-block;
+  transform-origin: 70% 70%;
+  animation: mine-swing 0.9s ease-in-out infinite;
+}
+/* "+20 XP" rising off a finished split. */
+@keyframes xp-pop {
+  0% { transform: translateY(0.4rem) scale(0.9); opacity: 0; }
+  30% { transform: translateY(0) scale(1.1); opacity: 1; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+.animate-xp-pop {
+  display: inline-block;
+  animation: xp-pop 0.7s ease-out;
+}

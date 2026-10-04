@@ -8,8 +8,11 @@ import {
   ideaFits,
   mixSignature,
   prepareSession,
+  rebaseSession,
+  reworkIdeas,
   studioIdeas,
   syncEverythingIdea,
+  timingSignature,
   type Idea,
   type Role,
   type Session,
@@ -236,6 +239,7 @@ export default function AiProducer() {
   const open = useStudioView((s) => s.aiOpen);
   const setOpen = useStudioView((s) => s.setAiOpen);
   const lanes = useStudioStore((s) => s.lanes);
+  const projectBpm = useStudioStore((s) => s.projectBpm);
   const [role, setRole] = useState<Role | "all">("all");
   const [request, setRequest] = useState("");
   const [vocalId, setVocalId] = useState<string>("");
@@ -250,6 +254,8 @@ export default function AiProducer() {
   const [modelProgress, setModelProgress] = useState<{ chars: number; started: number } | null>(null);
   const [now, setNow] = useState(0);
   const abort = useRef<AbortController | null>(null);
+  /** Bumped by every new request and by Stop, so a stopped one's results are dropped. */
+  const run = useRef(0);
   useKeepScreenOn("ai-producer", busy !== null);
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage only exists after mount
@@ -279,6 +285,25 @@ export default function AiProducer() {
   const signature = mixSignature(lanes);
   // The mix has moved on since the ideas were made (lanes swapped, added, removed, re-tempoed).
   const stale = !!session && session.signature !== signature;
+  // A different vocal or beat picked than the ideas were made for.
+  const repicked =
+    !!session && ((!!vocalId && session.vocal?.laneId !== vocalId) || (!!beatId && session.beat?.laneId !== beatId));
+  const timing = timingSignature(lanes, projectBpm);
+
+  // Timing changed (an idea applied, a clip moved, the tempo set) but the
+  // lanes are the same: re-work the ideas for where things are now — a
+  // filter build opening as the vocal now comes in, not where it used to —
+  // once things settle. Nothing needs listening to again.
+  const appliedId = applied?.id;
+  useEffect(() => {
+    if (!session || stale || busy || session.timing === timing) return;
+    const timer = setTimeout(() => {
+      const rebased = rebaseSession(session);
+      setSession(rebased);
+      setIdeas((current) => reworkIdeas(rebased, current, appliedId));
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [session, stale, busy, timing, appliedId]);
   const visible = useMemo(() => ideas.filter((i) => role === "all" || i.role === role), [ideas, role]);
   const modelOn = !!settings?.enabled && !!settings.model;
 
@@ -287,8 +312,16 @@ export default function AiProducer() {
     saveSettings(next);
   }
 
+  function stop() {
+    run.current++;
+    abort.current?.abort();
+    setModelProgress(null);
+    setBusy(null);
+  }
+
   async function getIdeas() {
     abort.current?.abort();
+    const id = ++run.current;
     setError(null);
     setApplied(null);
     setBusy("Listening to your lanes…");
@@ -296,15 +329,18 @@ export default function AiProducer() {
     let found: Idea[] = [];
     try {
       fresh = await prepareSession(vocalId || null, beatId || null);
+      if (id !== run.current) return;
       setSession(fresh);
       setBusy("Working out ideas…");
       // Let the panel paint before the (synchronous) arranging.
       await new Promise((r) => setTimeout(r, 30));
       found = studioIdeas(fresh);
       const sync = await syncEverythingIdea(fresh).catch(() => null);
+      if (id !== run.current) return;
       if (sync) found.push(sync);
       setIdeas(found);
     } catch (err) {
+      if (id !== run.current) return;
       setError(err instanceof Error ? err.message : "Couldn't analyse the lanes");
       setBusy(null);
       return;
@@ -313,10 +349,10 @@ export default function AiProducer() {
       setBusy(null);
       return;
     }
-    await askModel(fresh, found);
+    await askModel(fresh, found, id);
   }
 
-  async function askModel(current: Session, offered: Idea[]) {
+  async function askModel(current: Session, offered: Idea[], id: number) {
     if (!settings) return;
     const controller = new AbortController();
     abort.current = controller;
@@ -331,14 +367,20 @@ export default function AiProducer() {
         signal: controller.signal,
         onProgress: (chars) => setModelProgress((p) => (p ? { ...p, chars } : p)),
       });
+      if (id !== run.current) return;
+      // If the mix moved while the model thought, the effect above re-works these too.
       setIdeas((existing) => [...extra, ...existing]);
       if (!extra.length) setError(`The model's ideas didn't work out${skipped ? ` (${skipped} skipped)` : ""} — try again or rephrase.`);
     } catch (err) {
-      if ((err as Error)?.name !== "AbortError") setError(err instanceof Error ? err.message : "The local model failed");
+      if (id === run.current && (err as Error)?.name !== "AbortError") {
+        setError(err instanceof Error ? err.message : "The local model failed");
+      }
     } finally {
       if (abort.current === controller) abort.current = null;
-      setModelProgress(null);
-      setBusy(null);
+      if (id === run.current) {
+        setModelProgress(null);
+        setBusy(null);
+      }
     }
   }
 
@@ -346,8 +388,7 @@ export default function AiProducer() {
     try {
       applyIdea(idea);
       setApplied({ id: idea.id, lanes: useStudioStore.getState().lanes });
-      // Applying it was this person's choice, so the ideas still fit the mix.
-      setSession((s) => (s ? { ...s, signature: mixSignature(useStudioStore.getState().lanes) } : s));
+      // The other ideas are re-worked for the new timing by the effect above.
       return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't apply that");
@@ -466,10 +507,7 @@ export default function AiProducer() {
               </button>
               {busy && (
                 <button
-                  onClick={() => {
-                    abort.current?.abort();
-                    setBusy(null);
-                  }}
+                  onClick={stop}
                   className="rounded-xl border border-border px-3 text-xs text-muted hover:text-foreground"
                 >
                   Stop
@@ -490,6 +528,14 @@ export default function AiProducer() {
           </div>
 
           {error && <p className="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">{error}</p>}
+          {repicked && !stale && (
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-drums/50 bg-drums/10 px-3 py-2 text-xs">
+              <span className="flex-1">These ideas are for {session?.vocal?.trackTitle ?? "another vocal"} over {session?.beat?.trackTitle ?? "another beat"} — get ideas for the pair you picked.</span>
+              <button onClick={() => void getIdeas()} disabled={busy !== null} className="shrink-0 font-semibold text-drums hover:underline">
+                Refresh
+              </button>
+            </div>
+          )}
           {stale && (
             <div className="mt-3 flex items-center gap-2 rounded-lg border border-drums/50 bg-drums/10 px-3 py-2 text-xs">
               <span className="flex-1">Your lanes changed since these ideas were made. Ideas for lanes that are gone are greyed out.</span>

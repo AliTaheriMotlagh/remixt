@@ -104,7 +104,7 @@ async function queueSong(owner: Client, bytes: Uint8Array, filename = "My Song.m
 async function ownerJobs(owner: Client) {
   return (await expectStatus(await owner.fetch("/api/split-jobs"), 200, "list queue")) as {
     jobs: { id: string; status: string; position: number | null; helper_name: string | null; error: string | null; attempts: number }[];
-    stats: { waiting: number; working: number; helped: number };
+    stats: { waiting: number; working: number; helped: number; rigs: number };
   };
 }
 
@@ -242,6 +242,48 @@ describe("split queue", () => {
     const [note] = await sql`SELECT * FROM notifications WHERE user_id = ${owner.id} AND type = 'split' AND track_id = ${trackId}`;
     assert.equal(note?.actor_id, helper.id);
     assert.equal((await claim(helper, randomUUID())).stats.helped >= 1, true);
+  });
+
+  test("mining pays XP with bonuses, and shows up in the miner's stats", async () => {
+    const miner = await signUp("miner");
+    const session = randomUUID();
+
+    // Waited over 15 minutes, and the miner's first of the day: (10 + 5) × 2.
+    const rushed = await queueSong(owner, randomBytes(1024));
+    await sql`UPDATE split_jobs SET created_at = now() - interval '20 minutes' WHERE id = ${rushed}`;
+    await claimJob(miner, session, rushed);
+    await deliverStems(miner, rushed, session);
+    assert.equal((await jobRow(rushed)).reward, 30);
+
+    // Fresh and not the first today: the base 10.
+    const plain = await queueSong(owner, randomBytes(1024));
+    await claimJob(miner, session, plain);
+    await deliverStems(miner, plain, session);
+    assert.equal((await jobRow(plain)).reward, 10);
+
+    const { mining, miners, stats } = await expectStatus(await miner.fetch("/api/split-jobs"), 200, "miner's stats");
+    assert.equal(mining.songs, 2);
+    assert.equal(mining.xp, 40);
+    assert.equal(mining.today, 2);
+    assert.equal(mining.todayXp, 40);
+    assert.equal(mining.streak, 1);
+    assert.equal(typeof mining.weekRank, "number");
+    assert.ok(stats.rigs >= 1, "the miner's tab counts as a rig online");
+    assert.ok(miners.length >= 1);
+
+    const [{ count }] = await sql`SELECT COUNT(*)::int AS count FROM split_rigs WHERE session = ${session}`;
+    assert.equal(count, 1);
+    await expectStatus(
+      await miner.fetch("/api/split-jobs/claim", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session }),
+      }),
+      200,
+      "leave"
+    );
+    const [{ count: left }] = await sql`SELECT COUNT(*)::int AS count FROM split_rigs WHERE session = ${session}`;
+    assert.equal(left, 0, "a miner who stops is no longer online");
   });
 
   test("only the helper's own tab can work on the song", async () => {

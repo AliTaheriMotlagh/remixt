@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { rankedRemixes, topArtists, type RankedRemix } from "@/lib/social";
 import { pageMetadata } from "@/lib/seo";
+import { topMiners } from "@/lib/splitQueue";
 
 export const metadata: Metadata = pageMetadata({
   title: "Top remix artists & trending remixes",
@@ -49,17 +50,19 @@ function RemixBoard({ title, hint, remixes, metric }: { title: string; hint: str
 }
 
 export default async function LeaderboardPage() {
-  const [artists, trending, played] = await Promise.all([
+  const [artists, trending, played, miners] = await Promise.all([
     topArtists(20),
     rankedRemixes("trending", 10),
     rankedRemixes("played", 10),
+    topMiners(10),
   ]);
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
       <h1 className="text-2xl font-bold">Leaderboard</h1>
       <p className="mt-1 text-sm text-muted">
-        Earn XP by publishing remixes, uploading songs, and getting likes, plays and followers. Level up and collect badges.
+        Earn XP by publishing remixes, uploading songs, mining (splitting songs for people on phones), and getting likes,
+        plays and followers. Level up and collect badges.
       </p>
 
       <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
@@ -114,6 +117,33 @@ export default async function LeaderboardPage() {
             remixes={played}
             metric={(r) => `▶ ${r.plays.toLocaleString()}`}
           />
+          <section className="rounded-2xl border border-border bg-surface p-5">
+            <h2 className="font-semibold">⛏️ Top miners this week</h2>
+            <p className="mt-0.5 text-xs text-muted">XP from splitting songs for people on phones, last 7 days</p>
+            {miners.length === 0 ? (
+              <p className="mt-4 text-sm text-muted">
+                Nobody yet this week —{" "}
+                <Link href="/upload" className="text-brand-strong hover:underline">
+                  start mining
+                </Link>{" "}
+                on a computer to take the top spot.
+              </p>
+            ) : (
+              <ol className="mt-4 flex flex-col gap-2">
+                {miners.map((m, i) => (
+                  <li key={m.id} className="flex items-center gap-2">
+                    <Rank index={i} />
+                    <Link href={`/artist/${m.id}`} className="min-w-0 flex-1 truncate text-sm font-medium hover:underline">
+                      {m.artist_name}
+                    </Link>
+                    <span className="shrink-0 text-xs tabular-nums text-muted">
+                      {m.songs} song{m.songs === 1 ? "" : "s"} · {m.xp} XP
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </section>
         </div>
       </div>
     </div>

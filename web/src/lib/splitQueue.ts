@@ -4,6 +4,15 @@ import { notify } from "./notifications";
 import { deleteObject, deleteStemFile, storedObject } from "./storage";
 import { normaliseTags } from "./tags";
 import { finishTrackUpload } from "./trackUpload";
+import {
+  LONG_SONG_SECONDS,
+  RUSH_AFTER_MINUTES,
+  splitReward,
+  streakFrom,
+  type MiningStats,
+  type Reward,
+  type TopMiner,
+} from "./mining";
 
 // The split queue: phones can't split a song themselves (the model needs
 // more memory than a phone gives a web page), so they upload the song
@@ -49,6 +58,7 @@ export type SplitJob = {
   failed_by: string[];
   track_id: string | null;
   error: string | null;
+  reward: number;
   created_at: Date;
   updated_at: Date;
 };
@@ -80,6 +90,17 @@ export function ensureSplitQueueSchema(): Promise<void> {
       )
     `;
     await sql`ALTER TABLE split_jobs ADD COLUMN IF NOT EXISTS worker_session TEXT`;
+    // XP the helper earned for it (see lib/mining.ts). Splits from before
+    // rewards had bonuses were all worth the base 10.
+    await sql`ALTER TABLE split_jobs ADD COLUMN IF NOT EXISTS reward INTEGER NOT NULL DEFAULT 10`;
+    // Helpers' tabs that have asked for work lately — "rigs online".
+    await sql`
+      CREATE TABLE IF NOT EXISTS split_rigs (
+        session TEXT PRIMARY KEY,
+        worker_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        last_seen TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `;
     await sql`CREATE INDEX IF NOT EXISTS idx_split_jobs_status ON split_jobs(status, created_at)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_split_jobs_owner ON split_jobs(owner_id, created_at DESC)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_split_jobs_worker ON split_jobs(worker_id) WHERE status = 'done'`;
@@ -171,6 +192,7 @@ async function reapStale() {
  */
 export async function claimNext(workerId: string, session: string): Promise<SplitJob | null> {
   await ensureSplitQueueSchema();
+  await touchRig(workerId, session);
   const resumed = await sql<SplitJob[]>`
     SELECT * FROM split_jobs
     WHERE status = 'working' AND worker_id = ${workerId} AND worker_session = ${session}
@@ -217,6 +239,7 @@ export async function heartbeat(
   progress: number,
   stage: string
 ): Promise<boolean> {
+  if (session) await touchRig(workerId, session);
   const rows = await sql`
     UPDATE split_jobs
     SET heartbeat_at = now(), progress = ${Math.max(0, Math.min(1, progress))}, stage = ${stage.slice(0, 40)},
@@ -241,16 +264,36 @@ export async function isTrackWorker(trackId: string, userId: string): Promise<bo
   return rows.length > 0;
 }
 
-/** The helper has uploaded every stem: the track goes ready and the song is thrown away. */
-export async function completeJob(job: SplitJob): Promise<boolean> {
-  if (!job.track_id || !(await finishTrackUpload(job.track_id))) return false;
+/** What finishing `job` pays its helper: nothing for their own song. */
+async function rewardFor(job: SplitJob): Promise<Reward> {
+  if (!job.worker_id || job.worker_id === job.owner_id) return { xp: 0, bonuses: [] };
+  const [facts] = await sql<{ long: boolean; first_today: boolean; rush: boolean }[]>`
+    SELECT
+      COALESCE((SELECT duration FROM tracks WHERE id = ${job.track_id}), 0) > ${LONG_SONG_SECONDS} AS long,
+      NOT EXISTS (
+        SELECT 1 FROM split_jobs
+        WHERE worker_id = ${job.worker_id} AND owner_id <> worker_id AND status = 'done'
+          AND updated_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+      ) AS first_today,
+      now() - ${job.created_at} > make_interval(mins => ${RUSH_AFTER_MINUTES}) AS rush
+  `;
+  return splitReward({ long: facts.long, firstToday: facts.first_today, rush: facts.rush });
+}
+
+/**
+ * The helper has uploaded every stem: the track goes ready, the helper is
+ * paid, and the song is thrown away. Null if the stems aren't all there.
+ */
+export async function completeJob(job: SplitJob): Promise<Reward | null> {
+  if (!job.track_id || !(await finishTrackUpload(job.track_id))) return null;
+  const reward = await rewardFor(job);
   await sql`
-    UPDATE split_jobs SET status = 'done', progress = 1, stage = 'done', updated_at = now()
+    UPDATE split_jobs SET status = 'done', progress = 1, stage = 'done', reward = ${reward.xp}, updated_at = now()
     WHERE id = ${job.id}
   `;
   await deleteObject(job.source_key).catch(() => {});
   await notify({ userId: job.owner_id, actorId: job.worker_id, type: "split", trackId: job.track_id, body: job.title });
-  return true;
+  return reward;
 }
 
 /**
@@ -333,7 +376,27 @@ export type QueueStats = {
   working: number;
   /** Songs this user has split for other people. */
   helped: number;
+  /** Helpers with a tab asking for work lately (this one included). */
+  rigs: number;
 };
+
+/** How long after its last check-in a helper's tab still counts as online (background tabs check in about once a minute). */
+const RIG_ONLINE = "2 minutes";
+
+/** A helper's tab asked for work or checked in. */
+async function touchRig(workerId: string, session: string) {
+  await sql`
+    INSERT INTO split_rigs (session, worker_id, last_seen) VALUES (${session}, ${workerId}, now())
+    ON CONFLICT (session) DO UPDATE SET worker_id = excluded.worker_id, last_seen = now()
+  `;
+  if (Math.random() < 0.02) await sql`DELETE FROM split_rigs WHERE last_seen < now() - interval '1 day'`;
+}
+
+/** A helper switched off: they stop counting as online straight away. */
+export async function leaveRig(workerId: string, session: string) {
+  await ensureSplitQueueSchema();
+  await sql`DELETE FROM split_rigs WHERE session = ${session} AND worker_id = ${workerId}`;
+}
 
 export async function queueStats(userId: string): Promise<QueueStats> {
   await ensureSplitQueueSchema();
@@ -341,7 +404,63 @@ export async function queueStats(userId: string): Promise<QueueStats> {
     SELECT
       (SELECT COUNT(*) FROM split_jobs WHERE status = 'queued')::int AS waiting,
       (SELECT COUNT(*) FROM split_jobs WHERE status = 'working')::int AS working,
-      (SELECT COUNT(*) FROM split_jobs WHERE status = 'done' AND worker_id = ${userId} AND owner_id <> ${userId})::int AS helped
+      (SELECT COUNT(*) FROM split_jobs WHERE status = 'done' AND worker_id = ${userId} AND owner_id <> ${userId})::int AS helped,
+      (SELECT COUNT(DISTINCT worker_id) FROM split_rigs WHERE last_seen > now() - ${RIG_ONLINE}::interval)::int AS rigs
   `;
   return row;
+}
+
+// --- Mining stats ------------------------------------------------------------------------
+
+/** What counts: songs split for someone else, start to finish. */
+const MINED = sql`status = 'done' AND worker_id IS NOT NULL AND owner_id <> worker_id`;
+const TODAY = sql`date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`;
+const THIS_WEEK = sql`now() - interval '7 days'`;
+
+/** One helper's numbers: what they've mined in all, today, this week, their streak and rank. */
+export async function miningStats(userId: string): Promise<MiningStats> {
+  await ensureSplitQueueSchema();
+  const [[totals], days, [rank]] = await Promise.all([
+    sql<Omit<MiningStats, "streak" | "weekRank">[]>`
+      SELECT
+        COUNT(*)::int AS songs,
+        COALESCE(SUM(j.reward), 0)::int AS xp,
+        COALESCE(SUM(t.duration), 0)::float AS "audioSeconds",
+        COUNT(*) FILTER (WHERE j.updated_at >= ${TODAY})::int AS today,
+        COALESCE(SUM(j.reward) FILTER (WHERE j.updated_at >= ${TODAY}), 0)::int AS "todayXp",
+        COUNT(*) FILTER (WHERE j.updated_at >= ${THIS_WEEK})::int AS week,
+        COALESCE(SUM(j.reward) FILTER (WHERE j.updated_at >= ${THIS_WEEK}), 0)::int AS "weekXp"
+      FROM (SELECT * FROM split_jobs WHERE worker_id = ${userId} AND ${MINED}) j
+      LEFT JOIN tracks t ON t.id = j.track_id
+    `,
+    sql<{ day: string }[]>`
+      SELECT DISTINCT to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day
+      FROM split_jobs WHERE worker_id = ${userId} AND ${MINED}
+      ORDER BY day DESC LIMIT 400
+    `,
+    sql<{ place: number }[]>`
+      SELECT place FROM (
+        SELECT worker_id, RANK() OVER (ORDER BY SUM(reward) DESC)::int AS place
+        FROM split_jobs WHERE ${MINED} AND updated_at >= ${THIS_WEEK}
+        GROUP BY worker_id
+      ) ranked WHERE worker_id = ${userId}
+    `,
+  ]);
+  return { ...totals, streak: streakFrom(days.map((d) => d.day)), weekRank: rank?.place ?? null };
+}
+
+/** This week's top miners, by XP. */
+export async function topMiners(limit = 10): Promise<TopMiner[]> {
+  await ensureSplitQueueSchema();
+  return sql<TopMiner[]>`
+    SELECT users.id, users.artist_name, users.avatar_color, mined.songs, mined.xp
+    FROM (
+      SELECT worker_id, COUNT(*)::int AS songs, SUM(reward)::int AS xp
+      FROM split_jobs WHERE ${MINED} AND updated_at >= ${THIS_WEEK}
+      GROUP BY worker_id
+    ) mined
+    JOIN users ON users.id = mined.worker_id
+    ORDER BY mined.xp DESC, mined.songs DESC
+    LIMIT ${limit}
+  `;
 }

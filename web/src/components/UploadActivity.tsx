@@ -125,8 +125,8 @@ export function UploadList() {
 const SHOW_DONE_MS = 8000;
 
 /**
- * Runs on every page: keeps helping going (once switched on, until
- * switched off), and shows what's happening in the background — the
+ * Runs on every page: keeps mining going in this tab (once started, until
+ * stopped), and shows what's happening in the background — the
  * user's own songs being added, and songs being split for others — in the
  * corner, on every page but Upload (which lists it all already).
  */
@@ -224,7 +224,8 @@ export function BackgroundActivity({ signedIn }: { signedIn: boolean }) {
           <Link href="/upload" className="block rounded-lg hover:bg-surface-hover">
             <div className="flex items-center justify-between gap-2">
               <span className="min-w-0 truncate font-semibold">
-                ⛏️ {helper.job!.forSomeoneElse ? "Splitting for someone" : "Splitting your queued song"}
+                <span className="animate-mine">⛏️</span>{" "}
+                {helper.job!.forSomeoneElse ? "Mining a song for someone" : "Splitting your queued song"}
               </span>
               {helperStage.progress !== null && (
                 <span className="shrink-0 tabular-nums text-muted">{Math.round(helperStage.progress * 100)}%</span>
@@ -238,7 +239,8 @@ export function BackgroundActivity({ signedIn }: { signedIn: boolean }) {
         )}
         {!helping && helperDone && (
           <p className="truncate font-semibold text-success">
-            ✓ Split “{helper.finished!.title}”{helper.finished!.forSomeoneElse ? " for someone · +10 XP" : ""}
+            ✓ Split “{helper.finished!.title}”
+            {helper.finished!.reward && <span className="animate-xp-pop ml-1">· +{helper.finished!.reward.xp} XP</span>}
           </p>
         )}
       </div>
