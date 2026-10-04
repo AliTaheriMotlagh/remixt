@@ -832,6 +832,14 @@ if (typeof window !== "undefined") {
       for (const laneId of audioEngine.getLoadedLaneIds()) {
         if (!currentIds.has(laneId)) audioEngine.removeLane(laneId);
       }
+      // Forget lanes that are gone, so one that comes back (undo, or an AI
+      // idea taken off again) loads and joins in like a new one.
+      for (const laneId of [...lastPlacement.keys()]) {
+        if (!currentIds.has(laneId)) {
+          lastPlacement.delete(laneId);
+          lastTransforms.delete(laneId);
+        }
+      }
     }
     audioEngine.applyMixState();
 

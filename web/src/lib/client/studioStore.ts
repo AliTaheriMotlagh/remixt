@@ -153,6 +153,8 @@ export type LaneClip = {
   stretch?: number;
   /** Plays the clip backwards. */
   reverse?: boolean;
+  /** What it is, shown on the clip ("Chorus", "Verse 2") — set by the AI's arrangements. */
+  label?: string;
 };
 
 /** The fields a bulk edit (auto-match, or undoing one) may change. */
@@ -465,6 +467,33 @@ function defaultProjectBpm(lanes: StudioLane[], fallback: number) {
   return fallback;
 }
 
+/** A fresh lane playing a library stem from the start, at its own speed and pitch. */
+export function laneFromStem(stem: LoadableStem, laneId: string = crypto.randomUUID()): StudioLane {
+  const originalDuration = stem.track_duration ?? 0;
+  return {
+    laneId,
+    stemId: stem.id,
+    kind: stem.kind,
+    trackTitle: stem.track_title,
+    artistName: stem.artist_name,
+    volume: 1,
+    muted: false,
+    solo: false,
+    peaks: JSON.parse(stem.peaks_json || "[]"),
+    originalDuration,
+    duration: originalDuration,
+    offsetSeconds: 0,
+    bpm: stem.track_bpm ?? null,
+    musicalKey: null,
+    pitchSemitones: 0,
+    tempoRatio: 1,
+    fx: { ...DEFAULT_FX },
+    clips: null,
+    xfade: null,
+    automation: {},
+  };
+}
+
 export const useStudioStore = create<StudioState>((set, get) => ({
   lanes: [],
   isPlaying: false,
@@ -489,31 +518,8 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   setChallenge: (challenge) => set({ challenge }),
 
   addStem: (stem) => {
-    const laneId = crypto.randomUUID();
-    const peaks: number[] = JSON.parse(stem.peaks_json || "[]");
-    const originalDuration = stem.track_duration ?? 0;
-    const lane: StudioLane = {
-      laneId,
-      stemId: stem.id,
-      kind: stem.kind,
-      trackTitle: stem.track_title,
-      artistName: stem.artist_name,
-      volume: 1,
-      muted: false,
-      solo: false,
-      peaks,
-      originalDuration,
-      duration: originalDuration,
-      offsetSeconds: 0,
-      bpm: stem.track_bpm ?? null,
-      musicalKey: null,
-      pitchSemitones: 0,
-      tempoRatio: 1,
-      fx: { ...DEFAULT_FX },
-      clips: null,
-      xfade: null,
-      automation: {},
-    };
+    const lane = laneFromStem(stem);
+    const { laneId } = lane;
     set((state) => {
       const lanes = [...state.lanes, lane];
       const wasEmpty = state.lanes.length === 0;

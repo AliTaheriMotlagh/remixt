@@ -54,6 +54,15 @@ const GROUPS: { title: string; items: Shortcut[] }[] = [
     ],
   },
   {
+    title: "AI producer (panel open)",
+    items: [
+      { keys: [",", "."], label: "Try the previous / next idea", studioOnly: true },
+      { keys: ["B"], label: "Before / after", studioOnly: true },
+      { keys: ["Enter"], label: "Keep the idea", studioOnly: true },
+      { keys: ["⌘/Ctrl Z"], label: "Undo the idea you're trying", studioOnly: true },
+    ],
+  },
+  {
     title: "Lanes",
     items: [
       { keys: ["↑", "↓"], label: "Select the lane above / below (⇧ adds)" },

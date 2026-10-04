@@ -36,6 +36,7 @@ function Popover({
   align = "left",
   children,
   className = "",
+  lcd = false,
 }: {
   label: React.ReactNode;
   title: string;
@@ -43,6 +44,8 @@ function Popover({
   align?: "left" | "right";
   children: (close: () => void) => React.ReactNode;
   className?: string;
+  /** A cell of the transport's display rather than a button. */
+  lcd?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -70,9 +73,13 @@ function Popover({
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         title={title}
-        className={`flex h-9 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-colors ${
-          open || active ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted hover:text-foreground"
-        } ${className}`}
+        className={
+          lcd
+            ? `flex h-full flex-col items-start justify-center px-3 py-1 text-left transition-colors hover:bg-white/5 ${open ? "bg-white/10" : ""} ${className}`
+            : `flex h-9 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-colors ${
+                open || active ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted hover:text-foreground"
+              } ${className}`
+        }
       >
         {label}
       </button>
@@ -92,59 +99,60 @@ function Popover({
   );
 }
 
-/** Clock, bar counter and progress bar — the only parts of the transport that follow playback. */
-function TransportPosition({ empty }: { empty: boolean }) {
+/** A cell of the transport's display: a tiny label over a big readout. */
+function LcdLabel({ children }: { children: React.ReactNode }) {
+  return <span className="text-[9px] font-semibold uppercase tracking-[0.12em] text-muted">{children}</span>;
+}
+
+/** Bar counter and clock — the parts of the display that follow playback. */
+function TransportClock() {
   const playhead = useStudioStore((s) => s.playhead);
   const duration = useStudioStore((s) => s.duration);
   const projectBpm = useStudioStore((s) => s.projectBpm);
+  return (
+    <>
+      <div className="flex flex-col justify-center px-3 py-1">
+        <LcdLabel>Bar</LcdLabel>
+        <span className="font-mono text-lg font-semibold leading-tight text-brand-strong tabular-nums">{formatBars(playhead, projectBpm)}</span>
+      </div>
+      <div className="flex flex-col justify-center border-l border-white/10 px-3 py-1 max-sm:hidden">
+        <LcdLabel>Time</LcdLabel>
+        <span className="whitespace-nowrap font-mono text-sm leading-tight tabular-nums">
+          {formatTime(playhead)}
+          <span className="text-muted"> / {formatTime(duration)}</span>
+        </span>
+      </div>
+    </>
+  );
+}
+
+/** Phones: a seek bar of their own (larger screens seek on the arrangement's ruler), and the loop. */
+function MobileSeek({ empty }: { empty: boolean }) {
+  const playhead = useStudioStore((s) => s.playhead);
+  const duration = useStudioStore((s) => s.duration);
   const loopEnabled = useStudioStore((s) => s.loopEnabled);
   const loopStart = useStudioStore((s) => s.loopStart);
   const loopEnd = useStudioStore((s) => s.loopEnd);
-  const setLoop = useStudioStore((s) => s.setLoop);
   const hasLoop = loopEnd > loopStart;
-
   return (
-    // On larger screens the arrangement's ruler is the seek bar and shows the
-    // loop, so only the counter stays here; phones get the bar and loop chip.
-    <div className="flex min-w-0 items-center gap-3 max-sm:order-last max-sm:w-full sm:mr-auto">
-      <div className="flex shrink-0 flex-col items-start rounded-lg bg-background px-2.5 py-1 font-mono leading-none tabular-nums">
-        <span className="text-base font-semibold text-foreground">{formatBars(playhead, projectBpm)}</span>
-        <span className="mt-0.5 text-[10px] text-muted">
-          {formatTime(playhead)} / {formatTime(duration)}
-        </span>
-      </div>
-      <div
-        className="-my-2 min-w-[80px] flex-1 cursor-pointer py-2 sm:hidden"
-        onClick={(e) => {
-          if (empty) return;
-          const rect = e.currentTarget.getBoundingClientRect();
-          audioEngine.seek(((e.clientX - rect.left) / rect.width) * duration);
-        }}
-        title="Click to seek"
-      >
-        <div className="relative h-1.5 overflow-hidden rounded-full bg-surface-raised">
-          {hasLoop && duration > 0 && (
-            <div
-              className={`absolute inset-y-0 ${loopEnabled ? "bg-brand/40" : "bg-surface-hover"}`}
-              style={{ left: `${(loopStart / duration) * 100}%`, width: `${((loopEnd - loopStart) / duration) * 100}%` }}
-            />
-          )}
+    <div
+      className="-my-1 w-full cursor-pointer py-2 sm:hidden"
+      onClick={(e) => {
+        if (empty) return;
+        const rect = e.currentTarget.getBoundingClientRect();
+        audioEngine.seek(((e.clientX - rect.left) / rect.width) * duration);
+      }}
+      title="Tap to seek"
+    >
+      <div className="relative h-1.5 overflow-hidden rounded-full bg-surface-raised">
+        {hasLoop && duration > 0 && (
           <div
-            className="relative h-full bg-gradient-to-r from-vocals to-beat"
-            style={{ width: duration > 0 ? `${(playhead / duration) * 100}%` : "0%" }}
+            className={`absolute inset-y-0 ${loopEnabled ? "bg-brand/40" : "bg-surface-hover"}`}
+            style={{ left: `${(loopStart / duration) * 100}%`, width: `${((loopEnd - loopStart) / duration) * 100}%` }}
           />
-        </div>
+        )}
+        <div className="relative h-full bg-gradient-to-r from-vocals to-beat" style={{ width: duration > 0 ? `${(playhead / duration) * 100}%` : "0%" }} />
       </div>
-      {loopEnabled && hasLoop && (
-        <button
-          onClick={() => setLoop({ enabled: false })}
-          className="flex h-7 shrink-0 items-center gap-1 rounded-full border border-brand bg-brand/15 px-2 text-[11px] font-medium hover:border-danger sm:hidden"
-          title="Playback repeats this region — click to turn the loop off (L)"
-        >
-          🔁 <span className="font-mono tabular-nums max-sm:hidden">{formatTime(loopStart)}–{formatTime(loopEnd)}</span>
-          <span className="text-muted">✕</span>
-        </button>
-      )}
     </div>
   );
 }
@@ -173,11 +181,12 @@ function TempoControl() {
 
   return (
     <Popover
+      lcd
       title="Project tempo — the grid, snap, metronome and synced delays follow it"
       label={
         <>
-          <span className="font-mono text-sm font-semibold text-foreground tabular-nums">{projectBpm.toFixed(1)}</span>
-          <span className="text-[10px] uppercase">bpm</span>
+          <LcdLabel>BPM ▾</LcdLabel>
+          <span className="font-mono text-sm font-semibold leading-tight text-foreground tabular-nums">{projectBpm.toFixed(1)}</span>
         </>
       }
     >
@@ -236,11 +245,15 @@ function KeyControl() {
   const key = reference ? effectiveKey(reference) : null;
   return (
     <Popover
+      lcd
       title="Project key"
       label={
         <>
-          <span className="text-sm font-semibold text-foreground">{key ? keyLabel(key) : "…"}</span>
-          {key && <span className="font-mono text-[10px]">{camelotCode(key)}</span>}
+          <LcdLabel>Key ▾</LcdLabel>
+          <span className="whitespace-nowrap text-sm font-semibold leading-tight text-foreground">
+            {key ? keyLabel(key) : "…"}
+            {key && <span className="ml-1 font-mono text-[10px] text-muted">{camelotCode(key)}</span>}
+          </span>
         </>
       }
     >
@@ -449,70 +462,96 @@ export default function StudioTransport({
         showSave ? "max-sm:static" : ""
       }`}
     >
-      <div className="flex flex-wrap items-center gap-1.5 p-2.5 sm:gap-2 sm:p-3">
-        <div className="flex shrink-0 items-center gap-1.5">
+      <div className="flex flex-wrap items-center gap-2 p-2 sm:gap-2.5">
+        {/* Transport */}
+        <div className="flex shrink-0 items-center gap-0.5 rounded-xl border border-white/10 bg-black/30 p-1">
+          <button
+            onClick={() => audioEngine.seek(0)}
+            disabled={empty}
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-sm text-muted transition-colors hover:bg-white/5 hover:text-foreground disabled:opacity-40 max-xl:hidden"
+            title="Back to the start (Home)"
+            aria-label="Back to the start"
+          >
+            ⏮
+          </button>
           <button
             onClick={handlePlayPause}
             disabled={empty}
-            className="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-full bg-brand text-lg text-white shadow-[0_0_20px_-6px_var(--brand)] transition-transform hover:scale-105 disabled:opacity-40 disabled:hover:scale-100"
+            className="flex h-10 w-10 shrink-0 touch-manipulation items-center justify-center rounded-lg bg-brand text-base text-white shadow-[0_0_18px_-6px_var(--brand)] transition-transform hover:brightness-110 active:scale-95 disabled:opacity-40"
             title={starting ? "Preparing the audio… (tap to cancel)" : isPlaying ? "Pause (space)" : "Play (space)"}
             aria-label={starting ? "Cancel" : isPlaying ? "Pause" : "Play"}
             aria-busy={starting}
           >
-            {starting ? (
-              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-            ) : isPlaying ? (
-              "⏸"
-            ) : (
-              "▶"
-            )}
+            {starting ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" /> : isPlaying ? "⏸" : "▶"}
           </button>
           <button
             onClick={() => audioEngine.stop()}
             disabled={empty}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border text-xs text-muted transition-colors hover:border-danger hover:text-danger disabled:opacity-40"
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-xs text-muted transition-colors hover:bg-white/5 hover:text-danger disabled:opacity-40"
             title="Stop and return to the start (Esc)"
             aria-label="Stop"
           >
             ■
           </button>
+          <button
+            onClick={() => setLoop({ enabled: !loopEnabled, start: hasLoop ? loopStart : 0, end: hasLoop ? loopEnd : Math.min(duration, 16) })}
+            disabled={empty}
+            className={`flex h-9 w-9 items-center justify-center rounded-lg text-sm transition-colors disabled:opacity-40 max-sm:hidden ${
+              loopEnabled ? "bg-brand/25 text-foreground" : "text-muted hover:bg-white/5 hover:text-foreground"
+            }`}
+            title={hasLoop ? `Loop ${formatTime(loopStart)}–${formatTime(loopEnd)} (L)` : "Loop — or drag across the ruler to pick a region (L)"}
+            aria-pressed={loopEnabled}
+            aria-label="Loop"
+          >
+            🔁
+          </button>
         </div>
 
-        <TransportPosition empty={empty} />
-
-        {/* From sm up these sit inline (display: contents); on phones they're a row of their own. */}
-        <div
-          className={`${showTools ? "flex" : "hidden"} w-full flex-wrap items-center gap-1.5 border-t border-border pt-2.5 max-sm:order-last sm:contents`}
-        >
+        {/* The display */}
+        <div className="flex h-12 shrink-0 items-stretch overflow-hidden rounded-xl border border-white/10 bg-black/40 shadow-inner">
+          <TransportClock />
           {!empty && (
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-stretch border-l border-white/10 max-sm:hidden">
               <TempoControl />
-              <KeyControl />
+              <div className="border-l border-white/10">
+                <KeyControl />
+              </div>
+              <div className="flex flex-col justify-center border-l border-white/10 px-3 py-1 max-2xl:hidden">
+                <LcdLabel>Sig</LcdLabel>
+                <span className="font-mono text-sm leading-tight">4/4</span>
+              </div>
             </div>
           )}
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() =>
-                setLoop({ enabled: !loopEnabled, start: hasLoop ? loopStart : 0, end: hasLoop ? loopEnd : Math.min(duration, 16) })
-              }
-              disabled={empty}
-              className={toggle(loopEnabled)}
-              title={hasLoop ? `Loop ${formatTime(loopStart)}–${formatTime(loopEnd)} (L)` : "Loop — or drag across the ruler to pick a region (L)"}
-              aria-pressed={loopEnabled}
-            >
-              🔁<span className="xl:inline hidden">Loop</span>
-            </button>
-            {!viewing && (
-              <>
-                <button onClick={toggleMetronome} className={toggle(metronome)} title="Metronome (K)" aria-pressed={metronome}>
-                  🥁
-                </button>
-                <button onClick={toggleSnap} className={toggle(snapToGrid)} title="Snap to the beat (N)" aria-pressed={snapToGrid}>
-                  ⌗<span className="xl:inline hidden">Snap</span>
-                </button>
-              </>
-            )}
-          </div>
+        </div>
+
+        {/* Toggles, level, export — inline from sm up; a row of their own on phones (⋯). */}
+        <div className={`${showTools ? "flex" : "hidden"} w-full flex-wrap items-center gap-1.5 border-t border-border pt-2 max-sm:order-last sm:contents`}>
+          {!empty && (
+            <div className="flex h-12 items-stretch overflow-hidden rounded-xl border border-white/10 bg-black/40 sm:hidden">
+              <TempoControl />
+              <div className="border-l border-white/10">
+                <KeyControl />
+              </div>
+            </div>
+          )}
+          <button
+            onClick={() => setLoop({ enabled: !loopEnabled, start: hasLoop ? loopStart : 0, end: hasLoop ? loopEnd : Math.min(duration, 16) })}
+            disabled={empty}
+            className={`${toggle(loopEnabled)} sm:hidden`}
+            aria-pressed={loopEnabled}
+          >
+            🔁 Loop
+          </button>
+          {!viewing && (
+            <div className="flex items-center gap-1">
+              <button onClick={toggleMetronome} className={toggle(metronome)} title="Metronome (K)" aria-pressed={metronome}>
+                🥁<span className="hidden 2xl:inline">Click</span>
+              </button>
+              <button onClick={toggleSnap} className={toggle(snapToGrid)} title="Snap to the beat (N)" aria-pressed={snapToGrid}>
+                ⌗<span className="hidden 2xl:inline">Snap</span>
+              </button>
+            </div>
+          )}
           {hasXfade && (
             <label className="flex items-center gap-1.5 text-[10px] font-semibold text-muted" title="Crossfader between side A and side B lanes (double-click to centre)">
               A
@@ -530,7 +569,7 @@ export default function StudioTransport({
               B
             </label>
           )}
-          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted max-sm:min-w-[9rem] max-sm:flex-1" title="Master level (+ / −)">
+          <label className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted max-sm:min-w-[9rem] max-sm:flex-1" title="Master level (+ / −)">
             Out
             <input
               type="range"
@@ -540,14 +579,14 @@ export default function StudioTransport({
               value={masterVolume}
               onChange={(e) => setMasterVolume(Number(e.target.value))}
               onDoubleClick={() => setMasterVolume(1)}
-              className="h-1.5 w-16 accent-brand max-sm:flex-1"
+              className="h-1.5 w-16 accent-brand max-sm:flex-1 lg:w-20"
               aria-label="Master level"
             />
           </label>
           <Popover
             align="right"
             title="Export the mix as an audio file"
-            label={exportStage ?? <>⤓ <span>Export</span></>}
+            label={exportStage ?? <>⤓<span className="hidden 2xl:inline">Export</span></>}
             active={exportStage !== null}
           >
             {(close) => (
@@ -587,22 +626,6 @@ export default function StudioTransport({
                 >
                   Export just the loop
                 </button>
-                {!viewing && (
-                  <button
-                    onClick={() => {
-                      close();
-                      if (window.confirm("Clear the Studio? Undo can bring it back.")) {
-                        audioEngine.stop();
-                        startNewStep();
-                        clearLanes();
-                      }
-                    }}
-                    disabled={empty}
-                    className="mt-1 border-t border-border pt-2 text-left text-muted hover:text-danger disabled:opacity-40"
-                  >
-                    Clear the Studio…
-                  </button>
-                )}
               </div>
             )}
           </Popover>
@@ -611,9 +634,36 @@ export default function StudioTransport({
             artist={artistName ?? user?.artist_name ?? "Remixt"}
             remixId={savedId ?? (viewing ? remixId : null)}
           />
+          {!viewing && (
+            <Popover align="right" title="Clear the Studio — start over" label={<>🗑<span className="hidden 2xl:inline">Clear</span></>}>
+              {(close) => (
+                <div className="flex flex-col gap-2 text-xs">
+                  <p className="font-semibold">Clear the Studio?</p>
+                  <p className="text-muted">Every lane, the loop, markers and pads go. ⌘Z (undo) brings it all back.</p>
+                  <div className="flex gap-2">
+                    <button onClick={close} className="flex-1 rounded-lg border border-border px-3 py-1.5 text-muted hover:text-foreground">
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => {
+                        close();
+                        audioEngine.stop();
+                        startNewStep();
+                        clearLanes();
+                      }}
+                      disabled={empty}
+                      className="flex-1 rounded-lg bg-danger px-3 py-1.5 font-semibold text-white disabled:opacity-40"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+              )}
+            </Popover>
+          )}
         </div>
 
-        <div className="flex items-center gap-1 max-sm:ml-auto">
+        <div className="flex shrink-0 items-center gap-1 sm:ml-auto">
           <button
             onClick={undo}
             disabled={!canUndo}
@@ -626,7 +676,7 @@ export default function StudioTransport({
           <button
             onClick={redo}
             disabled={!canRedo}
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-border text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40"
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-border text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40 max-sm:hidden"
             title="Redo (⇧⌘Z / Ctrl+Y)"
             aria-label="Redo"
           >
@@ -642,32 +692,32 @@ export default function StudioTransport({
           >
             ⋯
           </button>
+          {!viewing && (
+            <button
+              onClick={() => setAiOpen(!aiOpen)}
+              disabled={empty}
+              aria-pressed={aiOpen}
+              aria-label="AI producer"
+              className={`flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-bold text-white transition-all disabled:opacity-40 max-sm:px-2.5 ${
+                aiOpen ? "bg-brand ring-2 ring-brand-strong" : "bg-gradient-to-r from-brand to-vocals shadow-[0_0_18px_-6px_var(--vocals)] hover:brightness-110"
+              }`}
+              title="AI producer — make your mix sound good, try styles and drops (I)"
+            >
+              ✨ <span className="max-sm:hidden">AI</span>
+            </button>
+          )}
+          <button
+            onClick={() => setShowSave((v) => !v)}
+            disabled={empty}
+            aria-expanded={showSave}
+            className="h-9 rounded-lg bg-foreground px-3 text-xs font-semibold text-background transition-opacity hover:opacity-90 disabled:opacity-40"
+          >
+            <span className="lg:hidden">Save</span>
+            <span className="hidden lg:inline">{remixId ? "Save as new" : "Save remix"}</span>
+          </button>
         </div>
 
-        {!viewing && (
-          <button
-            onClick={() => setAiOpen(!aiOpen)}
-            disabled={empty}
-            aria-pressed={aiOpen}
-            aria-label="AI producer"
-            className={`flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-bold text-white transition-all disabled:opacity-40 max-sm:px-2.5 ${
-              aiOpen ? "bg-brand ring-2 ring-brand-strong" : "bg-gradient-to-r from-brand to-vocals shadow-[0_0_18px_-6px_var(--vocals)] hover:brightness-110"
-            }`}
-            title="AI producer — ideas from a remixer, a sound engineer and a beatmaker (I)"
-          >
-            ✨ <span className="max-sm:hidden">AI</span>
-          </button>
-        )}
-
-        <button
-          onClick={() => setShowSave((v) => !v)}
-          disabled={empty}
-          aria-expanded={showSave}
-          className="h-9 rounded-lg bg-foreground px-3 text-xs font-semibold text-background transition-opacity hover:opacity-90 disabled:opacity-40 sm:px-3.5"
-        >
-          <span className="sm:hidden">Save</span>
-          <span className="hidden sm:inline">{remixId ? "Save as new remix" : "Save remix"}</span>
-        </button>
+        <MobileSeek empty={empty} />
       </div>
 
       {playError && <p className="border-t border-border px-4 py-2 text-sm text-danger">{playError}</p>}

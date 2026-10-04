@@ -11,6 +11,7 @@ import CollabBar from "./studio/CollabBar";
 import Arrangement from "./studio/Arrangement";
 import LaneInspector from "./studio/LaneInspector";
 import AiProducer from "./studio/AiProducer";
+import SplitLaneDialog from "./studio/SplitLaneDialog";
 import ContextMenuHost from "./studio/ContextMenu";
 import StudioNotice from "./studio/StudioNotice";
 import {
@@ -249,7 +250,7 @@ export default function Studio({ user }: { user: User | null }) {
     // With the AI producer docked on the right, the Studio makes room for it.
     <div
       className={`touch-targets mx-auto w-full max-w-[110rem] px-3 py-4 max-lg:pb-24 sm:px-5 sm:py-5 ${
-        aiOpen ? "lg:max-w-none lg:pr-[26.25rem]" : ""
+        aiOpen ? "lg:max-w-none lg:pr-[28.25rem]" : ""
       }`}
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -403,6 +404,7 @@ export default function Studio({ user }: { user: User | null }) {
         </button>
       )}
       <AiProducer />
+      <SplitLaneDialog />
       <ContextMenuHost />
       <StudioNotice />
     </div>

@@ -120,32 +120,50 @@ tempo & key, effects, edit tools and matching (a sheet on phones).
   shared by the menu, the toolbar and the shortcuts (`clipCommands.ts`).
 - **Zoom** — ⌘/Ctrl-scroll, a trackpad pinch or two fingers on a touch
   screen; Z fits the whole song again. The view follows the playhead.
-- **✨ AI producer** — ideas from three points of view: a **remixer**
-  (radio edit, hook up front, a short version for socials, an extended
-  club mix, hook chops), a **sound engineer** (balanced, vocal upfront with
-  the beat ducking under it, big & spacious, lo-fi, punchy; a key-clash fix
-  when the keys fight) and a **beatmaker** (the other tempo choices, a
-  filter build into the vocal, looping the beat to fit a longer vocal,
-  locking every lane to one grid). Each says why, lists exactly what it
-  changes, can be heard in one tap, and applies as one undo step. Ideas
-  only set values, so trying one after another never stacks, and each
-  remembers which lanes it was made for: once lanes are swapped, removed
-  or re-tempoed it says so and won't apply until you ask again.
-  (`lib/client/aiIdeas.ts`, `components/studio/AiProducer.tsx`)
-- **🧠 Local AI (optional)** — connect a language model running on your
-  own computer and the AI producer asks it for more ideas, including ones
-  you request in words ("darker, trap feel", "open with the chorus"). It
-  runs through [Ollama](https://ollama.com) or anything with an
-  OpenAI-style API (LM Studio, llama.cpp's server), called straight from
-  the browser — no server, no account, no key, and the model only sees the
-  studio's measurements (tempos, keys, bars, sections), never the audio.
-  It answers in the studio's own building blocks (song shape, sections on
-  bars, tempo choice, mix settings, builds…), which are checked and carried
-  out by the same engine, so it can't produce a broken arrangement. A 3–8B
-  model is plenty (`qwen2.5:7b`, or `qwen2.5:3b` on a slower machine).
-  Ollama only answers pages it trusts, so start it with this site allowed:
-  `OLLAMA_ORIGINS="https://your-site" ollama serve` (localhost works out of
-  the box). Set it up from 🧠 Local AI in the panel. (`lib/client/localAi.ts`)
+- **✨ AI producer** — made for people who've never used a music app. A
+  vocal from one song over a beat from another rarely sounds good as it
+  lands, so the panel opens, listens to both (speed, key, bars, the
+  vocal's chorus, the beat's drop) and shows:
+  - a **Mix check** in plain words — speed, on the beat, key, volume, the
+    ending — each green, amber or red with a **Fix**. Fixes change timing,
+    key and volumes only, never effects (how the vocal sounds is yours).
+    Fixes build on each other: pressing a second one adds it to the first,
+    all worked out together, so fixing the ending never undoes the timing;
+  - **✨ Make it sound good** — one tap: speeds matched, every line on the
+    beat (the chorus on the beat's drop when there is one), key fixed, the
+    beat looped or the outro trimmed, volumes evened — no effects added;
+  - **Styles** — a whole remix in one tap: Radio, Club, TikTok cut, Lo-fi,
+    Chill, Hard bootleg, Festival — and **🎲 Surprise me**;
+  - **Drops & moments** — chorus on the drop, the big drop (build-up, cut,
+    stutter), a build-up, stutters, a reverse swell, a muffled intro, an
+    acapella moment, a chorus lift, a beat switch — and drum drops, a
+    melody-only intro and breakdowns made with the beat's own drums, bass
+    and melody: songs are already split into those on upload, so trying one
+    simply swaps the beat for its parts from the library (undo puts it
+    back) — nothing is split again;
+  - **Fine-tune** — the vocal earlier/later (½ or ⅛ beat), louder/softer,
+    higher/lower; the beat's level; the whole song faster/slower (the
+    arrangement keeps its shape); how much space around the voice;
+  - **More options** — song shapes, speed choices, mix sounds, other fixes.
+
+  The AI lays a vocal out one clip per section ("Verse 1", "Chorus"…,
+  named on the timeline), splitting a section into lines only where the
+  beat's tempo moves enough to need it. A vocal over its own song's beat
+  goes back exactly as sung.
+- **🧩 Split with Demucs** — on any lane (right-click → Split with
+  Demucs…): pick vocals, drums, bass and/or melody, and they're laid on the
+  timeline exactly where the lane is, optionally replacing it. If the
+  song's parts are already in the library they're added instantly;
+  otherwise the same in-browser model as uploads runs on this computer and
+  the result is saved to your library. (`lib/client/laneSplit.ts`,
+  `lib/client/beatParts.ts`, `components/studio/SplitLaneDialog.tsx`)
+
+  Tapping anything plays it straight away from the original mix; a moment
+  tapped while a style is on joins it. The bar at the bottom flips
+  **Before / After**, says what changed, and **Keep it** makes it one undo
+  step (⌘Z while trying just goes back). It's all the studio's own
+  analysis, in the browser — nothing to install.
+  (`lib/client/aiIdeas.ts`, `lib/client/aiTrial.ts`, `components/studio/AiProducer.tsx`)
 
 - **Timing** — each lane has its own start position on the timeline. Drag
   the clip, nudge it by a beat or a bar, or drop it at the playhead; with

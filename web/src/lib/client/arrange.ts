@@ -401,6 +401,20 @@ export type SuggestedLayout = {
 };
 
 /**
+ * A vocal over the beat of its own song: every section back on the very
+ * bar it was sung on — the original song, exactly.
+ */
+export function sameSongLayout(heard: HeardVocal, structure: BeatStructure): SuggestedLayout {
+  const placements: SectionPlacement[] = [];
+  const dropped: number[] = [];
+  heard.sections.forEach((section, index) => {
+    if (section.bar >= 0 && section.bar < structure.endBar) placements.push({ section: index, bar: section.bar });
+    else dropped.push(index);
+  });
+  return { placements, entry: placements[0]?.bar ?? 0, shortened: 0, dropped };
+}
+
+/**
  * The arrangement AI Match picks on its own: in after the intro, the
  * original song's spacing, long breaks shortened, and the sections that
  * don't fit before the beat ends left out.
@@ -496,6 +510,12 @@ export type LaneInput = {
 const MAX_PHRASE_STRETCH = 0.08;
 /** Tempo differences smaller than this are left alone — not worth re-rendering for. */
 const MIN_PHRASE_STRETCH = 0.01;
+/**
+ * Lines of one section that land within this of where playing the section
+ * straight through would put them become one clip — fewer, bigger clips to
+ * work with, no audible difference.
+ */
+const MERGE_TOLERANCE = 0.025;
 
 /**
  * Seconds per beat around `position`, over eight beats either side — wide
@@ -528,15 +548,17 @@ export function placeVocal(
   structure: BeatStructure,
   heard: HeardVocal,
   placements: SectionPlacement[],
-  shiftBeats = 0
+  shiftBeats = 0,
+  /** A name for each section, by index ("Chorus", "Verse 2"), put on its clips. */
+  labels: string[] = []
 ): Placement | null {
   const { grid, downbeat } = structure;
   const beatTimeline = (position: number) => beat.offsetSeconds + grid.time(position) / beat.tempoRatio;
 
-  type Piece = { from: number; to: number; start: number; stretch: number; rigidError: number };
+  type Piece = { from: number; to: number; start: number; stretch: number; rigidError: number; group: number; label?: string };
   const lay = (shift: number) => {
     const pieces: Piece[] = [];
-    for (const { section: index, bar: target } of placements) {
+    for (const [group, { section: index, bar: target }] of placements.entries()) {
       const section = heard.sections[index];
       if (!section) continue;
       const first = section.phrases[0];
@@ -573,6 +595,8 @@ export function placeVocal(
           start: start - (p.start - from) / (vocal.tempoRatio * stretch),
           stretch,
           rigidError: Math.abs(start - rigid),
+          group,
+          label: labels[index],
         });
       });
     }
@@ -599,14 +623,35 @@ export function placeVocal(
     if (end > next.start) current.to = Math.max(current.from + 0.05, current.to - (end - next.start) * speed(current));
   }
 
-  const offsetSeconds = Math.max(0, pieces[0].start);
+  // One clip per section wherever its lines already sit where playing it
+  // straight through would put them: the gap between two lines plays too,
+  // but nothing moves.
+  const merged: Piece[] = [];
+  for (const piece of pieces) {
+    const last = merged[merged.length - 1];
+    const lands = last && last.start + (piece.from - last.from) / speed(last);
+    if (
+      last &&
+      last.group === piece.group &&
+      Math.abs(last.stretch - piece.stretch) < 0.002 &&
+      piece.from >= last.from &&
+      Math.abs(piece.start - lands!) <= MERGE_TOLERANCE
+    ) {
+      last.to = Math.max(last.to, piece.to);
+      continue;
+    }
+    merged.push({ ...piece });
+  }
+
+  const offsetSeconds = Math.max(0, merged[0].start);
   return {
     offsetSeconds,
-    clips: pieces.map((p) => ({
+    clips: merged.map((p) => ({
       from: p.from,
       to: p.to,
       at: Math.max(0, (p.start - offsetSeconds) * vocal.tempoRatio),
       ...(p.stretch !== 1 ? { stretch: p.stretch } : {}),
+      ...(p.label ? { label: p.label } : {}),
     })),
     drift: Math.max(...pieces.map((p) => p.rigidError)),
     maxStretch: Math.max(...pieces.map((p) => Math.abs(p.stretch - 1))),

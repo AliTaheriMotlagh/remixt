@@ -153,6 +153,12 @@ export function laneMenu(lane: StudioLane): MenuItem[] {
         { label: "B", active: lane.xfade === "b", onSelect: () => store().setLaneXfade(lane.laneId, "b") },
       ],
     },
+    {
+      label: "Split with Demucs…",
+      icon: "🧩",
+      hint: lane.kind === "vocals" ? "clean vocal" : "drums · bass · melody",
+      onSelect: () => useStudioView.getState().setSplitLane(lane.laneId),
+    },
     { type: "separator" },
     { label: "Select all its clips", icon: "▭", onSelect: () => clips.selectLaneClips(lane.laneId) },
     { label: "Cut out the silences", icon: "✂", onSelect: () => void clips.removeSilences(lane.laneId) },

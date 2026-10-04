@@ -67,7 +67,15 @@ function restore(target: Snapshot) {
   lastEditAt = 0;
 }
 
+/** Gets the first say on undo/redo; true means it handled it (see aiTrial.ts). */
+let intercept: ((action: "undo" | "redo") => boolean) | null = null;
+
+export function interceptHistory(handler: typeof intercept) {
+  intercept = handler;
+}
+
 export function undo() {
+  if (intercept?.("undo")) return;
   const { past, future } = useStudioHistory.getState();
   const previous = past[past.length - 1];
   if (!previous) return;
@@ -77,6 +85,7 @@ export function undo() {
 }
 
 export function redo() {
+  if (intercept?.("redo")) return;
   const { past, future } = useStudioHistory.getState();
   const next = future[future.length - 1];
   if (!next) return;
@@ -116,6 +125,24 @@ export function withoutRecording(apply: () => void) {
   } finally {
     restoring = false;
   }
+}
+
+/**
+ * Records one undo step back to `before`, for a change that was made
+ * without recording — an AI idea auditioned, then kept. With
+ * `beforeLast`, it goes in before the step just recorded: the person
+ * edited on top of the idea, so undo takes back their edit, then the idea.
+ */
+export function recordStep(before: Partial<Snapshot>, { beforeLast = false } = {}) {
+  const { past } = useStudioHistory.getState();
+  const last = past[past.length - 1];
+  if (beforeLast && last) {
+    useStudioHistory.setState({ past: [...past.slice(0, -1), { ...last, ...before }, last].slice(-LIMIT) });
+    return;
+  }
+  const step = { ...snapshot(useStudioStore.getState()), ...before };
+  useStudioHistory.setState({ past: [...past, step].slice(-LIMIT), future: [] });
+  lastEditAt = 0;
 }
 
 /**

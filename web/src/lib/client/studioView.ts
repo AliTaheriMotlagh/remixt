@@ -29,6 +29,9 @@ type ViewState = {
   setInspectorTab: (tab: InspectorTab) => void;
   aiOpen: boolean;
   setAiOpen: (open: boolean) => void;
+  /** The lane being split with Demucs (its dialog is open), if any. */
+  splitLaneId: string | null;
+  setSplitLane: (laneId: string | null) => void;
   notice: { id: number; text: string; tone: "info" | "error" } | null;
   notify: (text: string, tone?: "info" | "error") => void;
 };
@@ -54,6 +57,8 @@ export const useStudioView = create<ViewState>((set) => ({
   setInspectorTab: (inspectorTab) => set({ inspectorTab }),
   aiOpen: false,
   setAiOpen: (aiOpen) => set({ aiOpen }),
+  splitLaneId: null,
+  setSplitLane: (splitLaneId) => set({ splitLaneId }),
   notice: null,
   notify: (text, tone = "info") => {
     if (noticeTimer) clearTimeout(noticeTimer);

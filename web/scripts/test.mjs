@@ -128,7 +128,7 @@ try {
     .readdirSync(path.join(root, "tests"))
     .filter((f) => f.endsWith(".test.ts"))
     .map((f) => path.join("tests", f));
-  const tests = spawn(process.execPath, ["--test", "--test-concurrency=1", ...files, ...process.argv.slice(2)], {
+  const tests = spawn(process.execPath, ["--import", "./tests/support/register.mjs", "--test", "--test-concurrency=1", ...files, ...process.argv.slice(2)], {
     cwd: root,
     env: { ...process.env, BASE_URL: baseUrl, DATABASE_URL: databaseUrl },
     stdio: "inherit",

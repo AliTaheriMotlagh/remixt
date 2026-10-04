@@ -71,7 +71,8 @@ function isClipList(value: unknown): value is LaneClip[] {
         typeof c.at === "number" &&
         c.to > c.from &&
         (c.stretch === undefined || (typeof c.stretch === "number" && c.stretch >= 0.25 && c.stretch <= 4)) &&
-        (c.reverse === undefined || typeof c.reverse === "boolean")
+        (c.reverse === undefined || typeof c.reverse === "boolean") &&
+        (c.label === undefined || typeof c.label === "string")
     )
   );
 }
@@ -159,6 +160,7 @@ export function lanesToPayload(lanes: StudioLane[]) {
           at: ms(c.at),
           ...(c.stretch && c.stretch !== 1 ? { stretch: Math.round(c.stretch * 10000) / 10000 } : {}),
           ...(c.reverse ? { reverse: true } : {}),
+          ...(c.label ? { label: c.label.slice(0, 40) } : {}),
         })) ?? null,
       xfade: lane.xfade,
       automation: {

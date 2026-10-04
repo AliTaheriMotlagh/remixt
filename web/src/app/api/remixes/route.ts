@@ -32,6 +32,7 @@ const laneSettingsSchema = z
           at: z.number().min(0),
           stretch: z.number().min(0.25).max(4).optional(),
           reverse: z.boolean().optional(),
+          label: z.string().max(40).optional(),
         })
       )
       .max(2000)

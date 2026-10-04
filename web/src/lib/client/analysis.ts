@@ -239,20 +239,21 @@ export function trackBeats(analysis: StemAnalysis, bpm: number, tightness = 100)
 
   let last = n - 1;
   for (let t = Math.max(0, n - Math.ceil(period)); t < n; t++) if (score[t] > score[last]) last = t;
-  const found: number[] = [];
-  for (let t = last; t >= 0; t = back[t]) found.push(t / onsetRate);
-  found.reverse();
+  const frames: number[] = [];
+  for (let t = last; t >= 0; t = back[t]) frames.push(t);
+  frames.reverse();
 
-  // Each beat lands on a whole block, so on its own it wobbles by tens of
-  // milliseconds. Averaging it with its neighbours (for a symmetric
-  // window, the same as a local straight-line fit) evens that out and
-  // still follows a tempo that drifts over the song.
-  const beats = found.map((_, i) => {
-    const k = Math.min(4, i, found.length - 1 - i);
-    let s = 0;
-    for (let j = i - k; j <= i + k; j++) s += found[j];
-    return s / (2 * k + 1);
+  // Each beat lands on a whole block (11.6 ms); the peak between blocks is
+  // found by fitting a parabola through the block and its neighbours.
+  const found = frames.map((t) => {
+    const a = local[t - 1] ?? local[t];
+    const b = local[t];
+    const c = local[t + 1] ?? local[t];
+    const curve = a - 2 * b + c;
+    const shift = curve < 0 ? Math.max(-0.5, Math.min(0.5, (0.5 * (a - c)) / curve)) : 0;
+    return (t + shift) / onsetRate;
   });
+  const beats = steadyBeats(found);
 
   // Carry the grid on to both ends of the stem at the same tempo, so every
   // moment of it has a beat position.
@@ -261,6 +262,58 @@ export function trackBeats(analysis: StemAnalysis, bpm: number, tightness = 100)
   while (beats.length && beats[0] - step >= 0) beats.unshift(beats[0] - step);
   while (beats.length && beats[beats.length - 1] + step <= duration) beats.push(beats[beats.length - 1] + step);
   return Float64Array.from(beats);
+}
+
+/** A straight line t = a + b·i through (i, t), least squares, from the points `keep` allows. */
+function fitLine(times: number[], from: number, to: number, keep: (i: number) => boolean) {
+  let n = 0, si = 0, st = 0, sii = 0, sit = 0;
+  for (let i = from; i <= to; i++) {
+    if (!keep(i)) continue;
+    n++;
+    si += i;
+    st += times[i];
+    sii += i * i;
+    sit += i * times[i];
+  }
+  const denominator = n * sii - si * si;
+  if (n < 2 || denominator === 0) return null;
+  const b = (n * sit - si * st) / denominator;
+  return { a: (st - b * si) / n, b };
+}
+
+/** The same line fitted again without the points more than `limit` seconds off it — beats the tracker put on a stray hit. */
+function robustLine(times: number[], from: number, to: number, limit: number) {
+  let line = fitLine(times, from, to, () => true);
+  for (let round = 0; line && round < 2; round++) {
+    const current = line;
+    line = fitLine(times, from, to, (i) => Math.abs(times[i] - (current.a + current.b * i)) <= limit) ?? current;
+  }
+  return line;
+}
+
+/**
+ * Beats evened out without losing the song's real tempo. Most beats are
+ * made at one fixed tempo, so when a single straight line fits them all
+ * (90% within 25 ms, stray beats ignored), that line *is* the grid —
+ * every beat exactly where it should be. A song that really speeds up and
+ * slows down instead has each beat averaged with its neighbours (for a
+ * symmetric window, the same as a local straight-line fit), which evens
+ * out the tracker's wobble and still follows the drift.
+ */
+function steadyBeats(found: number[]): number[] {
+  const n = found.length;
+  if (n < 8) return found;
+  const global = robustLine(found, 0, n - 1, 0.04);
+  if (global) {
+    const off = found.map((t, i) => Math.abs(t - (global.a + global.b * i))).sort((x, y) => x - y);
+    if (off[Math.floor(n * 0.9)] <= 0.025) return found.map((_, i) => global.a + global.b * i);
+  }
+  return found.map((_, i) => {
+    const k = Math.min(4, i, n - 1 - i);
+    let sum = 0;
+    for (let j = i - k; j <= i + k; j++) sum += found[j];
+    return sum / (2 * k + 1);
+  });
 }
 
 export type Phrase = { start: number; end: number };

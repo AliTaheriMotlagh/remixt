@@ -131,12 +131,12 @@ function LaneTrack({
               background: `color-mix(in srgb, ${accent} ${isSelected ? 30 : 13}%, var(--background))`,
             }}
           >
-            {widthPx > 44 && (
+            {widthPx > 28 && (
               <div
                 className="pointer-events-none absolute inset-x-0 top-0 z-[1] flex h-4 items-center gap-1 truncate px-1.5 text-[9.5px] font-semibold leading-none"
                 style={{ background: `color-mix(in srgb, ${accent} ${isSelected ? 55 : 28}%, transparent)` }}
               >
-                <span className="truncate">{arranged ? `${i + 1}` : lane.trackTitle}</span>
+                <span className="truncate">{clip.label ?? (arranged ? `${i + 1}` : lane.trackTitle)}</span>
                 {clip.reverse && <span title="Plays backwards">⟲</span>}
                 {Math.abs(stretch - 1) > 0.05 && <span>{stretch < 1 ? `${(1 / stretch).toFixed(stretch === 0.5 ? 0 : 1)}× slow` : `${stretch.toFixed(1)}×`}</span>}
               </div>

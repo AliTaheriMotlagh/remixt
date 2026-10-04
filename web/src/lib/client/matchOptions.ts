@@ -64,6 +64,13 @@ export function findChorus(ctx: PairContext): { first: number; all: number[]; co
   return { first: all[0], all, confident: all.length > 1 };
 }
 
+/** A name for each of the vocal's sections, for its clips: "Chorus", or "Verse 1", "Verse 2"… in order. */
+export function sectionLabels(ctx: PairContext): string[] {
+  const chorus = findChorus(ctx);
+  let verse = 0;
+  return ctx.heard.sections.map((_, i) => (chorus.all.includes(i) ? "Chorus" : `Verse ${++verse}`));
+}
+
 /**
  * Lays `order` (section indices, repeats allowed) on the beat's bars from
  * `entry`. Sections that follow each other in the original song keep

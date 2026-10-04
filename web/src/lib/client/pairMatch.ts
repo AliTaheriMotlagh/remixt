@@ -1,5 +1,6 @@
 "use client";
 
+import { sectionLabels } from "./matchOptions";
 import { refineTempo, type StemAnalysis } from "./analysis";
 import { isBacking } from "@/lib/stemKinds";
 import {
@@ -8,6 +9,7 @@ import {
   placeVocal,
   placementNotes,
   rulerBar,
+  sameSongLayout,
   sectionBars,
   suggestLayout,
   type BeatStructure,
@@ -199,7 +201,8 @@ export async function preparePair(vocalLaneId: string, beatLaneId: string): Prom
     tempos,
     structure,
     heard,
-    suggestion: suggestLayout(heard, structure),
+    // The vocal's own song's beat (its guide is this very beat): put it back as sung.
+    suggestion: guide && guide === beatAnalysis ? sameSongLayout(heard, structure) : suggestLayout(heard, structure),
     vocalKey,
     beatKey,
     keys,
@@ -288,7 +291,7 @@ export function pairPlanPatches(
   if (placements.length === 0) throw new Error("None of those sections could be placed — check the section numbers and bars.");
 
   const shiftBeats = Math.max(-3, Math.min(3, Math.round(plan.shift_beats ?? 0)));
-  const placement = placeVocal(vocalInput, beatInput, structure, heard, placements, shiftBeats);
+  const placement = placeVocal(vocalInput, beatInput, structure, heard, placements, shiftBeats, sectionLabels(ctx));
   if (!placement) throw new Error("Couldn't place the vocal's phrases.");
 
   // Level: loudness-matched to the beat, the vocal a touch on top, then
