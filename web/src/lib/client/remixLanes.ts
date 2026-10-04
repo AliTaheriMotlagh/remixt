@@ -5,6 +5,7 @@ import type { StemKind } from "@/lib/stemKinds";
 import {
   DEFAULT_FX,
   PROJECT_DEFAULTS,
+  normaliseMaster,
   type AutoPoint,
   type LaneAutomation,
   type LaneClip,
@@ -43,6 +44,7 @@ type LaneSettings = {
   clips?: LaneClip[] | null;
   xfade?: "a" | "b" | null;
   automation?: LaneAutomation;
+  name?: string;
 };
 
 function isPointList(value: unknown): value is AutoPoint[] {
@@ -72,7 +74,11 @@ function isClipList(value: unknown): value is LaneClip[] {
         c.to > c.from &&
         (c.stretch === undefined || (typeof c.stretch === "number" && c.stretch >= 0.25 && c.stretch <= 4)) &&
         (c.reverse === undefined || typeof c.reverse === "boolean") &&
-        (c.label === undefined || typeof c.label === "string")
+        (c.label === undefined || typeof c.label === "string") &&
+        (c.gain === undefined || (typeof c.gain === "number" && c.gain >= 0 && c.gain <= 4)) &&
+        (c.muted === undefined || typeof c.muted === "boolean") &&
+        (c.fadeIn === undefined || (typeof c.fadeIn === "number" && c.fadeIn >= 0)) &&
+        (c.fadeOut === undefined || (typeof c.fadeOut === "number" && c.fadeOut >= 0))
     )
   );
 }
@@ -112,6 +118,7 @@ export function laneFromApi(lane: RemixLaneApi): StudioLane {
     clips: isClipList(settings.clips) ? settings.clips : null,
     xfade: settings.xfade === "a" || settings.xfade === "b" ? settings.xfade : null,
     automation: automationFrom(settings.automation),
+    ...(typeof settings.name === "string" && settings.name.trim() ? { name: settings.name.trim().slice(0, 40) } : {}),
   };
 }
 
@@ -122,6 +129,7 @@ export function projectFromApi(remix: RemixApi | undefined): Partial<ProjectSett
     markers: Array.isArray(project.markers) ? project.markers : PROJECT_DEFAULTS.markers,
     pads: Array.isArray(project.pads) ? project.pads : PROJECT_DEFAULTS.pads,
     crossfader: typeof project.crossfader === "number" ? project.crossfader : PROJECT_DEFAULTS.crossfader,
+    master: normaliseMaster(project.master),
   };
 }
 
@@ -129,8 +137,8 @@ const round = (n: number, places: number) => Math.round(n * 10 ** places) / 10 *
 
 /** Serialises the project-level settings for POST /api/remixes. */
 export function projectToPayload(state: ProjectSettings): ProjectSettings {
-  const { projectBpm, masterVolume, loopEnabled, loopStart, loopEnd, markers, crossfader, pads } = state;
-  return { projectBpm, masterVolume, loopEnabled, loopStart, loopEnd, markers, crossfader, pads };
+  const { projectBpm, masterVolume, loopEnabled, loopStart, loopEnd, markers, crossfader, pads, master } = state;
+  return { projectBpm, masterVolume, loopEnabled, loopStart, loopEnd, markers, crossfader, pads, master };
 }
 
 function pointsToPayload(points: AutoPoint[] | undefined) {
@@ -161,8 +169,13 @@ export function lanesToPayload(lanes: StudioLane[]) {
           ...(c.stretch && c.stretch !== 1 ? { stretch: Math.round(c.stretch * 10000) / 10000 } : {}),
           ...(c.reverse ? { reverse: true } : {}),
           ...(c.label ? { label: c.label.slice(0, 40) } : {}),
+          ...(c.gain !== undefined && Math.abs(c.gain - 1) > 0.005 ? { gain: Math.round(c.gain * 1000) / 1000 } : {}),
+          ...(c.muted ? { muted: true } : {}),
+          ...(c.fadeIn ? { fadeIn: ms(c.fadeIn) } : {}),
+          ...(c.fadeOut ? { fadeOut: ms(c.fadeOut) } : {}),
         })) ?? null,
       xfade: lane.xfade,
+      ...(lane.name ? { name: lane.name.slice(0, 40) } : {}),
       automation: {
         ...(lane.automation.volume?.length ? { volume: pointsToPayload(lane.automation.volume) } : {}),
         ...(lane.automation.filter?.length ? { filter: pointsToPayload(lane.automation.filter) } : {}),

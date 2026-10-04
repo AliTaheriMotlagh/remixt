@@ -4,9 +4,11 @@ import { ALL_ASPECTS, type Aspect, type Vibe } from "./aiControl";
 import type { StemAnalysis } from "./analysis";
 import { sectionBars, type BeatStructure } from "./arrange";
 import { analyzeLane, suggestMatches } from "./autoMatch";
+import { gatePattern, pumpPattern, spliceAutomation } from "./automationPatterns";
 import { findParts } from "./beatParts";
-import { clipEnd, clipId, clipStart, clipsOf, moveClips, normaliseLane, stutterLane } from "./clipEdit";
-import { DEFAULT_OPTIONS, findChorus, planFromOptions, type MatchOptions, type Structure } from "./matchOptions";
+import { asWholeTake, clipEnd, clipId, clipStart, clipsOf, moveClips, normaliseLane, playsInOrder, stutterLane } from "./clipEdit";
+import { DEFAULT_OPTIONS, findChorus, planFromOptions, type Entry, type MatchOptions, type Structure } from "./matchOptions";
+import { tempoFit } from "./matchFinder";
 import { bestKeyShift, keyFit, keyLabel, transposeKey } from "./musicKey";
 import { pairPlanPatches, preparePair, type PairContext, type TempoChoice } from "./pairMatch";
 import {
@@ -14,6 +16,7 @@ import {
   beatLength,
   effectiveKey,
   laneFromStem,
+  laneName,
   useStudioStore,
   type AutoPoint,
   type LaneClip,
@@ -48,7 +51,7 @@ import { isBacking } from "@/lib/stemKinds";
 export type Role = "remixer" | "engineer" | "beatmaker";
 
 /** Fix everything · fix one thing · a whole style · a moment · a single idea. */
-export type IdeaKind = "auto" | "fix" | "full" | "moment" | "idea";
+export type IdeaKind = "auto" | "sync" | "fix" | "full" | "moment" | "idea";
 
 export type Idea = {
   id: string;
@@ -83,7 +86,21 @@ export type Idea = {
 
 export type LaneChange = { add: StudioLane[]; remove: string[] };
 
-export type IdeaOptions = { vibe: Vibe };
+export type IdeaOptions = {
+  vibe: Vibe;
+  /**
+   * Keep every track whole: the AI moves, stretches, re-keys and levels
+   * lanes but never cuts them into clips (see wholeIfAsked).
+   */
+  keepWhole?: boolean;
+  /**
+   * How the vocal and the beat meet (a SYNC_TEMPLATES id): who keeps
+   * their speed and key, and when the vocal comes in. Every idea that
+   * places the vocal — Make it sound good, the fixes, the styles — uses it,
+   * so picking a style never undoes the sync the person chose.
+   */
+  sync?: string;
+};
 
 /** What the ideas are worked out from — the mix as it was when asked. */
 export type Session = {
@@ -126,7 +143,10 @@ export function timingSignature(lanes: StudioLane[], projectBpm: number) {
 /** The vocal and beat to work on: the selected ones, else the first of each. */
 export function pickPair(lanes: StudioLane[], selected: string[]) {
   const chosen = lanes.filter((l) => selected.includes(l.laneId));
-  const vocal = chosen.find((l) => l.kind === "vocals") ?? lanes.find((l) => l.kind === "vocals") ?? null;
+  // A vocal's doubles and octaves follow it: picking one means its lead.
+  const lead = (l: StudioLane | undefined) => (l && leadOf(l.laneId) ? lanes.find((x) => x.laneId === leadOf(l.laneId)) ?? l : l);
+  const isLead = (l: StudioLane) => l.kind === "vocals" && !leadOf(l.laneId);
+  const vocal = lead(chosen.find((l) => l.kind === "vocals")) ?? lanes.find(isLead) ?? lanes.find((l) => l.kind === "vocals") ?? null;
   const beat =
     chosen.find((l) => isBacking(l.kind)) ??
     lanes.find((l) => l.kind === "beat") ??
@@ -291,9 +311,38 @@ class Draft {
     return ALL_ASPECTS.filter((a) => found.has(a));
   }
 
+  /**
+   * Vocal layers (doubles, octaves — see layerIdeas) go wherever their lead
+   * vocal went: same clips, speed and start (plus their own small offset),
+   * and the same change of pitch. Layers this draft moved itself are left.
+   */
+  private followLeads() {
+    for (const layer of this.lanes.values()) {
+      const leadId = leadOf(layer.laneId);
+      const leadPatch = leadId ? this.patches[leadId] : undefined;
+      if (!leadId || !leadPatch || layer.laneId in this.patches) continue;
+      const lead = this.lanes.get(leadId);
+      const leadBefore = this.session.lanes.find((l) => l.laneId === leadId);
+      const layerBefore = this.session.lanes.find((l) => l.laneId === layer.laneId);
+      if (!lead || !leadBefore || !layerBefore) continue;
+      const p: LanePatch = {};
+      if ("clips" in leadPatch || "offsetSeconds" in leadPatch || "tempoRatio" in leadPatch) {
+        p.clips = lead.clips?.map((c) => ({ ...c })) ?? null;
+        p.tempoRatio = lead.tempoRatio;
+        p.offsetSeconds = lead.offsetSeconds + (layerBefore.offsetSeconds - leadBefore.offsetSeconds);
+      }
+      if ("pitchSemitones" in leadPatch) p.pitchSemitones = lead.pitchSemitones + (layerBefore.pitchSemitones - leadBefore.pitchSemitones);
+      if ("volume" in leadPatch && leadBefore.volume > 0) {
+        p.volume = Math.round(Math.min(1.5, (layerBefore.volume * lead.volume) / leadBefore.volume) * 100) / 100;
+      }
+      if (Object.keys(p).length) this.patch(layer.laneId, p);
+    }
+  }
+
   idea(
     meta: Pick<Idea, "id" | "role" | "icon" | "title" | "short" | "why"> & { kind?: IdeaKind; vibes?: Vibe[]; listenAt?: number; lanes?: LaneChange }
   ): Idea {
+    this.followLeads();
     return {
       kind: "idea",
       vibes: [],
@@ -301,10 +350,17 @@ class Draft {
       lines: this.lines,
       patches: this.patches,
       projectBpm: this.projectBpm,
-      aspects: this.aspects(),
+      // Lanes added alongside (vocal layers) are a thing of their own.
+      aspects: meta.lanes?.add.length && !meta.lanes.remove.length ? [...this.aspects(), "layers"] : this.aspects(),
       stems: Object.fromEntries(this.session.lanes.map((l) => [l.laneId, l.stemId])),
     };
   }
+}
+
+/** The lane id of a vocal layer's lead vocal (null for any other lane). */
+export function leadOf(laneId: string): string | null {
+  const at = laneId.indexOf("~layer-");
+  return at > 0 ? laneId.slice(0, at) : null;
 }
 
 /** When a lane's audio first comes in, on the timeline. */
@@ -372,6 +428,23 @@ function beatBarTime(draft: Draft, bar: number) {
 function gentlestTempo(pair: PairContext): TempoChoice {
   const cost = (c: TempoChoice) => Math.abs(Math.log(pair.tempos[c].vocalRatio)) + Math.abs(Math.log(pair.tempos[c].beatRatio));
   return cost("vocal") < cost("beat") - 0.01 ? "vocal" : "beat";
+}
+
+/** The sync template the person chose (Perfect sync when none). */
+function syncChoice(session: Session) {
+  return SYNC_TEMPLATES.find((t) => t.id === session.options.sync) ?? SYNC_TEMPLATES[0];
+}
+
+/** Who keeps their speed, as the chosen sync says — `own` (a style's own choice) only when the person left it on Perfect sync. */
+function syncTempo(session: Session, own?: TempoChoice): TempoChoice {
+  const t = syncChoice(session);
+  if (t.tempo !== "gentlest") return t.tempo;
+  return own ?? gentlestTempo(session.pair!);
+}
+
+/** Puts the vocal and beat in one key, whichever way the chosen sync says. */
+function syncKey(draft: Draft) {
+  return syncChoice(draft.session).keyTo === "vocal" ? fixBeatKey(draft) : fixKey(draft);
 }
 
 function adoptTiming(draft: Draft, result: ReturnType<typeof pairPlanPatches>) {
@@ -563,6 +636,128 @@ function keysNow(pair: PairContext, vocal: StudioLane, beat: StudioLane) {
   };
 }
 
+/** Shifts the beat (its parts follow it, see lockAllLanes) to the vocal's key when they clash. */
+function fixBeatKey(draft: Draft) {
+  const { pair, vocal, beat } = draft.session;
+  if (!pair || !vocal || !beat) return null;
+  const b = draft.lane(beat.laneId);
+  const { vocalKey, beatKey } = keysNow(pair, draft.lane(vocal.laneId), b);
+  const fit = keyFit(beatKey, vocalKey);
+  if (fit !== "far" && fit !== "clash") return null;
+  const shift = bestKeyShift(beatKey, vocalKey).semitones;
+  if (!shift) return null;
+  draft.patch(b.laneId, { pitchSemitones: b.pitchSemitones + shift });
+  draft.lines.push(`Beat pitch ${st(b.pitchSemitones + shift)} → plays in ${keyLabel(transposeKey(beatKey, shift))}, the vocal's key (${keyLabel(vocalKey)})`);
+  return { shift };
+}
+
+// --- Every lane in sync ---------------------------------------------------------------------
+
+/** The song a lane comes from, so a beat's own drums or a vocal's clean split follow it. */
+function sameSong(a: StudioLane, b: StudioLane) {
+  const title = (l: StudioLane) => l.trackTitle.replace(/\s*\(split\)$/i, "").trim().toLowerCase();
+  if (title(a) !== title(b)) return false;
+  return !a.bpm || !b.bpm || Math.abs(Math.log(a.bpm / b.bpm)) < 0.01;
+}
+
+/**
+ * Every other lane brought into step with the vocal and beat the draft has
+ * matched — all the layers of the mix, not just the pair:
+ *
+ *  - a lane from the same song as the beat (its drums, bass or melody) or
+ *    the vocal (a clean split) goes wherever that one went: same speed,
+ *    same change of pitch, same distance from it;
+ *  - any other lane (a second beat, another vocal, a sample) is stretched
+ *    to the project tempo (half or double time when that bends it less),
+ *    started on the beat's nearest bar line, and shifted into key when it
+ *    clashes with `keyTo` (the beat's key, or the vocal's when the beat
+ *    was moved to it).
+ *
+ * Vocal layers follow their lead by themselves (Draft.followLeads).
+ * Returns how many lanes it changed.
+ */
+function lockAllLanes(draft: Draft, keyTo: "beat" | "vocal" = "beat"): number {
+  const { session } = draft;
+  const before = (id: string) => session.lanes.find((l) => l.laneId === id);
+  const lead = session.vocal ? draft.lanes.get(session.vocal.laneId) ?? null : null;
+  const beat = session.beat ? draft.lanes.get(session.beat.laneId) ?? null : session.lanes.find((l) => isBacking(l.kind)) ?? null;
+  const reference = beat ?? [...draft.lanes.values()].find((l) => l.bpm) ?? null;
+  if (!reference) return 0;
+  const target = draft.bpm;
+  const oldBpm = session.projectBpm;
+  const bar = draft.bar;
+  // Where bar 1 of the beat is now.
+  const barZero = session.pair && beat?.laneId === session.pair.beatLaneId ? beatBarTime(draft, 0) : reference.offsetSeconds;
+  const keyRef = (() => {
+    if (!session.pair || !lead || !beat) return beat ? effectiveKey(beat) : null;
+    const { vocalKey, beatKey } = keysNow(session.pair, lead, beat);
+    return keyTo === "vocal" ? vocalKey : beatKey;
+  })();
+  let changed = 0;
+  for (const lane of [...draft.lanes.values()]) {
+    if (lane.laneId === lead?.laneId || lane.laneId === beat?.laneId || leadOf(lane.laneId) || lane.laneId in draft.patches) continue;
+    const was = before(lane.laneId);
+    if (!was) continue;
+    const anchor =
+      beat && (lane.laneId.startsWith(`${beat.laneId}~`) || (isBacking(lane.kind) && sameSong(lane, beat)))
+        ? beat
+        : lead && sameSong(lane, lead)
+          ? lead
+          : null;
+    if (anchor) {
+      const anchorWas = before(anchor.laneId);
+      if (!anchorWas || !(anchor.laneId in draft.patches)) continue;
+      const p: LanePatch = {
+        tempoRatio: (was.tempoRatio * anchor.tempoRatio) / anchorWas.tempoRatio,
+        offsetSeconds: anchor.offsetSeconds + ((was.offsetSeconds - anchorWas.offsetSeconds) * anchorWas.tempoRatio) / anchor.tempoRatio,
+        pitchSemitones: was.pitchSemitones + (anchor.pitchSemitones - anchorWas.pitchSemitones),
+      };
+      if (JSON.stringify(was.clips ?? null) === JSON.stringify(anchorWas.clips ?? null)) p.clips = anchor.clips?.map((c) => ({ ...c })) ?? null;
+      draft.patch(lane.laneId, p);
+      draft.lines.push(`“${laneName(lane)}” follows “${laneName(anchor)}” — same speed, key and timing`);
+      changed++;
+      continue;
+    }
+    const p: LanePatch = {};
+    const words: string[] = [];
+    if (lane.bpm) {
+      const fit = tempoFit(target, lane.bpm);
+      if (fit && Math.abs(Math.log(fit.stretch)) <= Math.log(1.35) && fit.stretch >= 0.5 && fit.stretch <= 2) {
+        if (Math.abs(fit.stretch - lane.tempoRatio) > 0.0005) {
+          p.tempoRatio = fit.stretch;
+          words.push(`${(lane.bpm * fit.factor * lane.tempoRatio).toFixed(0)} → ${target.toFixed(0)} BPM${fit.factor === 1 ? "" : fit.factor === 0.5 ? " (half time)" : " (double time)"}`);
+        }
+      } else {
+        draft.lines.push(`“${laneName(lane)}” is too far from ${target.toFixed(0)} BPM to stretch cleanly — left as it is`);
+        continue;
+      }
+    }
+    // Same spot in the song at the new tempo, then onto the nearest bar line.
+    const moved = (lane.offsetSeconds * oldBpm) / target;
+    const onBar = Math.max(0, barZero + Math.round((moved - barZero) / bar) * bar);
+    if (Math.abs(onBar - lane.offsetSeconds) > 0.002) {
+      p.offsetSeconds = onBar;
+      words.push(`starts on bar ${Math.round((onBar - barZero) / bar) + 1}`);
+    }
+    const key = effectiveKey(lane);
+    if (key && keyRef) {
+      const fit = keyFit(key, keyRef);
+      if (fit === "far" || fit === "clash") {
+        const shift = bestKeyShift(key, keyRef).semitones;
+        if (shift && Math.abs(lane.pitchSemitones + shift) <= 12) {
+          p.pitchSemitones = lane.pitchSemitones + shift;
+          words.push(`${st(shift)} into ${keyLabel(transposeKey(key, shift))}`);
+        }
+      }
+    }
+    if (!Object.keys(p).length) continue;
+    draft.patch(lane.laneId, p);
+    draft.lines.push(`“${laneName(lane)}”: ${words.join(", ")}`);
+    changed++;
+  }
+  return changed;
+}
+
 /** Shifts the vocal to the beat's key when they clash. */
 function fixKey(draft: Draft) {
   const { pair, vocal, beat } = draft.session;
@@ -723,6 +918,8 @@ const mix = (id: MixId) => MIXES.find((m) => m.id === id)!;
 function applyMix(draft: Draft, levels: Map<string, number>, recipe: Pick<MixRecipe, "vocalDb" | "vocal" | "backing">) {
   let vocalIndex = 0;
   for (const lane of draft.lanes.values()) {
+    // A layer keeps its own sound and follows its lead's level (see Draft.followLeads).
+    if (leadOf(lane.laneId)) continue;
     const vocal = lane.kind === "vocals";
     const fx: LaneFx = { ...DEFAULT_FX, ...(vocal ? recipe.vocal : recipe.backing) };
     // A second or third vocal (a harmony, a double) sits either side of the lead.
@@ -741,6 +938,7 @@ function applyMix(draft: Draft, levels: Map<string, number>, recipe: Pick<MixRec
 function applyLevels(draft: Draft, levels: Map<string, number>) {
   let changed = false;
   for (const lane of draft.lanes.values()) {
+    if (leadOf(lane.laneId)) continue;
     const volume = levels.get(lane.laneId);
     if (volume === undefined || Math.abs(volume - lane.volume) < 0.005) continue;
     draft.patch(lane.laneId, { volume });
@@ -781,13 +979,15 @@ function fixMix(session: Session, wants: Set<FixId>, { onDrop = false }: { onDro
   let dropAt: number | null = null;
   if (pair && wants.has("sync")) {
     let placed = false;
-    if (onDrop && drop?.kind === "drop" && findChorus(pair).confident && arrangeOnDrop(draft, drop)) {
+    const chosen = syncChoice(session);
+    // An entry the person picked (bar 1, an 8-bar intro) wins over the chorus-on-the-drop placement.
+    if (onDrop && chosen.entry === "auto" && drop?.kind === "drop" && findChorus(pair).confident && arrangeOnDrop(draft, drop, syncTempo(session))) {
       placed = true;
       dropAt = beatBarTime(draft, drop.bar);
     }
     if (!placed) {
       try {
-        arrange(draft, { tempo: gentlestTempo(pair), structure: "as-sung" });
+        arrange(draft, { tempo: syncTempo(session), structure: chosen.structure, entry: chosen.entry });
         placed = true;
       } catch {
         // Leave the timing as it is; the rest can still be fixed.
@@ -795,8 +995,13 @@ function fixMix(session: Session, wants: Set<FixId>, { onDrop = false }: { onDro
     }
     if (placed) done.push(dropAt !== null ? "speeds matched, every line on the beat, chorus on the drop" : FIX_WORDS.sync);
   }
-  if (wants.has("length") && ((pair && extendBeat(draft, pair.structure)) || tightenOutro(draft))) done.push(FIX_WORDS.length);
-  if (wants.has("key") && fixKey(draft)) done.push(FIX_WORDS.key);
+  // Every other lane (other beats, vocals, the beat's own parts) into the same tempo and grid.
+  if (wants.has("sync") && lockAllLanes(draft, syncChoice(session).keyTo) > 0 && !done.some((d) => d.startsWith("speeds"))) done.push("every lane at one speed, on one grid");
+  // Looping or trimming the beat means cutting it: not when tracks are kept whole.
+  if (wants.has("length") && !session.options.keepWhole && ((pair && extendBeat(draft, pair.structure)) || tightenOutro(draft))) {
+    done.push(FIX_WORDS.length);
+  }
+  if (wants.has("key") && syncKey(draft)) done.push(FIX_WORDS.key);
   // Volumes only: fixing the mix never puts effects on anything — those
   // are the person's choice (Sound, Fine-tune).
   if (wants.has("balance") && applyLevels(draft, balancedLevels(session))) done.push(FIX_WORDS.balance);
@@ -820,7 +1025,7 @@ export function mixFix(session: Session, wants: FixId[]): Idea | null {
   const { draft, done } = fixMix(session, set);
   if (draft.empty || !done.length) return null;
   const ids = ALL_FIXES.filter((f) => set.has(f));
-  return draft.idea({
+  return wholeIfAsked(session, draft.idea({
     id: `fix:${ids.join("+")}`,
     kind: "fix",
     role: "engineer",
@@ -829,7 +1034,7 @@ export function mixFix(session: Session, wants: FixId[]): Idea | null {
     short: done.join(" · "),
     why: "The Mix check's fixes, worked out together so none undoes another.",
     listenAt: vocalListen(draft),
-  });
+  }));
 }
 
 const AUTO_ID = "auto-good";
@@ -938,13 +1143,14 @@ const REMIXES: Remix[] = [
 
 function arrangementIdeas(session: Session): Idea[] {
   const pair = session.pair!;
-  const tempo = gentlestTempo(pair);
+  const tempo = syncTempo(session);
+  const { entry } = syncChoice(session);
   const seen = new Set<string>();
   const ideas: Idea[] = [];
   for (const r of REMIXES) {
     const draft = new Draft(session);
     try {
-      const signature = arrange(draft, { tempo, structure: r.structure });
+      const signature = arrange(draft, { tempo, structure: r.structure, entry });
       if (seen.has(signature)) continue;
       seen.add(signature);
       if (r.stutter) stutterAt(draft);
@@ -1099,13 +1305,19 @@ function fullRemixIdeas(session: Session): Idea[] {
   if (!pair) return [];
   const levels = balancedLevels(session);
   const ideas: Idea[] = [];
-  for (const r of FULL_REMIXES) {
+  const whole = !!session.options.keepWhole;
+  for (const recipe of FULL_REMIXES) {
+    // Kept whole: the vocal in its own order, nothing chopped, repeated or looped — the rest of the style stays.
+    const r: FullRecipe = whole
+      ? { ...recipe, structure: recipe.structure === "tight" ? "tight" : "as-sung", stutter: false, swell: false, extend: false }
+      : recipe;
     const draft = new Draft(session);
-    const tempo = r.tempo ?? gentlestTempo(pair);
-    const onDrop = !!(r.onDrop && drop?.kind === "drop" && arrangeOnDrop(draft, drop, tempo));
+    const chosen = syncChoice(session);
+    const tempo = syncTempo(session, r.tempo);
+    const onDrop = !!(r.onDrop && chosen.entry === "auto" && drop?.kind === "drop" && arrangeOnDrop(draft, drop, tempo));
     if (!onDrop) {
       try {
-        arrange(draft, { tempo, structure: r.structure });
+        arrange(draft, { tempo, structure: r.structure, entry: chosen.entry });
       } catch {
         continue;
       }
@@ -1116,7 +1328,8 @@ function fullRemixIdeas(session: Session): Idea[] {
     if (r.extend) extendBeat(draft, pair.structure);
     if (r.buildUp && dropAt !== null) buildUpTo(draft, dropAt);
     else if (r.filter || r.buildUp) filterBuild(draft);
-    fixKey(draft);
+    syncKey(draft);
+    lockAllLanes(draft, chosen.keyTo);
     applyMix(draft, levels, mix(r.mix));
     ideas.push(
       draft.idea({
@@ -1456,9 +1669,10 @@ function fixIdeas(session: Session): Idea[] {
     }
   }
 
-  // Two vocals singing over each other.
-  if (vocals.length > 1) {
-    const [a, ...rest] = vocals;
+  // Two vocals singing over each other (a vocal's own doubles and octaves don't count).
+  const singers = vocals.filter((l) => !leadOf(l.laneId));
+  if (singers.length > 1) {
+    const [a, ...rest] = singers;
     const span = (l: StudioLane) => clipsOf(l).map((c) => [clipStart(l, c), clipEnd(l, c)] as const);
     const overlap = (x: StudioLane, y: StudioLane) => {
       let total = 0;
@@ -1489,21 +1703,413 @@ function soundIdeas(session: Session): Idea[] {
   });
 }
 
+// --- Vocal layers -------------------------------------------------------------------------
+
+type Layer = { suffix: string; label: string; pitch: number; offset: number; level: number; fx: Partial<LaneFx> };
+
+/** A copy of the lead vocal as a layer lane of its own, playing in step with it. */
+function layerLane(lead: StudioLane, layer: Layer): StudioLane {
+  return normaliseLane({
+    ...lead,
+    laneId: `${lead.laneId}~layer-${layer.suffix}`,
+    name: `${laneName(lead)} · ${layer.label}`.slice(0, 40),
+    solo: false,
+    muted: false,
+    xfade: null,
+    volume: Math.round(Math.min(1.5, lead.volume * layer.level) * 100) / 100,
+    pitchSemitones: lead.pitchSemitones + layer.pitch,
+    offsetSeconds: lead.offsetSeconds + layer.offset,
+    clips: lead.clips?.map((c) => ({ ...c })) ?? null,
+    automation: { ...lead.automation },
+    fx: { ...lead.fx, duck: 0, ...layer.fx },
+  });
+}
+
+const LAYERS: { id: string; icon: string; title: string; short: string; why: string; vibes: Vibe[]; layers: Layer[] }[] = [
+  {
+    id: "double",
+    icon: "👯",
+    title: "Double the vocal",
+    short: "Thick and wide, like a stacked hook",
+    why: "Two quieter copies of the vocal, a few milliseconds late and panned left and right — the classic way producers make a hook sound big and wide.",
+    vibes: ["club", "hard", "radio"],
+    layers: [
+      { suffix: "dbl-l", label: "double L", pitch: 0, offset: 0.013, level: 0.5, fx: { pan: -0.75, width: 0, highpass: 160, reverb: 0.12, delay: 0 } },
+      { suffix: "dbl-r", label: "double R", pitch: 0, offset: 0.024, level: 0.5, fx: { pan: 0.75, width: 0, highpass: 160, reverb: 0.12, delay: 0 } },
+    ],
+  },
+  {
+    id: "octave-down",
+    icon: "🎚",
+    title: "Octave layer",
+    short: "A deep voice an octave under",
+    why: "The vocal an octave lower, quiet and dark, right under the lead — adds weight and attitude, a staple of trap and hard remixes.",
+    vibes: ["hard", "club"],
+    layers: [{ suffix: "oct-down", label: "octave down", pitch: -12, offset: 0, level: 0.35, fx: { lowpass: 4500, highpass: 70, reverb: 0.06, delay: 0, width: 0 } }],
+  },
+  {
+    id: "octave-up",
+    icon: "✨",
+    title: "Airy octave",
+    short: "A light shimmer an octave above",
+    why: "The vocal an octave higher, very quiet and full of reverb, floating above the lead — the airy pop and chill trick.",
+    vibes: ["chill", "radio", "lofi"],
+    layers: [{ suffix: "oct-up", label: "octave up", pitch: 12, offset: 0, level: 0.2, fx: { highpass: 500, reverb: 0.4, reverbSize: 3.2, width: 0.6, delay: 0 } }],
+  },
+];
+
+/** Doubles and octave layers for the lead vocal, as extra lanes that follow it. */
+function layerIdeas(session: Session): Idea[] {
+  const lead = session.vocal;
+  if (!lead || leadOf(lead.laneId)) return [];
+  const ideas: Idea[] = [];
+  for (const recipe of LAYERS) {
+    const lanes = recipe.layers.map((l) => layerLane(lead, l));
+    // Already in the mix (kept before): nothing to add.
+    if (lanes.some((l) => session.lanes.some((x) => x.laneId === l.laneId))) continue;
+    if (lanes.some((l) => Math.abs(l.pitchSemitones) > 12)) continue;
+    const draft = new Draft(session);
+    // Ties the idea to the lead, so it's only offered while the lead is here.
+    draft.patch(lead.laneId, {});
+    draft.lines.push(...recipe.layers.map((l) => `New lane “${laneName(lead)} · ${l.label}”: ${l.pitch ? `${l.pitch > 0 ? "+" : ""}${l.pitch} st, ` : ""}${Math.round(l.level * 100)}% of the vocal's level`));
+    ideas.push(
+      draft.idea({
+        id: `layer-${recipe.id}`,
+        kind: "moment",
+        role: "engineer",
+        icon: recipe.icon,
+        title: recipe.title,
+        short: recipe.short,
+        why: recipe.why,
+        vibes: recipe.vibes,
+        listenAt: vocalListen(draft),
+        lanes: { add: lanes, remove: [] },
+      })
+    );
+  }
+  return ideas;
+}
+
+// --- Rhythm: pump and gate ------------------------------------------------------------------
+
+/** The beat pumping under the vocal (sidechain feel), and a gated build into the drop. */
+function rhythmIdeas(session: Session): Idea[] {
+  const ideas: Idea[] = [];
+  const backing = session.lanes.filter((l) => isBacking(l.kind));
+  if (!backing.length) return ideas;
+  const beat = beatLength(session.projectBpm);
+  const bar = beat * 4;
+  const songEnd = Math.max(...session.lanes.map(endOf));
+  {
+    const draft = new Draft(session);
+    for (const lane of backing) {
+      draft.patch(lane.laneId, { automation: { ...lane.automation, volume: spliceAutomation(lane.automation.volume, entryOf(lane), endOf(lane), pumpPattern(entryOf(lane), endOf(lane), beat, { depth: 0.45 })) } });
+    }
+    draft.lines.push("The beat dips on every beat and swells back up — the pumping, breathing feel of dance music");
+    ideas.push(draft.idea({ id: "moment-pump", kind: "moment", role: "beatmaker", icon: "💓", title: "Pumping beat", short: "Breathes on every beat", why: "Dance producers make the music duck on every kick so it pumps and breathes. This draws that pump on the beat, no kick needed.", vibes: ["club", "hard"], listenAt: session.vocal ? Math.max(0, entryOf(session.vocal)) : 0 }));
+  }
+  const dropAt = session.pair && session.drop?.kind === "drop" ? beatBarTime(new Draft(session), session.drop.bar) : null;
+  const vocalAt = session.vocal ? entryOf(session.vocal) : null;
+  const at = dropAt ?? vocalAt;
+  if (at !== null && at >= 3 * bar && at < songEnd) {
+    const from = at - 2 * bar;
+    const draft = new Draft(session);
+    for (const lane of backing) {
+      draft.patch(lane.laneId, { automation: { ...lane.automation, volume: spliceAutomation(lane.automation.volume, from, at, gatePattern(from, at, beat / 4, { duty: 0.5, floor: 0 })) } });
+    }
+    const what = dropAt !== null ? "the drop" : "the vocal";
+    draft.lines.push(`The beat chopped into sixteenths for the 2 bars before ${what} (bar ${Math.round(at / bar) + 1}), then it all hits`);
+    ideas.push(draft.idea({ id: "moment-gate", kind: "moment", role: "beatmaker", icon: "🎛", title: "Gated build", short: `Stuttering beat into ${what}`, why: `A trance gate chops the beat on and off sixteen times a bar for the two bars before ${what} — tension that makes the landing hit harder.`, vibes: ["club", "hard"], listenAt: Math.max(0, from - 2 * bar) }));
+  }
+  return ideas;
+}
+
+// --- Slowed + reverb, sped up ---------------------------------------------------------------
+
+/** The whole song `k` times as fast and `semitones` higher — everything together, like a record played at another speed. */
+function scaleSpeed(draft: Draft, k: number, semitones: number) {
+  const lanes = [...draft.lanes.values()];
+  if (lanes.some((l) => l.tempoRatio * k < 0.5 || l.tempoRatio * k > 2 || Math.abs(l.pitchSemitones + semitones) > 12)) return false;
+  for (const lane of lanes) {
+    const automation = Object.fromEntries(
+      Object.entries(lane.automation).map(([param, points]) => [param, (points as AutoPoint[] | undefined)?.map((p) => ({ ...p, t: p.t / k }))])
+    );
+    draft.patch(lane.laneId, { tempoRatio: lane.tempoRatio * k, offsetSeconds: lane.offsetSeconds / k, pitchSemitones: lane.pitchSemitones + semitones, automation });
+  }
+  draft.projectBpm = Math.round(draft.bpm * k * 10) / 10;
+  return true;
+}
+
+const SPEED_STYLES: { id: string; icon: string; title: string; short: string; why: string; vibe: Vibe; k: number; semitones: number; mix: Pick<MixRecipe, "vocalDb" | "vocal" | "backing"> }[] = [
+  {
+    id: "slowed",
+    icon: "🌧",
+    title: "Slowed + reverb",
+    short: "15% slower, deeper, drenched in reverb",
+    why: "The TikTok and YouTube favourite: the whole song slowed down and pitched lower like a record played too slow, with a big washy reverb on the voice.",
+    vibe: "chill",
+    k: 0.85,
+    semitones: -3,
+    mix: {
+      vocalDb: 0,
+      vocal: { highpass: 120, compress: true, reverb: 0.42, reverbSize: 4.2, width: 0.35, eqHigh: -1, delay: 0.12, delayDivision: "1/4", delayFeedback: 0.3 },
+      backing: { lowpass: 9000, eqLow: 2, reverb: 0.14, reverbSize: 3.5, duck: 0.15, fadeOut: 6 },
+    },
+  },
+  {
+    id: "sped-up",
+    icon: "⚡",
+    title: "Sped up",
+    short: "20% faster and higher — nightcore energy",
+    why: "Faster and higher like nightcore and sped-up edits: brighter, more energetic, made for short videos.",
+    vibe: "short",
+    k: 1.2,
+    semitones: 3,
+    mix: {
+      vocalDb: 1,
+      vocal: { highpass: 140, compress: true, eqHigh: 2.5, reverb: 0.1 },
+      backing: { highpass: 30, eqLow: 1.5, eqHigh: 1, duck: 0.25, fadeOut: 3 },
+    },
+  },
+];
+
+function speedStyleIdeas(session: Session): Idea[] {
+  if (!session.lanes.length) return [];
+  const levels = balancedLevels(session);
+  const ideas: Idea[] = [];
+  for (const style of SPEED_STYLES) {
+    // In sync, in key and level first — then the whole thing re-speeded.
+    const { draft, done } = fixMix(session, new Set(ALL_FIXES));
+    if (!scaleSpeed(draft, style.k, style.semitones)) continue;
+    applyMix(draft, levels, style.mix);
+    draft.lines.unshift(
+      ...(done.length ? [`First: ${done.join(", ")}`] : []),
+      `Everything ${style.k < 1 ? `${Math.round((1 - style.k) * 100)}% slower` : `${Math.round((style.k - 1) * 100)}% faster`} and ${Math.abs(style.semitones)} semitones ${style.semitones < 0 ? "lower" : "higher"} (${draft.bpm.toFixed(0)} BPM)`
+    );
+    ideas.push(
+      draft.idea({
+        id: `full-${style.id}`,
+        kind: "full",
+        role: "remixer",
+        icon: style.icon,
+        title: style.title,
+        short: style.short,
+        why: style.why,
+        vibes: [style.vibe],
+        listenAt: session.vocal ? Math.max(0, entryOf(draft.lane(session.vocal.laneId)) - draft.bar) : 0,
+      })
+    );
+  }
+  return ideas;
+}
+
+// --- Mastering --------------------------------------------------------------------------------
+
+/** The master preset that suits a vibe (see MASTER_PRESETS). */
+export function masterFor(vibes: Vibe[]): string {
+  const has = (v: Vibe) => vibes.includes(v);
+  if (has("club") || has("hard")) return "club";
+  if (has("lofi") || has("chill")) return "warm";
+  if (has("short")) return "loud";
+  if (has("radio")) return "bright";
+  return "clean";
+}
+
+// --- Sync templates ---------------------------------------------------------------------------
+
+type SyncTemplate = {
+  id: string;
+  icon: string;
+  title: string;
+  short: string;
+  why: string;
+  /** Who keeps their speed: "gentlest" bends the audio least. */
+  tempo: TempoChoice | "gentlest";
+  /** Who moves key: the vocal to the beat's, or the beat (and every backing lane) to the vocal's. */
+  keyTo: "beat" | "vocal";
+  entry: Entry;
+  structure: Structure;
+  vibes: Vibe[];
+};
+
+export const SYNC_TEMPLATES: SyncTemplate[] = [
+  {
+    id: "perfect",
+    icon: "🎯",
+    title: "Perfect sync",
+    short: "Least stretching, every lane locked",
+    why: "The tempo that bends the audio least, the vocal moved into the beat's key, every line on the beat's bars after its intro — and every other lane (other beats, the beat's drums and bass, vocal layers) at the same speed, in key, on the same grid.",
+    tempo: "gentlest",
+    keyTo: "beat",
+    entry: "auto",
+    structure: "as-sung",
+    vibes: ["any", "radio"],
+  },
+  {
+    id: "beat-leads",
+    icon: "🥁",
+    title: "Beat leads",
+    short: "Beat untouched, vocal fits to it",
+    why: "The beat keeps its own speed and key; the vocal is stretched and shifted to fit it. Best when the beat is the star or has a strong groove.",
+    tempo: "beat",
+    keyTo: "beat",
+    entry: "auto",
+    structure: "as-sung",
+    vibes: ["club", "hard"],
+  },
+  {
+    id: "vocal-leads",
+    icon: "🎤",
+    title: "Vocal leads",
+    short: "Singer untouched, the music follows",
+    why: "The vocal keeps its natural speed and key — the beat and every other lane are stretched and shifted to the singer. Best for a voice that sounds odd sped up or pitched.",
+    tempo: "vocal",
+    keyTo: "vocal",
+    entry: "auto",
+    structure: "as-sung",
+    vibes: ["chill", "radio"],
+  },
+  {
+    id: "middle",
+    icon: "🤝",
+    title: "Meet halfway",
+    short: "Both bend half as much",
+    why: "Vocal and beat each move half the way to a tempo between them, so neither is stretched far — often the least noticeable.",
+    tempo: "middle",
+    keyTo: "beat",
+    entry: "auto",
+    structure: "as-sung",
+    vibes: ["lofi", "chill"],
+  },
+  {
+    id: "straight-in",
+    icon: "⏩",
+    title: "Vocal from bar 1",
+    short: "No intro — straight in",
+    why: "Everything synced, with the vocal starting on the beat's very first bar — for short clips and edits that get to the point.",
+    tempo: "gentlest",
+    keyTo: "beat",
+    entry: 0,
+    structure: "as-sung",
+    vibes: ["short"],
+  },
+  {
+    id: "long-intro",
+    icon: "🎛",
+    title: "8-bar intro",
+    short: "DJ-friendly intro, then the vocal",
+    why: "Everything synced, with eight bars of beat before the vocal comes in — room for a DJ to mix in, or for the groove to build.",
+    tempo: "gentlest",
+    keyTo: "beat",
+    entry: 8,
+    structure: "as-sung",
+    vibes: ["club"],
+  },
+  {
+    id: "tight",
+    icon: "🧲",
+    title: "No gaps",
+    short: "Synced, long breaks closed up",
+    why: "Everything synced and in the vocal's own order, with long instrumental gaps between its sections cut short so it never goes quiet for long.",
+    tempo: "gentlest",
+    keyTo: "beat",
+    entry: "auto",
+    structure: "tight",
+    vibes: ["radio", "short"],
+  },
+];
+
+/** One-tap ways to sync and match the vocal, the beat and every other lane. */
+function syncTemplateIdeas(session: Session): Idea[] {
+  const { pair } = session;
+  if (!pair) return [];
+  const seen = new Set<string>();
+  const ideas: Idea[] = [];
+  for (const t of SYNC_TEMPLATES) {
+    const draft = new Draft(session);
+    try {
+      arrange(draft, { tempo: t.tempo === "gentlest" ? gentlestTempo(pair) : t.tempo, structure: t.structure, entry: t.entry });
+    } catch {
+      continue;
+    }
+    if (t.keyTo === "vocal") fixBeatKey(draft);
+    else fixKey(draft);
+    lockAllLanes(draft, t.keyTo);
+    // Two templates that come out the same (an "auto" entry that is 8 bars anyway) are one.
+    const signature = JSON.stringify([draft.patches, draft.projectBpm]);
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    ideas.push(
+      draft.idea({ id: `sync-${t.id}`, kind: "sync", role: "beatmaker", icon: t.icon, title: t.title, short: t.short, why: t.why, vibes: t.vibes, listenAt: vocalListen(draft) })
+    );
+  }
+  return ideas;
+}
+
+// --- Keeping tracks whole -----------------------------------------------------------------
+
+/**
+ * `idea` as it is — or, when the person asked for tracks to be kept whole,
+ * without cutting anything: a lane the idea laid out in its own order
+ * (phrase by phrase on the beat) plays as one whole take from where its
+ * first phrase landed; a beat it looped or trimmed keeps its whole take.
+ * An idea that only works by chopping a vocal (reordering, repeating or
+ * reversing it) isn't offered (null).
+ */
+export function wholeIfAsked(session: Session, idea: Idea | null): Idea | null {
+  if (!idea || !session.options.keepWhole) return idea;
+  const draft = new Draft(session);
+  let changed = false;
+  for (const [id, patch] of Object.entries(idea.patches)) {
+    const before = session.lanes.find((l) => l.laneId === id) ?? idea.lanes?.add.find((l) => l.laneId === id);
+    if (!before || !("clips" in patch) || JSON.stringify(patch.clips ?? null) === JSON.stringify(before.clips ?? null)) {
+      draft.patch(id, patch);
+      continue;
+    }
+    const after = normaliseLane({ ...before, ...patch, offsetSeconds: Math.max(0, patch.offsetSeconds ?? before.offsetSeconds) });
+    if (playsInOrder(after)) {
+      draft.patch(id, { ...patch, clips: null, offsetSeconds: asWholeTake(after).offsetSeconds });
+      changed = true;
+    } else if (before.kind === "vocals") {
+      return null;
+    } else {
+      // A looped beat starts with its own first bars where it was: keep where the idea put it.
+      draft.patch(id, { ...patch, clips: before.clips ?? null, offsetSeconds: patch.offsetSeconds ?? before.offsetSeconds });
+      changed = true;
+    }
+  }
+  if (!changed) return idea;
+  draft.projectBpm = idea.projectBpm;
+  draft.lines.push(
+    ...idea.lines.filter((l) => !/looped|ends 4 bars|section/.test(l)),
+    "Every track kept whole — nothing cut into clips (the vocal starts where its first line lands on the beat)"
+  );
+  const { id, role, icon, title, short, why, kind, vibes, listenAt, lanes } = idea;
+  return draft.idea({ id, role, icon, title, short, why, kind, vibes, listenAt, lanes });
+}
+
 /** All the studio's ideas for the session — each kind with those suiting the chosen vibe first. */
 export function studioIdeas(session: Session): Idea[] {
   const auto = makeItGood(session);
   const all = [
     ...(auto ? [auto] : []),
+    ...syncTemplateIdeas(session),
     ...fixIdeas(session),
     ...fullRemixIdeas(session),
+    ...speedStyleIdeas(session),
     ...momentIdeas(session),
+    ...rhythmIdeas(session),
+    ...layerIdeas(session),
     ...(session.pair ? arrangementIdeas(session) : []),
     ...soundIdeas(session),
   ];
-  return rankIdeas(all, session.options.vibe);
+  return rankIdeas(
+    all.map((idea) => wholeIfAsked(session, idea)).filter((idea): idea is Idea => !!idea),
+    session.options.vibe
+  );
 }
 
-const KIND_ORDER: Record<IdeaKind, number> = { auto: 0, fix: 1, full: 2, moment: 3, idea: 4 };
+const KIND_ORDER: Record<IdeaKind, number> = { auto: 0, sync: 1, fix: 2, full: 3, moment: 4, idea: 5 };
 
 export function rankIdeas(ideas: Idea[], vibe: Vibe): Idea[] {
   const fits = (i: Idea) => (vibe !== "any" && i.vibes.includes(vibe) ? 0 : 1);
@@ -1533,7 +2139,7 @@ export async function syncEverythingIdea(session: Session): Promise<Idea | null>
   }
   draft.projectBpm = plan.projectBpm;
   draft.lines.push(...plan.lines.filter((l) => !/level|chain|dipped/.test(l)));
-  return draft.idea({
+  return wholeIfAsked(session, draft.idea({
     id: SYNC_ID,
     kind: "fix",
     role: "beatmaker",
@@ -1542,7 +2148,7 @@ export async function syncEverythingIdea(session: Session): Promise<Idea | null>
     short: "Every lane at one speed, on one grid",
     why: `${plan.title}: every lane stretched to one speed, the beat's bars lined up and each vocal laid line by line.`,
     listenAt: 0,
-  });
+  }));
 }
 
 /**
@@ -1575,10 +2181,31 @@ export function ideaFits(idea: Idea, lanes: StudioLane[]) {
 }
 
 /** Whether two ideas can be on at once: they touch different things. */
+/**
+ * What slot an idea fills, when only one of its kind can be on: a sound
+ * (mix recipe), or the Mix check's fixes (merged into one idea). Null for
+ * ideas that stack freely (moments, layers…).
+ */
+function slotOf(idea: Idea): string | null {
+  if (idea.id.startsWith("fix:")) return "fix";
+  if (idea.id.startsWith("sound-")) return "sound";
+  return null;
+}
+
+/**
+ * Whether two ideas can be on at once. Ideas stack like layers in a DAW —
+ * each worked out on top of the ones before, the later one winning where
+ * they set the same knob — so choosing one never throws the others away.
+ * Only the same kind of choice replaces the last: one timing (a sync
+ * template, a style, Make it sound good, a song shape — they all place
+ * the vocal), one sound, one set of fixes.
+ */
 export function compatible(a: Idea, b: Idea) {
+  if (a.id === b.id) return false;
   const timing = (i: Idea) => i.aspects.includes("arrangement") || i.aspects.includes("tempo");
   if (timing(a) && timing(b)) return false;
-  return !a.aspects.some((x) => b.aspects.includes(x));
+  const slot = slotOf(a);
+  return !slot || slot !== slotOf(b);
 }
 
 // --- Mix check ---------------------------------------------------------------------------------
@@ -1635,13 +2262,15 @@ export function checkMix(session: Session, lanes: StudioLane[]): Check[] {
       id: "timing",
       icon: "🧩",
       label: "On the beat",
-      status: off >= 0.012 ? "bad" : arranged ? "good" : "warn",
+      status: off >= 0.012 ? "bad" : arranged || session.options.keepWhole ? "good" : "warn",
       text:
         off >= 0.012
           ? "The lines can't land on the beat until the speeds match"
           : arranged
             ? "Every vocal line sits on the beat's bars"
-            : "The vocal is one long take — its lines may not land on the beat",
+            : session.options.keepWhole
+              ? "Kept whole, as you asked — it starts on the beat and plays as sung"
+              : "The vocal is one long take — its lines may not land on the beat",
       fix: "sync",
     });
     const { vocalKey, beatKey } = keysNow(pair, vocal, beat);
@@ -1679,13 +2308,49 @@ export function checkMix(session: Session, lanes: StudioLane[]): Check[] {
     }
   }
 
+  // Every other lane (another beat, another vocal, the beat's parts) at the same speed.
+  {
+    const ref = beat ?? backing.find((l) => l.bpm) ?? null;
+    const refBpm = ref?.bpm ? (pair && ref.laneId === beat?.laneId ? pair.beatBpm : ref.bpm) * ref.tempoRatio : null;
+    // The beat's own parts and a vocal's layers move with it anyway: only other songs are worth checking.
+    const companion = (l: StudioLane) => !!ref && (l.laneId.startsWith(`${ref.laneId}~`) || sameSong(l, ref) || (!!vocal && sameSong(l, vocal)));
+    const others = lanes.filter((l) => l.bpm && l.laneId !== ref?.laneId && l.laneId !== vocal?.laneId && !leadOf(l.laneId) && !companion(l));
+    if (refBpm && others.length) {
+      const off = others.filter((l) => {
+        const fit = tempoFit(refBpm, l.bpm! * l.tempoRatio);
+        return !fit || Math.abs(Math.log(fit.stretch)) > 0.012;
+      });
+      checks.push(
+        off.length
+          ? {
+              id: "lanes",
+              icon: "🔗",
+              label: "Every lane",
+              status: "bad",
+              text: `${off.length === 1 ? `“${laneName(off[0])}” plays` : `${off.length} lanes play`} at another speed than the beat (${refBpm.toFixed(0)} BPM)`,
+              fix: "sync",
+            }
+          : { id: "lanes", icon: "🔗", label: "Every lane", status: "good", text: `All ${others.length + 1 + (vocal && vocal.laneId !== ref?.laneId ? 1 : 0)} lanes move at one speed` }
+      );
+    }
+  }
+
   if (vocals.length && backing.length) {
     const bar = beatLength(session.projectBpm) * 4;
     const vEnd = Math.max(...vocals.map(endOf));
     const bEnd = Math.max(...backing.map(endOf));
     checks.push(
       vEnd > bEnd + bar
-        ? { id: "length", icon: "🏁", label: "Ending", status: "bad", text: "The vocal keeps singing after the beat stops", fix: "length" }
+        ? {
+            id: "length",
+            icon: "🏁",
+            label: "Ending",
+            status: "bad",
+            text: session.options.keepWhole
+              ? "The vocal keeps singing after the beat stops — fixing it means looping the beat, so switch Cutting to “Cut into lines”"
+              : "The vocal keeps singing after the beat stops",
+            fix: "length",
+          }
         : bEnd - vEnd > 8 * bar
           ? { id: "length", icon: "🏁", label: "Ending", status: "warn", text: `The beat plays on for ${Math.round((bEnd - vEnd) / bar)} bars after the singing ends`, fix: "length" }
           : { id: "length", icon: "🏁", label: "Ending", status: "good", text: "Vocal and beat end together" }

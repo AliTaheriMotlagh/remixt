@@ -1,5 +1,6 @@
 "use client";
 
+import { leadOf } from "./aiIdeas";
 import { startNewStep } from "./studioHistory";
 import { beatLength, useStudioStore, type AutoPoint, type LaneFx, type LanePatch } from "./studioStore";
 
@@ -10,26 +11,40 @@ import { beatLength, useStudioStore, type AutoPoint, type LaneFx, type LanePatch
 
 const store = () => useStudioStore.getState();
 
-/** Moves a lane earlier (negative) or later by a number of beats. */
+/** A lane and the vocal layers (doubles, octaves) that follow it. */
+function withLayers(laneId: string) {
+  return store().lanes.filter((l) => l.laneId === laneId || leadOf(l.laneId) === laneId);
+}
+
+/** Moves a lane (and its layers) earlier (negative) or later by a number of beats. */
 export function nudge(laneId: string, beats: number) {
   startNewStep();
-  store().moveLanes([laneId], beats * beatLength(store().projectBpm));
+  store().moveLanes(
+    withLayers(laneId).map((l) => l.laneId),
+    beats * beatLength(store().projectBpm)
+  );
 }
 
-/** A lane louder or softer, in dB. */
+/** A lane (and its layers with it) louder or softer, in dB. */
 export function gain(laneId: string, db: number) {
-  const lane = store().lanes.find((l) => l.laneId === laneId);
-  if (!lane) return;
+  if (!store().lanes.some((l) => l.laneId === laneId)) return;
   startNewStep();
-  store().setVolume(laneId, Math.round(Math.min(1.5, Math.max(0, lane.volume * 10 ** (db / 20))) * 100) / 100);
+  const patches: Record<string, LanePatch> = {};
+  for (const l of withLayers(laneId)) patches[l.laneId] = { volume: Math.round(Math.min(1.5, Math.max(0, l.volume * 10 ** (db / 20))) * 100) / 100 };
+  store().applyLanePatches(patches);
 }
 
-/** A lane higher or lower, in semitones. */
+/** A lane (and its layers, keeping their intervals) higher or lower, in semitones. */
 export function transpose(laneId: string, semitones: number) {
   const lane = store().lanes.find((l) => l.laneId === laneId);
   if (!lane) return;
+  const next = Math.max(-12, Math.min(12, lane.pitchSemitones + semitones));
+  const shift = next - lane.pitchSemitones;
+  if (!shift) return;
   startNewStep();
-  store().setPitchSemitones(laneId, Math.max(-12, Math.min(12, lane.pitchSemitones + semitones)));
+  const patches: Record<string, LanePatch> = {};
+  for (const l of withLayers(laneId)) patches[l.laneId] = { pitchSemitones: Math.max(-24, Math.min(24, l.pitchSemitones + shift)) };
+  store().applyLanePatches(patches);
 }
 
 /**

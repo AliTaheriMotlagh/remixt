@@ -1,9 +1,11 @@
 "use client";
 
 import {
+  DEFAULT_MASTER,
   resolveDelayTime,
   type LaneClip,
   type LaneFx,
+  type MasterFx,
   type StudioLane,
 } from "./studioStore";
 
@@ -241,12 +243,30 @@ export function createLaneChain(
   };
 }
 
+export type MasterChain = { input: AudioNode; gain: GainNode; update: (master: MasterFx) => void };
+
 /**
- * Master bus: the fader first, then a limiter, then a little headroom.
- * The limiter has to sit *after* the fader — in front of it, pushing the
- * master past unity would just clip whatever the limiter had tamed.
+ * Master bus: tone and glue, then the fader, then a limiter, then a
+ * little headroom. The limiter has to sit *after* the fader — in front of
+ * it, pushing the master past unity would just clip whatever the limiter
+ * had tamed.
  */
-export function createMasterChain(ctx: BaseAudioContext, destination: AudioNode) {
+export function createMasterChain(ctx: BaseAudioContext, destination: AudioNode, master: MasterFx = DEFAULT_MASTER): MasterChain {
+  const low = ctx.createBiquadFilter();
+  low.type = "lowshelf";
+  low.frequency.value = 90;
+  const high = ctx.createBiquadFilter();
+  high.type = "highshelf";
+  high.frequency.value = 9000;
+  // Glue: a slow, gentle bus compressor, blended in, with make-up gain.
+  const glue = ctx.createDynamicsCompressor();
+  glue.knee.value = 12;
+  glue.attack.value = 0.03;
+  glue.release.value = 0.25;
+  const glueWet = ctx.createGain();
+  const glueDry = ctx.createGain();
+  const makeUp = ctx.createGain();
+
   const gain = ctx.createGain();
   const limiter = ctx.createDynamicsCompressor();
   limiter.threshold.value = -1.5;
@@ -263,10 +283,37 @@ export function createMasterChain(ctx: BaseAudioContext, destination: AudioNode)
   const headroom = ctx.createGain();
   headroom.gain.value = 0.89;
 
+  low.connect(high);
+  high.connect(glue);
+  glue.connect(glueWet);
+  high.connect(glueDry);
+  glueWet.connect(makeUp);
+  glueDry.connect(makeUp);
+  makeUp.connect(gain);
   gain.connect(limiter);
   limiter.connect(headroom);
   headroom.connect(destination);
-  return { input: gain as AudioNode, gain };
+
+  function update(next: MasterFx) {
+    const amount = Math.min(1, Math.max(0, next.glue));
+    setParam(low.gain, next.low, ctx);
+    setParam(high.gain, next.high, ctx);
+    glue.threshold.value = -8 - 16 * amount;
+    glue.ratio.value = 1.5 + 2.5 * amount;
+    setParam(glueWet.gain, amount > 0 ? 1 : 0, ctx);
+    setParam(glueDry.gain, amount > 0 ? 0 : 1, ctx);
+    // Win back about what the compressor takes off, so "more glue" reads as denser, not quieter.
+    setParam(makeUp.gain, 10 ** ((amount * 7) / 20), ctx);
+  }
+  update(master);
+  // Set outright the first time: an offline render has no time to ramp.
+  low.gain.value = master.low;
+  high.gain.value = master.high;
+  glueWet.gain.value = master.glue > 0 ? 1 : 0;
+  glueDry.gain.value = master.glue > 0 ? 0 : 1;
+  makeUp.gain.value = 10 ** ((Math.min(1, Math.max(0, master.glue)) * 7) / 20);
+
+  return { input: low, gain, update };
 }
 
 /** Fade at each end of an arranged clip, so the cut doesn't click. */
@@ -294,23 +341,45 @@ export function needsOwnRender(clip: LaneClip) {
  */
 function laneSegments(lane: StudioLane, buffer: AudioBuffer, clipBuffer?: ClipBufferLookup) {
   if (!lane.clips?.length) {
-    return [{ buffer, start: lane.offsetSeconds, from: 0, length: buffer.duration, fades: false }];
+    return [{ buffer, start: lane.offsetSeconds, from: 0, length: buffer.duration, fades: false, clip: null }];
   }
   const ratio = lane.tempoRatio;
-  return lane.clips.map((clip) => {
-    const start = lane.offsetSeconds + clip.at / ratio;
-    const own = needsOwnRender(clip) ? clipBuffer?.(clip) : undefined;
-    if (own) return { buffer: own, start, from: 0, length: own.duration, fades: true };
-    // Not rendered yet (or no stretch of its own): read it from the lane's buffer.
-    const from = Math.min(buffer.duration, clip.from / ratio);
-    return {
-      buffer,
-      start,
-      from,
-      length: Math.max(0, Math.min(buffer.duration, clip.to / ratio) - from),
-      fades: true,
-    };
-  });
+  return lane.clips
+    .filter((clip) => !clip.muted)
+    .map((clip) => {
+      const start = lane.offsetSeconds + clip.at / ratio;
+      const own = needsOwnRender(clip) ? clipBuffer?.(clip) : undefined;
+      if (own) return { buffer: own, start, from: 0, length: own.duration, fades: true, clip };
+      // Not rendered yet (or no stretch of its own): read it from the lane's buffer.
+      const from = Math.min(buffer.duration, clip.from / ratio);
+      return {
+        buffer,
+        start,
+        from,
+        length: Math.max(0, Math.min(buffer.duration, clip.to / ratio) - from),
+        fades: true,
+        clip,
+      };
+    });
+}
+
+/**
+ * A clip's level shape: its gain, faded in over `fadeIn` and out over
+ * `fadeOut` (never shorter than the anti-click fades; scaled down together
+ * if they'd overlap). `length` is how long the clip plays, in seconds.
+ */
+export function clipEnvelope(clip: Pick<LaneClip, "gain" | "fadeIn" | "fadeOut"> | null, length: number) {
+  const level = Math.max(0, clip?.gain ?? 1);
+  let fadeIn = Math.max(CLIP_FADE_IN, clip?.fadeIn ?? 0);
+  let fadeOut = Math.max(CLIP_FADE_OUT, clip?.fadeOut ?? 0);
+  if (fadeIn + fadeOut > length && length > 0) {
+    const k = length / (fadeIn + fadeOut);
+    fadeIn *= k;
+    fadeOut *= k;
+  }
+  /** The level `x` seconds into the clip. */
+  const at = (x: number) => level * Math.min(1, fadeIn > 0 ? x / fadeIn : 1) * Math.min(1, fadeOut > 0 ? (length - x) / fadeOut : 1);
+  return { level, fadeIn, fadeOut, at };
 }
 
 /**
@@ -380,14 +449,12 @@ export function scheduleLane({
     if (segment.fades) {
       const gain = ctx.createGain();
       const g = gain.gain;
-      if (offset < CLIP_FADE_IN) {
-        g.setValueAtTime(offset / CLIP_FADE_IN, startsAt);
-        g.linearRampToValueAtTime(1, startsAt + CLIP_FADE_IN - offset);
-      } else {
-        g.setValueAtTime(1, startsAt);
-      }
-      const tail = Math.min(CLIP_FADE_OUT, remaining);
-      g.setValueAtTime(1, startsAt + remaining - tail);
+      const shape = clipEnvelope(segment.clip, segment.length);
+      // From where playback joins the clip: up to full level, held, then down to nothing at its end.
+      g.setValueAtTime(shape.at(offset), startsAt);
+      if (offset < shape.fadeIn) g.linearRampToValueAtTime(shape.level, startsAt + shape.fadeIn - offset);
+      const fadeOutFrom = segment.length - shape.fadeOut;
+      if (fadeOutFrom > offset) g.setValueAtTime(shape.level, startsAt + fadeOutFrom - offset);
       g.linearRampToValueAtTime(0, startsAt + remaining);
       source.connect(gain);
       gain.connect(chain.input);

@@ -7,6 +7,7 @@ import LaneMatchPanel from "../LaneMatchPanel";
 import KeyHelper from "./KeyHelper";
 import TapTempo from "./TapTempo";
 import * as commands from "@/lib/client/clipCommands";
+import { liveRefs } from "@/lib/client/clipEdit";
 import { exportLane } from "@/lib/client/mixdown";
 import { ALL_KEYS, camelotCode, keyId, keyLabel, parseKeyId } from "@/lib/client/musicKey";
 import { previewPlayer } from "@/lib/client/previewPlayer";
@@ -14,7 +15,9 @@ import { startNewStep } from "@/lib/client/studioHistory";
 import {
   beatLength,
   effectiveKey,
+  laneName,
   referenceLane,
+  snapTime,
   useStudioStore,
   type StudioLane,
 } from "@/lib/client/studioStore";
@@ -52,7 +55,6 @@ const pill =
 
 function MixTab({ lane }: { lane: StudioLane }) {
   const projectBpm = useStudioStore((s) => s.projectBpm);
-  const snapToGrid = useStudioStore((s) => s.snapToGrid);
   const groupSize = useStudioStore((s) => (s.selectedLaneIds.includes(lane.laneId) ? s.selectedLaneIds.length : 0));
   const automation = useStudioView((s) => s.automationLanes.includes(lane.laneId));
   const store = useStudioStore.getState();
@@ -132,6 +134,28 @@ function MixTab({ lane }: { lane: StudioLane }) {
       </div>
 
       <div className="flex flex-col gap-3">
+        <Row label="Name" hint="Your own name for this lane — empty goes back to the track's title">
+          <input
+            key={`${lane.laneId}:${lane.name ?? ""}`}
+            defaultValue={lane.name ?? ""}
+            placeholder={lane.trackTitle}
+            maxLength={40}
+            onBlur={(e) => {
+              if ((e.target.value.trim() || undefined) === lane.name) return;
+              startNewStep();
+              store.renameLane(lane.laneId, e.target.value);
+            }}
+            onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+            className="input !px-2 !py-1 text-xs"
+            aria-label="Lane name"
+          />
+          <button onClick={() => (startNewStep(), store.moveLane(lane.laneId, -1))} className="nudge" title="Move the lane up">
+            ▲
+          </button>
+          <button onClick={() => (startNewStep(), store.moveLane(lane.laneId, 1))} className="nudge" title="Move the lane down">
+            ▼
+          </button>
+        </Row>
         <Row label="Starts at" hint="Where this lane starts on the timeline">
           <input
             type="number"
@@ -163,7 +187,7 @@ function MixTab({ lane }: { lane: StudioLane }) {
             <button
               onClick={() => {
                 const playhead = useStudioStore.getState().playhead;
-                nudge((snapToGrid ? Math.round(playhead / beat) * beat : playhead) - lane.offsetSeconds);
+                nudge(snapTime(playhead, useStudioStore.getState()) - lane.offsetSeconds);
               }}
               className="nudge"
             >
@@ -191,7 +215,7 @@ function MixTab({ lane }: { lane: StudioLane }) {
             onClick={async () => {
               setExporting(true);
               try {
-                await exportLane(lane, lane.trackTitle);
+                await exportLane(lane, laneName(lane));
               } catch {
                 useStudioView.getState().notify("Couldn't export this lane", "error");
               } finally {
@@ -370,6 +394,12 @@ function TempoTab({ lane }: { lane: StudioLane }) {
   );
 }
 
+/** The Edit tab acts on the selected clips — or, when none of this lane's are, all of them. */
+function selectIfNone(laneId: string) {
+  const { lanes, selectedClips } = useStudioStore.getState();
+  if (!liveRefs(lanes, selectedClips).some((r) => r.laneId === laneId)) commands.selectLaneClips(laneId);
+}
+
 function EditTab({ lane }: { lane: StudioLane }) {
   const arranged = !!lane.clips?.length;
   return (
@@ -377,18 +407,36 @@ function EditTab({ lane }: { lane: StudioLane }) {
       <p className="text-[11px] text-muted">
         Acts on the selected clips — or, with none selected, at the playhead. Right-click (long-press) any clip for the full list.
       </p>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="w-20 text-[11px] text-muted">Track</span>
+        <div className="flex overflow-hidden rounded-lg border border-border" role="group" aria-label="Whole track or clips">
+          <button
+            onClick={() => commands.makeWhole(lane.laneId)}
+            aria-pressed={!arranged}
+            className={`px-3 py-1 text-xs font-medium pointer-coarse:py-1.5 ${!arranged ? "bg-brand text-white" : "text-muted hover:text-foreground"}`}
+          >
+            ▬ Whole track
+          </button>
+          <span className={`border-l border-border px-3 py-1 text-xs font-medium pointer-coarse:py-1.5 ${arranged ? "bg-brand text-white" : "text-muted"}`}>
+            ✂ {arranged ? `${lane.clips!.length} clips` : "Clips"}
+          </span>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="w-20 text-[11px] text-muted">Split into</span>
+        <button onClick={() => void commands.splitLane(lane.laneId, "silences")} className="nudge" title="One clip per phrase — the gaps are dropped">
+          phrases (at silences)
+        </button>
+        {([1, 2, 4, 8] as const).map((bars) => (
+          <button key={bars} onClick={() => commands.splitLane(lane.laneId, bars)} className="nudge" title="Equal clips on the bar lines, nothing dropped">
+            every {bars} bar{bars === 1 ? "" : "s"}
+          </button>
+        ))}
+      </div>
       <div className="flex flex-wrap gap-1.5">
         <button onClick={() => commands.splitAt(undefined, [lane.laneId])} className={pill}>
           ✂ Split at playhead
         </button>
-        <button onClick={() => void commands.removeSilences(lane.laneId)} className={pill} title="Split at every silence and drop the gaps">
-          〰 Cut out the silences
-        </button>
-        {arranged && (
-          <button onClick={() => commands.wholeTake(lane.laneId)} className={pill}>
-            ↺ Back to the whole take
-          </button>
-        )}
         <button onClick={() => commands.selectLaneClips(lane.laneId)} className={pill}>
           ▭ Select all its clips
         </button>
@@ -398,23 +446,68 @@ function EditTab({ lane }: { lane: StudioLane }) {
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="w-20 text-[11px] text-muted">Stutter</span>
-        {[
+        {([
           ["1/16×8", 0.25, 8],
           ["1/8×4", 0.5, 4],
           ["1/8×8", 0.5, 8],
           ["1 beat×4", 1, 4],
           ["½ bar×2", 2, 2],
           ["1 bar×2", 4, 2],
-        ].map(([label, beats, repeats]) => (
+        ] as const).map(([label, beats, repeats]) => (
           <button
             key={label}
-            onClick={() => commands.stutter(beats as number, repeats as number, undefined, lane.laneId)}
+            onClick={() => commands.stutter(beats, repeats, undefined, lane.laneId)}
             className="nudge"
             title="Beat repeat from the playhead, DJ-style"
           >
             {label}
           </button>
         ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="w-20 text-[11px] text-muted">Slice every</span>
+        {([
+          ["1/16", 0.25],
+          ["1/8", 0.5],
+          ["beat", 1],
+          ["bar", 4],
+        ] as const).map(([label, beats]) => (
+          <button key={label} onClick={() => (selectIfNone(lane.laneId), commands.slice(beats))} className="nudge" title="Chop the clips at every grid line">
+            {label}
+          </button>
+        ))}
+        <button onClick={commands.join} className="nudge" title="Join selected pieces that follow on (⌘/Ctrl J)">
+          ⛓ join
+        </button>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="w-20 text-[11px] text-muted">Fit to</span>
+        {[1, 2, 4, 8].map((bars) => (
+          <button key={bars} onClick={() => (selectIfNone(lane.laneId), commands.fitToBars(bars))} className="nudge" title="Speed the clip up or down (pitch stays) to last exactly this long">
+            {bars} bar{bars === 1 ? "" : "s"}
+          </button>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="w-20 text-[11px] text-muted">Clip level</span>
+        <button onClick={() => (selectIfNone(lane.laneId), commands.clipGain(-3))} className="nudge">−3 dB</button>
+        <button onClick={() => (selectIfNone(lane.laneId), commands.clipGain(3))} className="nudge">+3 dB</button>
+        <button onClick={() => (selectIfNone(lane.laneId), commands.resetClipGain())} className="nudge">0 dB</button>
+        <button onClick={() => (selectIfNone(lane.laneId), commands.toggleClipMute())} className="nudge" title="Mute / unmute (⇧M)">🔇 mute</button>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="w-20 text-[11px] text-muted">Fades</span>
+        <button onClick={() => (selectIfNone(lane.laneId), commands.clipFade("in", 1))} className="nudge">in 1 beat</button>
+        <button onClick={() => (selectIfNone(lane.laneId), commands.clipFade("out", 1))} className="nudge">out 1 beat</button>
+        <button onClick={() => (selectIfNone(lane.laneId), commands.clipFade("both", 4))} className="nudge">in+out 1 bar</button>
+        <button onClick={() => (selectIfNone(lane.laneId), commands.clipFade("both", 0))} className="nudge">off</button>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="w-20 text-[11px] text-muted" title="Over the loop when one is on, else the whole lane">Rhythm</span>
+        <button onClick={() => commands.pump(lane.laneId)} className="nudge" title="Dips on every beat and swells back — the sidechain feel">pump</button>
+        <button onClick={() => commands.gate(lane.laneId, 0.5)} className="nudge" title="On and off every eighth note">gate 1/8</button>
+        <button onClick={() => commands.gate(lane.laneId, 0.25)} className="nudge" title="On and off every sixteenth — trance gate">gate 1/16</button>
+        <button onClick={() => commands.clearAutomation(lane.laneId)} className="nudge">clear</button>
       </div>
     </div>
   );
@@ -429,7 +522,7 @@ function InspectorBody({ lane, onClose }: { lane: StudioLane; onClose?: () => vo
       <div className="flex items-center gap-2 border-b border-border px-3 pt-2.5">
         <span className="h-3 w-3 shrink-0 rounded-sm" style={{ background: accent }} />
         <div className="min-w-0 pb-2">
-          <p className="truncate text-sm font-semibold leading-tight">{lane.trackTitle}</p>
+          <p className="truncate text-sm font-semibold leading-tight">{laneName(lane)}</p>
           <p className="truncate text-[11px] text-muted">
             {kindLabel(lane.kind)} · {lane.artistName}
           </p>
@@ -518,7 +611,7 @@ export default function LaneInspector() {
           className="fixed inset-x-0 bottom-0 z-[61] max-h-[85dvh] overflow-y-auto overscroll-contain rounded-t-2xl border border-b-0 border-border bg-surface pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-2xl"
           style={{ animation: "sheet-in 0.2s ease-out" }}
           role="dialog"
-          aria-label={`${lane.trackTitle} settings`}
+          aria-label={`${laneName(lane)} settings`}
         >
           <InspectorBody lane={lane} onClose={close} />
         </div>

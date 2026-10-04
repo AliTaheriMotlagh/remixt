@@ -159,7 +159,8 @@ class CollabSession {
         state.loopEnd === previous.loopEnd &&
         state.markers === previous.markers &&
         state.crossfader === previous.crossfader &&
-        state.pads === previous.pads
+        state.pads === previous.pads &&
+        state.master === previous.master
       ) {
         return;
       }

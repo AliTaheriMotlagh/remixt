@@ -7,13 +7,14 @@ import { notifyRemixCreated } from "@/lib/notifications";
 import { ensureSchema } from "@/lib/schema";
 import { normaliseTags } from "@/lib/tags";
 import { STEM_KINDS } from "@/lib/stemKinds";
+import { MAX_AUTOMATION_POINTS } from "@/lib/client/automationPatterns";
 
 // The lane effect rack and the project mix settings are stored as JSON
 // blobs (remix_lanes.settings_json / remixes.project_json) rather than a
 // column per knob. They're validated loosely on purpose: an older remix
 // saved before a control existed just falls back to that control's
 // default when the Studio loads it.
-const pointsSchema = z.array(z.object({ t: z.number().min(0).max(4 * 3600), v: z.number().min(0).max(1) })).max(500);
+const pointsSchema = z.array(z.object({ t: z.number().min(0).max(4 * 3600), v: z.number().min(0).max(1) })).max(MAX_AUTOMATION_POINTS);
 
 const laneSettingsSchema = z
   .object({
@@ -33,12 +34,17 @@ const laneSettingsSchema = z
           stretch: z.number().min(0.25).max(4).optional(),
           reverse: z.boolean().optional(),
           label: z.string().max(40).optional(),
+          gain: z.number().min(0).max(4).optional(),
+          muted: z.boolean().optional(),
+          fadeIn: z.number().min(0).max(600).optional(),
+          fadeOut: z.number().min(0).max(600).optional(),
         })
       )
       .max(2000)
       .nullable()
       .optional(),
     xfade: z.enum(["a", "b"]).nullable().optional(),
+    name: z.string().max(40).optional(),
     automation: z
       .object({ volume: pointsSchema.optional(), filter: pointsSchema.optional() })
       .optional(),
@@ -90,6 +96,9 @@ const projectSchema = z
       )
       .max(16)
       .default([]),
+    master: z
+      .object({ low: z.number().min(-6).max(6), high: z.number().min(-6).max(6), glue: z.number().min(0).max(1) })
+      .optional(),
   })
   .default({
     projectBpm: 120,

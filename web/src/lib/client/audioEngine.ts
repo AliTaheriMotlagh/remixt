@@ -7,6 +7,7 @@ import {
   scheduleLane,
   type ClipBufferLookup,
   type LaneChain,
+  type MasterChain,
 } from "./audioGraph";
 import { scheduleModulation } from "./modulation";
 import { renderPitchTempo } from "./pitchTempo";
@@ -74,7 +75,7 @@ export class PlaybackBlockedError extends Error {
 
 class AudioEngine {
   private ctx: AudioContext | null = null;
-  private master: { input: AudioNode; gain: GainNode } | null = null;
+  private master: MasterChain | null = null;
   private lanes = new Map<string, LoadedLane>();
   private loading = new Map<string, Promise<void>>();
   private transforming = new Map<string, Promise<void>>();
@@ -112,7 +113,7 @@ class AudioEngine {
     if (!this.ctx) {
       const ctx = new AudioContext();
       this.ctx = ctx;
-      this.master = createMasterChain(ctx, ctx.destination);
+      this.master = createMasterChain(ctx, ctx.destination, useStudioStore.getState().master);
       this.master.gain.gain.value = useStudioStore.getState().masterVolume;
       // iOS stops the audio clock when the page is backgrounded, a call
       // comes in or another app takes the audio (state "interrupted" or
@@ -379,9 +380,10 @@ class AudioEngine {
 
   /** Pushes volume/mute/solo, per-lane FX and master volume into the graph. */
   applyMixState() {
-    const { lanes, projectBpm, masterVolume, crossfader } = useStudioStore.getState();
+    const { lanes, projectBpm, masterVolume, crossfader, master } = useStudioStore.getState();
     const audible = getAudibleLaneIds(lanes);
     if (this.master) {
+      this.master.update(master);
       this.master.gain.gain.setTargetAtTime(
         masterVolume,
         this.ctx!.currentTime,
@@ -820,6 +822,7 @@ if (typeof window !== "undefined") {
     if (
       state.lanes === prevState.lanes &&
       state.masterVolume === prevState.masterVolume &&
+      state.master === prevState.master &&
       state.projectBpm === prevState.projectBpm &&
       state.isPlaying === prevState.isPlaying &&
       state.crossfader === prevState.crossfader

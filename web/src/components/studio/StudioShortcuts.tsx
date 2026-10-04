@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { audioEngine } from "@/lib/client/audioEngine";
-import { beatLength, useStudioStore } from "@/lib/client/studioStore";
+import { GRID_CHOICES, beatLength, useStudioStore } from "@/lib/client/studioStore";
 import { redo, startNewStep, undo } from "@/lib/client/studioHistory";
 import { PAD_KEYS } from "./SamplePads";
 import * as commands from "@/lib/client/clipCommands";
@@ -31,7 +31,8 @@ const GROUPS: { title: string; items: Shortcut[] }[] = [
       { keys: ["L"], label: "Loop on / off" },
       { keys: ["+", "−"], label: "Master volume up / down" },
       { keys: ["K"], label: "Metronome on / off", studioOnly: true },
-      { keys: ["N"], label: "Snap to beat on / off", studioOnly: true },
+      { keys: ["N"], label: "Snap to the grid on / off", studioOnly: true },
+      { keys: ["G"], label: "Grid size: bar, ½ bar, beat, 1/8, 1/16", studioOnly: true },
       { keys: ["Z"], label: "Zoom to fit the song", studioOnly: true },
       { keys: ["I"], label: "AI producer", studioOnly: true },
     ],
@@ -46,6 +47,9 @@ const GROUPS: { title: string; items: Shortcut[] }[] = [
       { keys: ["⌘/Ctrl C", "X", "V"], label: "Copy / cut / paste at the playhead", studioOnly: true },
       { keys: ["⌘/Ctrl D"], label: "Duplicate", studioOnly: true },
       { keys: ["X"], label: "Split at the playhead", studioOnly: true },
+      { keys: ["⇧ X"], label: "Slice at every grid line", studioOnly: true },
+      { keys: ["⌘/Ctrl J"], label: "Join pieces that follow on", studioOnly: true },
+      { keys: ["⇧ M"], label: "Mute / unmute the clips", studioOnly: true },
       { keys: ["R"], label: "Reverse", studioOnly: true },
       { keys: ["Q", "⇧ Q"], label: "Quantize to the beat / bar", studioOnly: true },
       { keys: ["⇧ L"], label: "Loop the selection", studioOnly: true },
@@ -151,6 +155,9 @@ function handleKey(event: KeyboardEvent, mode: Mode, openHelp: () => void) {
     } else if (studio && lower === "v" && commands.hasClipboard()) {
       handled();
       commands.paste();
+    } else if (studio && lower === "j" && clipsSelected) {
+      handled();
+      commands.join();
     }
     return;
   }
@@ -233,6 +240,8 @@ function handleKey(event: KeyboardEvent, mode: Mode, openHelp: () => void) {
     if (!studio) return;
     if (lower === "l" && (clipsSelected || selected.length)) commands.loopSelection();
     else if (lower === "q" && (clipsSelected || selected.length)) commands.quantize("bar");
+    else if (lower === "x" && (clipsSelected || selected.length)) commands.slice();
+    else if (lower === "m" && (clipsSelected || selected.length)) commands.toggleClipMute();
     return;
   }
 
@@ -251,6 +260,14 @@ function handleKey(event: KeyboardEvent, mode: Mode, openHelp: () => void) {
       return;
     case "n":
       if (studio) state.toggleSnap();
+      return;
+    case "g":
+      if (studio) {
+        const at = GRID_CHOICES.findIndex((g) => g.beats === state.gridBeats);
+        const next = GRID_CHOICES[(at + 1) % GRID_CHOICES.length];
+        state.setGridBeats(next.beats);
+        useStudioView.getState().notify(`Grid: ${next.label}`);
+      }
       return;
     case "x":
       if (studio) commands.splitAt();

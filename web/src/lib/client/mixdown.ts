@@ -82,7 +82,7 @@ export async function renderMixdown({
     sampleRate,
   });
 
-  const master = createMasterChain(ctx, ctx.destination);
+  const master = createMasterChain(ctx, ctx.destination, state.master);
   master.gain.gain.value = state.masterVolume;
 
   for (const lane of lanes) {
@@ -198,6 +198,7 @@ export async function exportLane(lane: StudioLane, title: string) {
     length: Math.ceil(((lane.clips ? lane.duration : buffer.duration) + 2.5) * sampleRate),
     sampleRate,
   });
+  // A stem on its own is exported clean: the master's tone and glue are for the whole mix.
   const master = createMasterChain(ctx, ctx.destination);
   const chain = createLaneChain(ctx, lane, state.projectBpm, master.input);
   chain.volumeGain.gain.value = lane.volume;

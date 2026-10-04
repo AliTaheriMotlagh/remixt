@@ -118,6 +118,32 @@ tempo & key, effects, edit tools and matching (a sheet on phones).
   of their own. Every edit is one undo step. The editing itself is pure
   functions in `lib/client/clipEdit.ts` (tested in `tests/clip-edit.test.ts`),
   shared by the menu, the toolbar and the shortcuts (`clipCommands.ts`).
+- **Shaping and chopping clips** — every clip has its own level (±3 dB
+  steps), mute (⇧M) and fade in/out, drawn on the clip and heard in the
+  export. Slice a clip at every bar, beat, 1/8 or 1/16 (⇧X slices at the
+  grid), join pieces that follow on back into one (⌘J), trim the start or
+  end at the playhead, or fit a loop to exactly 1, 2, 4 or 8 bars (it's
+  sped up or slowed down, pitch unchanged). The grid snapping uses is a
+  bar, ½ bar, beat, 1/8 or 1/16 (the transport, or G to step through it).
+- **Whole track or clips** — every lane header shows ▬ (one whole
+  track) or ✂ and its number of clips; click it (or use the lane menu, a
+  clip's menu or the inspector's Edit tab) to split the lane into clips —
+  phrase by phrase at its silences, or every 1, 2, 4 or 8 bars — or to
+  make it one whole track again (the first clip stays where it is).
+- **Time** — right-click the ruler to insert 1–8 bars of space into the
+  whole song, or, with a loop set, delete the loop's time from every lane
+  (ripple delete): clips, automation and sections all move to close the
+  gap.
+- **Lanes** — rename them (lane menu, or the inspector's Mix tab) and move
+  them up and down; names are saved with the remix.
+- **Rhythm** — the lane menu (and the inspector's Edit tab) draws a
+  sidechain-style pump on every beat or a 1/8 or 1/16 trance gate onto
+  the lane's volume — over the loop when one is set, else the whole lane.
+  (`lib/client/automationPatterns.ts`)
+- **Master** — the transport's 🎚 Master: one-tap mastering presets
+  (Clean, Loud, Warm, Bright, Club) and the low, high and glue (bus
+  compression with make-up gain) behind them, in front of the fader and
+  the safety limiter. Saved with the remix; single-lane exports stay clean.
 - **Zoom** — ⌘/Ctrl-scroll, a trackpad pinch or two fingers on a touch
   screen; Z fits the whole song again. The view follows the playhead.
 - **✨ AI producer** — made for people who've never used a music app. A
@@ -132,8 +158,22 @@ tempo & key, effects, edit tools and matching (a sheet on phones).
   - **✨ Make it sound good** — one tap: speeds matched, every line on the
     beat (the chorus on the beat's drop when there is one), key fixed, the
     beat looped or the outro trimmed, volumes evened — no effects added;
+  - **🔗 Sync templates** — the goal of every remix is the vocal, the
+    beat and every other lane moving as one, so these come first: Perfect
+    sync (least stretching — the best start), Beat leads, Vocal leads
+    (the beat and everything else follow the singer's speed and key),
+    Meet halfway, Vocal from bar 1, 8-bar intro and No gaps. Each matches
+    tempo, key and timing for **all** lanes: the beat's own drums, bass
+    and melody (and a vocal's clean split) follow the lane they came from;
+    any other beat or vocal is stretched to the project tempo (half or
+    double time when that bends it less), started on the beat's nearest
+    bar and shifted into key; vocal layers follow their lead. The Mix
+    check's "Every lane" row names any lane at another speed, and its Fix
+    (and ✨ Make it sound good) syncs them the same way;
   - **Styles** — a whole remix in one tap: Radio, Club, TikTok cut, Lo-fi,
-    Chill, Hard bootleg, Festival — and **🎲 Surprise me**;
+    Chill, Hard bootleg, Festival, **Slowed + reverb** and **Sped up**
+    (the whole song slower and lower, or faster and higher, like a record
+    at another speed) — and **🎲 Surprise me**;
   - **Drops & moments** — chorus on the drop, the big drop (build-up, cut,
     stutter), a build-up, stutters, a reverse swell, a muffled intro, an
     acapella moment, a chorus lift, a beat switch — and drum drops, a
@@ -141,7 +181,18 @@ tempo & key, effects, edit tools and matching (a sheet on phones).
     and melody: songs are already split into those on upload, so trying one
     simply swaps the beat for its parts from the library (undo puts it
     back) — nothing is split again;
-  - **Fine-tune** — the vocal earlier/later (½ or ⅛ beat), louder/softer,
+  - **Vocal layers** — a double (two quiet copies panned left and right,
+    a few milliseconds late), an octave underneath, an airy octave above:
+    extra lanes that follow the vocal wherever the AI moves or re-keys it,
+    and can be stacked on top of any style;
+  - **Rhythm moments** — a pumping beat (a dip on every beat) and a gated
+    build into the drop (or the vocal's entrance);
+  - **Master it** — the mastering presets, with the one that suits the
+    style you're trying (or kept) marked as the AI's pick;
+  - **Find a match** — library beats (or vocals) ranked by how little
+    they'd need stretching to fit, half and double time included, to
+    preview and add in one tap (`lib/client/matchFinder.ts`);
+  - **Fine-tune** — the vocal (and its layers) earlier/later (½ or ⅛ beat), louder/softer,
     higher/lower; the beat's level; the whole song faster/slower (the
     arrangement keeps its shape); how much space around the voice;
   - **More options** — song shapes, speed choices, mix sounds, other fixes.
@@ -158,7 +209,31 @@ tempo & key, effects, edit tools and matching (a sheet on phones).
   the result is saved to your library. (`lib/client/laneSplit.ts`,
   `lib/client/beatParts.ts`, `components/studio/SplitLaneDialog.tsx`)
 
-  Tapping anything plays it straight away from the original mix; a moment
+  At the top of the panel, **✂ Cut into lines / ▬ Keep tracks whole**
+  decides how the AI may edit: cut the vocal at its silences and lock
+  every line to the beat (the tightest fit), or never cut anything — then
+  tracks are only moved, stretched, re-keyed and levelled, ideas that
+  only work by chopping (stutters, swells, chorus loops) aren't offered,
+  and the vocal plays as sung from where its first line lands on the
+  beat. The choice is remembered.
+
+  The panel has four tabs — **Sync** (Mix check, Make it sound good,
+  cutting, sync templates, find a beat), **Styles**, **Moments** (drops,
+  vocal layers, other fixes) and **Mix** (mastering, sounds, fine-tune) —
+  each showing how many of its ideas are on. **Options stack**: choosing
+  one never throws the others away; only the same kind of choice makes
+  way (one timing — a style or song shape; one sound; the Mix check's
+  fixes merge into one), and the bottom bar says when that happens. The
+  sync template you pick is a setting every idea uses, so a style picked
+  afterwards is synced your way, and changing the sync or the cutting
+  mode works whatever is on out again instead of taking it off. ◀ ▶ step
+  through ideas of the same kind as the last one tried.
+
+  Tapping anything plays it straight away from where the playhead is —
+  an idea never moves it (one that makes the whole song faster or
+  slower keeps you on the same spot in the song); ⤒ Best part in the
+  bottom bar jumps to the best moment to hear the idea. It's heard from
+  the original mix; a moment
   tapped while a style is on joins it. The bar at the bottom flips
   **Before / After**, says what changed, and **Keep it** makes it one undo
   step (⌘Z while trying just goes back). It's all the studio's own

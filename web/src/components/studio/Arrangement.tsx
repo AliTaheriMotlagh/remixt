@@ -5,7 +5,7 @@ import { kindColor, kindLabel } from "@/lib/stemKinds";
 import Waveform from "../Waveform";
 import AutomationLane from "./AutomationLane";
 import { openMenu, useLongPress } from "./ContextMenu";
-import { clipMenu, laneMenu, rulerMenu, selectForMenu, trackMenu } from "./studioMenus";
+import { clipMenu, laneMenu, rulerMenu, selectForMenu, trackMenu, trackModeItems } from "./studioMenus";
 import * as commands from "@/lib/client/clipCommands";
 import {
   clipEnd,
@@ -26,6 +26,8 @@ import {
   beatLength,
   effectiveKey,
   getAudibleLaneIds,
+  laneName,
+  snapTime,
   useStudioStore,
   viewDuration,
   type LaneClip,
@@ -72,6 +74,19 @@ function ClipWaveform({ lane, clip, accent, height }: { lane: StudioLane; clip: 
     return clip.reverse ? slice.reverse() : slice;
   }, [all, originalDuration, clip.from, clip.to, clip.reverse]);
   return <Waveform peaks={peaks} color={`${accent}cc`} height={height} />;
+}
+
+/** The clip's fades, drawn as shaded ramps at its edges. */
+function ClipFades({ lane, clip }: { lane: StudioLane; clip: LaneClip }) {
+  const length = clipSpan(clip) / lane.tempoRatio;
+  if (!(length > 0)) return null;
+  const share = (seconds: number | undefined) => `${Math.min(100, ((seconds ?? 0) / length) * 100)}%`;
+  return (
+    <svg className="pointer-events-none absolute inset-0 z-[1] h-full w-full" preserveAspectRatio="none" viewBox="0 0 100 100" aria-hidden>
+      {!!clip.fadeIn && <polygon points={`0,0 ${parseFloat(share(clip.fadeIn))},0 0,100`} fill="var(--background)" fillOpacity="0.55" />}
+      {!!clip.fadeOut && <polygon points={`100,0 ${100 - parseFloat(share(clip.fadeOut))},0 100,100`} fill="var(--background)" fillOpacity="0.55" />}
+    </svg>
+  );
 }
 
 type ClipHandlers = {
@@ -123,7 +138,7 @@ function LaneTrack({
             onContextMenu={(e) => handlers.onClipContextMenu(e, lane, clip)}
             className={`group absolute inset-y-1 cursor-grab touch-pan-y overflow-hidden rounded-md border transition-[box-shadow,opacity] active:cursor-grabbing ${
               isSelected ? "z-10 shadow-[0_0_0_2px_var(--foreground)]" : "hover:shadow-[0_0_0_1px_var(--foreground)]"
-            } ${audible ? "" : "opacity-40"}`}
+            } ${audible && !clip.muted ? "" : "opacity-40"} ${clip.muted ? "border-dashed" : ""}`}
             style={{
               left: `${(clipStart(lane, clip) / span) * 100}%`,
               width: `${(clipSpan(clip) / lane.tempoRatio / span) * 100}%`,
@@ -136,10 +151,20 @@ function LaneTrack({
                 className="pointer-events-none absolute inset-x-0 top-0 z-[1] flex h-4 items-center gap-1 truncate px-1.5 text-[9.5px] font-semibold leading-none"
                 style={{ background: `color-mix(in srgb, ${accent} ${isSelected ? 55 : 28}%, transparent)` }}
               >
-                <span className="truncate">{clip.label ?? (arranged ? `${i + 1}` : lane.trackTitle)}</span>
+                <span className="truncate">{clip.label ?? (arranged ? `${i + 1}` : laneName(lane))}</span>
+                {clip.muted && <span title="Muted clip">🔇</span>}
                 {clip.reverse && <span title="Plays backwards">⟲</span>}
+                {clip.gain !== undefined && Math.abs(clip.gain - 1) > 0.005 && (
+                  <span title="The clip's own level" className="font-mono">
+                    {clip.gain > 1 ? "+" : ""}
+                    {(20 * Math.log10(Math.max(1e-3, clip.gain))).toFixed(1)}dB
+                  </span>
+                )}
                 {Math.abs(stretch - 1) > 0.05 && <span>{stretch < 1 ? `${(1 / stretch).toFixed(stretch === 0.5 ? 0 : 1)}× slow` : `${stretch.toFixed(1)}×`}</span>}
               </div>
+            )}
+            {(clip.fadeIn || clip.fadeOut) && (
+              <ClipFades lane={lane} clip={clip} />
             )}
             <div className="absolute inset-x-0 bottom-0.5">
               {arranged ? (
@@ -178,7 +203,7 @@ function LaneHeader({ lane, focused }: { lane: StudioLane; focused: boolean }) {
   const accent = kindColor(lane.kind);
   const key = effectiveKey(lane);
   const bpm = lane.bpm ? lane.bpm * lane.tempoRatio : null;
-  const longPress = useLongPress((x, y) => openMenu(x, y, laneMenu(lane), lane.trackTitle));
+  const longPress = useLongPress((x, y) => openMenu(x, y, laneMenu(lane), laneName(lane)));
 
   function select(e: React.MouseEvent) {
     const store = useStudioStore.getState();
@@ -198,7 +223,7 @@ function LaneHeader({ lane, focused }: { lane: StudioLane; focused: boolean }) {
         e.preventDefault();
         if (lastPointerType === "touch") return;
         useStudioStore.getState().setLaneSelection([lane.laneId]);
-        openMenu(e.clientX, e.clientY, laneMenu(lane), lane.trackTitle);
+        openMenu(e.clientX, e.clientY, laneMenu(lane), laneName(lane));
       }}
       className={`group relative flex ${LANE_H} cursor-default items-stretch gap-1 border-b border-border/70 pr-1 pl-2.5 transition-colors ${
         focused ? "bg-brand/12" : "hover:bg-surface-hover/60"
@@ -210,9 +235,9 @@ function LaneHeader({ lane, focused }: { lane: StudioLane; focused: boolean }) {
         style={{ background: accent }}
       />
       <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
-        <p className="flex items-center gap-1 truncate text-[12.5px] font-medium leading-tight" title={lane.trackTitle}>
+        <p className="flex items-center gap-1 truncate text-[12.5px] font-medium leading-tight" title={lane.name ? `${lane.name} — ${lane.trackTitle}` : lane.trackTitle}>
           {isRendering && <span className="h-1.5 w-1.5 shrink-0 animate-pulse-glow rounded-full bg-brand-strong" title="Re-rendering pitch/tempo" />}
-          <span className="truncate">{lane.trackTitle}</span>
+          <span className="truncate">{laneName(lane)}</span>
         </p>
         <p className="truncate text-[10px] leading-tight text-muted">
           <span style={{ color: accent }}>{kindLabel(lane.kind)}</span>
@@ -247,6 +272,20 @@ function LaneHeader({ lane, focused }: { lane: StudioLane; focused: boolean }) {
           >
             S
           </button>
+          <button
+            onClick={(e) => {
+              useStudioStore.getState().setLaneSelection([lane.laneId]);
+              const rect = e.currentTarget.getBoundingClientRect();
+              openMenu(rect.left, rect.bottom, trackModeItems(lane), laneName(lane));
+            }}
+            aria-label={lane.clips?.length ? `${lane.clips.length} clips — change` : "Whole track — split into clips"}
+            title={lane.clips?.length ? `Split into ${lane.clips.length} clips — click for whole track or another split` : "Whole track — click to split it into clips"}
+            className={`h-5 shrink-0 rounded px-1 text-[10px] font-bold transition-colors pointer-coarse:h-7 pointer-coarse:px-1.5 ${
+              lane.clips?.length ? "bg-brand/20 text-foreground" : "bg-surface-raised text-muted hover:text-foreground"
+            }`}
+          >
+            {lane.clips?.length ? `✂${lane.clips.length}` : "▬"}
+          </button>
           {automation && <span className="text-[10px] text-brand-strong max-sm:hidden" title="Automation shown">〰</span>}
           <input
             type="range"
@@ -268,10 +307,10 @@ function LaneHeader({ lane, focused }: { lane: StudioLane; focused: boolean }) {
           e.stopPropagation();
           useStudioStore.getState().setLaneSelection([lane.laneId]);
           const rect = e.currentTarget.getBoundingClientRect();
-          openMenu(rect.right, rect.top, laneMenu(lane), lane.trackTitle);
+          openMenu(rect.right, rect.top, laneMenu(lane), laneName(lane));
         }}
         className="flex w-6 shrink-0 items-center justify-center self-center rounded text-muted transition-colors hover:bg-surface-raised hover:text-foreground pointer-coarse:h-9 pointer-coarse:w-7"
-        aria-label={`Options for ${lane.trackTitle}`}
+        aria-label={`Options for ${laneName(lane)}`}
         title="Lane options"
       >
         ⋯
@@ -301,7 +340,7 @@ function Ruler({ span, pxPerSecond, contentRef }: { span: number; pxPerSecond: n
   function timeAt(clientX: number, snap = snapToGrid) {
     const rect = contentRef.current!.getBoundingClientRect();
     const seconds = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) * span;
-    return snap ? Math.round(seconds / beat) * beat : seconds;
+    return snap ? snapTime(seconds, { ...useStudioStore.getState(), snapToGrid: true }) : seconds;
   }
 
   function onPointerDown(e: React.PointerEvent<HTMLDivElement>) {
@@ -524,6 +563,23 @@ function SelectionBar() {
           <button onClick={() => commands.quantize("beat")} className={action} title="Snap starts to the beat (Q)">
             ⌗<span className="max-md:hidden">Quantize</span>
           </button>
+          <button onClick={() => commands.slice()} className={action} title="Slice at every grid line (⇧X)">
+            ▥<span className="max-lg:hidden">Slice</span>
+          </button>
+          {count > 1 && (
+            <button onClick={commands.join} className={action} title="Join pieces that follow on (⌘/Ctrl J)">
+              ⛓<span className="max-lg:hidden">Join</span>
+            </button>
+          )}
+          <button onClick={commands.toggleClipMute} className={action} title="Mute / unmute the clips (⇧M)">
+            🔇
+          </button>
+          <button onClick={() => commands.clipGain(-3)} className={action} title="Clip quieter (−3 dB)">
+            −dB
+          </button>
+          <button onClick={() => commands.clipGain(3)} className={action} title="Clip louder (+3 dB)">
+            +dB
+          </button>
           <button onClick={commands.loopSelection} className={action} title="Loop and play the selection (⇧L)">
             🔁<span className="max-md:hidden">Loop</span>
           </button>
@@ -677,7 +733,7 @@ export default function Arrangement() {
   }
 
   function snapDelta(seconds: number) {
-    return useStudioStore.getState().snapToGrid ? Math.round(seconds / beat) * beat : seconds;
+    return snapTime(seconds, useStudioStore.getState());
   }
 
   const handlers: ClipHandlers = {
@@ -725,7 +781,7 @@ export default function Arrangement() {
               gesture.current = null;
               selectForMenu(ref);
               navigator.vibrate?.(10);
-              openMenu(x, y, clipMenu(lane, ref, timeAt(x)), lane.trackTitle);
+              openMenu(x, y, clipMenu(lane, ref, timeAt(x)), laneName(lane));
             }, 480)
           : null,
       };
@@ -738,13 +794,13 @@ export default function Arrangement() {
       if (lastPointerType === "touch") return;
       const ref = { laneId: lane.laneId, clipId: clipId(clip) };
       selectForMenu(ref);
-      openMenu(e.clientX, e.clientY, clipMenu(lane, ref, timeAt(e.clientX)), lane.trackTitle);
+      openMenu(e.clientX, e.clientY, clipMenu(lane, ref, timeAt(e.clientX)), laneName(lane));
     },
     onTrackContextMenu(e, lane) {
       e.preventDefault();
       if (lastPointerType === "touch") return;
       useStudioStore.getState().setLaneSelection([lane.laneId]);
-      openMenu(e.clientX, e.clientY, trackMenu(lane, timeAt(e.clientX)), lane.trackTitle);
+      openMenu(e.clientX, e.clientY, trackMenu(lane, timeAt(e.clientX)), laneName(lane));
     },
   };
 
@@ -772,7 +828,7 @@ export default function Arrangement() {
               const lane = useStudioStore.getState().lanes.find((l) => l.laneId === laneId);
               if (!lane) return;
               navigator.vibrate?.(10);
-              openMenu(x, y, trackMenu(lane, timeAt(x)), lane.trackTitle);
+              openMenu(x, y, trackMenu(lane, timeAt(x)), laneName(lane));
             }, 480)
           : null,
     };

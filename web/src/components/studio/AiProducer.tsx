@@ -8,6 +8,8 @@ import {
   fixesOf,
   mixFix,
   ideaFits,
+  leadOf,
+  masterFor,
   mixSignature,
   prepareSession,
   rebaseSession,
@@ -24,7 +26,11 @@ import {
 import { compare, keepTrial, removeFromTrial, revertTrial, tryIdea, useAiTrial } from "@/lib/client/aiTrial";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { changeSpeed, gain, nudge, setSpace, spaceOf, transpose, type Space } from "@/lib/client/quickAdjust";
-import { useStudioStore, type StudioLane } from "@/lib/client/studioStore";
+import { startNewStep } from "@/lib/client/studioHistory";
+import { MASTER_PRESETS, laneName, useStudioStore, type StudioLane } from "@/lib/client/studioStore";
+import { loadKeepWhole, loadSync, saveKeepWhole, saveSync, type Vibe } from "@/lib/client/aiControl";
+import { masterPresetOf } from "./MasterPanel";
+import MatchFinder from "./MatchFinder";
 import { useStudioView } from "@/lib/client/studioView";
 import { useKeepScreenOn } from "@/lib/client/wakeLock";
 
@@ -36,6 +42,9 @@ import { useKeepScreenOn } from "@/lib/client/wakeLock";
 //   Styles             — whole remixes to try (radio, club, TikTok…)
 //   Drops & moments    — the chorus on the drop, build-ups, stutters… (with
 //                        the beat's own drums and bass from the library)
+//   Vocal layers       — doubles and octaves that follow the vocal
+//   Master it          — one-tap mastering, the preset that suits the style picked
+//   Find a match       — library beats (or vocals) that fit with the least stretching
 //   More options       — single arrangement, speed and sound ideas
 //
 // Tapping anything plays it at once, from the original mix; a moment
@@ -54,9 +63,47 @@ const STATUS = {
   bad: { dot: "bg-danger", text: "text-danger", label: "Needs fixing" },
 } as const;
 
-function play(from?: number) {
-  if (from !== undefined) audioEngine.seek(from);
+const bpmNow = () => useStudioStore.getState().projectBpm;
+
+/**
+ * Trying an idea never moves the playhead: it stays on the same spot in
+ * the song — scaled when the idea made the whole song faster or slower.
+ */
+function keepPlace(bpmBefore: number) {
+  const { projectBpm, playhead } = useStudioStore.getState();
+  if (Math.abs(projectBpm - bpmBefore) > 0.01) audioEngine.seek((playhead * bpmBefore) / projectBpm);
+}
+
+/** Plays on from where the playhead is (starts playing if stopped). */
+function playOn() {
   if (!useStudioStore.getState().isPlaying) void audioEngine.play().catch(() => {});
+}
+
+type Tab = "sync" | "styles" | "moments" | "mix";
+
+const TABS: { id: Tab; label: string; icon: string }[] = [
+  { id: "sync", label: "Sync", icon: "🔗" },
+  { id: "styles", label: "Styles", icon: "🎨" },
+  { id: "moments", label: "Moments", icon: "💥" },
+  { id: "mix", label: "Mix", icon: "🎚" },
+];
+
+/** Ideas that place the vocal or change the speed — only one of those is on at a time. */
+const isTiming = (i: Idea) => i.aspects.includes("arrangement") || i.aspects.includes("tempo");
+
+/** Puts back on, worked out for `session`, the ideas that were on (by id). */
+function putBackOn(session: Session, ideas: Idea[], ids: string[]) {
+  for (const ideaId of ids) {
+    const again = ideaId.startsWith("fix:") ? mixFix(session, fixesOf({ id: ideaId } as Idea)) : ideas.find((i) => i.id === ideaId);
+    if (again) tryIdea(session, again, { add: true });
+  }
+}
+
+/** Runs a change to what's being tried, keeping the playhead's place in the song. */
+function inPlace(change: () => void) {
+  const bpm = bpmNow();
+  change();
+  keepPlace(bpm);
 }
 
 function Section({ title, hint, action, children }: { title: string; hint?: string; action?: React.ReactNode; children: React.ReactNode }) {
@@ -74,29 +121,33 @@ function Section({ title, hint, action, children }: { title: string; hint?: stri
   );
 }
 
-/** A tap-to-try idea: big icon, name, a few words. */
-function Tile({ idea, on, disabled, onClick }: { idea: Idea; on: boolean; disabled: boolean; onClick: () => void }) {
+/** A tap-to-try idea: big icon, name, a few words. `selected` marks a setting that's chosen (a sync). */
+function Tile({ idea, on, disabled, onClick, selected = false, badge }: { idea: Idea; on: boolean; disabled: boolean; onClick: () => void; selected?: boolean; badge?: string }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
-      aria-pressed={on}
+      aria-pressed={on || selected}
       title={idea.why}
-      className={`relative flex min-h-[4.75rem] flex-col items-start gap-0.5 rounded-xl border p-2.5 text-left transition-all active:scale-[0.98] disabled:opacity-40 ${
-        on ? "border-brand bg-brand/15 ring-2 ring-brand/50" : "border-border bg-surface hover:border-brand/60 hover:bg-surface-hover"
+      className={`relative flex h-full min-h-[4.75rem] w-full flex-col items-start gap-0.5 rounded-xl border p-2.5 text-left transition-all active:scale-[0.98] disabled:opacity-40 ${
+        on ? "border-brand bg-brand/15 ring-2 ring-brand/50" : selected ? "border-brand/70 bg-brand/[0.07]" : "border-border bg-surface hover:border-brand/60 hover:bg-surface-hover"
       }`}
     >
       <span className="text-xl leading-none" aria-hidden>
         {idea.icon}
       </span>
-      <span className="text-[13px] font-semibold leading-tight">{idea.title}</span>
+      <span className="pr-8 text-[13px] font-semibold leading-tight">{idea.title}</span>
       <span className="text-[11px] leading-snug text-muted">{idea.short}</span>
-      {on && <span className="absolute right-2 top-2 rounded-full bg-brand px-1.5 py-px text-[9px] font-bold text-white">▶ ON</span>}
+      {on ? (
+        <span className="absolute right-2 top-2 rounded-full bg-brand px-1.5 py-px text-[9px] font-bold text-white">▶ ON</span>
+      ) : badge ? (
+        <span className={`absolute right-1.5 top-1.5 rounded-full px-1.5 py-px text-[9px] font-bold text-white ${selected ? "bg-brand" : "bg-vocals"}`}>{badge}</span>
+      ) : null}
     </button>
   );
 }
 
-/** A plain list row for the "More options" lists. */
+/** A plain list row, for the longer lists. */
 function Row({ idea, on, disabled, onClick }: { idea: Idea; on: boolean; disabled: boolean; onClick: () => void }) {
   return (
     <button
@@ -231,6 +282,41 @@ function FineTune({ vocal, beat }: { vocal: StudioLane; beat: StudioLane | null 
   );
 }
 
+/**
+ * One-tap mastering: the master bus presets, with the one that suits the
+ * style being tried (or last kept) marked as the AI's pick.
+ */
+function MasterIt({ vibes }: { vibes: Vibe[] }) {
+  const master = useStudioStore((s) => s.master);
+  const current = masterPresetOf(master);
+  const pick = masterFor(vibes);
+  return (
+    <div className="grid grid-cols-2 gap-1.5 min-[480px]:grid-cols-3 lg:grid-cols-2">
+      {MASTER_PRESETS.filter((p) => p.id !== "off").map((p) => {
+        const on = current?.id === p.id;
+        return (
+          <button
+            key={p.id}
+            onClick={() => {
+              keepWhatsPlaying();
+              startNewStep();
+              useStudioStore.getState().setMaster(on ? MASTER_PRESETS[0].master : p.master);
+              useStudioView.getState().notify(on ? "Master off" : `Mastered: ${p.label} — ⌘Z to undo`);
+            }}
+            aria-pressed={on}
+            title={p.hint}
+            className={`relative h-full rounded-xl border px-2.5 py-2 text-left text-xs transition-colors ${on ? "border-brand bg-brand/15" : "border-border bg-surface hover:border-brand/60"}`}
+          >
+            <span className="block font-semibold">{p.label}</span>
+            <span className="line-clamp-2 block text-[10px] leading-snug text-muted">{p.hint}</span>
+            {p.id === pick && !on && <span className="absolute -top-1.5 right-1.5 rounded-full bg-vocals px-1.5 text-[9px] font-bold text-white">AI pick</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /** Fine-tuning works on the mix as it is: an idea being tried is kept first. */
 function keepWhatsPlaying() {
   if (useAiTrial.getState().trial) keepTrial();
@@ -250,6 +336,25 @@ export default function AiProducer() {
   const [step, setStep] = useState<Step | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [details, setDetails] = useState(false);
+  /** The vibes of what was last kept, for the mastering pick. */
+  const [keptVibes, setKeptVibes] = useState<Vibe[]>([]);
+  /** Keep tracks whole: the AI never cuts them into clips. Read after mount (it's remembered per browser). */
+  const [keepWhole, setKeepWhole] = useState(false);
+  /** The sync template every idea uses (see IdeaOptions.sync). */
+  const [syncId, setSyncId] = useState("perfect");
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage only exists after mount
+    setKeepWhole(loadKeepWhole());
+    setSyncId(loadSync());
+  }, []);
+  const [tab, setTab] = useState<Tab>("sync");
+  /** "X takes the place of Y" — shown in the bottom bar for a few seconds. */
+  const [swapNote, setSwapNote] = useState<string | null>(null);
+  useEffect(() => {
+    if (!swapNote) return;
+    const timer = setTimeout(() => setSwapNote(null), 4500);
+    return () => clearTimeout(timer);
+  }, [swapNote]);
   const run = useRef(0);
   const busy = step !== null;
   useKeepScreenOn("ai-producer", busy);
@@ -266,20 +371,26 @@ export default function AiProducer() {
   const checks = useMemo(() => (session ? checkMix(session, lanes) : []), [session, lanes]);
 
   /** Listens to the lanes and works out the ideas. */
-  async function analyse() {
+  async function analyse(whole = keepWhole, { reapply = false } = {}) {
     const id = ++run.current;
+    // Switching how the AI may edit keeps what's being tried: it's worked out again the new way.
+    const wasOn = reapply ? (useAiTrial.getState().trial?.ideas.map((i) => i.id) ?? []) : [];
+    const bpm = bpmNow();
     revertTrial();
     setError(null);
     try {
-      const fresh = await prepareSession(vocalId || null, beatId || null, { vibe: "any" }, (s) => id === run.current && setStep(s));
+      const fresh = await prepareSession(vocalId || null, beatId || null, { vibe: "any", keepWhole: whole, sync: syncId }, (s) => id === run.current && setStep(s));
       if (id !== run.current) return;
       // Let the steps paint before the (synchronous) arranging.
       await new Promise((r) => setTimeout(r, 30));
       const found = studioIdeas(fresh);
       const sync = await syncEverythingIdea(fresh).catch(() => null);
       if (id !== run.current) return;
+      const all = sync ? [...found, sync] : found;
       setSession(fresh);
-      setIdeas(sync ? [...found, sync] : found);
+      setIdeas(all);
+      putBackOn(fresh, all, wasOn);
+      keepPlace(bpm);
     } catch (err) {
       if (id === run.current) setError(err instanceof Error ? err.message : "Couldn't listen to the lanes");
     } finally {
@@ -293,10 +404,11 @@ export default function AiProducer() {
 
   // Opening the panel, or changing which lanes there are, starts listening by itself.
   // (Not again after it failed: the person retries.)
-  const needsListen = open && lanes.length > 0 && !busy && !trial && !error && (!session || stale || repicked);
+  // Picking another vocal or beat to work on listens again, keeping what's being tried.
+  const needsListen = open && lanes.length > 0 && !busy && !error && (!trial || repicked) && (!session || stale || repicked);
   useEffect(() => {
     if (!needsListen) return;
-    const timer = setTimeout(() => void analyseRef.current(), session ? 700 : 0);
+    const timer = setTimeout(() => void analyseRef.current(undefined, { reapply: true }), session ? 700 : 0);
     return () => clearTimeout(timer);
   }, [needsListen, session]);
 
@@ -315,45 +427,124 @@ export default function AiProducer() {
   /** The mix every try starts from: the original while an idea is on. */
   const startLanes = () => useAiTrial.getState().trial?.baseline.lanes ?? useStudioStore.getState().lanes;
 
-  /** Plays an idea: on top of what's on if it fits alongside, else instead. Tapping one that's on takes it off. */
+  /**
+   * Plays an idea on top of what's on — the others stay; only one of the
+   * same kind (another timing, another sound) makes way. Tapping one
+   * that's on takes just it off.
+   */
   function toggle(idea: Idea) {
     if (!session) return;
     setError(null);
+    const bpm = bpmNow();
     if (onIds.has(idea.id)) {
       removeFromTrial(session, idea.id);
+      keepPlace(bpm);
       return;
     }
-    const add = trying.length > 0 && trying.every((t) => compatible(t, idea));
-    if (!tryIdea(session, idea, { add })) {
+    const replaced = trying.filter((t) => !compatible(t, idea));
+    if (!tryIdea(session, idea, { add: true })) {
       setError(`“${idea.title}” doesn't fit the mix as it is now — it's being worked out again.`);
       return;
     }
-    play(idea.listenAt);
+    // A style taking over from a sync template keeps that sync (it's a setting): say so, not "replaced".
+    const sync = replaced.find((t) => t.kind === "sync");
+    const gone = replaced.filter((t) => t.kind !== "sync");
+    if (gone.length) setSwapNote(`${idea.icon} ${idea.title} took the place of ${gone.map((t) => t.title).join(", ")} — the rest stays on`);
+    else if (sync) setSwapNote(`${idea.icon} ${idea.title} — synced your way (${sync.title})`);
+    keepPlace(bpm);
+    playOn();
+  }
+
+  /**
+   * Works every idea out again with different options (whole tracks, the
+   * sync), without listening again — and puts back on what was on, worked
+   * out the new way. Returns the new session and ideas.
+   */
+  function applyOptions(next: Partial<Session["options"]>, { except = [] as string[] } = {}) {
+    if (!session) return null;
+    const bpm = bpmNow();
+    const wasOn = (useAiTrial.getState().trial?.ideas.map((i) => i.id) ?? []).filter((id) => !except.includes(id));
+    revertTrial();
+    const rebased = rebaseSession(session, { ...session.options, ...next });
+    const all = reworkIdeas(rebased, ideas);
+    setSession(rebased);
+    setIdeas(all);
+    putBackOn(rebased, all, wasOn);
+    keepPlace(bpm);
+    return { session: rebased, ideas: all };
+  }
+
+  /** Whole tracks or cut into lines: everything on is worked out again that way. */
+  function chooseWhole(whole: boolean) {
+    if (whole === keepWhole) return;
+    setKeepWhole(whole);
+    saveKeepWhole(whole);
+    applyOptions({ keepWhole: whole });
+  }
+
+  /**
+   * A sync template is a setting: every idea that places the vocal uses
+   * it. With a style (or another timing idea) on, that's worked out again
+   * with the new sync; with none, the template itself is tried.
+   */
+  function chooseSync(idea: Idea) {
+    if (!session) return;
+    if (onIds.has(idea.id)) return toggle(idea);
+    const id = idea.id.slice("sync-".length);
+    setSyncId(id);
+    saveSync(id);
+    const otherTiming = trying.find((t) => t.kind !== "sync" && isTiming(t));
+    const done = applyOptions({ sync: id }, { except: trying.filter((t) => t.kind === "sync").map((t) => t.id) });
+    if (!done) return;
+    if (otherTiming) {
+      setSwapNote(`🔗 ${idea.title}: “${otherTiming.title}” is now synced this way`);
+      playOn();
+      return;
+    }
+    const again = done.ideas.find((i) => i.id === idea.id);
+    const bpm = bpmNow();
+    if (again && tryIdea(done.session, again, { add: true })) {
+      keepPlace(bpm);
+      playOn();
+    }
   }
 
   function surprise() {
     if (!session) return;
+    const bpm = bpmNow();
     const pick = <T,>(list: T[]) => list[Math.floor(Math.random() * list.length)];
     const styles = ideas.filter((i) => i.kind === "full" && ideaFits(i, startLanes()));
     const style = pick(styles.length ? styles : ideas.filter((i) => ideaFits(i, startLanes())));
-    if (!style || !tryIdea(session, style)) return;
+    // A new style (with its timing and sound) on top of what's on: layers and fixes stay.
+    if (!style || !tryIdea(session, style, { add: true })) return;
     const moments = ideas.filter((i) => i.kind === "moment" && ideaFits(i, startLanes()) && compatible(style, i));
     const moment = moments.length ? pick(moments) : null;
     if (moment) tryIdea(session, moment, { add: true });
-    play(moment?.listenAt ?? style.listenAt);
+    keepPlace(bpm);
+    playOn();
   }
 
+  /** ◀ ▶: the next idea of the same kind as the last one tried takes its place; everything else stays on. */
   function stepThrough(delta: number) {
-    const list = ideas.filter((i) => ideaFits(i, startLanes()));
-    if (!list.length || !session) return;
-    const currentId = trying[trying.length - 1]?.id;
-    const next = list[(list.findIndex((i) => i.id === currentId) + delta + list.length) % list.length];
-    if (tryIdea(session, next)) play(useStudioStore.getState().isPlaying ? undefined : next.listenAt);
+    if (!session) return;
+    const last = trying[trying.length - 1];
+    const list = ideas.filter((i) => ideaFits(i, startLanes()) && (!last || i.kind === last.kind) && (i.id === last?.id || !onIds.has(i.id)));
+    if (!list.length) return;
+    const next = list[(list.findIndex((i) => i.id === last?.id) + delta + list.length) % list.length];
+    if (next.id === last?.id) return;
+    const bpm = bpmNow();
+    if (tryIdea(session, next, { add: true, replace: last?.id })) {
+      keepPlace(bpm);
+      playOn();
+    }
   }
 
   function keep() {
     const kept = keepTrial();
-    if (kept.length) notify(`Kept “${kept.map((i) => i.title).join(" + ")}” — ⌘Z to undo`);
+    if (kept.length) {
+      setKeptVibes(kept.flatMap((i) => i.vibes));
+      notify(`Kept “${kept.map((i) => i.title).join(" + ")}” — ⌘Z to undo`);
+    }
   }
 
   function close() {
@@ -369,12 +560,14 @@ export default function AiProducer() {
   function fixCheck(fix: FixId) {
     if (!session) return;
     setError(null);
+    const bpm = bpmNow();
     const idea = mixFix(session, [...fixesOn, fix]);
     if (!idea || !tryIdea(session, idea, { add: true })) {
       setError("That can't be fixed automatically for this mix — try Fine-tune below.");
       return;
     }
-    play(idea.listenAt);
+    keepPlace(bpm);
+    playOn();
   }
 
   // Keys: , and . flip through ideas, B before/after, Enter keeps, Esc closes.
@@ -390,7 +583,7 @@ export default function AiProducer() {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const has = !!useAiTrial.getState().trial;
       if (e.key === "Escape") keys.current.close();
-      else if ((e.key === "b" || e.key === "B") && has) compare();
+      else if ((e.key === "b" || e.key === "B") && has) inPlace(() => compare());
       else if (e.key === "," || e.key === ".") keys.current.stepThrough(e.key === "." ? 1 : -1);
       else if (e.key === "Enter" && has) keys.current.keep();
       else return;
@@ -405,38 +598,81 @@ export default function AiProducer() {
 
   const auto = byId("auto-good");
   const styles = ideas.filter((i) => i.kind === "full");
-  const moments = ideas.filter((i) => i.kind === "moment");
+  const syncs = ideas.filter((i) => i.kind === "sync");
+  const isLayer = (i: Idea) => i.id.startsWith("layer-");
+  const moments = ideas.filter((i) => i.kind === "moment" && !isLayer(i));
+  const layers = ideas.filter(isLayer);
   // The Mix check's own fixes aren't in the list; these are the rest.
   const otherFixes = ideas.filter((i) => i.kind === "fix");
   const arrangement = ideas.filter((i) => i.kind === "idea" && i.role !== "engineer");
   const sounds = ideas.filter((i) => i.kind === "idea" && i.role === "engineer");
   const fits = (i: Idea) => ideaFits(i, trial?.baseline.lanes ?? lanes);
   const missing = !vocals.length ? "vocal" : !backings.length ? "beat" : null;
+  const leadVocal = vocals.find((l) => !leadOf(l.laneId)) ?? vocals[0];
+  const vibesNow = trying.length ? trying.flatMap((i) => i.vibes) : keptVibes;
   const current = trying[trying.length - 1];
   const hasPartLanes = lanes.some((l) => l.kind === "drums" || l.kind === "bass");
   const partsNote = hasPartLanes || session?.beatParts.length ? " · drops use the beat's own drums & bass" : "";
   const vocalLane = lanes.find((l) => l.laneId === session?.vocal?.laneId) ?? null;
   const beatLane = lanes.find((l) => l.laneId === session?.beat?.laneId) ?? null;
 
+  const inTab: Record<Tab, (i: Idea) => boolean> = {
+    sync: (i) => i.kind === "auto" || i.kind === "sync" || i.id.startsWith("fix:"),
+    styles: (i) => i.kind === "full" || (i.kind === "idea" && i.role !== "engineer"),
+    moments: (i) => i.kind === "moment" || (i.kind === "fix" && !i.id.startsWith("fix:")),
+    mix: (i) => i.kind === "idea" && i.role === "engineer",
+  };
+  const onIn = (t: Tab) => trying.filter(inTab[t]).length;
+  const tile = (idea: Idea, badge?: string) => (
+    <Tile key={idea.id} idea={idea} on={onIds.has(idea.id)} disabled={!fits(idea)} onClick={() => toggle(idea)} badge={badge} />
+  );
+  const ready = !!session && !busy && !missing;
+
   return (
     <>
       <div className="fixed inset-0 z-[55] bg-black/40 lg:hidden" onClick={close} />
       <aside
         aria-label="AI producer"
-        className="touch-targets fixed z-[56] flex flex-col border-border bg-background shadow-2xl max-lg:inset-x-0 max-lg:bottom-0 max-lg:max-h-[90dvh] max-lg:rounded-t-2xl max-lg:border max-lg:border-b-0 lg:top-[var(--header-h)] lg:right-0 lg:bottom-0 lg:w-[27rem] lg:border-l"
+        className="touch-targets fixed z-[56] flex flex-col border-border bg-background shadow-2xl max-lg:inset-x-0 max-lg:bottom-0 max-lg:mx-auto max-lg:max-h-[90dvh] max-lg:max-w-2xl max-lg:rounded-t-2xl max-lg:border max-lg:border-b-0 lg:top-[var(--header-h)] lg:right-0 lg:bottom-0 lg:w-[27rem] lg:border-l"
         style={{ animation: "sheet-in 0.2s ease-out" }}
       >
-        <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-border lg:hidden" aria-hidden />
-        <header className="flex items-center gap-2.5 border-b border-border px-4 py-2.5">
+        <div className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-border lg:hidden" aria-hidden />
+        <header className="flex shrink-0 items-center gap-2.5 px-4 pt-2.5 pb-2">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand to-vocals text-lg">✨</span>
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-bold">AI producer</h2>
-            <p className="truncate text-[11px] text-muted">Tap anything to hear it — nothing is final until you keep it</p>
+            <p className="truncate text-[11px] text-muted">Tap to hear it · options stack · nothing&apos;s final until you keep it</p>
           </div>
-          <button onClick={close} className="flex h-9 w-9 items-center justify-center rounded-lg text-muted hover:bg-surface hover:text-foreground" aria-label="Close (keeps what's playing)">
+          <button onClick={close} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-surface hover:text-foreground" aria-label="Close (keeps what's playing)">
             ✕
           </button>
         </header>
+
+        {ready && (
+          <nav className="flex shrink-0 gap-1 border-b border-border px-3 pb-2" aria-label="AI producer sections">
+            {TABS.map((t) => {
+              const count = onIn(t.id);
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => setTab(t.id)}
+                  aria-current={tab === t.id}
+                  className={`relative flex flex-1 items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 text-xs font-semibold transition-colors ${
+                    tab === t.id ? "bg-brand text-white" : "text-muted hover:bg-surface hover:text-foreground"
+                  }`}
+                >
+                  <span aria-hidden>{t.icon}</span>
+                  {t.label}
+                  {count > 0 && (
+                    <span className={`ml-0.5 rounded-full px-1.5 text-[10px] leading-4 ${tab === t.id ? "bg-white/25" : "bg-brand text-white"}`} aria-label={`${count} on`}>
+                      {count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+        )}
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3">
           {lanes.length === 0 || missing ? (
@@ -454,6 +690,12 @@ export default function AiProducer() {
                 </div>
               ))}
               <p className="text-xs text-muted">As soon as both are in, this panel listens to them and shows you how to make them sound good together.</p>
+              {missing === "beat" && leadVocal?.bpm && (
+                <MatchFinder kind="beat" bpm={leadVocal.bpm} title={`🔎 Beats that fit “${leadVocal.trackTitle}” (${leadVocal.bpm.toFixed(0)} BPM)`} />
+              )}
+              {missing === "vocal" && backings[0]?.bpm && (
+                <MatchFinder kind="vocals" bpm={backings[0].bpm} title={`🔎 Vocals that fit “${backings[0].trackTitle}” (${backings[0].bpm.toFixed(0)} BPM)`} />
+              )}
               {lanes.length > 0 && (
                 <button onClick={() => void analyse()} disabled={busy} className="self-start text-xs text-brand-strong hover:underline">
                   Get sound ideas anyway →
@@ -496,28 +738,28 @@ export default function AiProducer() {
             </p>
           )}
 
-          {session && !busy && !missing && (
+          {ready && session && tab === "sync" && (
             <div className="flex flex-col gap-5">
-              {(vocals.length > 1 || backings.length > 1) && (
-                <div className="grid grid-cols-2 gap-2 text-[11px] text-muted">
-                  <label className="flex flex-col gap-1">
+              {(vocals.filter((l) => !leadOf(l.laneId)).length > 1 || backings.length > 1) && (
+                <div className="grid grid-cols-1 gap-2 text-[11px] text-muted min-[380px]:grid-cols-2">
+                  <label className="flex min-w-0 flex-col gap-1">
                     Vocal to work on
                     <select value={vocalId} onChange={(e) => setVocalId(e.target.value)} className="input !py-1 text-xs">
-                      <option value="">{session.vocal?.trackTitle ?? "Auto"}</option>
-                      {vocals.map((l) => (
+                      <option value="">{session.vocal ? laneName(session.vocal) : "Auto"}</option>
+                      {vocals.filter((l) => !leadOf(l.laneId)).map((l) => (
                         <option key={l.laneId} value={l.laneId}>
-                          {l.trackTitle}
+                          {laneName(l)}
                         </option>
                       ))}
                     </select>
                   </label>
-                  <label className="flex flex-col gap-1">
+                  <label className="flex min-w-0 flex-col gap-1">
                     Beat to work on
                     <select value={beatId} onChange={(e) => setBeatId(e.target.value)} className="input !py-1 text-xs">
-                      <option value="">{session.beat?.trackTitle ?? "Auto"}</option>
+                      <option value="">{session.beat ? laneName(session.beat) : "Auto"}</option>
                       {backings.map((l) => (
                         <option key={l.laneId} value={l.laneId}>
-                          {l.trackTitle}
+                          {laneName(l)}
                         </option>
                       ))}
                     </select>
@@ -543,80 +785,61 @@ export default function AiProducer() {
                       onIds.has(auto.id) ? "bg-brand ring-2 ring-brand-strong" : "bg-gradient-to-r from-brand to-vocals hover:brightness-110"
                     }`}
                   >
-                    <span className="block text-base font-bold">{onIds.has(auto.id) ? "▶ Playing: made to sound good" : "✨ Make it sound good"}</span>
+                    <span className="block text-base font-bold">{onIds.has(auto.id) ? "▶ On: made to sound good" : "✨ Make it sound good"}</span>
                     <span className="mt-0.5 block text-[11px] leading-snug text-white/85">{auto.short}</span>
                   </button>
-                  <p className="mt-1.5 text-center text-[11px] text-muted">One tap fixes it all. Then try a style or a drop below.</p>
+                  <p className="mt-1.5 text-center text-[11px] text-muted">One tap fixes it all — with the sync and cutting choices below.</p>
                 </div>
               )}
 
-              {styles.length > 0 && (
-                <Section
-                  title="🎨 Styles"
-                  hint="A whole remix in one tap"
-                  action={
-                    <button onClick={surprise} className="shrink-0 rounded-lg border border-border px-2.5 py-1 text-xs font-semibold hover:border-brand">
-                      🎲 Surprise me
+              <Section title="✂ Cutting" hint="How the AI may edit your tracks — everything on is worked out again when you switch">
+                <div className="flex overflow-hidden rounded-xl border border-border text-xs font-semibold" role="group" aria-label="How the AI may edit your tracks">
+                  {([
+                    [false, "✂ Cut into lines", "Tightest fit: the vocal is cut at its silences and every line laid on the beat"],
+                    [true, "▬ Keep tracks whole", "Nothing is cut: tracks are only moved, sped up or slowed, re-keyed and levelled"],
+                  ] as const).map(([whole, label, hint]) => (
+                    <button
+                      key={label}
+                      onClick={() => chooseWhole(whole)}
+                      aria-pressed={keepWhole === whole}
+                      title={hint}
+                      className={`flex-1 px-2 py-2 transition-colors ${keepWhole === whole ? "bg-brand text-white" : "text-muted hover:text-foreground"}`}
+                    >
+                      {label}
                     </button>
-                  }
-                >
+                  ))}
+                </div>
+              </Section>
+
+              {syncs.length > 0 && (
+                <Section title="🔗 Sync templates" hint="How the vocal, the beat and every other lane meet — your pick is used by every style and fix">
                   <div className="grid grid-cols-2 gap-2">
-                    {styles.map((idea) => (
-                      <Tile key={idea.id} idea={idea} on={onIds.has(idea.id)} disabled={!fits(idea)} onClick={() => toggle(idea)} />
-                    ))}
+                    {syncs.map((idea) => {
+                      const chosen = idea.id === `sync-${syncId}`;
+                      return (
+                        <Tile
+                          key={idea.id}
+                          idea={idea}
+                          on={onIds.has(idea.id)}
+                          selected={chosen}
+                          disabled={!fits(idea)}
+                          onClick={() => chooseSync(idea)}
+                          badge={chosen ? "Your sync" : idea.id === "sync-perfect" ? "Best start" : undefined}
+                        />
+                      );
+                    })}
                   </div>
                 </Section>
               )}
 
-              {moments.length > 0 && (
-                <Section
-                  title="💥 Drops & moments"
-                  hint={
-                    session.drop
-                      ? `The beat's ${session.drop.kind === "drop" ? "drop" : "biggest moment"} is at bar ${session.drop.bar + 1}${partsNote}`
-                      : `Moments that make people listen${partsNote}`
-                  }
-                >
-                  <div className="grid grid-cols-2 gap-2">
-                    {moments.map((idea) => (
-                      <Tile key={idea.id} idea={idea} on={onIds.has(idea.id)} disabled={!fits(idea)} onClick={() => toggle(idea)} />
-                    ))}
-                  </div>
-                </Section>
-              )}
-
-              {vocalLane && (
-                <Section title="🎚 Fine-tune" hint="Small hands-on fixes — each one is a single undo">
-                  <FineTune vocal={vocalLane} beat={beatLane} />
-                </Section>
-              )}
-
-              {(arrangement.length > 0 || sounds.length > 0 || otherFixes.length > 0) && (
+              {vocalLane?.bpm && (
                 <details className="group rounded-xl border border-border">
                   <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2.5 text-sm font-bold">
-                    🎛 More options
-                    <span className="text-xs font-normal text-muted group-open:hidden">
-                      {arrangement.length + sounds.length + otherFixes.length} more ▾
-                    </span>
+                    🔎 Find a beat that fits
+                    <span className="text-xs font-normal text-muted group-open:hidden">from the library ▾</span>
                   </summary>
-                  <div className="flex flex-col gap-3 px-1.5 pb-2">
-                    {[
-                      { title: "Song shape & speed", items: arrangement },
-                      { title: "Sound", items: sounds },
-                      { title: "Other fixes", items: otherFixes },
-                    ].map(
-                      (group) =>
-                        group.items.length > 0 && (
-                          <div key={group.title}>
-                            <p className="px-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">{group.title}</p>
-                            <div className="flex flex-col">
-                              {group.items.map((idea) => (
-                                <Row key={idea.id} idea={idea} on={onIds.has(idea.id)} disabled={!fits(idea)} onClick={() => toggle(idea)} />
-                              ))}
-                            </div>
-                          </div>
-                        )
-                    )}
+                  <div className="px-3 pb-3">
+                    <MatchFinder kind="beat" bpm={vocalLane.bpm} title={`Beats near ${vocalLane.bpm.toFixed(0)} BPM, least stretching first`} />
                   </div>
                 </details>
               )}
@@ -628,45 +851,126 @@ export default function AiProducer() {
               ))}
             </div>
           )}
+
+          {ready && session && tab === "styles" && (
+            <div className="flex flex-col gap-5">
+              {styles.length > 0 ? (
+                <Section
+                  title="🎨 Styles"
+                  hint="A whole remix in one tap — synced your way, and your layers and moments stay on"
+                  action={
+                    <button onClick={surprise} className="shrink-0 rounded-lg border border-border px-2.5 py-1 text-xs font-semibold hover:border-brand">
+                      🎲 Surprise me
+                    </button>
+                  }
+                >
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-2">{styles.map((idea) => tile(idea))}</div>
+                </Section>
+              ) : (
+                <p className="text-xs text-muted">Styles need a vocal and a beat the AI could match.</p>
+              )}
+              {arrangement.length > 0 && (
+                <Section title="🧩 Song shape & speed" hint="One change to the arrangement at a time">
+                  <div className="flex flex-col">
+                    {arrangement.map((idea) => (
+                      <Row key={idea.id} idea={idea} on={onIds.has(idea.id)} disabled={!fits(idea)} onClick={() => toggle(idea)} />
+                    ))}
+                  </div>
+                </Section>
+              )}
+            </div>
+          )}
+
+          {ready && session && tab === "moments" && (
+            <div className="flex flex-col gap-5">
+              {moments.length > 0 && (
+                <Section
+                  title="💥 Drops & moments"
+                  hint={
+                    session.drop
+                      ? `The beat's ${session.drop.kind === "drop" ? "drop" : "biggest moment"} is at bar ${session.drop.bar + 1}${partsNote}`
+                      : `Moments that make people listen${partsNote}`
+                  }
+                >
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-2">{moments.map((idea) => tile(idea))}</div>
+                </Section>
+              )}
+              {layers.length > 0 && (
+                <Section title="🎤 Vocal layers" hint="Extra lanes that follow the vocal — they stack with everything">
+                  <div className="grid grid-cols-2 gap-2 min-[420px]:grid-cols-3">{layers.map((idea) => tile(idea))}</div>
+                </Section>
+              )}
+              {otherFixes.length > 0 && (
+                <Section title="🩹 Other fixes" hint="Small problems the AI spotted">
+                  <div className="flex flex-col">
+                    {otherFixes.map((idea) => (
+                      <Row key={idea.id} idea={idea} on={onIds.has(idea.id)} disabled={!fits(idea)} onClick={() => toggle(idea)} />
+                    ))}
+                  </div>
+                </Section>
+              )}
+            </div>
+          )}
+
+          {ready && session && tab === "mix" && (
+            <div className="flex flex-col gap-5">
+              <Section title="🎛 Master it" hint="The finishing touch on the whole mix — one undo">
+                <MasterIt vibes={vibesNow} />
+              </Section>
+              {sounds.length > 0 && (
+                <Section title="✨ Sound" hint="Effects and levels on every lane — one sound at a time">
+                  <div className="flex flex-col">
+                    {sounds.map((idea) => (
+                      <Row key={idea.id} idea={idea} on={onIds.has(idea.id)} disabled={!fits(idea)} onClick={() => toggle(idea)} />
+                    ))}
+                  </div>
+                </Section>
+              )}
+              {vocalLane && (
+                <Section title="🎚 Fine-tune" hint="Small hands-on fixes — each one is a single undo">
+                  <FineTune vocal={vocalLane} beat={beatLane} />
+                </Section>
+              )}
+            </div>
+          )}
         </div>
 
         {trial && current && (
-          <footer className="border-t border-border bg-surface px-3 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
-            <div className="flex items-center gap-2">
-              <div className="flex shrink-0 overflow-hidden rounded-lg border border-border">
-                <button onClick={() => stepThrough(-1)} className="px-2.5 py-1.5 text-xs hover:bg-surface-hover" aria-label="Previous idea (,)" title="Previous idea (,)">
-                  ◀
-                </button>
-                <button onClick={() => stepThrough(1)} className="border-l border-border px-2.5 py-1.5 text-xs hover:bg-surface-hover" aria-label="Next idea (.)" title="Next idea (.)">
-                  ▶
-                </button>
-              </div>
-              <button onClick={() => setDetails((d) => !d)} className="min-w-0 flex-1 text-left" aria-expanded={details}>
+          <footer className="shrink-0 border-t border-border bg-surface px-3 pt-2 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
+            {swapNote && (
+              <p className="mb-1.5 rounded-md bg-brand/15 px-2 py-1 text-[11px] text-foreground" role="status">
+                {swapNote}
+              </p>
+            )}
+            <div className="flex items-center gap-1.5">
+              <button onClick={() => stepThrough(-1)} className="h-9 w-9 shrink-0 rounded-lg border border-border text-xs hover:bg-surface-hover" aria-label="Previous idea of this kind (,)" title="Previous idea of this kind (,)">
+                ◀
+              </button>
+              <button onClick={() => setDetails((d) => !d)} className="min-w-0 flex-1 px-1 text-left" aria-expanded={details}>
                 <span className="block truncate text-xs font-semibold">
                   {trial.showing === "idea" ? "▶ " : "⏸ Before · "}
                   {trying.map((i) => `${i.icon} ${i.title}`).join(" + ")}
                 </span>
-                <span className="block text-[10px] text-muted">{details ? "Hide details ▴" : "What changed? ▾"}</span>
+                <span className="block text-[10px] text-muted">
+                  {trying.length > 1 ? `${trying.length} on together · ` : ""}
+                  {details ? "Hide details ▴" : "What changed? ▾"}
+                </span>
               </button>
-              <div className="flex shrink-0 overflow-hidden rounded-lg border border-border text-[11px] font-bold" role="group" aria-label="Compare (B)" title="Compare (B)">
-                {(["original", "idea"] as const).map((side) => (
-                  <button
-                    key={side}
-                    onClick={() => compare(side)}
-                    aria-pressed={trial.showing === side}
-                    className={`px-2.5 py-1.5 ${trial.showing === side ? "bg-brand text-white" : "text-muted hover:text-foreground"}`}
-                  >
-                    {side === "original" ? "Before" : "After"}
-                  </button>
-                ))}
-              </div>
+              <button onClick={() => stepThrough(1)} className="h-9 w-9 shrink-0 rounded-lg border border-border text-xs hover:bg-surface-hover" aria-label="Next idea of this kind (.)" title="Next idea of this kind (.)">
+                ▶
+              </button>
             </div>
             {details && (
-              <div className="mt-2 max-h-40 overflow-y-auto rounded-lg bg-background p-2.5 text-[11px] text-muted">
+              <div className="mt-2 max-h-[30dvh] overflow-y-auto rounded-lg bg-background p-2.5 text-[11px] text-muted">
                 {trying.map((i) => (
                   <div key={i.id} className="mb-2 last:mb-0">
-                    <p className="font-semibold text-foreground">
-                      {i.icon} {i.title}
+                    <p className="flex items-center gap-2 font-semibold text-foreground">
+                      <span className="min-w-0 flex-1">
+                        {i.icon} {i.title}
+                      </span>
+                      <button onClick={() => toggle(i)} className="shrink-0 rounded border border-border px-1.5 text-[10px] font-normal text-muted hover:text-danger">
+                        take off
+                      </button>
                     </p>
                     <p className="mt-0.5">{i.why}</p>
                     <ul className="mt-1 list-disc space-y-0.5 pl-4">
@@ -678,11 +982,36 @@ export default function AiProducer() {
                 ))}
               </div>
             )}
-            <div className="mt-2 flex gap-2">
-              <button onClick={revertTrial} className="flex-1 rounded-lg border border-border py-2 text-xs font-medium hover:border-danger/60 hover:text-danger">
-                ✕ Undo
+            <div className="mt-2 flex items-stretch gap-1.5">
+              <div className="flex shrink-0 overflow-hidden rounded-lg border border-border text-[11px] font-bold" role="group" aria-label="Compare (B)" title="Compare (B)">
+                {(["original", "idea"] as const).map((side) => (
+                  <button
+                    key={side}
+                    onClick={() => inPlace(() => compare(side))}
+                    aria-pressed={trial.showing === side}
+                    className={`px-2.5 py-2 ${trial.showing === side ? "bg-brand text-white" : "text-muted hover:text-foreground"}`}
+                  >
+                    {side === "original" ? "Before" : "After"}
+                  </button>
+                ))}
+              </div>
+              {current.listenAt !== undefined && (
+                <button
+                  onClick={() => {
+                    audioEngine.seek(current.listenAt!);
+                    playOn();
+                  }}
+                  className="shrink-0 rounded-lg border border-border px-2.5 text-[11px] text-muted hover:text-foreground"
+                  title="Jump to the best moment to hear it (otherwise the playhead stays where you are)"
+                  aria-label="Jump to the best part"
+                >
+                  ⤒<span className="max-[400px]:hidden"> Best part</span>
+                </button>
+              )}
+              <button onClick={() => inPlace(revertTrial)} className="shrink-0 rounded-lg border border-border px-3 text-xs font-medium hover:border-danger/60 hover:text-danger" title="Take everything off (⌘Z)">
+                ✕<span className="max-[400px]:hidden"> Undo</span>
               </button>
-              <button onClick={keep} className="flex-[2] rounded-lg bg-success py-2 text-xs font-bold text-white hover:opacity-90" title="Keep (Enter)">
+              <button onClick={keep} className="min-w-0 flex-1 rounded-lg bg-success py-2 text-xs font-bold text-white hover:opacity-90" title="Keep (Enter)">
                 ✓ Keep it
               </button>
             </div>

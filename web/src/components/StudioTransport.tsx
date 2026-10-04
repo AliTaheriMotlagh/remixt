@@ -6,7 +6,8 @@ import { audioEngine, PlaybackBlockedError } from "@/lib/client/audioEngine";
 import { exportMixdown, getExportFormat, setExportFormat, type ExportFormat } from "@/lib/client/mixdown";
 import { camelotCode, keyLabel } from "@/lib/client/musicKey";
 import { lanesToPayload, projectToPayload } from "@/lib/client/remixLanes";
-import { beatLength, effectiveKey, referenceLane, useStudioStore } from "@/lib/client/studioStore";
+import { GRID_CHOICES, beatLength, effectiveKey, referenceLane, useStudioStore } from "@/lib/client/studioStore";
+import MasterPanel, { isMastered } from "./studio/MasterPanel";
 import { redo, startNewStep, undo, useStudioHistory } from "@/lib/client/studioHistory";
 import { markDraftClean } from "@/lib/client/studioDraft";
 import { useStudioView } from "@/lib/client/studioView";
@@ -320,6 +321,9 @@ export default function StudioTransport({
   const masterVolume = useStudioStore((s) => s.masterVolume);
   const metronome = useStudioStore((s) => s.metronome);
   const snapToGrid = useStudioStore((s) => s.snapToGrid);
+  const gridBeats = useStudioStore((s) => s.gridBeats);
+  const setGridBeats = useStudioStore((s) => s.setGridBeats);
+  const mastered = useStudioStore((s) => isMastered(s.master));
   const loopEnabled = useStudioStore((s) => s.loopEnabled);
   const loopStart = useStudioStore((s) => s.loopStart);
   const loopEnd = useStudioStore((s) => s.loopEnd);
@@ -547,9 +551,22 @@ export default function StudioTransport({
               <button onClick={toggleMetronome} className={toggle(metronome)} title="Metronome (K)" aria-pressed={metronome}>
                 🥁<span className="hidden 2xl:inline">Click</span>
               </button>
-              <button onClick={toggleSnap} className={toggle(snapToGrid)} title="Snap to the beat (N)" aria-pressed={snapToGrid}>
+              <button onClick={toggleSnap} className={toggle(snapToGrid)} title="Snap to the grid (N)" aria-pressed={snapToGrid}>
                 ⌗<span className="hidden 2xl:inline">Snap</span>
               </button>
+              <select
+                value={gridBeats}
+                onChange={(e) => setGridBeats(Number(e.target.value))}
+                className="h-9 rounded-lg border border-border bg-transparent px-1.5 text-xs text-muted hover:text-foreground"
+                title="Grid size — what dragging, pasting and slicing snap to (G)"
+                aria-label="Grid size"
+              >
+                {GRID_CHOICES.map((g) => (
+                  <option key={g.beats} value={g.beats}>
+                    {g.label}
+                  </option>
+                ))}
+              </select>
             </div>
           )}
           {hasXfade && (
@@ -583,6 +600,16 @@ export default function StudioTransport({
               aria-label="Master level"
             />
           </label>
+          {!viewing && (
+            <Popover
+              align="right"
+              title="Master — mastering presets, tone and glue for the whole mix"
+              label={<>🎚<span className="hidden 2xl:inline">Master</span></>}
+              active={mastered}
+            >
+              {() => <MasterPanel />}
+            </Popover>
+          )}
           <Popover
             align="right"
             title="Export the mix as an audio file"

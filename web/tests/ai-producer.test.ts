@@ -12,6 +12,7 @@ import {
   findDrop,
   fixesOf,
   ideaFits,
+  masterFor,
   mixFix,
   mixSignature,
   studioIdeas,
@@ -20,6 +21,7 @@ import {
   type Session,
 } from "../src/lib/client/aiIdeas.ts";
 import { compare, keepTrial, revertTrial, tryIdea, useAiTrial } from "../src/lib/client/aiTrial.ts";
+import { gain, nudge, transpose } from "../src/lib/client/quickAdjust.ts";
 import type { BeatStructure } from "../src/lib/client/arrange.ts";
 import { normaliseLane } from "../src/lib/client/clipEdit.ts";
 import { resetHistory, undo } from "../src/lib/client/studioHistory.ts";
@@ -307,5 +309,221 @@ describe("drops with the beat's own parts from the library", () => {
     assert.equal(useAiTrial.getState().trial!.ideas.length, 2);
     keepTrial();
     assert.equal(state().lanes.filter((l) => l.kind === "beat").length, 0);
+  });
+});
+
+describe("vocal layers, speed styles, rhythm and mastering", () => {
+  const beat = lane("beat", "beat");
+  const vocal = lane("vocal", "vocals", { offsetSeconds: 8, originalDuration: 36 });
+  const state = () => useStudioStore.getState();
+  const find = (id: string) => state().lanes.find((l) => l.laneId === id)!;
+
+  beforeEach(() => {
+    useAiTrial.setState({ trial: null });
+    useStudioStore.setState({ lanes: [beat, vocal], projectBpm: BPM, duration: 120 });
+  });
+
+  test("doubles and octaves are offered as extra lanes that follow the vocal", () => {
+    const ideas = studioIdeas(session([beat, vocal]));
+    const double = ideas.find((i) => i.id === "layer-double")!;
+    assert.ok(double, "a double is offered");
+    assert.deepEqual(double.lanes!.add.map((l) => l.laneId), ["vocal~layer-dbl-l", "vocal~layer-dbl-r"]);
+    assert.deepEqual(double.lanes!.remove, []);
+    assert.ok(double.aspects.includes("layers"));
+    const [left, right] = double.lanes!.add;
+    assert.ok(left.fx.pan < 0 && right.fx.pan > 0, "panned either side");
+    assert.ok(left.volume < vocal.volume, "under the lead");
+    assert.equal(ideas.find((i) => i.id === "layer-octave-down")!.lanes!.add[0].pitchSemitones, -12);
+  });
+
+  test("two layers can be on together, and on top of anything else", () => {
+    const s = session([beat, vocal]);
+    const ideas = studioIdeas(s);
+    const get = (id: string) => ideas.find((i) => i.id === id)!;
+    assert.equal(compatible(get("layer-double"), get("layer-octave-down")), true);
+    assert.ok(tryIdea(s, get("layer-double")));
+    assert.ok(tryIdea(s, get("layer-octave-down"), { add: true }));
+    assert.deepEqual(
+      state().lanes.map((l) => l.laneId),
+      ["beat", "vocal", "vocal~layer-dbl-l", "vocal~layer-dbl-r", "vocal~layer-oct-down"]
+    );
+    revertTrial();
+    assert.deepEqual(state().lanes, [beat, vocal]);
+  });
+
+  test("a layer goes wherever its vocal is moved, keeping its own small offset", () => {
+    const s = session([beat, vocal]);
+    const ideas = studioIdeas(s);
+    tryIdea(s, ideas.find((i) => i.id === "layer-double")!);
+    // A move of the whole mix, tried with the double on: the double lines up with the moved vocal.
+    const moved = studioIdeas({ ...s, lanes: state().lanes, signature: mixSignature(state().lanes), timing: timingSignature(state().lanes, BPM) });
+    const stutter = moved.find((i) => i.id === "moment-stutter")!;
+    assert.ok(stutter.patches["vocal~layer-dbl-l"]?.clips, "the stutter is copied onto the double");
+    assert.deepEqual(
+      stutter.patches["vocal~layer-dbl-l"].clips!.map((c) => [c.from, c.to, c.at]),
+      stutter.patches["vocal"].clips!.map((c) => [c.from, c.to, c.at])
+    );
+  });
+
+  test("a vocal's own doubles don't count as a second singer", () => {
+    const withLayer = [beat, vocal, lane("vocal~layer-dbl-l", "vocals", { offsetSeconds: 8.013, originalDuration: 36, volume: 0.5 })];
+    assert.ok(!studioIdeas(session(withLayer)).some((i) => i.id === "fix-vocal-clash"));
+  });
+
+  test("slowed + reverb: everything slower and lower together, the tempo with it", () => {
+    const slowed = studioIdeas(session([beat, vocal])).find((i) => i.id === "full-slowed")!;
+    assert.ok(slowed, "offered");
+    assert.equal(slowed.projectBpm, 102);
+    for (const id of ["beat", "vocal"]) {
+      assert.ok(Math.abs(slowed.patches[id].tempoRatio! - 0.85) < 1e-9, id);
+      assert.equal(slowed.patches[id].pitchSemitones, -3, id);
+    }
+    assert.ok(Math.abs(slowed.patches.vocal.offsetSeconds! - 8 / 0.85) < 1e-6, "the vocal still comes in on the same beat");
+    assert.ok(slowed.patches.vocal.fx!.reverb > 0.3, "drenched in reverb");
+    const sped = studioIdeas(session([beat, vocal])).find((i) => i.id === "full-sped-up")!;
+    assert.equal(sped.projectBpm, 144);
+    assert.equal(sped.patches.vocal.pitchSemitones, 3);
+  });
+
+  test("a pumping beat and a gated build are drawn on the beat", () => {
+    const ideas = studioIdeas(session([beat, vocal]));
+    const pump = ideas.find((i) => i.id === "moment-pump")!;
+    const gate = ideas.find((i) => i.id === "moment-gate")!;
+    assert.ok(pump.patches.beat.automation!.volume!.length > 100, "a dip on every beat");
+    const gated = gate.patches.beat.automation!.volume!;
+    assert.ok(gated.some((p) => p.v === 0 && p.t > 4 && p.t < 8), "the beat chops off before the vocal at 8s");
+    assert.ok(gated.every((p) => p.t < 4 - 0.01 || p.t <= 8.01), "and only there");
+  });
+
+  test("the mastering pick suits the style", () => {
+    assert.equal(masterFor(["club"]), "club");
+    assert.equal(masterFor(["lofi"]), "warm");
+    assert.equal(masterFor(["short"]), "loud");
+    assert.equal(masterFor([]), "clean");
+  });
+
+  test("fine-tune moves, re-pitches and levels a vocal's layers with it", () => {
+    const layer = lane("vocal~layer-oct-down", "vocals", { offsetSeconds: 8, originalDuration: 36, pitchSemitones: -12, volume: 0.4 });
+    useStudioStore.setState({ lanes: [beat, vocal, layer] });
+    transpose("vocal", 2);
+    assert.equal(find("vocal").pitchSemitones, 2);
+    assert.equal(find("vocal~layer-oct-down").pitchSemitones, -10, "still an octave under");
+    nudge("vocal", 1);
+    assert.equal(find("vocal~layer-oct-down").offsetSeconds, 8.5);
+    gain("vocal", -6);
+    assert.ok(find("vocal~layer-oct-down").volume < 0.4);
+  });
+});
+
+describe("keeping tracks whole", () => {
+  const beat = lane("beat", "beat");
+  const vocal = lane("vocal", "vocals", { offsetSeconds: 8, originalDuration: 36 });
+  const whole = (lanes: StudioLane[]) => ({ ...session(lanes), options: { vibe: "any" as const, keepWhole: true } });
+
+  test("no idea cuts the vocal; ideas that only work by chopping it aren't offered", () => {
+    const ideas = studioIdeas(whole([beat, vocal]));
+    const ids = ideas.map((i) => i.id);
+    assert.ok(!ids.includes("moment-stutter") && !ids.includes("moment-swell"), ids.join(", "));
+    assert.ok(ids.includes("full-slowed") && ids.includes("moment-pump"), "the rest are still there");
+    for (const idea of ideas) {
+      for (const [id, patch] of Object.entries(idea.patches)) {
+        assert.ok(!patch.clips, `${idea.id} cuts ${id}`);
+      }
+    }
+  });
+
+  test("the ending isn't fixed by looping or trimming the beat", () => {
+    assert.ok(mixFix(session([beat, vocal]), ["length"]), "normally the long beat is trimmed");
+    assert.equal(mixFix(whole([beat, vocal]), ["length"]), null);
+  });
+
+  test("without the setting, cutting ideas are offered as before", () => {
+    assert.ok(studioIdeas(session([beat, vocal])).some((i) => i.id === "moment-stutter"));
+  });
+});
+
+describe("every lane in sync", () => {
+  const beat = lane("beat", "beat");
+  const vocal = lane("vocal", "vocals", { offsetSeconds: 8, originalDuration: 36 });
+  // A second beat at 100 BPM, starting off the grid.
+  const other = lane("other", "beat", { bpm: 100, offsetSeconds: 3.1, trackTitle: "other song" });
+
+  test("the mix check names a lane at another speed, with the fix", () => {
+    const check = checkMix(session([beat, vocal, other]), [beat, vocal, other]).find((c) => c.id === "lanes");
+    assert.equal(check?.status, "bad");
+    assert.match(check!.text, /other song/);
+    assert.equal(check?.fix, "sync");
+  });
+
+  test("syncing stretches it to the project tempo and starts it on a bar line", () => {
+    const idea = mixFix(session([beat, vocal, other]), ["sync"])!;
+    assert.ok(idea, "there's something to sync");
+    assert.ok(Math.abs(idea.patches.other.tempoRatio! - 1.2) < 1e-9);
+    assert.equal(idea.patches.other.offsetSeconds, 4, "bar 3 (2s bars)");
+    const after = [beat, vocal, normaliseLane({ ...other, ...idea.patches.other })];
+    assert.equal(checkMix(session([beat, vocal, other]), after).find((c) => c.id === "lanes")?.status, "good");
+  });
+
+  test("half time counts: a 60 BPM lane is read at 120, not stretched 2×", () => {
+    const slow = lane("slow", "beat", { bpm: 61, trackTitle: "slow song" });
+    const idea = mixFix(session([beat, vocal, slow]), ["sync"])!;
+    assert.ok(Math.abs(idea.patches.slow.tempoRatio! - 120 / 122) < 1e-9);
+  });
+
+  test("a lane too far from the tempo is left alone, and says so", () => {
+    const far = lane("far", "beat", { bpm: 88, trackTitle: "far song" });
+    const idea = mixFix(session([beat, vocal, far]), ["sync"]);
+    assert.ok(!idea?.patches.far?.tempoRatio);
+  });
+});
+
+describe("choosing one option keeps the others", () => {
+  const beat = lane("beat", "beat");
+  const vocal = lane("vocal", "vocals", { offsetSeconds: 8, originalDuration: 36 });
+  const drums = lane("drums", "drums");
+  let s: Session;
+  let ideas: Idea[];
+  const get = (id: string) => ideas.find((i) => i.id === id)!;
+  const on = () => useAiTrial.getState().trial!.ideas.map((i) => i.id);
+
+  beforeEach(() => {
+    useAiTrial.setState({ trial: null });
+    useStudioStore.setState({ lanes: [beat, vocal, drums], projectBpm: BPM, duration: 120 });
+    s = session([beat, vocal, drums]);
+    ideas = studioIdeas(s);
+  });
+
+  test("a style, a sound, a moment and a layer all stay on together", () => {
+    assert.ok(tryIdea(s, get("full-slowed"), { add: true }));
+    assert.ok(tryIdea(s, get("sound-punch"), { add: true }));
+    assert.ok(tryIdea(s, get("moment-acapella"), { add: true }));
+    assert.ok(tryIdea(s, get("layer-double"), { add: true }));
+    assert.deepEqual(on().sort(), ["full-slowed", "layer-double", "moment-acapella", "sound-punch"]);
+  });
+
+  test("only the same kind makes way: another sound replaces the sound, another timing the timing", () => {
+    tryIdea(s, get("full-slowed"), { add: true });
+    tryIdea(s, get("sound-punch"), { add: true });
+    tryIdea(s, get("layer-double"), { add: true });
+    tryIdea(s, get("sound-lofi"), { add: true });
+    assert.deepEqual(on().sort(), ["full-slowed", "layer-double", "sound-lofi"]);
+    tryIdea(s, get("full-sped-up"), { add: true });
+    assert.deepEqual(on().sort(), ["full-sped-up", "layer-double", "sound-lofi"]);
+  });
+
+  test("stepping to the next idea replaces just the one being browsed", () => {
+    tryIdea(s, get("layer-double"), { add: true });
+    tryIdea(s, get("sound-punch"), { add: true });
+    tryIdea(s, get("sound-lofi"), { add: true, replace: "sound-punch" });
+    assert.deepEqual(on().sort(), ["layer-double", "sound-lofi"]);
+  });
+
+  test("the later idea wins where two set the same thing, the earlier keeps the rest", () => {
+    tryIdea(s, get("full-slowed"), { add: true });
+    tryIdea(s, get("sound-punch"), { add: true });
+    const v = useStudioStore.getState().lanes.find((l) => l.laneId === "vocal")!;
+    assert.ok(Math.abs(v.tempoRatio - 0.85) < 1e-9, "the style's speed stays");
+    assert.ok(v.fx.reverb < 0.2, "the punch sound replaced the slowed reverb");
+    revertTrial();
   });
 });

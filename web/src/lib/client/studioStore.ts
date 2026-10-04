@@ -4,6 +4,8 @@ import { isBacking, type StemKind } from "@/lib/stemKinds";
 import {
   MIN_CLIP,
   WHOLE,
+  asWholeTake,
+  cleanClip,
   clipSpan,
   clipStart,
   clipsOf,
@@ -101,7 +103,14 @@ export type StudioLane = {
   xfade: "a" | "b" | null;
   /** Drawn changes over time — see LaneAutomation. */
   automation: LaneAutomation;
+  /** A name of the person's own for the lane (shown instead of the track title). */
+  name?: string;
 };
+
+/** What a lane is called on screen: its own name, else its track's title. */
+export function laneName(lane: Pick<StudioLane, "name" | "trackTitle">) {
+  return lane.name?.trim() || lane.trackTitle;
+}
 
 /** One point of an automation line: a timeline position and a 0..1 value. */
 export type AutoPoint = { t: number; v: number };
@@ -155,7 +164,17 @@ export type LaneClip = {
   reverse?: boolean;
   /** What it is, shown on the clip ("Chorus", "Verse 2") — set by the AI's arrangements. */
   label?: string;
+  /** The clip's own level on top of the lane's fader (1 or missing = as is). */
+  gain?: number;
+  /** Silenced without being deleted. */
+  muted?: boolean;
+  /** Fade in / out at the clip's own edges, in timeline seconds. */
+  fadeIn?: number;
+  fadeOut?: number;
 };
+
+/** The clip options that are dropped when they're at their default. */
+export type ClipOptions = Pick<LaneClip, "reverse" | "stretch" | "gain" | "muted" | "fadeIn" | "fadeOut">;
 
 /** The fields a bulk edit (auto-match, or undoing one) may change. */
 export type LanePatch = Partial<
@@ -170,6 +189,7 @@ export type LanePatch = Partial<
     | "fx"
     | "clips"
     | "automation"
+    | "name"
   >
 >;
 
@@ -267,6 +287,42 @@ export const FX_PRESETS: FxPreset[] = [
   },
 ];
 
+/**
+ * The master bus, before the fader and the safety limiter: a broad tone
+ * (low and high shelves) and "glue" — gentle bus compression with make-up
+ * gain, which is most of what makes a mix sound finished and loud.
+ */
+export type MasterFx = {
+  /** dB, low shelf at 90 Hz. */
+  low: number;
+  /** dB, high shelf at 9 kHz. */
+  high: number;
+  /** 0..1 bus compression (and make-up gain). */
+  glue: number;
+};
+
+export const DEFAULT_MASTER: MasterFx = { low: 0, high: 0, glue: 0 };
+
+export type MasterPreset = { id: string; label: string; hint: string; master: MasterFx };
+
+export const MASTER_PRESETS: MasterPreset[] = [
+  { id: "off", label: "Off", hint: "Just the safety limiter", master: DEFAULT_MASTER },
+  { id: "clean", label: "Clean", hint: "A touch of glue, nothing coloured", master: { low: 0, high: 0.5, glue: 0.3 } },
+  { id: "loud", label: "Loud", hint: "Punchy and loud for streaming and phones", master: { low: 1.5, high: 1.5, glue: 0.75 } },
+  { id: "warm", label: "Warm", hint: "Rounder lows, softer highs — lo-fi and chill", master: { low: 2, high: -2, glue: 0.45 } },
+  { id: "bright", label: "Bright", hint: "Airy and crisp — pop and radio", master: { low: -0.5, high: 3, glue: 0.4 } },
+  { id: "club", label: "Club", hint: "Big low end, hard glue — for big speakers", master: { low: 3, high: 1, glue: 0.65 } },
+];
+
+/** Grid choices for snapping, in beats. */
+export const GRID_CHOICES: { beats: number; label: string }[] = [
+  { beats: 4, label: "Bar" },
+  { beats: 2, label: "½ bar" },
+  { beats: 1, label: "Beat" },
+  { beats: 0.5, label: "1/8" },
+  { beats: 0.25, label: "1/16" },
+];
+
 type StudioState = {
   lanes: StudioLane[];
   isPlaying: boolean;
@@ -279,6 +335,11 @@ type StudioState = {
   masterVolume: number;
   metronome: boolean;
   snapToGrid: boolean;
+  /** What snapping snaps to, in beats (1 = the beat, 4 = the bar). Not saved. */
+  gridBeats: number;
+  setGridBeats: (beats: number) => void;
+  master: MasterFx;
+  setMaster: (patch: Partial<MasterFx>) => void;
   loopEnabled: boolean;
   loopStart: number;
   loopEnd: number;
@@ -302,6 +363,10 @@ type StudioState = {
   addStem: (stem: LoadableStem) => string;
   removeLane: (laneId: string) => void;
   duplicateLane: (laneId: string) => void;
+  /** Moves a lane up (-1) or down (1) the list. */
+  moveLane: (laneId: string, direction: -1 | 1) => void;
+  /** Names a lane (empty: back to its track's title). */
+  renameLane: (laneId: string, name: string) => void;
   setVolume: (laneId: string, volume: number) => void;
   toggleMute: (laneId: string) => void;
   toggleSolo: (laneId: string) => void;
@@ -343,7 +408,7 @@ type StudioState = {
   setCrossfader: (position: number) => void;
   setLaneXfade: (laneId: string, side: "a" | "b" | null) => void;
   /** Flips a clip backwards/forwards, or sets its own speed (1 = the lane's). */
-  setClipOptions: (laneId: string, index: number, patch: Pick<LaneClip, "reverse" | "stretch">) => void;
+  setClipOptions: (laneId: string, index: number, patch: ClipOptions) => void;
   /**
    * Beat repeat: from `timelineSeconds`, plays the `beats`-long slice that
    * starts there `repeats` times in a row, over whatever was there.
@@ -385,6 +450,7 @@ export type ProjectSettings = {
   /** 0 = all side A, 1 = all side B, 0.5 = both at full level. */
   crossfader: number;
   pads: Pad[];
+  master: MasterFx;
 };
 
 export const PROJECT_DEFAULTS: ProjectSettings = {
@@ -396,7 +462,32 @@ export const PROJECT_DEFAULTS: ProjectSettings = {
   markers: [],
   crossfader: 0.5,
   pads: [],
+  master: DEFAULT_MASTER,
 };
+
+/** A saved or shared master setting made safe: numbers in range, defaults for the rest. */
+export function normaliseMaster(value: unknown): MasterFx {
+  const raw = (value ?? {}) as Partial<Record<keyof MasterFx, unknown>>;
+  const num = (v: unknown, min: number, max: number, fallback: number) =>
+    typeof v === "number" && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;
+  return {
+    low: num(raw.low, -6, 6, 0),
+    high: num(raw.high, -6, 6, 0),
+    glue: num(raw.glue, 0, 1, 0),
+  };
+}
+
+/** Seconds per grid step at the project tempo. */
+export function gridLength(bpm: number, gridBeats: number) {
+  return beatLength(bpm) * (gridBeats > 0 ? gridBeats : 1);
+}
+
+/** `seconds` snapped to the grid, when snapping is on. */
+export function snapTime(seconds: number, state: { snapToGrid: boolean; projectBpm: number; gridBeats: number }) {
+  if (!state.snapToGrid) return seconds;
+  const grid = gridLength(state.projectBpm, state.gridBeats);
+  return Math.round(seconds / grid) * grid;
+}
 
 function recomputeDuration(lanes: StudioLane[]) {
   return lanes.reduce((max, lane) => Math.max(max, lane.offsetSeconds + lane.duration), 0);
@@ -505,6 +596,8 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   masterVolume: 1,
   metronome: false,
   snapToGrid: true,
+  gridBeats: 1,
+  master: DEFAULT_MASTER,
   loopEnabled: false,
   loopStart: 0,
   loopEnd: 0,
@@ -559,6 +652,30 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       lanes.splice(index + 1, 0, copy);
       return { lanes, duration: recomputeDuration(lanes) };
     });
+  },
+
+  moveLane: (laneId, direction) => {
+    set((state) => {
+      const index = state.lanes.findIndex((l) => l.laneId === laneId);
+      const to = index + direction;
+      if (index < 0 || to < 0 || to >= state.lanes.length) return state;
+      const lanes = [...state.lanes];
+      [lanes[index], lanes[to]] = [lanes[to], lanes[index]];
+      return { lanes };
+    });
+  },
+
+  renameLane: (laneId, name) => {
+    const clean = name.trim().slice(0, 40);
+    set((state) => ({
+      lanes: state.lanes.map((l) => {
+        if (l.laneId !== laneId) return l;
+        const next = { ...l };
+        if (clean && clean !== l.trackTitle) next.name = clean;
+        else delete next.name;
+        return next;
+      }),
+    }));
   },
 
   setVolume: (laneId, volume) => {
@@ -707,12 +824,9 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   clearClips: (laneId) => {
     set((state) => {
       const lanes = state.lanes.map((l) => {
-        if (l.laneId !== laneId || !l.clips?.length) return l;
         // Keep the first phrase where it was, with the rest of the take
         // around it as originally sung.
-        const first = l.clips.reduce((a, b) => (b.at < a.at ? b : a));
-        const offsetSeconds = Math.max(0, l.offsetSeconds + (first.at - first.from) / l.tempoRatio);
-        return withEffectiveDuration({ ...l, offsetSeconds, clips: null });
+        return l.laneId === laneId ? asWholeTake(l) : l;
       });
       return { lanes, duration: recomputeDuration(lanes) };
     });
@@ -833,6 +947,10 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
   toggleSnap: () => set((state) => ({ snapToGrid: !state.snapToGrid })),
 
+  setGridBeats: (gridBeats) => set({ gridBeats: GRID_CHOICES.some((g) => g.beats === gridBeats) ? gridBeats : 1, snapToGrid: true }),
+
+  setMaster: (patch) => set((state) => ({ master: normaliseMaster({ ...state.master, ...patch }) })),
+
   setLoop: (patch) => {
     set((state) => {
       const start = Math.max(0, patch.start ?? state.loopStart);
@@ -867,10 +985,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       laneId,
       clips.map((c, i) => {
         if (i !== index) return c;
-        const next: LaneClip = { ...c, ...patch };
-        if (!next.reverse) delete next.reverse;
-        if (next.stretch === undefined || Math.abs(next.stretch - 1) < 0.0005) delete next.stretch;
-        return next;
+        return cleanClip({ ...c, ...patch });
       })
     );
   },
@@ -928,6 +1043,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       markers: [],
       crossfader: 0.5,
       pads: [],
+      master: DEFAULT_MASTER,
       sourceRemix: null,
       challenge: null,
       selectedLaneIds: [],
@@ -953,6 +1069,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       markers: project?.markers ?? [],
       crossfader: project?.crossfader ?? 0.5,
       pads: project?.pads ?? [],
+      master: normaliseMaster(project?.master),
       sourceRemix: source,
       challenge: null,
       selectedLaneIds: [],
@@ -967,7 +1084,15 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       // Looping is for whoever's listening: a collaborator's loop shouldn't
       // start (or stop) repeating this person's playback.
       const { loopEnabled, loopStart, loopEnd } = state;
-      return { ...project, loopEnabled, loopStart, loopEnd, lanes: next, duration: recomputeDuration(next) };
+      return {
+        ...project,
+        master: normaliseMaster(project.master),
+        loopEnabled,
+        loopStart,
+        loopEnd,
+        lanes: next,
+        duration: recomputeDuration(next),
+      };
     });
   },
 

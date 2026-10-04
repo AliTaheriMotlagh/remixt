@@ -6,7 +6,7 @@ import { audioEngine } from "@/lib/client/audioEngine";
 import { exportLane } from "@/lib/client/mixdown";
 import { previewPlayer } from "@/lib/client/previewPlayer";
 import { startNewStep } from "@/lib/client/studioHistory";
-import { beatLength, useStudioStore, type StudioLane } from "@/lib/client/studioStore";
+import { beatLength, laneName, snapTime as snapToGrid, useStudioStore, type StudioLane } from "@/lib/client/studioStore";
 import { useStudioView, type InspectorTab } from "@/lib/client/studioView";
 import type { MenuItem } from "./ContextMenu";
 
@@ -42,9 +42,45 @@ export function selectForMenu(ref: ClipRef) {
 }
 
 function snapTime(seconds: number) {
-  const { snapToGrid, projectBpm } = store();
-  const beat = beatLength(projectBpm);
-  return snapToGrid ? Math.round(seconds / beat) * beat : seconds;
+  return snapToGrid(seconds, store());
+}
+
+function gainLabel(gain: number) {
+  return gain > 0 ? `${gain > 1 ? "+" : ""}${(20 * Math.log10(gain)).toFixed(1)} dB` : "silent";
+}
+
+function rename(lane: StudioLane) {
+  const name = window.prompt("Name this lane", laneName(lane));
+  if (name === null) return;
+  startNewStep();
+  store().renameLane(lane.laneId, name);
+}
+
+/** Whole track or clips: the same choice from the lane menu, a clip's menu and the lane header. */
+export function trackModeItems(lane: StudioLane): MenuItem[] {
+  const whole = !lane.clips?.length;
+  return [
+    { type: "heading", label: whole ? "Track · whole" : `Track · ${lane.clips!.length} clips` },
+    {
+      label: "Whole track",
+      icon: "▬",
+      checked: whole,
+      hint: whole ? "Plays the whole stem as one clip" : "Undo the cuts — the first clip stays put",
+      onSelect: () => clips.makeWhole(lane.laneId),
+    },
+    {
+      type: "chips",
+      label: "Split into clips",
+      chips: [
+        { label: "at silences", onSelect: () => void clips.splitLane(lane.laneId, "silences"), hint: "One clip per phrase — the gaps are dropped" },
+        ...([1, 2, 4, 8] as const).map((bars) => ({
+          label: `every ${bars} bar${bars === 1 ? "" : "s"}`,
+          onSelect: () => clips.splitLane(lane.laneId, bars),
+          hint: "Equal clips on the bar lines, nothing dropped",
+        })),
+      ],
+    },
+  ];
 }
 
 function laneEssentials(lane: StudioLane): MenuItem[] {
@@ -60,7 +96,7 @@ export function clipMenu(lane: StudioLane, ref: ClipRef, seconds: number): MenuI
   const count = selection.length || 1;
   const clip = clipsOf(lane).find((c) => clipId(c) === ref.clipId);
   const stretch = clip?.stretch ?? 1;
-  const arranged = !!lane.clips?.length;
+  const gain = clip?.gain ?? 1;
   const many = count > 1 ? ` ${count} clips` : "";
   return [
     { label: "Split here", icon: "✂", onSelect: () => clips.splitAt(seconds, [lane.laneId]) },
@@ -108,13 +144,62 @@ export function clipMenu(lane: StudioLane, ref: ClipRef, seconds: number): MenuI
         onSelect: () => clips.stutter(s.beats, s.repeats, seconds, lane.laneId),
       })),
     },
+    { type: "heading", label: "Shape" },
+    {
+      type: "chips",
+      label: `Level${gain !== 1 ? ` (${gainLabel(gain)})` : ""}`,
+      chips: [
+        { label: "−3 dB", onSelect: () => clips.clipGain(-3), hint: "Quieter — this clip only" },
+        { label: "+3 dB", onSelect: () => clips.clipGain(3), hint: "Louder — this clip only" },
+        { label: "0 dB", active: gain === 1, onSelect: clips.resetClipGain, hint: "Back to the lane's level" },
+      ],
+    },
+    {
+      type: "chips",
+      label: "Fade",
+      chips: [
+        { label: "in 1 beat", active: !!clip?.fadeIn, onSelect: () => clips.clipFade("in", 1) },
+        { label: "out 1 beat", active: !!clip?.fadeOut, onSelect: () => clips.clipFade("out", 1) },
+        { label: "in+out 1 bar", onSelect: () => clips.clipFade("both", 4) },
+        { label: "off", onSelect: () => clips.clipFade("both", 0) },
+      ],
+    },
+    { label: `${clip?.muted ? "Unmute" : "Mute"}${many || " clip"}`, icon: "🔇", shortcut: "⇧M", checked: !!clip?.muted, onSelect: clips.toggleClipMute },
+    { type: "heading", label: "Chop & fit" },
+    {
+      type: "chips",
+      label: "Slice every",
+      chips: [
+        { label: "1/16", onSelect: () => clips.slice(0.25) },
+        { label: "1/8", onSelect: () => clips.slice(0.5) },
+        { label: "beat", onSelect: () => clips.slice(1) },
+        { label: "bar", onSelect: () => clips.slice(4) },
+      ],
+    },
+    {
+      type: "chips",
+      label: "Fit to",
+      chips: [1, 2, 4, 8].map((bars) => ({
+        label: `${bars} bar${bars === 1 ? "" : "s"}`,
+        hint: "Speed it up or down (pitch stays) to last exactly this long",
+        onSelect: () => clips.fitToBars(bars),
+      })),
+    },
+    {
+      type: "chips",
+      label: "Trim at playhead",
+      chips: [
+        { label: "cut the start", onSelect: () => clips.trimAtPlayhead("start"), hint: "Drop what's before the playhead" },
+        { label: "cut the end", onSelect: () => clips.trimAtPlayhead("end"), hint: "Drop what's after the playhead" },
+      ],
+    },
+    { label: "Join clips", icon: "⛓", shortcut: `${mod}J`, disabled: count < 2, hint: "Glue back pieces that follow on", onSelect: clips.join },
     { type: "separator" },
     { label: "Move to playhead", icon: "⇥", onSelect: clips.moveToPlayhead },
     { label: "Loop and play this", icon: "🔁", shortcut: "⇧L", onSelect: clips.loopSelection },
     { label: "Send to a sample pad", icon: "▦", onSelect: () => clips.toPad(lane.laneId) },
     { type: "separator" },
-    { label: "Cut out the silences", icon: "〰", hint: "Split this lane at every silence", onSelect: () => void clips.removeSilences(lane.laneId) },
-    ...(arranged ? [{ label: "Back to the whole take", icon: "↺", onSelect: () => clips.wholeTake(lane.laneId) }] : []),
+    ...trackModeItems(lane),
     { label: "Select every clip in this lane", icon: "▭", onSelect: () => clips.selectLaneClips(lane.laneId) },
     { type: "separator" },
     {
@@ -129,8 +214,20 @@ export function clipMenu(lane: StudioLane, ref: ClipRef, seconds: number): MenuI
 
 export function laneMenu(lane: StudioLane): MenuItem[] {
   const automation = useStudioView.getState().automationLanes.includes(lane.laneId);
+  const index = store().lanes.findIndex((l) => l.laneId === lane.laneId);
+  const last = store().lanes.length - 1;
+  const hasAutomation = !!(lane.automation.volume?.length || lane.automation.filter?.length);
   return [
     ...laneEssentials(lane),
+    { label: "Rename…", icon: "✎", onSelect: () => rename(lane) },
+    {
+      type: "chips",
+      label: "Move",
+      chips: [
+        { label: "▲ up", onSelect: () => (index > 0 ? (startNewStep(), store().moveLane(lane.laneId, -1)) : undefined), hint: "Move this lane up the list" },
+        { label: "▼ down", onSelect: () => (index < last ? (startNewStep(), store().moveLane(lane.laneId, 1)) : undefined), hint: "Move this lane down the list" },
+      ],
+    },
     { label: "Tempo & key…", icon: "♩", onSelect: () => openInspector(lane.laneId, "tempo") },
     { label: "Effects…", icon: "✦", onSelect: () => openInspector(lane.laneId, "fx") },
     {
@@ -143,6 +240,16 @@ export function laneMenu(lane: StudioLane): MenuItem[] {
       icon: "〰",
       checked: automation,
       onSelect: () => useStudioView.getState().toggleAutomation(lane.laneId),
+    },
+    {
+      type: "chips",
+      label: store().loopEnabled ? "Rhythm (over the loop)" : "Rhythm",
+      chips: [
+        { label: "pump", onSelect: () => clips.pump(lane.laneId), hint: "Dips on every beat and swells back — the sidechain feel" },
+        { label: "gate 1/8", onSelect: () => clips.gate(lane.laneId, 0.5), hint: "Chops it on and off every eighth note" },
+        { label: "gate 1/16", onSelect: () => clips.gate(lane.laneId, 0.25), hint: "Chops it on and off every sixteenth — trance gate" },
+        ...(hasAutomation ? [{ label: "clear", onSelect: () => clips.clearAutomation(lane.laneId), hint: "Take the drawn automation off" }] : []),
+      ],
     },
     {
       type: "chips",
@@ -160,15 +267,14 @@ export function laneMenu(lane: StudioLane): MenuItem[] {
       onSelect: () => useStudioView.getState().setSplitLane(lane.laneId),
     },
     { type: "separator" },
+    ...trackModeItems(lane),
     { label: "Select all its clips", icon: "▭", onSelect: () => clips.selectLaneClips(lane.laneId) },
-    { label: "Cut out the silences", icon: "✂", onSelect: () => void clips.removeSilences(lane.laneId) },
-    ...(lane.clips?.length ? [{ label: "Back to the whole take", icon: "↺", onSelect: () => clips.wholeTake(lane.laneId) }] : []),
     { type: "separator" },
     {
       label: "Preview the original stem",
       icon: "▶",
       onSelect: () =>
-        previewPlayer.toggle({ stemId: lane.stemId, title: lane.trackTitle, artist: lane.artistName, kind: lane.kind }),
+        previewPlayer.toggle({ stemId: lane.stemId, title: laneName(lane), artist: lane.artistName, kind: lane.kind }),
     },
     {
       label: "Duplicate lane",
@@ -183,7 +289,7 @@ export function laneMenu(lane: StudioLane): MenuItem[] {
       icon: "⤓",
       onSelect: () => {
         useStudioView.getState().notify("Rendering the lane…");
-        exportLane(lane, lane.trackTitle).catch(() => useStudioView.getState().notify("Couldn't export this lane", "error"));
+        exportLane(lane, laneName(lane)).catch(() => useStudioView.getState().notify("Couldn't export this lane", "error"));
       },
     },
     { type: "separator" },
@@ -267,6 +373,25 @@ export function rulerMenu(seconds: number): MenuItem[] {
       : []),
     { type: "separator" },
     { label: "Split every lane here", icon: "✂", onSelect: () => clips.splitAt(snapTime(seconds), state.lanes.map((l) => l.laneId)) },
+    ...(hasLoop
+      ? ([
+          {
+            label: "Delete the loop's time",
+            icon: "⌫",
+            hint: "Takes it out of every lane — the rest moves up",
+            onSelect: () => clips.removeTime(state.loopStart, state.loopEnd),
+          },
+        ] as MenuItem[])
+      : []),
+    {
+      type: "chips",
+      label: "Insert space here",
+      chips: [1, 2, 4, 8].map((bars) => ({
+        label: `${bars} bar${bars === 1 ? "" : "s"}`,
+        hint: "Pushes everything from this bar later",
+        onSelect: () => clips.insertBars(seconds, bars),
+      })),
+    },
     { label: "Paste here", icon: "📋", disabled: !clips.hasClipboard(), onSelect: () => clips.paste(snapTime(seconds)) },
   ];
 }

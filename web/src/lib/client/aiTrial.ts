@@ -93,13 +93,19 @@ function build(session: Session, baseline: Mix, ideas: Idea[]): { result: Mix; o
 
 /**
  * Tries `idea` from the original mix — instead of whatever was on, or,
- * with `add`, alongside the ones on that touch different things. False if
- * it couldn't be applied to this mix.
+ * with `add`, on top of the ones on (only those it can't be combined with
+ * go, and `replace`, the one it takes the place of). False if it couldn't
+ * be applied to this mix.
  */
-export function tryIdea(session: Session, idea: Idea, { add = false }: { add?: boolean } = {}): boolean {
+export function tryIdea(
+  session: Session,
+  idea: Idea,
+  { add = false, replace }: { add?: boolean; replace?: string } = {}
+): boolean {
   const { trial } = useAiTrial.getState();
   const baseline = trial?.baseline ?? currentMix();
-  const ideas = add && trial ? [...trial.ideas.filter((i) => i.id !== idea.id && compatible(i, idea)), idea] : [idea];
+  const ideas =
+    add && trial ? [...trial.ideas.filter((i) => i.id !== idea.id && i.id !== replace && compatible(i, idea)), idea] : [idea];
   const { result, on } = build(session, baseline, ideas);
   if (!on.length) {
     setMix(baseline);

@@ -27,12 +27,13 @@ type Snapshot = Pick<
   | "markers"
   | "crossfader"
   | "pads"
+  | "master"
 >;
 
 function snapshot(state: Snapshot): Snapshot {
-  const { lanes, duration, projectBpm, masterVolume, loopEnabled, loopStart, loopEnd, markers, crossfader, pads } =
+  const { lanes, duration, projectBpm, masterVolume, loopEnabled, loopStart, loopEnd, markers, crossfader, pads, master } =
     state;
-  return { lanes, duration, projectBpm, masterVolume, loopEnabled, loopStart, loopEnd, markers, crossfader, pads };
+  return { lanes, duration, projectBpm, masterVolume, loopEnabled, loopStart, loopEnd, markers, crossfader, pads, master };
 }
 
 function changed(a: Snapshot, b: Snapshot) {
@@ -45,7 +46,8 @@ function changed(a: Snapshot, b: Snapshot) {
     a.loopEnd !== b.loopEnd ||
     a.markers !== b.markers ||
     a.crossfader !== b.crossfader ||
-    a.pads !== b.pads
+    a.pads !== b.pads ||
+    a.master !== b.master
   );
 }
 

@@ -1,4 +1,4 @@
-import type { LaneClip, StudioLane } from "./studioStore";
+import type { AutoPoint, ClipOptions, LaneAutomation, LaneClip, Marker, StudioLane } from "./studioStore";
 
 // Editing clips the way a DAW does: pick any number of them, across any
 // lanes, and move, cut, copy, paste, duplicate, repeat, quantize, reverse
@@ -25,6 +25,18 @@ export function newClipId() {
 /** How long a clip plays, in the lane's (unstretched) seconds. */
 export function clipSpan(clip: LaneClip) {
   return (clip.to - clip.from) / (clip.stretch ?? 1);
+}
+
+/** Drops the clip options that are at their defaults, so a clip saves and compares the same either way. */
+export function cleanClip(clip: LaneClip): LaneClip {
+  const next = { ...clip };
+  if (!next.reverse) delete next.reverse;
+  if (next.stretch === undefined || Math.abs(next.stretch - 1) < 0.0005) delete next.stretch;
+  if (next.gain === undefined || Math.abs(next.gain - 1) < 0.005) delete next.gain;
+  if (!next.muted) delete next.muted;
+  if (!(next.fadeIn && next.fadeIn > 0.001)) delete next.fadeIn;
+  if (!(next.fadeOut && next.fadeOut > 0.001)) delete next.fadeOut;
+  return next;
 }
 
 /** A lane's clips — a lane that isn't arranged is one clip of its whole stem. */
@@ -252,27 +264,48 @@ export function splitClips(
     );
     if (index < 0) continue;
     const clip = clips[index];
-    const cut = clip.from + (at - clip.at) * (clip.stretch ?? 1);
-    const right = { ...clip, id: newClipId(), from: cut, at };
-    // Reversed audio plays its end first, so the left half is the stem's later part.
-    const [first, second] = clip.reverse
-      ? [{ ...clip, from: clip.to - (cut - clip.from), to: clip.to }, { ...right, from: clip.from, to: clip.to - (cut - clip.from) }]
-      : [{ ...clip, to: cut }, right];
+    const [first, second] = cutClip(clip, at);
     next.set(lane.laneId, normaliseLane({ ...lane, clips: [...clips.slice(0, index), first, second, ...clips.slice(index + 1)] }));
     count++;
     if (ids?.has(clipId(clip))) {
       selection = selection.filter((r) => !(r.laneId === lane.laneId && (r.clipId === clipId(clip) || r.clipId === WHOLE)));
-      selection.push({ laneId: lane.laneId, clipId: clipId(first) }, { laneId: lane.laneId, clipId: right.id });
+      selection.push({ laneId: lane.laneId, clipId: clipId(first) }, { laneId: lane.laneId, clipId: clipId(second) });
     }
   }
   return { lanes: replace(lanes, next), selection, count };
 }
 
-/** Changes each selected clip with `update` (reverse, speed…). */
+/**
+ * Cuts a clip in two at `at` (lane seconds, inside the clip). The left half
+ * keeps the clip's id and its fade in, the right half gets a new id and the
+ * fade out; both keep its level, speed, direction and name.
+ */
+export function cutClip(clip: LaneClip, at: number): [LaneClip, LaneClip] {
+  const stretch = clip.stretch ?? 1;
+  const into = (at - clip.at) * stretch;
+  const { fadeIn: _fadeIn, fadeOut: _fadeOut, ...rest } = clip;
+  void _fadeIn;
+  void _fadeOut;
+  const left: LaneClip = { ...rest, ...(clip.fadeIn ? { fadeIn: clip.fadeIn } : {}) };
+  const right: LaneClip = { ...rest, id: newClipId(), at, ...(clip.fadeOut ? { fadeOut: clip.fadeOut } : {}) };
+  // Reversed audio plays its end first, so the left half is the stem's later part.
+  if (clip.reverse) {
+    return [
+      { ...left, from: clip.to - into, to: clip.to },
+      { ...right, from: clip.from, to: clip.to - into },
+    ];
+  }
+  return [
+    { ...left, to: clip.from + into },
+    { ...right, from: clip.from + into },
+  ];
+}
+
+/** Changes each selected clip with `update` (reverse, speed, level, fades…). */
 export function updateClips(
   lanes: StudioLane[],
   refs: ClipRef[],
-  update: (clip: LaneClip) => Partial<Pick<LaneClip, "reverse" | "stretch">>
+  update: (clip: LaneClip) => Partial<ClipOptions>
 ): EditResult {
   const next = new Map<string, StudioLane>();
   let selection = refs;
@@ -281,10 +314,7 @@ export function updateClips(
     const ids = concreteIds(lane, clips, wanted);
     const updated = clips.map((clip) => {
       if (!ids.has(clipId(clip))) return clip;
-      const changed: LaneClip = { ...clip, ...update(clip) };
-      if (!changed.reverse) delete changed.reverse;
-      if (changed.stretch === undefined || Math.abs(changed.stretch - 1) < 0.0005) delete changed.stretch;
-      return changed;
+      return cleanClip({ ...clip, ...update(clip) });
     });
     next.set(lane.laneId, normaliseLane({ ...lane, clips: updated }));
     if (wanted.has(WHOLE)) {
@@ -402,4 +432,283 @@ export function stutterLane(
     .filter((c) => c.to - c.from >= MIN_CLIP / 2)
     .map((c) => (c.id === WHOLE ? { ...c, id: newClipId() } : c))
     .sort((a, b) => a.at - b.at);
+}
+
+// --- Slicing, joining, trimming --------------------------------------------------
+
+/** Most slices one Slice can make, so a long take on a 1/16 grid stays workable. */
+export const MAX_SLICES = 512;
+
+/**
+ * Chops each selected clip at every grid line inside it (timeline
+ * multiples of `gridSeconds`) — for chopping a loop or a vocal into beats
+ * to rearrange. The pieces end up selected. `count` is how many cuts.
+ */
+export function sliceClips(lanes: StudioLane[], refs: ClipRef[], gridSeconds: number): EditResult & { count: number } {
+  if (!(gridSeconds > 0)) return { lanes, selection: refs, count: 0 };
+  const next = new Map<string, StudioLane>();
+  const selection: ClipRef[] = [];
+  let count = 0;
+  for (const { lane, ids: wanted } of resolveSelection(lanes, refs)) {
+    const clips = concrete(lane);
+    const ids = concreteIds(lane, clips, wanted);
+    const out: LaneClip[] = [];
+    for (const clip of clips) {
+      if (!ids.has(clipId(clip))) {
+        out.push(clip);
+        continue;
+      }
+      const start = clipStart(lane, clip);
+      const end = clipEnd(lane, clip);
+      let piece = clip;
+      const minTimeline = MIN_CLIP / lane.tempoRatio;
+      for (let t = Math.ceil((start + minTimeline) / gridSeconds) * gridSeconds; t < end - minTimeline && count < MAX_SLICES; t += gridSeconds) {
+        const [left, right] = cutClip(piece, (t - lane.offsetSeconds) * lane.tempoRatio);
+        out.push(left);
+        selection.push({ laneId: lane.laneId, clipId: clipId(left) });
+        piece = right;
+        count++;
+      }
+      out.push(piece);
+      selection.push({ laneId: lane.laneId, clipId: clipId(piece) });
+    }
+    next.set(lane.laneId, normaliseLane({ ...lane, clips: out }));
+  }
+  return count ? { lanes: replace(lanes, next), selection, count } : { lanes, selection: refs, count: 0 };
+}
+
+/** Whether `b` carries on exactly where `a` stops — in the song and on the timeline. */
+function continues(a: LaneClip, b: LaneClip) {
+  const close = (x: number, y: number) => Math.abs(x - y) < 0.005;
+  if (!!a.reverse !== !!b.reverse || !close(a.stretch ?? 1, b.stretch ?? 1)) return false;
+  if (!close(a.gain ?? 1, b.gain ?? 1) || !!a.muted !== !!b.muted) return false;
+  if (!close(b.at, a.at + clipSpan(a))) return false;
+  return a.reverse ? close(b.to, a.from) : close(b.from, a.to);
+}
+
+/**
+ * Glues selected clips back together where one carries straight on from
+ * the next (e.g. after a split or a slice). `count` is how many joins.
+ */
+export function joinClips(lanes: StudioLane[], refs: ClipRef[]): EditResult & { count: number } {
+  const next = new Map<string, StudioLane>();
+  let selection = refs;
+  let count = 0;
+  for (const { lane, ids } of resolveSelection(lanes, refs)) {
+    if (!lane.clips?.length) continue;
+    const sorted = [...lane.clips].sort((a, b) => a.at - b.at);
+    const out: LaneClip[] = [];
+    let joined = 0;
+    for (const clip of sorted) {
+      const last = out[out.length - 1];
+      if (last && ids.has(clipId(last)) && ids.has(clipId(clip)) && continues(last, clip)) {
+        out[out.length - 1] = cleanClip({
+          ...last,
+          ...(last.reverse ? { from: clip.from } : { to: clip.to }),
+          fadeOut: clip.fadeOut,
+        });
+        selection = selection.filter((r) => !(r.laneId === lane.laneId && r.clipId === clipId(clip)));
+        joined++;
+        continue;
+      }
+      out.push(clip);
+    }
+    if (!joined) continue;
+    count += joined;
+    next.set(lane.laneId, normaliseLane({ ...lane, clips: out }));
+  }
+  return { lanes: count ? replace(lanes, next) : lanes, selection, count };
+}
+
+/**
+ * Trims each selected clip that `seconds` falls inside: drops what's
+ * before it (`edge` "start") or after it ("end"). `count` is how many.
+ */
+export function trimClipsAt(lanes: StudioLane[], refs: ClipRef[], seconds: number, edge: "start" | "end"): EditResult & { count: number } {
+  const next = new Map<string, StudioLane>();
+  let selection = refs;
+  let count = 0;
+  for (const { lane, ids: wanted } of resolveSelection(lanes, refs)) {
+    const clips = concrete(lane);
+    const ids = concreteIds(lane, clips, wanted);
+    const at = (seconds - lane.offsetSeconds) * lane.tempoRatio;
+    let changed = false;
+    const out = clips.map((clip) => {
+      if (!ids.has(clipId(clip)) || !(at > clip.at + MIN_CLIP && at < clip.at + clipSpan(clip) - MIN_CLIP)) return clip;
+      const [left, right] = cutClip(clip, at);
+      changed = true;
+      count++;
+      // The kept half takes over the clip's id, so the selection holds.
+      return edge === "start" ? { ...right, id: clipId(clip) } : left;
+    });
+    if (!changed) continue;
+    next.set(lane.laneId, normaliseLane({ ...lane, clips: out }));
+    if (wanted.has(WHOLE)) {
+      selection = [...selection.filter((r) => !(r.laneId === lane.laneId && r.clipId === WHOLE)), ...[...ids].map((clipId) => ({ laneId: lane.laneId, clipId }))];
+    }
+  }
+  return { lanes: count ? replace(lanes, next) : lanes, selection, count };
+}
+
+/** Stretch bounds a clip can be fitted with (the same as a saved clip allows). */
+export const MIN_STRETCH = 0.25;
+export const MAX_STRETCH = 4;
+
+/**
+ * Speeds each selected clip up or down (pitch unchanged) so it lasts
+ * exactly `seconds` on the timeline — a loop fitted to 1, 2 or 4 bars.
+ * Clips that would need more than 4× either way are left. `count` is how many fitted.
+ */
+export function fitClips(lanes: StudioLane[], refs: ClipRef[], seconds: number): EditResult & { count: number } {
+  let count = 0;
+  if (!(seconds > 0)) return { lanes, selection: refs, count };
+  const next = new Map<string, StudioLane>();
+  let selection = refs;
+  for (const { lane, ids: wanted } of resolveSelection(lanes, refs)) {
+    const clips = concrete(lane);
+    const ids = concreteIds(lane, clips, wanted);
+    let changed = false;
+    const out = clips.map((clip) => {
+      if (!ids.has(clipId(clip))) return clip;
+      const stretch = (clip.to - clip.from) / (seconds * lane.tempoRatio);
+      if (stretch < MIN_STRETCH || stretch > MAX_STRETCH) return clip;
+      changed = true;
+      count++;
+      return cleanClip({ ...clip, stretch });
+    });
+    if (!changed) continue;
+    // Clips after a fitted one keep their places: it can now overlap or leave a gap, as in any DAW.
+    next.set(lane.laneId, normaliseLane({ ...lane, clips: out }));
+    if (wanted.has(WHOLE)) {
+      selection = [...selection.filter((r) => !(r.laneId === lane.laneId && r.clipId === WHOLE)), ...[...ids].map((clipId) => ({ laneId: lane.laneId, clipId }))];
+    }
+  }
+  return { lanes: count ? replace(lanes, next) : lanes, selection, count };
+}
+
+// --- Time: ripple delete and insert -------------------------------------------------
+
+const EPS = 0.001;
+
+/** Automation value at `t`, linear between points (held at the ends). */
+function valueAt(points: AutoPoint[], t: number) {
+  if (!points.length) return 1;
+  if (t <= points[0].t) return points[0].v;
+  for (let i = 1; i < points.length; i++) {
+    if (t <= points[i].t) {
+      const a = points[i - 1];
+      const b = points[i];
+      return b.t > a.t ? a.v + ((b.v - a.v) * (t - a.t)) / (b.t - a.t) : b.v;
+    }
+  }
+  return points[points.length - 1].v;
+}
+
+/**
+ * Automation with `start`..`end` taken out (or, with start === end and a
+ * positive `delta`, time put in at `start`): later points move by `delta`,
+ * and the line carries on from where it was.
+ */
+export function shiftAutomation(points: AutoPoint[], start: number, end: number, delta: number): AutoPoint[] {
+  if (!points.length || points[points.length - 1].t < start) return points;
+  const before = points.filter((p) => p.t < start - EPS);
+  const after = points.filter((p) => p.t > end + EPS).map((p) => ({ ...p, t: Math.max(0, p.t + delta) }));
+  const join = [{ t: start, v: valueAt(points, start) }];
+  if (end > start) join.push({ t: start + EPS, v: valueAt(points, end) });
+  else join.push({ t: start + delta, v: valueAt(points, start) });
+  return [...before, ...join, ...after].filter((p, i, all) => i === 0 || p.t >= all[i - 1].t);
+}
+
+function shiftLaneAutomation(automation: LaneAutomation, start: number, end: number, delta: number): LaneAutomation {
+  const out: LaneAutomation = {};
+  if (automation.volume?.length) out.volume = shiftAutomation(automation.volume, start, end, delta);
+  if (automation.filter?.length) out.filter = shiftAutomation(automation.filter, start, end, delta);
+  return out;
+}
+
+/** Sections (markers) after a time edit: shifted, squeezed or dropped. */
+export function shiftMarkers(markers: Marker[], start: number, end: number, delta: number): Marker[] {
+  const move = (t: number) => (t >= end - EPS ? Math.max(0, t + delta) : t > start ? start : t);
+  return markers
+    .map((m) => ({ ...m, start: move(m.start), end: move(m.end) }))
+    .filter((m) => m.end - m.start > 0.05);
+}
+
+/** A lane's clips cut at each of `times` (timeline seconds) that falls inside one. */
+function cutLaneAt(lane: StudioLane, times: number[]): LaneClip[] {
+  let clips = concrete(lane);
+  for (const t of times) {
+    const at = (t - lane.offsetSeconds) * lane.tempoRatio;
+    clips = clips.flatMap((c) => (at > c.at + MIN_CLIP / 2 && at < c.at + clipSpan(c) - MIN_CLIP / 2 ? cutClip(c, at) : [c]));
+  }
+  return clips;
+}
+
+function timeEdit(lanes: StudioLane[], start: number, end: number, delta: number): StudioLane[] {
+  const out: StudioLane[] = [];
+  for (const lane of lanes) {
+    const automation = shiftLaneAutomation(lane.automation, start, end, delta);
+    const laneEnd = lane.offsetSeconds + lane.duration;
+    if (laneEnd <= start + EPS) {
+      out.push({ ...lane, automation });
+      continue;
+    }
+    if (!lane.clips?.length && lane.offsetSeconds >= end - EPS) {
+      out.push({ ...lane, automation, offsetSeconds: Math.max(0, lane.offsetSeconds + delta) });
+      continue;
+    }
+    const clips = cutLaneAt(lane, end > start ? [start, end] : [start])
+      .filter((c) => end <= start || !(clipStart(lane, c) >= start - EPS && clipEnd(lane, c) <= end + EPS))
+      .map((c) => (clipStart(lane, c) >= end - EPS ? { ...c, at: c.at + delta * lane.tempoRatio } : c));
+    // A lane with nothing left to play goes (undo brings it back).
+    if (!clips.length) continue;
+    out.push(normaliseLane({ ...lane, automation, clips }));
+  }
+  return out;
+}
+
+/** Takes `start`..`end` out of the whole song: everything after moves up to close the gap. */
+export function removeTime(lanes: StudioLane[], start: number, end: number): StudioLane[] {
+  if (!(end - start > MIN_CLIP)) return lanes;
+  return timeEdit(lanes, Math.max(0, start), end, -(end - Math.max(0, start)));
+}
+
+/** Puts `seconds` of silence into the whole song at `at`: everything after moves later. */
+export function insertTime(lanes: StudioLane[], at: number, seconds: number): StudioLane[] {
+  if (!(seconds > 0)) return lanes;
+  return timeEdit(lanes, Math.max(0, at), Math.max(0, at), seconds);
+}
+
+// --- Whole track or clips ------------------------------------------------------------
+
+/**
+ * Whether a lane's clips play its stem forwards and in its own order, each
+ * part once — so the whole take could stand in for them (the clips just
+ * leave out the gaps). The small stretches the AI gives phrases to follow
+ * a drifting beat, and phrase edges that overlap a little, still count;
+ * a part played twice, backwards or at a really different speed doesn't.
+ */
+export function playsInOrder(lane: StudioLane): boolean {
+  if (!lane.clips?.length) return true;
+  const sorted = [...lane.clips].sort((a, b) => a.at - b.at);
+  return sorted.every((c, i) => {
+    const stretch = c.stretch ?? 1;
+    if (c.reverse || stretch < 0.85 || stretch > 1.18) return false;
+    if (i === 0) return true;
+    const prev = sorted[i - 1];
+    // Starts later in the song than the one before, and doesn't go back over most of it.
+    return c.from > prev.from + 0.05 && c.from >= prev.to - Math.min(0.75, (prev.to - prev.from) / 2);
+  });
+}
+
+/**
+ * The lane playing its whole stem again, anchored on its first clip: that
+ * clip stays exactly where it was and the rest of the take plays around it
+ * as originally recorded.
+ */
+export function asWholeTake(lane: StudioLane): StudioLane {
+  if (!lane.clips?.length) return lane;
+  const first = lane.clips.reduce((a, b) => (b.at < a.at ? b : a));
+  const offsetSeconds = Math.max(0, lane.offsetSeconds + (first.at - first.from) / lane.tempoRatio);
+  return withEffectiveDuration({ ...lane, offsetSeconds, clips: null });
 }
