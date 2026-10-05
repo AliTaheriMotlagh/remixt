@@ -25,6 +25,7 @@ import {
   type LanePatch,
   type StudioLane,
 } from "./studioStore";
+import type { IconName } from "@/components/Icon";
 import { isBacking } from "@/lib/stemKinds";
 
 // The AI producer. A vocal from one song over a beat from another rarely
@@ -57,8 +58,8 @@ export type Idea = {
   id: string;
   role: Role;
   kind: IdeaKind;
-  /** A short emoji for the idea's tile. */
-  icon: string;
+  /** The idea tile.s icon. */
+  icon: IconName;
   title: string;
   /** In a few plain words: what you'll hear. */
   short: string;
@@ -834,7 +835,7 @@ type MixId = "balanced" | "upfront" | "wide" | "lofi" | "punch" | "echo";
 
 type MixRecipe = {
   id: MixId;
-  icon: string;
+  icon: IconName;
   title: string;
   short: string;
   why: string;
@@ -847,7 +848,7 @@ type MixRecipe = {
 const MIXES: MixRecipe[] = [
   {
     id: "balanced",
-    icon: "⚖️",
+    icon: "scale",
     title: "Clean & balanced",
     short: "Clear vocal, even volumes",
     why: "Separated vocals and beats come out at very different volumes, and the vocal is thin and dry. This evens the volumes, cleans the vocal's rumble, adds presence and a little room, and makes a pocket in the beat for the voice.",
@@ -858,7 +859,7 @@ const MIXES: MixRecipe[] = [
   },
   {
     id: "upfront",
-    icon: "🎤",
+    icon: "mic",
     title: "Vocal upfront",
     short: "Voice leads, beat pumps under it",
     why: "For rap and pop: the voice leads. The beat dips a little every time the vocal sings, so every word cuts through.",
@@ -869,7 +870,7 @@ const MIXES: MixRecipe[] = [
   },
   {
     id: "wide",
-    icon: "🌌",
+    icon: "orbit",
     title: "Big & spacious",
     short: "Wide vocal, long echoes",
     why: "For slower songs and big choruses: a wide doubled vocal, a long echo and a hall, over a beat with a little more weight and air.",
@@ -880,7 +881,7 @@ const MIXES: MixRecipe[] = [
   },
   {
     id: "lofi",
-    icon: "📼",
+    icon: "cassette-tape",
     title: "Lo-fi tape",
     short: "Warm, dusty, old-record feel",
     why: "Rolls off the top and bottom and adds warmth to both, so two recordings from different eras sound like one dusty record.",
@@ -891,7 +892,7 @@ const MIXES: MixRecipe[] = [
   },
   {
     id: "punch",
-    icon: "🥊",
+    icon: "hammer",
     title: "Punchy & loud",
     short: "Hard-hitting beat, bright vocal",
     why: "For club and trap: tight low end and more snap on the beat, a bright, slightly driven vocal with almost no reverb, so it all hits hard.",
@@ -902,7 +903,7 @@ const MIXES: MixRecipe[] = [
   },
   {
     id: "echo",
-    icon: "🔁",
+    icon: "repeat",
     title: "Echo-out ending",
     short: "Last word trails into space",
     why: "A long echo on the vocal and slow fades at both ends, so the song floats out instead of stopping dead.",
@@ -1029,7 +1030,7 @@ export function mixFix(session: Session, wants: FixId[]): Idea | null {
     id: `fix:${ids.join("+")}`,
     kind: "fix",
     role: "engineer",
-    icon: "🩺",
+    icon: "stethoscope",
     title: ids.length === 1 ? `Fix: ${FIX_WORDS[ids[0]]}` : `${ids.length} fixes`,
     short: done.join(" · "),
     why: "The Mix check's fixes, worked out together so none undoes another.",
@@ -1051,7 +1052,7 @@ function makeItGood(session: Session): Idea | null {
     id: AUTO_ID,
     kind: "auto",
     role: "engineer",
-    icon: "✨",
+    icon: "sparkles",
     title: "Make it sound good",
     short: done.join(" · "),
     why: "Fixes what usually makes a vocal over a different beat hard to listen to — different speeds, lines that miss the beat, clashing keys and uneven volumes — all at once.",
@@ -1090,12 +1091,12 @@ function withParts(session: Session): { session: Session; change?: LaneChange } 
   };
 }
 
-type Remix = { id: string; icon: string; structure: Structure; title: string; short: string; why: (pair: PairContext) => string; vibes: Vibe[]; stutter?: boolean };
+type Remix = { id: string; icon: IconName; structure: Structure; title: string; short: string; why: (pair: PairContext) => string; vibes: Vibe[]; stutter?: boolean };
 
 const REMIXES: Remix[] = [
   {
     id: "radio",
-    icon: "📻",
+    icon: "radio",
     structure: "as-sung",
     title: "Original order",
     short: "The vocal as sung, on the beat",
@@ -1104,7 +1105,7 @@ const REMIXES: Remix[] = [
   },
   {
     id: "hook-first",
-    icon: "🪝",
+    icon: "anchor",
     structure: "chorus-first",
     title: "Chorus first",
     short: "Open on the hook",
@@ -1114,7 +1115,7 @@ const REMIXES: Remix[] = [
   },
   {
     id: "short",
-    icon: "⏱",
+    icon: "timer",
     structure: "short",
     title: "Short version",
     short: "One verse, chorus twice",
@@ -1123,7 +1124,7 @@ const REMIXES: Remix[] = [
   },
   {
     id: "extended",
-    icon: "🔄",
+    icon: "refresh-cw",
     structure: "fill",
     title: "Extended",
     short: "Chorus keeps coming back",
@@ -1132,7 +1133,7 @@ const REMIXES: Remix[] = [
   },
   {
     id: "chops",
-    icon: "✂️",
+    icon: "scissors",
     structure: "hook",
     title: "Chorus chops",
     short: "Only the hook, looped",
@@ -1177,7 +1178,7 @@ function arrangementIdeas(session: Session): Idea[] {
         draft.idea({
           id: `beatmaker-tempo-${choice}`,
           role: "beatmaker",
-          icon: "⏱",
+          icon: "timer",
           title: `${title} (${t.projectBpm.toFixed(0)} BPM)`,
           short,
           why: `Beat ${pct(t.beatRatio)}, vocal ${pct(t.vocalRatio)} speed — the pitch doesn't change. ${
@@ -1196,7 +1197,7 @@ function arrangementIdeas(session: Session): Idea[] {
 
 type FullRecipe = {
   id: string;
-  icon: string;
+  icon: IconName;
   vibe: Vibe;
   title: string;
   short: string;
@@ -1216,7 +1217,7 @@ type FullRecipe = {
 const FULL_REMIXES: FullRecipe[] = [
   {
     id: "radio",
-    icon: "📻",
+    icon: "radio",
     vibe: "radio",
     title: "Radio",
     short: "Clean, natural, ready to share",
@@ -1227,7 +1228,7 @@ const FULL_REMIXES: FullRecipe[] = [
   },
   {
     id: "club",
-    icon: "🪩",
+    icon: "disc-3",
     vibe: "club",
     title: "Club",
     short: "Build-up, chorus on the drop",
@@ -1240,7 +1241,7 @@ const FULL_REMIXES: FullRecipe[] = [
   },
   {
     id: "short",
-    icon: "📱",
+    icon: "smartphone",
     vibe: "short",
     title: "TikTok cut",
     short: "Under a minute, hook twice",
@@ -1251,7 +1252,7 @@ const FULL_REMIXES: FullRecipe[] = [
   },
   {
     id: "lofi",
-    icon: "📼",
+    icon: "cassette-tape",
     vibe: "lofi",
     title: "Lo-fi",
     short: "Slower, warm, dusty",
@@ -1263,7 +1264,7 @@ const FULL_REMIXES: FullRecipe[] = [
   },
   {
     id: "chill",
-    icon: "🌙",
+    icon: "moon",
     vibe: "chill",
     title: "Chill",
     short: "Spacious, floating, late-night",
@@ -1275,7 +1276,7 @@ const FULL_REMIXES: FullRecipe[] = [
   },
   {
     id: "hard",
-    icon: "🔥",
+    icon: "flame",
     vibe: "hard",
     title: "Hard bootleg",
     short: "Chopped hook, heavy beat",
@@ -1286,7 +1287,7 @@ const FULL_REMIXES: FullRecipe[] = [
   },
   {
     id: "festival",
-    icon: "🎆",
+    icon: "party-popper",
     vibe: "club",
     title: "Festival",
     short: "Huge build, huge drop",
@@ -1366,7 +1367,7 @@ function momentIdeas(session: Session): Idea[] {
           id: "moment-chorus-drop",
           kind: "moment",
           role: "remixer",
-          icon: "🎯",
+          icon: "target",
           title: `Chorus on the ${label}`,
           short: "The hook lands as the beat hits",
           why: `The beat's biggest moment is at bar ${drop.bar + 1}. Moving the vocal so its chorus starts right there makes both hit at once — the moment a remix is remembered for.`,
@@ -1385,7 +1386,7 @@ function momentIdeas(session: Session): Idea[] {
           id: "moment-big-drop",
           kind: "moment",
           role: "beatmaker",
-          icon: "💥",
+          icon: "bomb",
           title: "The big drop",
           short: "Build-up, cut, chorus slams in",
           why: "A build-up rises for four bars, the beat cuts out, and the chorus slams in with a stutter right on the drop — the most exciting moment you can give a remix.",
@@ -1405,7 +1406,7 @@ function momentIdeas(session: Session): Idea[] {
           id: "moment-build",
           kind: "moment",
           role: "beatmaker",
-          icon: "📈",
+          icon: "trending-up",
           title: `Build-up into the ${label}`,
           short: "Tension, then release",
           why: `Keeps everything where it is and adds tension before the beat's ${label} at bar ${drop.bar + 1}: the sound opens up, cuts out, then hits.`,
@@ -1421,16 +1422,16 @@ function momentIdeas(session: Session): Idea[] {
   if (lead) {
     const stutter = new Draft(session);
     if (stutterAt(stutter)) {
-      ideas.push(stutter.idea({ id: "moment-stutter", kind: "moment", role: "remixer", icon: "🔂", title: "Stutter the first word", short: "“I-I-I-I want…”", why: "Repeats the first half-beat of the vocal four times as it comes in — a classic remix trick that announces the voice.", vibes: ["short", "hard"], listenAt: Math.max(0, entryOf(lead) - stutter.bar) }));
+      ideas.push(stutter.idea({ id: "moment-stutter", kind: "moment", role: "remixer", icon: "repeat-1", title: "Stutter the first word", short: "“I-I-I-I want…”", why: "Repeats the first half-beat of the vocal four times as it comes in — a classic remix trick that announces the voice.", vibes: ["short", "hard"], listenAt: Math.max(0, entryOf(lead) - stutter.bar) }));
     }
     const swell = new Draft(session);
     if (reverseSwell(swell)) {
-      ideas.push(swell.idea({ id: "moment-swell", kind: "moment", role: "remixer", icon: "🌊", title: "Reverse swell", short: "A whoosh into the first line", why: "The vocal's first bar played backwards, rising into its first word — a sucked-in whoosh that sets up the entrance.", vibes: ["chill", "club"], listenAt: Math.max(0, entryOf(lead) - 2 * swell.bar) }));
+      ideas.push(swell.idea({ id: "moment-swell", kind: "moment", role: "remixer", icon: "waves", title: "Reverse swell", short: "A whoosh into the first line", why: "The vocal's first bar played backwards, rising into its first word — a sucked-in whoosh that sets up the entrance.", vibes: ["chill", "club"], listenAt: Math.max(0, entryOf(lead) - 2 * swell.bar) }));
     }
   }
   const filter = new Draft(session);
   if (filterBuild(filter)) {
-    ideas.push(filter.idea({ id: "moment-filter", kind: "moment", role: "beatmaker", icon: "🌫", title: "Muffled intro", short: "The beat opens up as the vocal lands", why: "The beat starts muffled, like from the next room, and opens up just as the vocal comes in.", vibes: ["club", "lofi"], listenAt: 0 }));
+    ideas.push(filter.idea({ id: "moment-filter", kind: "moment", role: "beatmaker", icon: "cloud-fog", title: "Muffled intro", short: "The beat opens up as the vocal lands", why: "The beat starts muffled, like from the next room, and opens up just as the vocal comes in.", vibes: ["club", "lofi"], listenAt: 0 }));
   }
   return [...ideas, ...partIdeas(session), ...dynamicsIdeas(session)];
 }
@@ -1460,7 +1461,7 @@ function dynamicsIdeas(session: Session): Idea[] {
     const draft = new Draft(session);
     for (const lane of backing) draft.patch(lane.laneId, { automation: { ...lane.automation, volume: gap(entry, entry + 2 * bar) } });
     draft.lines.push(`The beat stops for the first 2 bars of singing (from bar ${Math.round(entry / bar) + 1}), then comes back in`);
-    ideas.push(draft.idea({ id: "moment-acapella", kind: "moment", role: "remixer", icon: "🎙", title: "Acapella moment", short: "Voice alone, then the beat crashes in", why: "Letting the first line be heard on its own makes everyone listen — and the beat landing after it feels huge.", vibes: ["radio", "hard", "short"], listenAt: Math.max(0, entry - bar) }));
+    ideas.push(draft.idea({ id: "moment-acapella", kind: "moment", role: "remixer", icon: "mic-vocal", title: "Acapella moment", short: "Voice alone, then the beat crashes in", why: "Letting the first line be heard on its own makes everyone listen — and the beat landing after it feels huge.", vibes: ["radio", "hard", "short"], listenAt: Math.max(0, entry - bar) }));
   }
 
   // Beat switch: two full beats at the same speed — the second takes over halfway.
@@ -1474,7 +1475,7 @@ function dynamicsIdeas(session: Session): Idea[] {
       draft.patch(a.laneId, { automation: { ...a.automation, volume: [{ t: 0, v: 1 }, { t: at - 0.03, v: 1 }, { t: at, v: 0 }] } });
       draft.patch(b.laneId, { automation: { ...b.automation, volume: [{ t: 0, v: 0 }, { t: at - 0.03, v: 0 }, { t: at, v: 1 }] } });
       draft.lines.push(`“${a.trackTitle}” until bar ${Math.round(at / bar) + 1}, then “${b.trackTitle}” takes over`);
-      ideas.push(draft.idea({ id: "moment-beat-switch", kind: "moment", role: "beatmaker", icon: "🔀", title: "Beat switch", short: "A new beat takes over halfway", why: "Halfway through, the second beat takes over under the same vocal — the switch-up that makes people replay a track.", vibes: ["hard", "club"], listenAt: Math.max(0, at - 2 * bar) }));
+      ideas.push(draft.idea({ id: "moment-beat-switch", kind: "moment", role: "beatmaker", icon: "shuffle", title: "Beat switch", short: "A new beat takes over halfway", why: "Halfway through, the second beat takes over under the same vocal — the switch-up that makes people replay a track.", vibes: ["hard", "club"], listenAt: Math.max(0, at - 2 * bar) }));
     }
   }
 
@@ -1502,7 +1503,7 @@ function dynamicsIdeas(session: Session): Idea[] {
       draft.patch(lane.laneId, { automation: { ...lane.automation, volume, filter } });
     }
     draft.lines.push(`The beat sits back a little in the verses and opens up fully on ${chorus.length === 1 ? "the chorus" : `all ${chorus.length} choruses`}`);
-    ideas.push(draft.idea({ id: "moment-dynamics", kind: "moment", role: "engineer", icon: "📶", title: "Chorus lift", short: "Verses sit back, choruses open up", why: "A song that's the same loudness all the way through gets tiring. Holding the beat back in the verses makes every chorus feel like a lift.", vibes: ["radio", "club", "chill"], listenAt: Math.max(0, chorus[0][0] - 2 * bar) }));
+    ideas.push(draft.idea({ id: "moment-dynamics", kind: "moment", role: "engineer", icon: "chart-no-axes-column-increasing", title: "Chorus lift", short: "Verses sit back, choruses open up", why: "A song that's the same loudness all the way through gets tiring. Holding the beat back in the verses makes every chorus feel like a lift.", vibes: ["radio", "club", "chill"], listenAt: Math.max(0, chorus[0][0] - 2 * bar) }));
   }
   return ideas;
 }
@@ -1539,20 +1540,20 @@ function partIdeas(base: Session): Idea[] {
     const draft = new Draft(session);
     silence(drums, moment - 2 * bar, moment, draft);
     draft.lines.push(`Drums out for the 2 bars before ${what} (bar ${atBar}), slamming back in with it`);
-    ideas.push(draft.idea({ id: "parts-drop", kind: "moment", role: "beatmaker", icon: "🥁", title: "Drum drop", short: "Drums vanish, then slam back", why: `Pull the drums for two bars and ${what} hits twice as hard when they come back.`, vibes: ["club", "hard"], listenAt: Math.max(0, moment - 4 * bar), lanes }));
+    ideas.push(draft.idea({ id: "parts-drop", kind: "moment", role: "beatmaker", icon: "drum", title: "Drum drop", short: "Drums vanish, then slam back", why: `Pull the drums for two bars and ${what} hits twice as hard when they come back.`, vibes: ["club", "hard"], listenAt: Math.max(0, moment - 4 * bar), lanes }));
   }
   if (moment >= 2 * bar) {
     const draft = new Draft(session);
     silence([...drums, ...bass], 0, moment, draft);
     draft.lines.push(`Only the melody until ${what} (bar ${atBar}), then drums and bass come in`);
-    ideas.push(draft.idea({ id: "parts-intro", kind: "moment", role: "beatmaker", icon: "🎹", title: "Melody-only intro", short: `Drums & bass come in with ${what}`, why: `Start with just the chords and melody, and bring the drums and bass in with ${what} — the song builds instead of starting at full speed.`, vibes: ["radio", "chill"], listenAt: 0, lanes }));
+    ideas.push(draft.idea({ id: "parts-intro", kind: "moment", role: "beatmaker", icon: "piano", title: "Melody-only intro", short: `Drums & bass come in with ${what}`, why: `Start with just the chords and melody, and bring the drums and bass in with ${what} — the song builds instead of starting at full speed.`, vibes: ["radio", "chill"], listenAt: 0, lanes }));
   }
   if (end - entry > 24 * bar) {
     const middle = entry + Math.round((end - entry) / 2 / (8 * bar)) * 8 * bar;
     const draft = new Draft(session);
     silence([...drums, ...bass], middle, middle + 4 * bar, draft);
     draft.lines.push(`Drums and bass out for 4 bars from bar ${Math.round(middle / bar) + 1}`);
-    ideas.push(draft.idea({ id: "parts-breakdown", kind: "moment", role: "beatmaker", icon: "🕳", title: "Breakdown", short: "Strip it back halfway through", why: "Just the vocal and melody for four bars halfway through, then everything back in — gives a long remix a second peak.", vibes: ["club", "chill"], listenAt: Math.max(0, middle - 2 * bar), lanes }));
+    ideas.push(draft.idea({ id: "parts-breakdown", kind: "moment", role: "beatmaker", icon: "circle-dashed", title: "Breakdown", short: "Strip it back halfway through", why: "Just the vocal and melody for four bars halfway through, then everything back in — gives a long remix a second peak.", vibes: ["club", "chill"], listenAt: Math.max(0, middle - 2 * bar), lanes }));
   }
   return ideas;
 }
@@ -1621,7 +1622,7 @@ function fixIdeas(session: Session): Idea[] {
       draft.patch(lane.laneId, { offsetSeconds: lane.offsetSeconds - earliest, automation });
     }
     draft.lines.push(`Every lane ${earliest.toFixed(1)}s earlier, keeping them in step`);
-    ideas.push(draft.idea({ id: "fix-start", kind: "fix", role: "remixer", icon: "⏩", title: "Cut the silence at the start", short: `${earliest.toFixed(1)}s of nothing removed`, why: "Nothing plays for the first seconds — listeners skip. Everything moves up together, so nothing falls out of sync.", listenAt: 0 }));
+    ideas.push(draft.idea({ id: "fix-start", kind: "fix", role: "remixer", icon: "fast-forward", title: "Cut the silence at the start", short: `${earliest.toFixed(1)}s of nothing removed`, why: "Nothing plays for the first seconds — listeners skip. Everything moves up together, so nothing falls out of sync.", listenAt: 0 }));
   }
 
   const lead = session.vocal ?? vocals[0];
@@ -1638,7 +1639,7 @@ function fixIdeas(session: Session): Idea[] {
       const draft = new Draft(session);
       for (const v of vocals) draft.patch(v.laneId, { offsetSeconds: v.offsetSeconds - shift });
       draft.lines.push(`Vocals ${bars(shift)} bars earlier: in after an 8-bar intro instead of ${Math.floor(intro)}`);
-      ideas.push(draft.idea({ id: "fix-late-entry", kind: "fix", role: "remixer", icon: "⏩", title: "Bring the vocal in sooner", short: "An 8-bar intro, not a long wait", why: `The vocal waits ${Math.floor(intro)} bars to come in — most listeners are gone by then.`, vibes: ["radio", "short"], listenAt: Math.max(0, beatStart + 7 * bar) }));
+      ideas.push(draft.idea({ id: "fix-late-entry", kind: "fix", role: "remixer", icon: "fast-forward", title: "Bring the vocal in sooner", short: "An 8-bar intro, not a long wait", why: `The vocal waits ${Math.floor(intro)} bars to come in — most listeners are gone by then.`, vibes: ["radio", "short"], listenAt: Math.max(0, beatStart + 7 * bar) }));
     }
 
     // No intro at all, with beat to spare.
@@ -1646,7 +1647,7 @@ function fixIdeas(session: Session): Idea[] {
       const draft = new Draft(session);
       for (const v of vocals) draft.patch(v.laneId, { offsetSeconds: v.offsetSeconds + 4 * bar });
       draft.lines.push("Vocals 4 bars later, so the beat has a short intro");
-      ideas.push(draft.idea({ id: "fix-intro", kind: "fix", role: "remixer", icon: "🚪", title: "Add a short intro", short: "4 bars of beat first", why: "The vocal starts on the very first beat. Four bars of beat first sets the groove and gives the voice an entrance.", listenAt: 0 }));
+      ideas.push(draft.idea({ id: "fix-intro", kind: "fix", role: "remixer", icon: "door-open", title: "Add a short intro", short: "4 bars of beat first", why: "The vocal starts on the very first beat. Four bars of beat first sets the groove and gives the voice an entrance.", listenAt: 0 }));
     }
 
     // The biggest gap in the lead vocal while the beat plays on.
@@ -1664,7 +1665,7 @@ function fixIdeas(session: Session): Idea[] {
         draft.adopt(moveClips([...draft.lanes.values()], later, -shiftBars * bar).lanes);
         const at = Math.round(clipEnd(lead, sorted[gap.index]) / bar) + 1;
         draft.lines.push(`Everything after bar ${at} moved ${shiftBars} bars earlier, leaving a 2-bar breath`);
-        ideas.push(draft.idea({ id: "fix-gap", kind: "fix", role: "remixer", icon: "🧲", title: "Close the long gap", short: `A ${Math.round(gap.size / bar)}-bar silence in the vocal`, why: `The vocal goes quiet for ${Math.round(gap.size / bar)} bars while the beat carries on — the energy drops.`, listenAt: Math.max(0, clipEnd(lead, sorted[gap.index]) - 2 * bar) }));
+        ideas.push(draft.idea({ id: "fix-gap", kind: "fix", role: "remixer", icon: "magnet", title: "Close the long gap", short: `A ${Math.round(gap.size / bar)}-bar silence in the vocal`, why: `The vocal goes quiet for ${Math.round(gap.size / bar)} bars while the beat carries on — the energy drops.`, listenAt: Math.max(0, clipEnd(lead, sorted[gap.index]) - 2 * bar) }));
       }
     }
   }
@@ -1686,7 +1687,7 @@ function fixIdeas(session: Session): Idea[] {
         draft.patch(l.laneId, { volume: Math.round(l.volume * 0.7 * 100) / 100, fx: { ...l.fx, pan: i % 2 ? -0.35 : 0.35, highpass: Math.max(l.fx.highpass, 160) } });
         draft.lines.push(`${l.trackTitle}: quieter, to the ${i % 2 ? "left" : "right"}, thinner low end`);
       });
-      ideas.push(draft.idea({ id: "fix-vocal-clash", kind: "fix", role: "engineer", icon: "↔️", title: "Separate the vocals", short: "Lead in the middle, the other to the side", why: "Two vocals sing over each other most of the time, so neither is clear. The lead stays in the middle; the other steps back and to the side.", listenAt: Math.max(0, entryOf(clashing[0])) }));
+      ideas.push(draft.idea({ id: "fix-vocal-clash", kind: "fix", role: "engineer", icon: "arrow-left-right", title: "Separate the vocals", short: "Lead in the middle, the other to the side", why: "Two vocals sing over each other most of the time, so neither is clear. The lead stays in the middle; the other steps back and to the side.", listenAt: Math.max(0, entryOf(clashing[0])) }));
     }
   }
 
@@ -1725,10 +1726,10 @@ function layerLane(lead: StudioLane, layer: Layer): StudioLane {
   });
 }
 
-const LAYERS: { id: string; icon: string; title: string; short: string; why: string; vibes: Vibe[]; layers: Layer[] }[] = [
+const LAYERS: { id: string; icon: IconName; title: string; short: string; why: string; vibes: Vibe[]; layers: Layer[] }[] = [
   {
     id: "double",
-    icon: "👯",
+    icon: "users",
     title: "Double the vocal",
     short: "Thick and wide, like a stacked hook",
     why: "Two quieter copies of the vocal, a few milliseconds late and panned left and right — the classic way producers make a hook sound big and wide.",
@@ -1740,7 +1741,7 @@ const LAYERS: { id: string; icon: string; title: string; short: string; why: str
   },
   {
     id: "octave-down",
-    icon: "🎚",
+    icon: "sliders-vertical",
     title: "Octave layer",
     short: "A deep voice an octave under",
     why: "The vocal an octave lower, quiet and dark, right under the lead — adds weight and attitude, a staple of trap and hard remixes.",
@@ -1749,7 +1750,7 @@ const LAYERS: { id: string; icon: string; title: string; short: string; why: str
   },
   {
     id: "octave-up",
-    icon: "✨",
+    icon: "sparkles",
     title: "Airy octave",
     short: "A light shimmer an octave above",
     why: "The vocal an octave higher, very quiet and full of reverb, floating above the lead — the airy pop and chill trick.",
@@ -1806,7 +1807,7 @@ function rhythmIdeas(session: Session): Idea[] {
       draft.patch(lane.laneId, { automation: { ...lane.automation, volume: spliceAutomation(lane.automation.volume, entryOf(lane), endOf(lane), pumpPattern(entryOf(lane), endOf(lane), beat, { depth: 0.45 })) } });
     }
     draft.lines.push("The beat dips on every beat and swells back up — the pumping, breathing feel of dance music");
-    ideas.push(draft.idea({ id: "moment-pump", kind: "moment", role: "beatmaker", icon: "💓", title: "Pumping beat", short: "Breathes on every beat", why: "Dance producers make the music duck on every kick so it pumps and breathes. This draws that pump on the beat, no kick needed.", vibes: ["club", "hard"], listenAt: session.vocal ? Math.max(0, entryOf(session.vocal)) : 0 }));
+    ideas.push(draft.idea({ id: "moment-pump", kind: "moment", role: "beatmaker", icon: "heart-pulse", title: "Pumping beat", short: "Breathes on every beat", why: "Dance producers make the music duck on every kick so it pumps and breathes. This draws that pump on the beat, no kick needed.", vibes: ["club", "hard"], listenAt: session.vocal ? Math.max(0, entryOf(session.vocal)) : 0 }));
   }
   const dropAt = session.pair && session.drop?.kind === "drop" ? beatBarTime(new Draft(session), session.drop.bar) : null;
   const vocalAt = session.vocal ? entryOf(session.vocal) : null;
@@ -1819,7 +1820,7 @@ function rhythmIdeas(session: Session): Idea[] {
     }
     const what = dropAt !== null ? "the drop" : "the vocal";
     draft.lines.push(`The beat chopped into sixteenths for the 2 bars before ${what} (bar ${Math.round(at / bar) + 1}), then it all hits`);
-    ideas.push(draft.idea({ id: "moment-gate", kind: "moment", role: "beatmaker", icon: "🎛", title: "Gated build", short: `Stuttering beat into ${what}`, why: `A trance gate chops the beat on and off sixteen times a bar for the two bars before ${what} — tension that makes the landing hit harder.`, vibes: ["club", "hard"], listenAt: Math.max(0, from - 2 * bar) }));
+    ideas.push(draft.idea({ id: "moment-gate", kind: "moment", role: "beatmaker", icon: "sliders-horizontal", title: "Gated build", short: `Stuttering beat into ${what}`, why: `A trance gate chops the beat on and off sixteen times a bar for the two bars before ${what} — tension that makes the landing hit harder.`, vibes: ["club", "hard"], listenAt: Math.max(0, from - 2 * bar) }));
   }
   return ideas;
 }
@@ -1840,10 +1841,10 @@ function scaleSpeed(draft: Draft, k: number, semitones: number) {
   return true;
 }
 
-const SPEED_STYLES: { id: string; icon: string; title: string; short: string; why: string; vibe: Vibe; k: number; semitones: number; mix: Pick<MixRecipe, "vocalDb" | "vocal" | "backing"> }[] = [
+const SPEED_STYLES: { id: string; icon: IconName; title: string; short: string; why: string; vibe: Vibe; k: number; semitones: number; mix: Pick<MixRecipe, "vocalDb" | "vocal" | "backing"> }[] = [
   {
     id: "slowed",
-    icon: "🌧",
+    icon: "cloud-rain",
     title: "Slowed + reverb",
     short: "15% slower, deeper, drenched in reverb",
     why: "The TikTok and YouTube favourite: the whole song slowed down and pitched lower like a record played too slow, with a big washy reverb on the voice.",
@@ -1858,7 +1859,7 @@ const SPEED_STYLES: { id: string; icon: string; title: string; short: string; wh
   },
   {
     id: "sped-up",
-    icon: "⚡",
+    icon: "rabbit",
     title: "Sped up",
     short: "20% faster and higher — nightcore energy",
     why: "Faster and higher like nightcore and sped-up edits: brighter, more energetic, made for short videos.",
@@ -1919,7 +1920,7 @@ export function masterFor(vibes: Vibe[]): string {
 
 type SyncTemplate = {
   id: string;
-  icon: string;
+  icon: IconName;
   title: string;
   short: string;
   why: string;
@@ -1935,7 +1936,7 @@ type SyncTemplate = {
 export const SYNC_TEMPLATES: SyncTemplate[] = [
   {
     id: "perfect",
-    icon: "🎯",
+    icon: "target",
     title: "Perfect sync",
     short: "Least stretching, every lane locked",
     why: "The tempo that bends the audio least, the vocal moved into the beat's key, every line on the beat's bars after its intro — and every other lane (other beats, the beat's drums and bass, vocal layers) at the same speed, in key, on the same grid.",
@@ -1947,7 +1948,7 @@ export const SYNC_TEMPLATES: SyncTemplate[] = [
   },
   {
     id: "beat-leads",
-    icon: "🥁",
+    icon: "drum",
     title: "Beat leads",
     short: "Beat untouched, vocal fits to it",
     why: "The beat keeps its own speed and key; the vocal is stretched and shifted to fit it. Best when the beat is the star or has a strong groove.",
@@ -1959,7 +1960,7 @@ export const SYNC_TEMPLATES: SyncTemplate[] = [
   },
   {
     id: "vocal-leads",
-    icon: "🎤",
+    icon: "mic",
     title: "Vocal leads",
     short: "Singer untouched, the music follows",
     why: "The vocal keeps its natural speed and key — the beat and every other lane are stretched and shifted to the singer. Best for a voice that sounds odd sped up or pitched.",
@@ -1971,7 +1972,7 @@ export const SYNC_TEMPLATES: SyncTemplate[] = [
   },
   {
     id: "middle",
-    icon: "🤝",
+    icon: "handshake",
     title: "Meet halfway",
     short: "Both bend half as much",
     why: "Vocal and beat each move half the way to a tempo between them, so neither is stretched far — often the least noticeable.",
@@ -1983,7 +1984,7 @@ export const SYNC_TEMPLATES: SyncTemplate[] = [
   },
   {
     id: "straight-in",
-    icon: "⏩",
+    icon: "fast-forward",
     title: "Vocal from bar 1",
     short: "No intro — straight in",
     why: "Everything synced, with the vocal starting on the beat's very first bar — for short clips and edits that get to the point.",
@@ -1995,7 +1996,7 @@ export const SYNC_TEMPLATES: SyncTemplate[] = [
   },
   {
     id: "long-intro",
-    icon: "🎛",
+    icon: "sliders-horizontal",
     title: "8-bar intro",
     short: "DJ-friendly intro, then the vocal",
     why: "Everything synced, with eight bars of beat before the vocal comes in — room for a DJ to mix in, or for the groove to build.",
@@ -2007,7 +2008,7 @@ export const SYNC_TEMPLATES: SyncTemplate[] = [
   },
   {
     id: "tight",
-    icon: "🧲",
+    icon: "magnet",
     title: "No gaps",
     short: "Synced, long breaks closed up",
     why: "Everything synced and in the vocal's own order, with long instrumental gaps between its sections cut short so it never goes quiet for long.",
@@ -2143,7 +2144,7 @@ export async function syncEverythingIdea(session: Session): Promise<Idea | null>
     id: SYNC_ID,
     kind: "fix",
     role: "beatmaker",
-    icon: "🔗",
+    icon: "link",
     title: `Lock every lane to ${plan.projectBpm.toFixed(0)} BPM`,
     short: "Every lane at one speed, on one grid",
     why: `${plan.title}: every lane stretched to one speed, the beat's bars lined up and each vocal laid line by line.`,
@@ -2214,7 +2215,7 @@ export type CheckStatus = "good" | "warn" | "bad";
 
 export type Check = {
   id: string;
-  icon: string;
+  icon: IconName;
   label: string;
   status: CheckStatus;
   /** What's going on, in plain words. */
@@ -2249,7 +2250,7 @@ export function checkMix(session: Session, lanes: StudioLane[]): Check[] {
     const arranged = !!vocal.clips?.length;
     checks.push({
       id: "speed",
-      icon: "⏱",
+      icon: "timer",
       label: "Speed",
       status: off < 0.012 ? "good" : off < 0.04 ? "warn" : "bad",
       text:
@@ -2260,7 +2261,7 @@ export function checkMix(session: Session, lanes: StudioLane[]): Check[] {
     });
     checks.push({
       id: "timing",
-      icon: "🧩",
+      icon: "puzzle",
       label: "On the beat",
       status: off >= 0.012 ? "bad" : arranged || session.options.keepWhole ? "good" : "warn",
       text:
@@ -2277,7 +2278,7 @@ export function checkMix(session: Session, lanes: StudioLane[]): Check[] {
     const fit = keyFit(vocalKey, beatKey);
     checks.push({
       id: "key",
-      icon: "🎼",
+      icon: "music",
       label: "Key",
       status: fit === "clash" ? "bad" : fit === "far" ? "warn" : "good",
       text:
@@ -2299,7 +2300,7 @@ export function checkMix(session: Session, lanes: StudioLane[]): Check[] {
       const ratio = (vl * vocal.volume) / (bl * ref.volume) / VOCAL_LIFT;
       checks.push({
         id: "volume",
-        icon: "🔊",
+        icon: "volume-2",
         label: "Volume",
         status: ratio < 0.5 || ratio > 2.2 ? "bad" : ratio < 0.75 || ratio > 1.5 ? "warn" : "good",
         text: ratio < 0.75 ? "The vocal is buried under the beat" : ratio > 1.5 ? "The vocal is much louder than the beat" : "Vocal and beat are balanced",
@@ -2324,13 +2325,13 @@ export function checkMix(session: Session, lanes: StudioLane[]): Check[] {
         off.length
           ? {
               id: "lanes",
-              icon: "🔗",
+              icon: "link",
               label: "Every lane",
               status: "bad",
               text: `${off.length === 1 ? `“${laneName(off[0])}” plays` : `${off.length} lanes play`} at another speed than the beat (${refBpm.toFixed(0)} BPM)`,
               fix: "sync",
             }
-          : { id: "lanes", icon: "🔗", label: "Every lane", status: "good", text: `All ${others.length + 1 + (vocal && vocal.laneId !== ref?.laneId ? 1 : 0)} lanes move at one speed` }
+          : { id: "lanes", icon: "link", label: "Every lane", status: "good", text: `All ${others.length + 1 + (vocal && vocal.laneId !== ref?.laneId ? 1 : 0)} lanes move at one speed` }
       );
     }
   }
@@ -2343,7 +2344,7 @@ export function checkMix(session: Session, lanes: StudioLane[]): Check[] {
       vEnd > bEnd + bar
         ? {
             id: "length",
-            icon: "🏁",
+            icon: "flag",
             label: "Ending",
             status: "bad",
             text: session.options.keepWhole
@@ -2352,8 +2353,8 @@ export function checkMix(session: Session, lanes: StudioLane[]): Check[] {
             fix: "length",
           }
         : bEnd - vEnd > 8 * bar
-          ? { id: "length", icon: "🏁", label: "Ending", status: "warn", text: `The beat plays on for ${Math.round((bEnd - vEnd) / bar)} bars after the singing ends`, fix: "length" }
-          : { id: "length", icon: "🏁", label: "Ending", status: "good", text: "Vocal and beat end together" }
+          ? { id: "length", icon: "flag", label: "Ending", status: "warn", text: `The beat plays on for ${Math.round((bEnd - vEnd) / bar)} bars after the singing ends`, fix: "length" }
+          : { id: "length", icon: "flag", label: "Ending", status: "good", text: "Vocal and beat end together" }
     );
   }
   return checks;

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import type { User } from "@/lib/auth";
 import NotificationBell from "./NotificationBell";
 import RemixtMark from "./RemixtMark";
@@ -125,9 +126,7 @@ function AccountMenu({ user, isAdmin }: { user: User; isAdmin: boolean }) {
           {user.artist_name.slice(0, 1).toUpperCase()}
         </span>
         <span className="hidden max-w-[10rem] truncate text-sm font-medium lg:inline">{user.artist_name}</span>
-        <svg viewBox="0 0 24 24" className="hidden h-4 w-4 text-muted sm:block" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden>
-          <path d="m6 9 6 6 6-6" />
-        </svg>
+        <ChevronDown className="hidden h-4 w-4 text-muted sm:block" />
       </button>
       {open && (
         <div

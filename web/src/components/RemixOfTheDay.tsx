@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Heart, Play, SlidersHorizontal, Star, Trophy } from "lucide-react";
 import { coverUrl } from "@/lib/models";
 import type { FeaturedRemix } from "@/lib/social";
 
@@ -14,12 +15,14 @@ export default function RemixOfTheDay({ remix }: { remix: FeaturedRemix }) {
             <img src={cover} alt="" className="aspect-square w-full rounded-xl object-cover shadow-lg sm:w-32" />
           ) : (
             <span className="flex aspect-[3/1] w-full items-center justify-center rounded-xl bg-gradient-to-br from-vocals-dim to-beat-dim text-5xl shadow-lg sm:aspect-square sm:w-32">
-              🏆
+              <Trophy className="text-amber-400" />
             </span>
           )}
         </Link>
         <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-bold tracking-wider text-brand-strong uppercase">⭐ Remix of the day</p>
+          <p className="text-[11px] font-bold tracking-wider text-brand-strong uppercase">
+            <Star className="fill-current" /> Remix of the day
+          </p>
           <Link href={`/remixes/${remix.id}`} className="mt-1 block truncate text-xl font-bold hover:underline">
             {remix.title}
           </Link>
@@ -29,16 +32,16 @@ export default function RemixOfTheDay({ remix }: { remix: FeaturedRemix }) {
               {remix.artist_name}
             </Link>
             <span className="ml-2 tabular-nums">
-              ▶ {remix.plays} · ♥ {remix.likes}
+              <Play /> {remix.plays} · <Heart /> {remix.likes}
             </span>
           </p>
         </div>
         <div className="flex gap-2 sm:flex-col">
           <Link href={`/remixes/${remix.id}`} className="flex-1 rounded-xl bg-brand px-4 py-2.5 text-center text-sm font-semibold text-white hover:bg-brand-strong">
-            ▶ Listen
+            <Play className="fill-current" /> Listen
           </Link>
           <Link href={`/studio?remix=${remix.id}`} className="flex-1 rounded-xl border border-border bg-background/60 px-4 py-2.5 text-center text-sm font-semibold hover:bg-surface-hover">
-            🎛 Remix it
+            <SlidersHorizontal /> Remix it
           </Link>
         </div>
       </div>

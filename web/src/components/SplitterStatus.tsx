@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Check } from "lucide-react";
 import { splitter, useSplitter } from "@/lib/client/splitter";
 import { useUploads } from "@/lib/client/uploads";
 
@@ -59,7 +60,7 @@ export default function SplitterStatus({ signedIn }: { signedIn: boolean }) {
         </>
       ) : justFinished && state.status === "ready" ? (
         <p className="font-semibold text-success">
-          ✓ Song splitter ready — saved on this device, so next time it&apos;s instant
+          <Check /> Song splitter ready — saved on this device, so next time it&apos;s instant
         </p>
       ) : (
         <>

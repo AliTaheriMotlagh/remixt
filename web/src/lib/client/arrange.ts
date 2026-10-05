@@ -691,7 +691,7 @@ export function placementNotes(
   if (structure.downbeatConfidence < UNSURE_DOWNBEAT || heard.downbeatConfidence < UNSURE_DOWNBEAT) {
     const which = structure.downbeatConfidence < UNSURE_DOWNBEAT ? `“${beat.title}”` : `${vocal.title}'s original beat`;
     lines.push(
-      `⚠ Couldn't tell for sure where the bar starts in ${which} — if the vocal feels half a bar early or late, use +½bar or −½bar on its lane`
+      `Heads-up: couldn't tell for sure where the bar starts in ${which} — if the vocal feels half a bar early or late, use +½bar or −½bar on its lane`
     );
   }
   return lines;

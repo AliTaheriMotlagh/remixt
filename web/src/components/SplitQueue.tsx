@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
+import { ArrowRight, Check, Circle, Flame, Laptop, Pickaxe, Smartphone } from "lucide-react";
+import { Icon, PlaceMedal } from "@/components/Icon";
 import {
   cancelQueued,
   fetchQueue,
@@ -33,7 +35,9 @@ import { describeStage } from "@/lib/client/uploads";
 export function QueueNotice({ onTryAnyway }: { onTryAnyway: () => void }) {
   return (
     <div className="mb-4 rounded-2xl border border-brand/40 bg-brand/10 px-4 py-4 text-sm sm:px-5">
-      <p className="font-semibold">📱 → 💻 A computer splits it for you</p>
+      <p className="font-semibold">
+        <Smartphone /> <ArrowRight className="text-muted" /> <Laptop /> A computer splits it for you
+      </p>
       <ol className="mt-2 grid gap-1.5 text-muted sm:grid-cols-3 sm:gap-3">
         <li>
           <span className="font-semibold text-foreground">1.</span> Pick songs — as many as you like. They&apos;re sent to the split queue.
@@ -301,7 +305,7 @@ function duration(seconds: number) {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-function Stat({ value, label, accent }: { value: string | number; label: string; accent?: boolean }) {
+function Stat({ value, label, accent }: { value: React.ReactNode; label: string; accent?: boolean }) {
   return (
     <div className="min-w-0 rounded-lg bg-surface-raised px-3 py-2">
       <p className={`truncate text-base font-semibold tabular-nums ${accent ? "text-success" : ""}`}>{value}</p>
@@ -346,7 +350,9 @@ function RigStatus({ helper }: { helper: HelperState }) {
 function LastBlock({ finished }: { finished: NonNullable<HelperState["finished"]> }) {
   return (
     <p key={finished.at} className="flex flex-wrap items-baseline gap-x-2 text-xs">
-      <span className="font-medium text-success">✓ Split “{finished.title}”</span>
+      <span className="font-medium text-success">
+        <Check /> Split “{finished.title}”
+      </span>
       {finished.reward && (
         <span className="animate-xp-pop font-bold text-success">
           +{finished.reward.xp} XP
@@ -377,13 +383,21 @@ function RewardRules() {
           <span className="shrink-0 font-semibold text-foreground">+{REWARD.firstToday}</span>
         </li>
         <li className="flex justify-between gap-3">
-          <span>🔥 Rush: it waited over {RUSH_AFTER_MINUTES} min</span>
+          <span>
+            <Flame className="text-orange-400" /> Rush: it waited over {RUSH_AFTER_MINUTES} min
+          </span>
           <span className="shrink-0 font-semibold text-foreground">×{REWARD.rushMultiplier}</span>
         </li>
       </ul>
       <p className="mt-2 text-[11px] text-muted">
         XP counts towards your level and the leaderboard. Badges at{" "}
-        {MINING_TIERS.map((t) => `${t.songs} ${t.emoji}`).join(" · ")} songs.
+        {MINING_TIERS.map((t, i) => (
+          <span key={t.songs}>
+            {i > 0 && " · "}
+            {t.songs} <Icon name={t.icon} aria-label={t.label} role="img" aria-hidden={false} />
+          </span>
+        ))}{" "}
+        songs.
       </p>
     </div>
   );
@@ -402,7 +416,9 @@ function TopMinersList({ miners, me }: { miners: TopMiner[]; me: number | null }
         <ol className="mt-2 space-y-1.5">
           {miners.map((m, i) => (
             <li key={m.id} className="flex items-center gap-2">
-              <span className="w-5 shrink-0 text-center tabular-nums text-muted">{["🥇", "🥈", "🥉"][i] ?? i + 1}</span>
+              <span className="w-5 shrink-0 text-center tabular-nums text-muted">
+                <PlaceMedal rank={i + 1} />
+              </span>
               <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: m.avatar_color }} />
               <Link href={`/artist/${m.id}`} className="min-w-0 flex-1 truncate hover:underline">
                 {m.artist_name}
@@ -481,13 +497,14 @@ export function HelperPanel() {
           }`}
           aria-hidden
         >
-          <span className={working ? "animate-mine" : ""}>⛏️</span>
+          <Pickaxe className={`${helper.enabled ? "text-success" : "text-muted"} ${working ? "animate-mine" : ""}`} />
         </span>
         <div className="min-w-0 flex-1">
           <h2 className="font-semibold">
             Mining rig{" "}
             <span className={`ml-1 text-xs font-medium ${helper.enabled ? "text-success" : "text-muted"}`}>
-              {helper.enabled ? (working ? "● mining" : helper.status === "paused" ? "● paused" : "● online") : "○ off"}
+              {helper.enabled ? <Circle className="h-2 w-2 fill-current" /> : <Circle className="h-2 w-2" />}{" "}
+              {helper.enabled ? (working ? "mining" : helper.status === "paused" ? "paused" : "online") : "off"}
             </span>
           </h2>
           <p className="mt-1 text-xs text-muted">
@@ -504,7 +521,13 @@ export function HelperPanel() {
               : "bg-success text-white hover:opacity-90"
           }`}
         >
-          {helper.enabled ? "Stop mining" : "⛏️ Start mining"}
+          {helper.enabled ? (
+            "Stop mining"
+          ) : (
+            <>
+              <Pickaxe /> Start mining
+            </>
+          )}
         </button>
       </div>
 
@@ -547,14 +570,24 @@ export function HelperPanel() {
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <Stat value={`${mining.xp.toLocaleString()} XP`} label={`from ${mining.songs} ${mining.songs === 1 ? "song" : "songs"}`} />
             <Stat value={`+${mining.todayXp}`} label={`today · ${mining.today} ${mining.today === 1 ? "song" : "songs"}`} />
-            <Stat value={mining.streak ? `🔥 ${mining.streak}` : "—"} label={mining.streak === 1 ? "day streak" : "days streak"} />
+            <Stat
+              value={
+                mining.streak ? (
+                  <>
+                    <Flame className="text-orange-400" /> {mining.streak}
+                  </>
+                ) : (
+                  "—"
+                )
+              }
+              label={mining.streak === 1 ? "day streak" : "days streak"} />
             <Stat value={mining.weekRank ? `#${mining.weekRank}` : "—"} label="rank this week" />
           </div>
           {next && (
             <div className="mt-3">
               <div className="flex justify-between gap-2 text-[11px] text-muted">
                 <span>
-                  Next badge: {next.emoji} <span className="font-medium text-foreground">{next.label}</span>
+                  Next badge: <Icon name={next.icon} className="text-brand-strong" /> <span className="font-medium text-foreground">{next.label}</span>
                 </span>
                 <span className="tabular-nums">
                   {mining.songs} / {next.songs} songs

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { Heart, Play } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 type Overview = {
@@ -379,7 +380,7 @@ function RemixesTab({ onChange }: { onChange: () => void }) {
                 </span>
               </p>
               <p className="truncate text-xs text-muted">
-                {remix.artist_name} ({remix.email}) · {formatDate(remix.created_at)} · ▶ {remix.play_count} · ♥{" "}
+                {remix.artist_name} ({remix.email}) · {formatDate(remix.created_at)} · <Play /> {remix.play_count} · <Heart />{" "}
                 {remix.likes} · {remix.lanes} lanes
               </p>
             </div>

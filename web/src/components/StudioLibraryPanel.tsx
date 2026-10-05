@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Pause, Play } from "lucide-react";
 import Waveform from "./Waveform";
 import { previewPlayer, usePreviewState } from "@/lib/client/previewPlayer";
 import { useStudioStore } from "@/lib/client/studioStore";
@@ -137,7 +138,7 @@ export default function StudioLibraryPanel() {
                     title={previewing && preview.playing ? "Pause preview" : "Preview"}
                     aria-label={`${previewing && preview.playing ? "Pause" : "Preview"} ${stem.track_title}`}
                   >
-                    {previewing && preview.playing ? "⏸" : "▶"}
+                    {previewing && preview.playing ? <Pause className="fill-current" /> : <Play className="fill-current" />}
                   </button>
                   <span className="min-w-0 flex-1 truncate text-xs font-medium">
                     {stem.track_title}

@@ -1,5 +1,6 @@
 "use client";
 
+import { Pause, Play, Square } from "lucide-react";
 import { previewPlayer, usePreviewState } from "@/lib/client/previewPlayer";
 import { kindColor, kindLabel } from "@/lib/stemKinds";
 
@@ -39,7 +40,7 @@ export default function PreviewBar() {
           style={{ background: accent }}
           aria-label={state.playing ? "Pause preview" : "Resume preview"}
         >
-          {state.playing ? "⏸" : "▶"}
+          {state.playing ? <Pause className="fill-current" /> : <Play className="fill-current" />}
         </button>
 
         <div className="min-w-0 flex-1">
@@ -75,7 +76,8 @@ export default function PreviewBar() {
           className="flex h-10 shrink-0 items-center rounded-lg border border-border px-3 text-xs font-medium text-muted transition-colors hover:border-danger hover:text-danger"
           aria-label="Stop preview"
         >
-          ■<span className="ml-1 hidden sm:inline">Stop</span>
+          <Square className="fill-current" />
+          <span className="ml-1 hidden sm:inline">Stop</span>
         </button>
       </div>
     </div>

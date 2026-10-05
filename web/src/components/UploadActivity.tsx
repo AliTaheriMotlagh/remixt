@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { Check, Music, Pickaxe, X } from "lucide-react";
 import { splitHelper, useSplitHelper } from "@/lib/client/splitQueue";
 import { useSplitter } from "@/lib/client/splitter";
 import { describeStage, uploads, useUploads, type UploadItem } from "@/lib/client/uploads";
@@ -31,7 +32,7 @@ function UploadRow({ item }: { item: UploadItem }) {
     >
       <div className="flex items-center justify-between gap-3">
         <span className="min-w-0 truncate font-medium">
-          {item.status === "done" && <span className="mr-1.5 text-success">✓</span>}
+          {item.status === "done" && <Check className="mr-1.5 text-success" />}
           {item.name}
         </span>
         <div className="flex shrink-0 items-center gap-2 text-xs">
@@ -52,7 +53,7 @@ function UploadRow({ item }: { item: UploadItem }) {
               className="rounded-md px-1.5 py-1 text-muted hover:text-foreground"
               aria-label={item.status === "waiting" ? `Don't add ${item.name}` : `Hide ${item.name}`}
             >
-              {item.status === "waiting" ? "Remove" : "✕"}
+              {item.status === "waiting" ? "Remove" : <X />}
             </button>
           )}
         </div>
@@ -188,7 +189,9 @@ export function BackgroundActivity({ signedIn }: { signedIn: boolean }) {
         {current && own && (
           <div>
             <div className="flex items-center justify-between gap-2">
-              <span className="min-w-0 truncate font-semibold">🎵 {current.name}</span>
+              <span className="min-w-0 truncate font-semibold">
+                <Music /> {current.name}
+              </span>
               {own.progress !== null && (
                 <span className="shrink-0 tabular-nums text-muted">{Math.round(own.progress * 100)}%</span>
               )}
@@ -200,13 +203,19 @@ export function BackgroundActivity({ signedIn }: { signedIn: boolean }) {
             </p>
           </div>
         )}
-        {!current && active.length > 0 && <p className="font-semibold">🎵 {active.length} songs waiting to be added</p>}
+        {!current && active.length > 0 && (
+          <p className="font-semibold">
+            <Music /> {active.length} songs waiting to be added
+          </p>
+        )}
         {justDone.length > 2 ? (
-          <p className="truncate font-semibold text-success">✓ {justDone.length} songs added</p>
+          <p className="truncate font-semibold text-success">
+            <Check /> {justDone.length} songs added
+          </p>
         ) : (
           justDone.map((item) => (
             <p key={item.id} className="truncate font-semibold text-success">
-              ✓ “{item.name}” — {doneText(item).toLowerCase()}
+              <Check /> “{item.name}” — {doneText(item).toLowerCase()}
             </p>
           ))
         )}
@@ -224,7 +233,7 @@ export function BackgroundActivity({ signedIn }: { signedIn: boolean }) {
           <Link href="/upload" className="block rounded-lg hover:bg-surface-hover">
             <div className="flex items-center justify-between gap-2">
               <span className="min-w-0 truncate font-semibold">
-                <span className="animate-mine">⛏️</span>{" "}
+                <Pickaxe className="animate-mine" />{" "}
                 {helper.job!.forSomeoneElse ? "Mining a song for someone" : "Splitting your queued song"}
               </span>
               {helperStage.progress !== null && (
@@ -239,7 +248,7 @@ export function BackgroundActivity({ signedIn }: { signedIn: boolean }) {
         )}
         {!helping && helperDone && (
           <p className="truncate font-semibold text-success">
-            ✓ Split “{helper.finished!.title}”
+            <Check /> Split “{helper.finished!.title}”
             {helper.finished!.reward && <span className="animate-xp-pop ml-1">· +{helper.finished!.reward.xp} XP</span>}
           </p>
         )}
@@ -250,7 +259,7 @@ export function BackgroundActivity({ signedIn }: { signedIn: boolean }) {
           className="absolute right-1.5 top-1.5 rounded px-1.5 text-muted hover:text-foreground"
           aria-label="Hide"
         >
-          ✕
+          <X />
         </button>
       )}
     </div>

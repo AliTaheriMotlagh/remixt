@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Users } from "lucide-react";
 import { useCollab } from "@/lib/client/collab";
 
 const SYNC_LABEL = {
@@ -30,7 +31,9 @@ export default function CollabBar({ userId, onLeave }: { userId: string | null; 
 
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-xl border border-beat/50 bg-beat/10 px-4 py-2.5 text-sm">
-      <span className="font-semibold">👥 {title || "Shared session"}</span>
+      <span className="font-semibold">
+        <Users /> {title || "Shared session"}
+      </span>
       <span className="flex -space-x-1.5">
         {members.map((m) => (
           <span

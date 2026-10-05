@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Flame, Heart, Play, X, type LucideIcon } from "lucide-react";
 import sql from "@/lib/db";
 import { coverUrl, ensureRemixStats } from "@/lib/models";
 import { remixOfTheDay } from "@/lib/social";
@@ -10,9 +11,9 @@ import type { Metadata } from "next";
 
 type Tab = "latest" | "trending" | "following";
 
-const TABS: { id: Tab; label: string }[] = [
+const TABS: { id: Tab; label: string; icon?: LucideIcon }[] = [
   { id: "latest", label: "Latest" },
-  { id: "trending", label: "🔥 Trending" },
+  { id: "trending", label: "Trending", icon: Flame },
   { id: "following", label: "Following" },
 ];
 
@@ -130,6 +131,7 @@ export default async function RemixesPage({
               tab === t.id ? "bg-brand text-white" : "border border-border text-muted hover:text-foreground"
             }`}
           >
+            {t.icon && <t.icon className="mr-1" />}
             {t.label}
           </Link>
         ))}
@@ -153,7 +155,7 @@ export default async function RemixesPage({
           ))}
           {tag && (
             <Link href={tabHref(tab, null)} className="px-1 text-xs text-muted hover:text-foreground">
-              clear ✕
+              clear <X />
             </Link>
           )}
         </div>
@@ -226,8 +228,12 @@ export default async function RemixesPage({
                 </p>
               )}
               <p className="mt-3 flex gap-3 text-xs text-muted tabular-nums">
-                <span title="Plays">▶ {remix.play_count}</span>
-                <span title="Likes">♥ {remix.like_count}</span>
+                <span title="Plays">
+                  <Play /> {remix.play_count}
+                </span>
+                <span title="Likes">
+                  <Heart /> {remix.like_count}
+                </span>
               </p>
             </Link>
           ))}

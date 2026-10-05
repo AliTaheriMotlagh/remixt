@@ -2,6 +2,24 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  ChevronDown,
+  Download,
+  Drum,
+  Ellipsis,
+  Flag,
+  Grid3x3,
+  Pause,
+  Play,
+  Redo2,
+  Repeat,
+  SkipBack,
+  SlidersVertical,
+  Sparkles,
+  Square,
+  Trash2,
+  Undo2,
+} from "lucide-react";
 import { audioEngine, PlaybackBlockedError } from "@/lib/client/audioEngine";
 import { exportMixdown, getExportFormat, setExportFormat, type ExportFormat } from "@/lib/client/mixdown";
 import { camelotCode, keyLabel } from "@/lib/client/musicKey";
@@ -186,7 +204,9 @@ function TempoControl() {
       title="Project tempo — the grid, snap, metronome and synced delays follow it"
       label={
         <>
-          <LcdLabel>BPM ▾</LcdLabel>
+          <LcdLabel>
+            BPM <ChevronDown />
+          </LcdLabel>
           <span className="font-mono text-sm font-semibold leading-tight text-foreground tabular-nums">{projectBpm.toFixed(1)}</span>
         </>
       }
@@ -250,7 +270,9 @@ function KeyControl() {
       title="Project key"
       label={
         <>
-          <LcdLabel>Key ▾</LcdLabel>
+          <LcdLabel>
+            Key <ChevronDown />
+          </LcdLabel>
           <span className="whitespace-nowrap text-sm font-semibold leading-tight text-foreground">
             {key ? keyLabel(key) : "…"}
             {key && <span className="ml-1 font-mono text-[10px] text-muted">{camelotCode(key)}</span>}
@@ -476,7 +498,7 @@ export default function StudioTransport({
             title="Back to the start (Home)"
             aria-label="Back to the start"
           >
-            ⏮
+            <SkipBack className="fill-current" />
           </button>
           <button
             onClick={handlePlayPause}
@@ -486,7 +508,7 @@ export default function StudioTransport({
             aria-label={starting ? "Cancel" : isPlaying ? "Pause" : "Play"}
             aria-busy={starting}
           >
-            {starting ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" /> : isPlaying ? "⏸" : "▶"}
+            {starting ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" /> : isPlaying ? <Pause className="h-5 w-5 fill-current" /> : <Play className="h-5 w-5 fill-current" />}
           </button>
           <button
             onClick={() => audioEngine.stop()}
@@ -495,7 +517,7 @@ export default function StudioTransport({
             title="Stop and return to the start (Esc)"
             aria-label="Stop"
           >
-            ■
+            <Square className="fill-current" />
           </button>
           <button
             onClick={() => setLoop({ enabled: !loopEnabled, start: hasLoop ? loopStart : 0, end: hasLoop ? loopEnd : Math.min(duration, 16) })}
@@ -507,7 +529,7 @@ export default function StudioTransport({
             aria-pressed={loopEnabled}
             aria-label="Loop"
           >
-            🔁
+            <Repeat />
           </button>
         </div>
 
@@ -544,15 +566,17 @@ export default function StudioTransport({
             className={`${toggle(loopEnabled)} sm:hidden`}
             aria-pressed={loopEnabled}
           >
-            🔁 Loop
+            <Repeat /> Loop
           </button>
           {!viewing && (
             <div className="flex items-center gap-1">
               <button onClick={toggleMetronome} className={toggle(metronome)} title="Metronome (K)" aria-pressed={metronome}>
-                🥁<span className="hidden 2xl:inline">Click</span>
+                <Drum />
+                <span className="hidden 2xl:inline">Click</span>
               </button>
               <button onClick={toggleSnap} className={toggle(snapToGrid)} title="Snap to the grid (N)" aria-pressed={snapToGrid}>
-                ⌗<span className="hidden 2xl:inline">Snap</span>
+                <Grid3x3 />
+                <span className="hidden 2xl:inline">Snap</span>
               </button>
               <select
                 value={gridBeats}
@@ -604,7 +628,12 @@ export default function StudioTransport({
             <Popover
               align="right"
               title="Master — mastering presets, tone and glue for the whole mix"
-              label={<>🎚<span className="hidden 2xl:inline">Master</span></>}
+              label={
+                <>
+                  <SlidersVertical />
+                  <span className="hidden 2xl:inline">Master</span>
+                </>
+              }
               active={mastered}
             >
               {() => <MasterPanel />}
@@ -613,7 +642,14 @@ export default function StudioTransport({
           <Popover
             align="right"
             title="Export the mix as an audio file"
-            label={exportStage ?? <>⤓<span className="hidden 2xl:inline">Export</span></>}
+            label={
+              exportStage ?? (
+                <>
+                  <Download />
+                  <span className="hidden 2xl:inline">Export</span>
+                </>
+              )
+            }
             active={exportStage !== null}
           >
             {(close) => (
@@ -662,7 +698,7 @@ export default function StudioTransport({
             remixId={savedId ?? (viewing ? remixId : null)}
           />
           {!viewing && (
-            <Popover align="right" title="Clear the Studio — start over" label={<>🗑<span className="hidden 2xl:inline">Clear</span></>}>
+            <Popover align="right" title="Clear the Studio — start over" label={<><Trash2 /><span className="hidden 2xl:inline">Clear</span></>}>
               {(close) => (
                 <div className="flex flex-col gap-2 text-xs">
                   <p className="font-semibold">Clear the Studio?</p>
@@ -698,7 +734,7 @@ export default function StudioTransport({
             title="Undo (⌘/Ctrl+Z)"
             aria-label="Undo"
           >
-            ↶
+            <Undo2 />
           </button>
           <button
             onClick={redo}
@@ -707,7 +743,7 @@ export default function StudioTransport({
             title="Redo (⇧⌘Z / Ctrl+Y)"
             aria-label="Redo"
           >
-            ↷
+            <Redo2 />
           </button>
           <button
             onClick={() => setShowTools((v) => !v)}
@@ -717,7 +753,7 @@ export default function StudioTransport({
               showTools ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted"
             }`}
           >
-            ⋯
+            <Ellipsis className="h-5 w-5" />
           </button>
           {!viewing && (
             <button
@@ -730,7 +766,7 @@ export default function StudioTransport({
               }`}
               title="AI producer — make your mix sound good, try styles and drops (I)"
             >
-              ✨ <span className="max-sm:hidden">AI</span>
+              <Sparkles /> <span className="max-sm:hidden">AI</span>
             </button>
           )}
           <button
@@ -779,7 +815,7 @@ export default function StudioTransport({
               </div>
               {challenge && (
                 <p className="w-full rounded-lg bg-beat/15 px-3 py-2 text-xs">
-                  🏁 This will be entered in the challenge “{challenge.title}”
+                  <Flag /> This will be entered in the challenge “{challenge.title}”
                   {publish ? "." : " once you publish it."}
                 </p>
               )}

@@ -2,6 +2,22 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import {
+  ArrowRight,
+  Eye,
+  Flag,
+  Hand,
+  Handshake,
+  Headphones,
+  Heart,
+  Library,
+  MessageCircle,
+  Scissors,
+  SlidersHorizontal,
+  Upload,
+  Activity as ActivityIcon,
+  type LucideIcon,
+} from "lucide-react";
 import { setPresence, usePresence } from "@/lib/client/presence";
 import type { Activity, Area, OnlineArtist, PresenceSnapshot } from "@/lib/presence";
 
@@ -20,14 +36,23 @@ const AREA_LABEL: Record<Area, string> = {
   browsing: "looking around",
 };
 
-const AREA_SHORT: Record<Area, string> = {
-  studio: "🎛️ in the Studio",
-  library: "📚 in the library",
-  upload: "⬆️ uploading",
-  listening: "🎧 listening",
-  challenges: "🏁 on challenges",
-  browsing: "👀 browsing",
+const AREA_SHORT: Record<Area, { icon: LucideIcon; text: string }> = {
+  studio: { icon: SlidersHorizontal, text: "in the Studio" },
+  library: { icon: Library, text: "in the library" },
+  upload: { icon: Upload, text: "uploading" },
+  listening: { icon: Headphones, text: "listening" },
+  challenges: { icon: Flag, text: "on challenges" },
+  browsing: { icon: Eye, text: "browsing" },
 };
+
+function AreaShort({ area }: { area: Area }) {
+  const { icon: AreaIcon, text } = AREA_SHORT[area];
+  return (
+    <>
+      <AreaIcon /> {text}
+    </>
+  );
+}
 
 function Avatar({ artist, size = "h-9 w-9 text-sm" }: { artist: Pick<OnlineArtist, "artist_name" | "avatar_color">; size?: string }) {
   return (
@@ -118,14 +143,19 @@ function ago(at: string, now: number) {
   return days < 30 ? `${days}d ago` : new Date(at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-const ACTIVITY_ICON: Record<Activity["type"], string> = {
-  remix: "🎛️",
-  track: "✂️",
-  like: "❤️",
-  comment: "💬",
-  follow: "🤝",
-  join: "👋",
+const ACTIVITY_ICON: Record<Activity["type"], LucideIcon> = {
+  remix: SlidersHorizontal,
+  track: Scissors,
+  like: Heart,
+  comment: MessageCircle,
+  follow: Handshake,
+  join: Hand,
 };
+
+function ActivityGlyph({ type }: { type: Activity["type"] }) {
+  const Glyph = ACTIVITY_ICON[type];
+  return <Glyph />;
+}
 
 function activityKey(a: Activity) {
   return `${a.type}:${a.actor_id}:${a.remix_id ?? a.target_id ?? ""}:${a.at}`;
@@ -224,7 +254,7 @@ export function LivePanel({ initialPresence, initialActivity }: { initialPresenc
           <div className="mt-4 flex flex-wrap gap-1.5">
             {areas.map(([area, n]) => (
               <span key={area} className="rounded-full border border-border bg-surface-raised px-2.5 py-1 text-xs">
-                <span className="font-semibold tabular-nums">{n}</span> <span className="text-muted">{AREA_SHORT[area]}</span>
+                <span className="font-semibold tabular-nums">{n}</span> <span className="text-muted"><AreaShort area={area} /></span>
               </span>
             ))}
           </div>
@@ -270,10 +300,10 @@ export function LivePanel({ initialPresence, initialActivity }: { initialPresenc
       <section className="rounded-2xl border border-border bg-surface p-5 sm:p-6" aria-labelledby="live-feed">
         <div className="flex items-center justify-between gap-3">
           <h3 id="live-feed" className="font-semibold">
-            ⚡ Live activity
+            <ActivityIcon className="text-brand-strong" /> Live activity
           </h3>
           <Link href="/remixes" className="text-xs font-medium text-brand-strong hover:underline">
-            All remixes →
+            All remixes <ArrowRight />
           </Link>
         </div>
         {activity.length === 0 ? (
@@ -291,7 +321,7 @@ export function LivePanel({ initialPresence, initialActivity }: { initialPresenc
                   className={`flex items-start gap-3 border-b border-border/60 py-2.5 last:border-0 ${i >= 6 ? "max-sm:hidden" : ""} ${fresh.has(key) ? "animate-feed-in" : ""}`}
                 >
                   <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-base" aria-hidden>
-                    {ACTIVITY_ICON[a.type]}
+                    <ActivityGlyph type={a.type} />
                   </span>
                   <p className="min-w-0 flex-1 text-sm leading-snug [overflow-wrap:anywhere]">
                     <ActivityText a={a} />

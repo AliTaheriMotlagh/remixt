@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { X } from "lucide-react";
 import { embedCode, shortPath } from "@/lib/shareLinks";
 
 /** Short link, QR code and embed snippet for a remix. */
@@ -48,7 +49,7 @@ export default function ShareMenu({ remixId, title, onClose }: { remixId: string
         <div className="flex items-center justify-between">
           <p className="font-semibold">Share “{title}”</p>
           <button onClick={onClose} className="-m-2 p-2 text-muted hover:text-foreground" aria-label="Close">
-            ✕
+            <X className="h-5 w-5" />
           </button>
         </div>
 

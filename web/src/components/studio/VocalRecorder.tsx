@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { Mic, Play, X } from "lucide-react";
 import Waveform from "../Waveform";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { prepareRecording, startRecording, uploadTake, type Recording, type Take } from "@/lib/client/recorder";
@@ -150,7 +151,7 @@ export default function VocalRecorder({ signedIn }: { signedIn: boolean }) {
         onClick={() => setOpen(true)}
         className="flex items-center gap-2 self-start rounded-lg border border-border px-3 py-2 text-sm text-muted transition-colors hover:border-vocals hover:text-foreground"
       >
-        🎤 Record a vocal
+        <Mic /> Record a vocal
       </button>
     );
   }
@@ -158,7 +159,9 @@ export default function VocalRecorder({ signedIn }: { signedIn: boolean }) {
   return (
     <div className="rounded-xl border border-vocals/40 bg-vocals/5 p-3 text-sm">
       <div className="flex items-center justify-between">
-        <p className="font-semibold">🎤 Record a vocal</p>
+        <p className="font-semibold">
+          <Mic className="text-vocals" /> Record a vocal
+        </p>
         <button
           onClick={() => {
             recording.current?.cancel();
@@ -171,7 +174,7 @@ export default function VocalRecorder({ signedIn }: { signedIn: boolean }) {
           className="text-muted hover:text-foreground"
           aria-label="Close recorder"
         >
-          ✕
+          <X />
         </button>
       </div>
 
@@ -205,7 +208,7 @@ export default function VocalRecorder({ signedIn }: { signedIn: boolean }) {
               <div className="flex w-full flex-col gap-2">
                 <div className="flex items-center gap-2">
                   <button onClick={listen} className="nudge !px-2.5 !py-1.5 !text-xs">
-                    ▶ Listen
+                    <Play className="fill-current" /> Listen
                   </button>
                   <span className="text-xs text-muted">
                     {formatTime(take.buffer.duration)} · starts at {formatTime(take.start)}

@@ -1,6 +1,21 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Combine,
+  CopyPlus,
+  Download,
+  LayoutGrid,
+  Play,
+  RectangleHorizontal,
+  Spline,
+  SquareDashed,
+  SquareSplitHorizontal,
+  VolumeX,
+  X,
+} from "lucide-react";
 import { kindColor, kindLabel } from "@/lib/stemKinds";
 import LaneFxPanel from "../LaneFxPanel";
 import LaneMatchPanel from "../LaneMatchPanel";
@@ -117,7 +132,7 @@ function MixTab({ lane }: { lane: StudioLane }) {
             className={`${pill} ${automation ? "!border-brand !bg-brand/15 !text-foreground" : ""}`}
             title="Draw volume and filter changes over the song"
           >
-            〰 Automation
+            <Spline /> Automation
           </button>
         </Row>
         <Row label="Crossfader" hint="Put this lane on side A or B of the crossfader in the transport">
@@ -150,10 +165,10 @@ function MixTab({ lane }: { lane: StudioLane }) {
             aria-label="Lane name"
           />
           <button onClick={() => (startNewStep(), store.moveLane(lane.laneId, -1))} className="nudge" title="Move the lane up">
-            ▲
+            <ArrowUp />
           </button>
           <button onClick={() => (startNewStep(), store.moveLane(lane.laneId, 1))} className="nudge" title="Move the lane down">
-            ▼
+            <ArrowDown />
           </button>
         </Row>
         <Row label="Starts at" hint="Where this lane starts on the timeline">
@@ -200,7 +215,7 @@ function MixTab({ lane }: { lane: StudioLane }) {
             onClick={() => previewPlayer.toggle({ stemId: lane.stemId, title: lane.trackTitle, artist: lane.artistName, kind: lane.kind })}
             className={pill}
           >
-            ▶ Original stem
+            <Play className="fill-current" /> Original stem
           </button>
           <button
             onClick={() => {
@@ -209,7 +224,7 @@ function MixTab({ lane }: { lane: StudioLane }) {
             }}
             className={pill}
           >
-            ⊕ Duplicate lane
+            <CopyPlus /> Duplicate lane
           </button>
           <button
             onClick={async () => {
@@ -225,7 +240,13 @@ function MixTab({ lane }: { lane: StudioLane }) {
             disabled={exporting}
             className={pill}
           >
-            {exporting ? "Rendering…" : "⤓ Export WAV"}
+            {exporting ? (
+              "Rendering…"
+            ) : (
+              <>
+                <Download /> Export WAV
+              </>
+            )}
           </button>
           <button
             onClick={() => {
@@ -234,7 +255,7 @@ function MixTab({ lane }: { lane: StudioLane }) {
             }}
             className={`${pill} hover:!border-danger hover:!text-danger`}
           >
-            ✕ Remove
+            <X /> Remove
           </button>
         </div>
       </div>
@@ -415,10 +436,10 @@ function EditTab({ lane }: { lane: StudioLane }) {
             aria-pressed={!arranged}
             className={`px-3 py-1 text-xs font-medium pointer-coarse:py-1.5 ${!arranged ? "bg-brand text-white" : "text-muted hover:text-foreground"}`}
           >
-            ▬ Whole track
+            <RectangleHorizontal /> Whole track
           </button>
           <span className={`border-l border-border px-3 py-1 text-xs font-medium pointer-coarse:py-1.5 ${arranged ? "bg-brand text-white" : "text-muted"}`}>
-            ✂ {arranged ? `${lane.clips!.length} clips` : "Clips"}
+            <SquareSplitHorizontal /> {arranged ? `${lane.clips!.length} clips` : "Clips"}
           </span>
         </div>
       </div>
@@ -435,13 +456,13 @@ function EditTab({ lane }: { lane: StudioLane }) {
       </div>
       <div className="flex flex-wrap gap-1.5">
         <button onClick={() => commands.splitAt(undefined, [lane.laneId])} className={pill}>
-          ✂ Split at playhead
+          <SquareSplitHorizontal /> Split at playhead
         </button>
         <button onClick={() => commands.selectLaneClips(lane.laneId)} className={pill}>
-          ▭ Select all its clips
+          <SquareDashed /> Select all its clips
         </button>
         <button onClick={() => commands.toPad(lane.laneId)} className={pill}>
-          ▦ To a sample pad
+          <LayoutGrid /> To a sample pad
         </button>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
@@ -477,7 +498,7 @@ function EditTab({ lane }: { lane: StudioLane }) {
           </button>
         ))}
         <button onClick={commands.join} className="nudge" title="Join selected pieces that follow on (⌘/Ctrl J)">
-          ⛓ join
+          <Combine /> join
         </button>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
@@ -493,7 +514,9 @@ function EditTab({ lane }: { lane: StudioLane }) {
         <button onClick={() => (selectIfNone(lane.laneId), commands.clipGain(-3))} className="nudge">−3 dB</button>
         <button onClick={() => (selectIfNone(lane.laneId), commands.clipGain(3))} className="nudge">+3 dB</button>
         <button onClick={() => (selectIfNone(lane.laneId), commands.resetClipGain())} className="nudge">0 dB</button>
-        <button onClick={() => (selectIfNone(lane.laneId), commands.toggleClipMute())} className="nudge" title="Mute / unmute (⇧M)">🔇 mute</button>
+        <button onClick={() => (selectIfNone(lane.laneId), commands.toggleClipMute())} className="nudge" title="Mute / unmute (⇧M)">
+          <VolumeX /> mute
+        </button>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="w-20 text-[11px] text-muted">Fades</span>

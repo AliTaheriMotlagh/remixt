@@ -64,10 +64,10 @@ export type TopMiner = { id: string; artist_name: string; avatar_color: string; 
 
 /** Mining badges, by songs split for others — the next one is shown as a goal. */
 export const MINING_TIERS = [
-  { songs: 1, label: "First Block", emoji: "🪨" },
-  { songs: 5, label: "Helping Hand", emoji: "⛏️" },
-  { songs: 25, label: "Rig Runner", emoji: "🖥️" },
-  { songs: 100, label: "Mining Legend", emoji: "💎" },
+  { songs: 1, label: "First Block", icon: "box" },
+  { songs: 5, label: "Helping Hand", icon: "pickaxe" },
+  { songs: 25, label: "Rig Runner", icon: "monitor" },
+  { songs: 100, label: "Mining Legend", icon: "gem" },
 ] as const;
 
 export function nextTier(songs: number) {

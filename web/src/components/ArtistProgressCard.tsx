@@ -1,3 +1,4 @@
+import { Icon } from "@/components/Icon";
 import type { ArtistProgress } from "@/lib/social";
 
 /** An artist's level, XP towards the next one, and badges. */
@@ -37,7 +38,9 @@ export default function ArtistProgressCard({ progress, isOwner }: { progress: Ar
               title={b.description}
               className={`rounded-xl border p-3 ${b.earned ? "border-brand/50 bg-brand/10" : "border-border opacity-60"}`}
             >
-              <div className={`text-2xl ${b.earned ? "" : "grayscale"}`}>{b.emoji}</div>
+              <div className={`text-2xl ${b.earned ? "text-brand-strong" : "text-muted"}`}>
+                <Icon name={b.icon} />
+              </div>
               <div className="mt-1 text-xs font-semibold">{b.label}</div>
               <div className="text-[11px] text-muted">{b.progress ?? b.description}</div>
             </div>

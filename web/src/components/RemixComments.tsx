@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { Play } from "lucide-react";
 import { useRouter } from "next/navigation";
 import ReportButton from "./ReportButton";
 import { audioEngine } from "@/lib/client/audioEngine";
@@ -157,7 +158,7 @@ export default function RemixComments({
                       className="rounded bg-brand/15 px-1.5 font-mono text-[11px] text-brand-strong hover:bg-brand/25"
                       title="Play from here"
                     >
-                      ▶ {formatAt(c.at_seconds)}
+                      <Play className="fill-current" /> {formatAt(c.at_seconds)}
                     </button>
                   )}
                   <span className="ml-auto flex items-center gap-3">

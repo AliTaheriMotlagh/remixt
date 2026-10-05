@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { SlidersVertical } from "lucide-react";
 import {
   DEFAULT_OPTIONS,
   STRUCTURES,
@@ -141,7 +142,9 @@ export default function LaneMatchPanel({ lane }: { lane: StudioLane }) {
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-brand/40 bg-brand/10 p-3">
       <div className="flex flex-wrap items-center gap-2 text-xs">
-        <span className="font-semibold">🎚 Match</span>
+        <span className="font-semibold">
+          <SlidersVertical /> Match
+        </span>
         {partners.length === 0 ? (
           <span className="text-muted">Add a {lane.kind === "vocals" ? "beat" : "vocal"} lane to match this one with.</span>
         ) : (

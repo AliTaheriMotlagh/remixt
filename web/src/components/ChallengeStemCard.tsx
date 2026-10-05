@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { Pause, Play } from "lucide-react";
 import Waveform from "./Waveform";
 import { previewPlayer, usePreviewState } from "@/lib/client/previewPlayer";
 import { KIND_INFO } from "@/lib/stemKinds";
@@ -31,7 +32,7 @@ export default function ChallengeStemCard({ stem }: { stem: ChallengeStem }) {
           style={{ background: color }}
           aria-label={current && preview.playing ? "Pause preview" : "Play preview"}
         >
-          {current && preview.playing ? "⏸" : "▶"}
+          {current && preview.playing ? <Pause className="fill-current" /> : <Play className="fill-current" />}
         </button>
         <Waveform
           peaks={peaks}

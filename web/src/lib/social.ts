@@ -3,6 +3,7 @@ import { ensureRemixStats } from "./models";
 import { ensureSchema } from "./schema";
 import { REWARD } from "./mining";
 import { ensureSplitQueueSchema } from "./splitQueue";
+import type { IconName } from "@/components/Icon";
 
 // The social side of Remixt: following artists, commenting on remixes,
 // and the game layer on top — XP, levels, badges and leaderboards.
@@ -182,7 +183,7 @@ export function levelFor(xp: number): Level {
 
 export type Badge = {
   id: string;
-  emoji: string;
+  icon: IconName;
   label: string;
   description: string;
   earned: boolean;
@@ -190,27 +191,27 @@ export type Badge = {
   progress: string | null;
 };
 
-function badge(id: string, emoji: string, label: string, description: string, value: number, goal: number): Badge {
+function badge(id: string, icon: IconName, label: string, description: string, value: number, goal: number): Badge {
   const earned = value >= goal;
-  return { id, emoji, label, description, earned, progress: earned || goal === 1 ? null : `${value} / ${goal}` };
+  return { id, icon, label, description, earned, progress: earned || goal === 1 ? null : `${value} / ${goal}` };
 }
 
 export function badgesFor(n: ArtistNumbers): Badge[] {
   return [
-    badge("first-remix", "🎛️", "First Remix", "Publish a remix", n.published, 1),
-    badge("prolific", "🔥", "Prolific", "Publish 10 remixes", n.published, 10),
-    badge("crate-digger", "🎤", "Crate Digger", "Upload 5 songs", n.tracks, 5),
-    badge("first-fan", "❤️", "First Fan", "Get a like from someone", n.likes, 1),
-    badge("hit-maker", "💎", "Hit Maker", "Get 10 likes on one remix", n.bestLikes, 10),
-    badge("crowd-pleaser", "🎧", "Crowd Pleaser", "Reach 100 plays in total", n.plays, 100),
-    badge("viral", "🚀", "Viral", "Reach 1,000 plays on one remix", n.bestPlays, 1000),
-    badge("scene-builder", "🤝", "Scene Builder", "Have 10 followers", n.followers, 10),
-    badge("tastemaker", "👍", "Tastemaker", "Like 20 remixes by others", n.likesGiven, 20),
-    badge("in-the-mix", "💬", "In the Mix", "Comment on 10 remixes by others", n.commentedOn, 10),
-    badge("helping-hand", "⛏️", "Helping Hand", "Split 5 songs for people on phones", n.splitsForOthers, 5),
-    badge("rig-runner", "🖥️", "Rig Runner", "Split 25 songs for people on phones", n.splitsForOthers, 25),
-    badge("talent-scout", "📣", "Talent Scout", "Bring 3 friends who make something", n.referrals ?? 0, 3),
-    badge("mining-legend", "💎", "Mining Legend", "Split 100 songs for people on phones", n.splitsForOthers, 100),
+    badge("first-remix", "sliders-horizontal", "First Remix", "Publish a remix", n.published, 1),
+    badge("prolific", "flame", "Prolific", "Publish 10 remixes", n.published, 10),
+    badge("crate-digger", "mic", "Crate Digger", "Upload 5 songs", n.tracks, 5),
+    badge("first-fan", "heart", "First Fan", "Get a like from someone", n.likes, 1),
+    badge("hit-maker", "gem", "Hit Maker", "Get 10 likes on one remix", n.bestLikes, 10),
+    badge("crowd-pleaser", "headphones", "Crowd Pleaser", "Reach 100 plays in total", n.plays, 100),
+    badge("viral", "rocket", "Viral", "Reach 1,000 plays on one remix", n.bestPlays, 1000),
+    badge("scene-builder", "handshake", "Scene Builder", "Have 10 followers", n.followers, 10),
+    badge("tastemaker", "thumbs-up", "Tastemaker", "Like 20 remixes by others", n.likesGiven, 20),
+    badge("in-the-mix", "message-circle", "In the Mix", "Comment on 10 remixes by others", n.commentedOn, 10),
+    badge("helping-hand", "pickaxe", "Helping Hand", "Split 5 songs for people on phones", n.splitsForOthers, 5),
+    badge("rig-runner", "monitor", "Rig Runner", "Split 25 songs for people on phones", n.splitsForOthers, 25),
+    badge("talent-scout", "megaphone", "Talent Scout", "Bring 3 friends who make something", n.referrals ?? 0, 3),
+    badge("mining-legend", "gem", "Mining Legend", "Split 100 songs for people on phones", n.splitsForOthers, 100),
   ];
 }
 

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { PartyPopper } from "lucide-react";
 import RemixtMark from "@/components/RemixtMark";
 
 export default function SignupPage() {
@@ -47,7 +48,9 @@ export default function SignupPage() {
           <RemixtMark className="h-12 w-12" />
         </Link>
         {invited && (
-          <p className="mb-4 rounded-xl border border-brand/40 bg-brand/10 px-3 py-2 text-sm">🎉 A friend invited you — make your first remix together.</p>
+          <p className="mb-4 rounded-xl border border-brand/40 bg-brand/10 px-3 py-2 text-sm">
+            <PartyPopper className="text-brand-strong" /> A friend invited you — make your first remix together.
+          </p>
         )}
         <h1 className="text-2xl font-bold">Become an artist</h1>
         <p className="mt-1 text-sm text-muted">

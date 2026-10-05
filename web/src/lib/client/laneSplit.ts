@@ -4,6 +4,7 @@ import { audioEngine } from "./audioEngine";
 import { siblingStems } from "./beatParts";
 import { isConstrainedDevice, splitter, uploadStems, type UploadStage } from "./splitter";
 import type { LaneKind, LoadableStem, StudioLane } from "./studioStore";
+import type { IconName } from "@/components/Icon";
 
 // Demucs on any lane, right in the Studio: the lane's stem is run through
 // the same in-browser model as an upload, its vocals, drums, bass and
@@ -13,11 +14,11 @@ import type { LaneKind, LoadableStem, StudioLane } from "./studioStore";
 
 export type SplitKind = "vocals" | "drums" | "bass" | "other";
 
-export const SPLIT_KINDS: { id: SplitKind; label: string; icon: string }[] = [
-  { id: "vocals", label: "Vocals", icon: "🎤" },
-  { id: "drums", label: "Drums", icon: "🥁" },
-  { id: "bass", label: "Bass", icon: "🎸" },
-  { id: "other", label: "Melody", icon: "🎹" },
+export const SPLIT_KINDS: { id: SplitKind; label: string; icon: IconName }[] = [
+  { id: "vocals", label: "Vocals", icon: "mic" },
+  { id: "drums", label: "Drums", icon: "drum" },
+  { id: "bass", label: "Bass", icon: "guitar" },
+  { id: "other", label: "Melody", icon: "piano" },
 ];
 
 /** What splitting a lane is usually for: a beat into its parts, a vocal cleaned of what bled in. */

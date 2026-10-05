@@ -1,5 +1,6 @@
 "use client";
 
+import { Check, type LucideIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { create } from "zustand";
@@ -12,7 +13,7 @@ export type MenuItem =
   | {
       type?: "item";
       label: string;
-      icon?: string;
+      icon?: LucideIcon;
       shortcut?: string;
       hint?: string;
       onSelect: () => void;
@@ -23,7 +24,7 @@ export type MenuItem =
   | { type: "separator" }
   | { type: "heading"; label: string }
   /** A row of small choices, e.g. stutter lengths. */
-  | { type: "chips"; label: string; chips: { label: string; onSelect: () => void; active?: boolean; hint?: string }[] };
+  | { type: "chips"; label: string; chips: { label: string; icon?: LucideIcon; onSelect: () => void; active?: boolean; hint?: string }[] };
 
 type MenuState = {
   /** `sheet`: shown as a sheet from the bottom (phones) rather than at the pointer. */
@@ -209,6 +210,7 @@ export default function ContextMenuHost() {
                       chip.active ? "border-brand bg-brand/20 text-foreground" : "border-border text-muted hover:border-brand hover:text-foreground"
                     }`}
                   >
+                    {chip.icon && <chip.icon className="mr-0.5" />}
                     {chip.label}
                   </button>
                 ))}
@@ -228,7 +230,7 @@ export default function ContextMenuHost() {
                   : "text-foreground hover:bg-brand/20 focus:bg-brand/20"
               }`}
             >
-              <span className="w-4 shrink-0 text-center text-xs opacity-80">{item.checked ? "✓" : item.icon}</span>
+              <span className="w-4 shrink-0 text-center text-sm opacity-80">{item.checked ? <Check /> : item.icon && <item.icon />}</span>
               <span className="min-w-0 flex-1 truncate">{item.label}</span>
               {item.shortcut && (
                 <kbd className="shrink-0 font-mono text-[10px] text-muted pointer-coarse:hidden">{item.shortcut}</kbd>

@@ -1,5 +1,6 @@
 "use client";
 
+import { Share, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 type InstallEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> };
@@ -85,7 +86,7 @@ export default function InstallPrompt() {
         <p className="text-muted">
           {ios ? (
             <>
-              Tap <span aria-label="Share">⎋ Share</span>, then <b>Add to Home Screen</b> — full screen, one tap away.
+              Tap <Share /> <b>Share</b>, then <b>Add to Home Screen</b> — full screen, one tap away.
             </>
           ) : (
             "Full screen, one tap from your home screen — no store needed."
@@ -98,7 +99,7 @@ export default function InstallPrompt() {
         </button>
       )}
       <button onClick={dismiss} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted hover:text-foreground" aria-label="Not now">
-        ✕
+        <X className="h-5 w-5" />
       </button>
     </div>
   );

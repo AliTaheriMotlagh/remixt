@@ -1,5 +1,30 @@
 import Link from "next/link";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Award,
+  Brain,
+  Check,
+  Flag,
+  Flame,
+  Handshake,
+  Heart,
+  Hourglass,
+  Lock,
+  Music,
+  Pause,
+  Play,
+  Rocket,
+  SlidersHorizontal,
+  SlidersVertical,
+  Smartphone,
+  TrendingUp,
+  Trophy,
+  Zap,
+  type LucideIcon,
+} from "lucide-react";
 import sql from "@/lib/db";
+import { Icon, PlaceMedal } from "@/components/Icon";
 import RemixtMark from "@/components/RemixtMark";
 import ChallengeStemCard from "@/components/ChallengeStemCard";
 import CountUp from "@/components/landing/CountUp";
@@ -293,7 +318,9 @@ export default async function Home() {
                 Your browser can&apos;t play this video.
               </video>
             </div>
-            <p className="mt-3 text-center text-xs text-muted">▶ See Remixt in 16 seconds</p>
+            <p className="mt-3 text-center text-xs text-muted">
+              <Play className="fill-current" /> See Remixt in 16 seconds
+            </p>
           </div>
         </div>
       </section>
@@ -305,7 +332,15 @@ export default async function Home() {
             <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
               <div className="min-w-0">
                 <p className="text-xs font-bold uppercase tracking-widest text-vocals">
-                  {challenge.status === "running" ? "🏁 Live challenge" : "⏳ Next challenge"}
+                  {challenge.status === "running" ? (
+                    <>
+                      <Flag /> Live challenge
+                    </>
+                  ) : (
+                    <>
+                      <Hourglass /> Next challenge
+                    </>
+                  )}
                 </p>
                 <h2 className="mt-2 text-2xl font-black tracking-tight sm:text-3xl">{challenge.title}</h2>
                 <p className="mt-2 max-w-xl text-sm text-muted">
@@ -339,7 +374,7 @@ export default async function Home() {
                   href={user ? `/studio?challenge=${challenge.id}` : "/signup"}
                   className="rounded-xl bg-brand px-5 py-3 text-center text-sm font-semibold text-white hover:bg-brand-strong"
                 >
-                  {user ? "Enter the challenge →" : "Sign up & enter →"}
+                  {user ? "Enter the challenge" : "Sign up & enter"} <ArrowRight />
                 </Link>
               )}
               <Link
@@ -389,7 +424,7 @@ export default async function Home() {
             <p className="mt-3 text-xs text-muted">
               {progress.badges.filter((b) => b.earned).length} of {progress.badges.length} badges ·{" "}
               <Link href={`/artist/${user.id}`} className="font-medium text-brand-strong hover:underline">
-                See your profile →
+                See your profile <ArrowRight />
               </Link>
             </p>
           </div>
@@ -397,7 +432,9 @@ export default async function Home() {
 
         <div className="mt-10 grid grid-cols-1 gap-6 lg:grid-cols-3">
           <div className="rounded-2xl border border-border bg-surface p-5 sm:p-6">
-            <h3 className="font-semibold">⚡ How you earn XP</h3>
+            <h3 className="font-semibold">
+              <Zap className="text-brand-strong" /> How you earn XP
+            </h3>
             <ul className="mt-4 flex flex-col gap-2 text-sm">
               <XpRow label="Publish a remix" xp={XP.published} />
               <XpRow label="Upload a song" xp={XP.track} />
@@ -411,7 +448,9 @@ export default async function Home() {
           </div>
 
           <div className="rounded-2xl border border-border bg-surface p-5 sm:p-6">
-            <h3 className="font-semibold">🪜 The ladder</h3>
+            <h3 className="font-semibold">
+              <TrendingUp className="text-brand-strong" /> The ladder
+            </h3>
             <ol className="mt-4 flex flex-col gap-1.5">
               {levelLadder().map((l) => {
                 const current = progress?.level.level === l.level;
@@ -428,7 +467,11 @@ export default async function Home() {
                     </span>
                     <span className="flex-1 truncate font-medium">
                       {l.title}
-                      {current && <span className="ml-2 text-xs text-brand-strong">← you</span>}
+                      {current && (
+                        <span className="ml-2 text-xs text-brand-strong">
+                          <ArrowLeft /> you
+                        </span>
+                      )}
                     </span>
                     <span className="text-xs tabular-nums text-muted">{l.from.toLocaleString("en-US")} XP</span>
                   </li>
@@ -439,9 +482,11 @@ export default async function Home() {
 
           <div className="rounded-2xl border border-border bg-surface p-5 sm:p-6">
             <div className="flex items-baseline justify-between gap-2">
-              <h3 className="font-semibold">🏆 Top artists</h3>
+              <h3 className="font-semibold">
+                <Trophy className="text-brand-strong" /> Top artists
+              </h3>
               <Link href="/leaderboard" className="text-xs font-medium text-brand-strong hover:underline">
-                Full leaderboard →
+                Full leaderboard <ArrowRight />
               </Link>
             </div>
             <Podium artists={podium} />
@@ -450,7 +495,9 @@ export default async function Home() {
 
         <div className="mt-6 rounded-2xl border border-border bg-surface p-5 sm:p-6">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h3 className="font-semibold">🎖️ Badges to collect</h3>
+            <h3 className="font-semibold">
+              <Award className="text-brand-strong" /> Badges to collect
+            </h3>
             <span className="text-xs text-muted">
               {progress
                 ? `You've earned ${progress.badges.filter((b) => b.earned).length} of ${progress.badges.length}`
@@ -466,7 +513,9 @@ export default async function Home() {
                   b.earned ? "border-brand/50 bg-brand/10" : "border-border bg-surface-raised/40"
                 }`}
               >
-                <div className={`text-2xl ${progress && !b.earned ? "opacity-50 grayscale" : ""}`}>{b.emoji}</div>
+                <div className={`text-2xl ${progress && !b.earned ? "text-muted opacity-50" : "text-brand-strong"}`}>
+                  <Icon name={b.icon} />
+                </div>
                 <div className="mt-1 text-xs font-semibold">{b.label}</div>
                 <div className="text-[11px] text-muted">{progress && !b.earned && b.progress ? b.progress : b.description}</div>
               </div>
@@ -481,14 +530,16 @@ export default async function Home() {
           <div className="mb-8 flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
             <SectionHeading eyebrow="Listen" title="Hot from the community" align="left" />
             <Link href="/remixes" className="text-sm font-medium text-brand-strong hover:underline">
-              View all remixes →
+              View all remixes <ArrowRight />
             </Link>
           </div>
 
           {remixes.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-border bg-surface p-12 text-center text-muted">
               No remixes published yet. Be the first — and grab the{" "}
-              <span className="font-semibold text-foreground">🎛️ First Remix</span> badge.
+              <span className="font-semibold text-foreground">
+                <SlidersHorizontal className="text-brand-strong" /> First Remix
+              </span> badge.
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -508,12 +559,12 @@ export default async function Home() {
                     ))}
                     <span className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100">
                       <span className="flex h-12 w-12 items-center justify-center rounded-full bg-brand text-lg text-white shadow-lg">
-                        ▶
+                        <Play className="fill-current" />
                       </span>
                     </span>
                     {remix.hot && (
                       <span className="absolute left-2 top-2 rounded-full bg-background/80 px-2 py-0.5 text-[10px] font-bold">
-                        🔥 Trending
+                        <Flame className="text-orange-400" /> Trending
                       </span>
                     )}
                   </div>
@@ -521,7 +572,7 @@ export default async function Home() {
                   <div className="mt-1 flex items-center justify-between gap-2 text-sm text-muted">
                     <span className="truncate">by {remix.artist_name}</span>
                     <span className="shrink-0 text-xs tabular-nums">
-                      ♥ {remix.likes} · ▶ {remix.plays.toLocaleString("en-US")}
+                      <Heart /> {remix.likes} · <Play /> {remix.plays.toLocaleString("en-US")}
                     </span>
                   </div>
                 </Link>
@@ -535,12 +586,12 @@ export default async function Home() {
       <section className="mx-auto w-full max-w-6xl px-4 py-14 sm:px-6 sm:py-20">
         <SectionHeading eyebrow="Why Remixt" title="A real studio, without the studio" />
         <div className="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <Feature icon="🧠" title="AI stem splitting" text="The same Demucs model the pros use, running on your GPU or CPU. No upload queue, no credits." />
-          <Feature icon="🔒" title="Private by design" text="Your original song never leaves your device. Only the stems you choose to share go up." />
-          <Feature icon="🎚️" title="A DAW in a tab" text="Multitrack lanes, BPM sync, pitch and key matching, FX, automation, sample pads and vocal recording." />
-          <Feature icon="📱" title="Works on your phone" text="Queue a song from your phone and a computer splits it for you. Install it to your home screen like an app." />
-          <Feature icon="🤝" title="Remix together" text="Invite friends into a shared project and build a mix together, live." />
-          <Feature icon="🚀" title="Share anywhere" text="Short links, embeddable players and social clips — post your remix to TikTok, Instagram or your own site." />
+          <Feature icon={Brain} title="AI stem splitting" text="The same Demucs model the pros use, running on your GPU or CPU. No upload queue, no credits." />
+          <Feature icon={Lock} title="Private by design" text="Your original song never leaves your device. Only the stems you choose to share go up." />
+          <Feature icon={SlidersVertical} title="A DAW in a tab" text="Multitrack lanes, BPM sync, pitch and key matching, FX, automation, sample pads and vocal recording." />
+          <Feature icon={Smartphone} title="Works on your phone" text="Queue a song from your phone and a computer splits it for you. Install it to your home screen like an app." />
+          <Feature icon={Handshake} title="Remix together" text="Invite friends into a shared project and build a mix together, live." />
+          <Feature icon={Rocket} title="Share anywhere" text="Short links, embeddable players and social clips — post your remix to TikTok, Instagram or your own site." />
         </div>
       </section>
 
@@ -575,7 +626,9 @@ export default async function Home() {
           <h2 className="text-3xl font-black tracking-tight text-balance sm:text-5xl">Your first remix is 5 minutes away.</h2>
           <p className="mx-auto mt-4 max-w-lg text-muted">
             Publish it and you&apos;re straight to level 2 with the{" "}
-            <span className="font-semibold text-foreground">🎛️ First Remix</span> badge. Free, no install.
+            <span className="font-semibold text-foreground">
+                <SlidersHorizontal className="text-brand-strong" /> First Remix
+              </span> badge. Free, no install.
           </p>
           <div className="mt-8 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:items-center">
             <Link
@@ -692,7 +745,7 @@ function Podium({ artists }: { artists: LeaderboardArtist[] }) {
   // Second, first, third — the winner in the middle, on the tallest step.
   const order = [artists[1], artists[0], artists[2]];
   const heights = ["h-16", "h-24", "h-12"];
-  const medals = ["🥈", "🥇", "🥉"];
+  const ranks = [2, 1, 3];
   return (
     <div className="mt-6 grid grid-cols-3 items-end gap-2">
       {order.map((a, i) =>
@@ -709,7 +762,7 @@ function Podium({ artists }: { artists: LeaderboardArtist[] }) {
             <div
               className={`mt-2 flex w-full items-start justify-center rounded-t-lg border border-b-0 border-border bg-surface-raised pt-2 text-xl ${heights[i]}`}
             >
-              {medals[i]}
+              <PlaceMedal rank={ranks[i]} />
             </div>
           </Link>
         ) : (
@@ -720,11 +773,11 @@ function Podium({ artists }: { artists: LeaderboardArtist[] }) {
   );
 }
 
-function Feature({ icon, title, text }: { icon: string; title: string; text: string }) {
+function Feature({ icon: FeatureIcon, title, text }: { icon: LucideIcon; title: string; text: string }) {
   return (
     <div className="rounded-2xl border border-border bg-surface p-5 transition-colors hover:border-brand/40">
-      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-surface-raised text-xl" aria-hidden>
-        {icon}
+      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-surface-raised text-xl text-brand-strong">
+        <FeatureIcon />
       </div>
       <h3 className="mt-4 font-semibold">{title}</h3>
       <p className="mt-1 text-sm text-muted">{text}</p>
@@ -752,8 +805,12 @@ function StudioMock() {
 
         <div className="mt-4 rounded-xl border border-border bg-background/60 p-3">
           <div className="flex items-center justify-between text-[11px] text-muted">
-            <span>🎵 your-song.mp3</span>
-            <span className="font-semibold text-success">✓ split by AI</span>
+            <span>
+              <Music /> your-song.mp3
+            </span>
+            <span className="font-semibold text-success">
+              <Check /> split by AI
+            </span>
           </div>
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-raised">
             <div className="h-full w-full rounded-full bg-gradient-to-r from-vocals to-beat" />
@@ -786,7 +843,9 @@ function StudioMock() {
         </div>
 
         <div className="mt-4 flex items-center gap-3">
-          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-brand text-white">⏸</span>
+          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-brand text-white">
+            <Pause className="fill-current" />
+          </span>
           <div className="flex flex-1 gap-1.5">
             {["Pitch +2", "Reverb", "Key: Am"].map((chip) => (
               <span key={chip} className="truncate rounded-md border border-border bg-surface-raised px-2 py-1 text-[10px] text-muted">
@@ -807,7 +866,7 @@ function StudioMock() {
         className="animate-float absolute -bottom-5 -left-2 rounded-xl border border-border bg-surface px-3 py-2 text-xs shadow-xl sm:-left-6"
         style={{ animationDelay: "-2s" }}
       >
-        🎛️ <span className="font-semibold">Badge unlocked:</span> <span className="text-muted">First Remix</span>
+        <SlidersHorizontal className="text-brand-strong" /> <span className="font-semibold">Badge unlocked:</span> <span className="text-muted">First Remix</span>
       </div>
     </div>
   );

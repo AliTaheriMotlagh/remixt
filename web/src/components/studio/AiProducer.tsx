@@ -1,6 +1,41 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowRight,
+  ArrowUpToLine,
+  Bandage,
+  CassetteTape,
+  CheckIcon,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  Dices,
+  Disc3,
+  Drum,
+  Info,
+  Link,
+  Mic,
+  Minus,
+  Palette,
+  Pause,
+  Play,
+  Plus,
+  Puzzle,
+  Radio,
+  RectangleHorizontal,
+  Scissors,
+  Search,
+  SlidersHorizontal,
+  SlidersVertical,
+  Sparkles,
+  Stethoscope,
+  X,
+  Zap,
+  type LucideIcon,
+} from "lucide-react";
+import { Icon, type IconName } from "@/components/Icon";
 import {
   availableFixes,
   checkMix,
@@ -81,11 +116,11 @@ function playOn() {
 
 type Tab = "sync" | "styles" | "moments" | "mix";
 
-const TABS: { id: Tab; label: string; icon: string }[] = [
-  { id: "sync", label: "Sync", icon: "🔗" },
-  { id: "styles", label: "Styles", icon: "🎨" },
-  { id: "moments", label: "Moments", icon: "💥" },
-  { id: "mix", label: "Mix", icon: "🎚" },
+const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
+  { id: "sync", label: "Sync", icon: Link },
+  { id: "styles", label: "Styles", icon: Palette },
+  { id: "moments", label: "Moments", icon: Zap },
+  { id: "mix", label: "Mix", icon: SlidersVertical },
 ];
 
 /** Ideas that place the vocal or change the speed — only one of those is on at a time. */
@@ -106,12 +141,15 @@ function inPlace(change: () => void) {
   keepPlace(bpm);
 }
 
-function Section({ title, hint, action, children }: { title: string; hint?: string; action?: React.ReactNode; children: React.ReactNode }) {
+function Section({ icon: SectionIcon, title, hint, action, children }: { icon: LucideIcon; title: string; hint?: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
     <section className="flex flex-col gap-2">
       <div className="flex items-end justify-between gap-2">
         <div className="min-w-0">
-          <h3 className="text-sm font-bold">{title}</h3>
+          <h3 className="flex items-center gap-1.5 text-sm font-bold">
+            <SectionIcon className="text-brand-strong" />
+            {title}
+          </h3>
           {hint && <p className="text-[11px] text-muted">{hint}</p>}
         </div>
         {action}
@@ -133,13 +171,15 @@ function Tile({ idea, on, disabled, onClick, selected = false, badge }: { idea: 
         on ? "border-brand bg-brand/15 ring-2 ring-brand/50" : selected ? "border-brand/70 bg-brand/[0.07]" : "border-border bg-surface hover:border-brand/60 hover:bg-surface-hover"
       }`}
     >
-      <span className="text-xl leading-none" aria-hidden>
-        {idea.icon}
+      <span className="text-xl leading-none text-brand-strong" aria-hidden>
+        <Icon name={idea.icon} />
       </span>
       <span className="pr-8 text-[13px] font-semibold leading-tight">{idea.title}</span>
       <span className="text-[11px] leading-snug text-muted">{idea.short}</span>
       {on ? (
-        <span className="absolute right-2 top-2 rounded-full bg-brand px-1.5 py-px text-[9px] font-bold text-white">▶ ON</span>
+        <span className="absolute right-2 top-2 flex items-center gap-0.5 rounded-full bg-brand px-1.5 py-px text-[9px] font-bold text-white">
+          <Play className="fill-current" /> ON
+        </span>
       ) : badge ? (
         <span className={`absolute right-1.5 top-1.5 rounded-full px-1.5 py-px text-[9px] font-bold text-white ${selected ? "bg-brand" : "bg-vocals"}`}>{badge}</span>
       ) : null}
@@ -159,14 +199,22 @@ function Row({ idea, on, disabled, onClick }: { idea: Idea; on: boolean; disable
         on ? "border-brand bg-brand/15" : "border-transparent hover:bg-surface-hover"
       }`}
     >
-      <span className="w-6 shrink-0 text-center text-base" aria-hidden>
-        {idea.icon}
+      <span className="w-6 shrink-0 text-center text-base text-brand-strong" aria-hidden>
+        <Icon name={idea.icon} />
       </span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-xs font-semibold">{idea.title}</span>
         <span className="block truncate text-[11px] text-muted">{idea.short}</span>
       </span>
-      <span className={`shrink-0 text-[11px] font-semibold ${on ? "text-brand-strong" : "text-muted"}`}>{on ? "▶ On" : "Try"}</span>
+      <span className={`shrink-0 text-[11px] font-semibold ${on ? "text-brand-strong" : "text-muted"}`}>
+        {on ? (
+          <>
+            <Play className="fill-current" /> On
+          </>
+        ) : (
+          "Try"
+        )}
+      </span>
     </button>
   );
 }
@@ -177,7 +225,10 @@ function MixCheck({ checks, onFix, canFix, trying }: { checks: Check[]; onFix: (
   return (
     <div className="rounded-2xl border border-border bg-surface p-3">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-bold">🩺 Mix check{trying && <span className="ml-1.5 text-[11px] font-normal text-muted">(with the idea on)</span>}</h3>
+        <h3 className="text-sm font-bold">
+          <Stethoscope className="mr-1.5 text-brand-strong" />
+          Mix check{trying && <span className="ml-1.5 text-[11px] font-normal text-muted">(with the idea on)</span>}
+        </h3>
         <span className={`text-xs font-bold tabular-nums ${score === 1 ? "text-success" : score >= 0.5 ? "text-amber-400" : "text-danger"}`}>
           {good} / {checks.length} good
         </span>
@@ -254,13 +305,21 @@ function FineTune({ vocal, beat }: { vocal: StudioLane; beat: StudioLane | null 
         <TuneButton onClick={() => (before(), nudge(vocal.laneId, 0.5))} title="Half a beat later">+½</TuneButton>
       </TuneRow>
       <TuneRow label="Vocal volume" hint={`${Math.round(vocal.volume * 100)}%`}>
-        <TuneButton onClick={() => (before(), gain(vocal.laneId, -1.5))}>−</TuneButton>
-        <TuneButton onClick={() => (before(), gain(vocal.laneId, 1.5))}>+</TuneButton>
+        <TuneButton onClick={() => (before(), gain(vocal.laneId, -1.5))} title="Vocal quieter">
+          <Minus className="text-sm" />
+        </TuneButton>
+        <TuneButton onClick={() => (before(), gain(vocal.laneId, 1.5))} title="Vocal louder">
+          <Plus className="text-sm" />
+        </TuneButton>
       </TuneRow>
       {beat && (
         <TuneRow label="Beat volume" hint={`${Math.round(beat.volume * 100)}%`}>
-          <TuneButton onClick={() => (before(), gain(beat.laneId, -1.5))}>−</TuneButton>
-          <TuneButton onClick={() => (before(), gain(beat.laneId, 1.5))}>+</TuneButton>
+          <TuneButton onClick={() => (before(), gain(beat.laneId, -1.5))} title="Beat quieter">
+            <Minus className="text-sm" />
+          </TuneButton>
+          <TuneButton onClick={() => (before(), gain(beat.laneId, 1.5))} title="Beat louder">
+            <Plus className="text-sm" />
+          </TuneButton>
         </TuneRow>
       )}
       <TuneRow label="Vocal pitch" hint={vocal.pitchSemitones ? `${vocal.pitchSemitones > 0 ? "+" : ""}${vocal.pitchSemitones} semitones` : "as sung"}>
@@ -323,12 +382,12 @@ function keepWhatsPlaying() {
 }
 
 /** Who's producing: ranks the ideas that suit that producer's taste first (nothing is hidden). */
-type Persona = { id: string; label: string; icon: string; vibes: Vibe[] };
+type Persona = { id: string; label: string; icon: LucideIcon; vibes: Vibe[] };
 const PERSONAS: Persona[] = [
-  { id: "any", label: "Any style", icon: "✨", vibes: [] },
-  { id: "club", label: "Club DJ", icon: "🪩", vibes: ["club", "hard"] },
-  { id: "lofi", label: "Lo-fi", icon: "📼", vibes: ["lofi", "chill"] },
-  { id: "radio", label: "Radio hit", icon: "📻", vibes: ["radio", "short"] },
+  { id: "any", label: "Any style", icon: Sparkles, vibes: [] },
+  { id: "club", label: "Club DJ", icon: Disc3, vibes: ["club", "hard"] },
+  { id: "lofi", label: "Lo-fi", icon: CassetteTape, vibes: ["lofi", "chill"] },
+  { id: "radio", label: "Radio hit", icon: Radio, vibes: ["radio", "short"] },
 ];
 const PERSONA_KEY = "remixt-ai-persona";
 function loadPersona(): string {
@@ -402,7 +461,7 @@ export default function AiProducer() {
     };
   }, [open]);
   /** "X takes the place of Y" — shown in the bottom bar for a few seconds. */
-  const [swapNote, setSwapNote] = useState<string | null>(null);
+  const [swapNote, setSwapNote] = useState<{ icon?: IconName; text: string } | null>(null);
   useEffect(() => {
     if (!swapNote) return;
     const timer = setTimeout(() => setSwapNote(null), 4500);
@@ -502,8 +561,8 @@ export default function AiProducer() {
     // A style taking over from a sync template keeps that sync (it's a setting): say so, not "replaced".
     const sync = replaced.find((t) => t.kind === "sync");
     const gone = replaced.filter((t) => t.kind !== "sync");
-    if (gone.length) setSwapNote(`${idea.icon} ${idea.title} took the place of ${gone.map((t) => t.title).join(", ")} — the rest stays on`);
-    else if (sync) setSwapNote(`${idea.icon} ${idea.title} — synced your way (${sync.title})`);
+    if (gone.length) setSwapNote({ icon: idea.icon, text: `${idea.title} took the place of ${gone.map((t) => t.title).join(", ")} — the rest stays on` });
+    else if (sync) setSwapNote({ icon: idea.icon, text: `${idea.title} — synced your way (${sync.title})` });
     keepPlace(bpm);
     playOn();
   }
@@ -550,7 +609,7 @@ export default function AiProducer() {
     const done = applyOptions({ sync: id }, { except: trying.filter((t) => t.kind === "sync").map((t) => t.id) });
     if (!done) return;
     if (otherTiming) {
-      setSwapNote(`🔗 ${idea.title}: “${otherTiming.title}” is now synced this way`);
+      setSwapNote({ icon: "link", text: `${idea.title}: “${otherTiming.title}” is now synced this way` });
       playOn();
       return;
     }
@@ -590,7 +649,7 @@ export default function AiProducer() {
     let list = ideas.filter((i) => usable(i) && (!last || i.kind === last.kind));
     if (list.length < 2) list = ideas.filter(usable);
     if (!list.length || (list.length === 1 && list[0].id === last?.id)) {
-      setSwapNote("No other ideas fit the mix right now");
+      setSwapNote({ text: "No other ideas fit the mix right now" });
       return;
     }
     const from = list.findIndex((i) => i.id === last?.id);
@@ -606,11 +665,11 @@ export default function AiProducer() {
       if (tryIdea(session, next, { add: true, replace: last?.id })) {
         keepPlace(bpm);
         playOn();
-        setSwapNote(`${next.icon} ${next.title}`);
+        setSwapNote({ icon: next.icon, text: next.title });
         return;
       }
     }
-    setSwapNote("No other ideas fit the mix right now");
+    setSwapNote({ text: "No other ideas fit the mix right now" });
   }
 
   function keep() {
@@ -751,7 +810,9 @@ export default function AiProducer() {
           <span className="h-1 w-10 rounded-full bg-border" aria-hidden />
         </button>
         <header className="flex shrink-0 items-center gap-2.5 px-4 pt-2.5 pb-2">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand to-vocals text-lg">✨</span>
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand to-vocals text-lg text-white">
+            <Sparkles />
+          </span>
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-bold">AI producer</h2>
             <p className="truncate text-[11px] text-muted">Tap to hear it · options stack · nothing&apos;s final until you keep it</p>
@@ -761,10 +822,10 @@ export default function AiProducer() {
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-surface hover:text-foreground lg:hidden"
             aria-label={sheet === "mini" ? "Show ideas" : "Shrink to just the controls"}
           >
-            {sheet === "mini" ? "▴" : "▾"}
+            {sheet === "mini" ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
           </button>
           <button onClick={close} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-surface hover:text-foreground" aria-label="Close (keeps what's playing)">
-            ✕
+            <X className="h-5 w-5" />
           </button>
         </header>
 
@@ -781,7 +842,7 @@ export default function AiProducer() {
                     tab === t.id ? "bg-brand text-white" : "text-muted hover:bg-surface hover:text-foreground"
                   }`}
                 >
-                  <span aria-hidden>{t.icon}</span>
+                  <t.icon />
                   {t.label}
                   {count > 0 && (
                     <span className={`ml-0.5 rounded-full px-1.5 text-[10px] leading-4 ${tab === t.id ? "bg-white/25" : "bg-brand text-white"}`} aria-label={`${count} on`}>
@@ -807,7 +868,7 @@ export default function AiProducer() {
                     persona.id === p.id ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted hover:text-foreground"
                   }`}
                 >
-                  <span aria-hidden>{p.icon}</span> {p.label}
+                  <p.icon /> {p.label}
                 </button>
               ))}
             </div>
@@ -817,25 +878,49 @@ export default function AiProducer() {
               <p className="text-base font-bold">Let&apos;s make a remix</p>
               <p className="text-muted">The AI needs a vocal and a beat to work with. Pick them from the library — any vocal over any song.</p>
               {[
-                { done: vocals.length > 0, icon: "🎤", text: "A vocal (someone singing or rapping)" },
-                { done: backings.length > 0, icon: "🥁", text: "A beat (the music of another song)" },
+                { done: vocals.length > 0, icon: Mic, text: "A vocal (someone singing or rapping)" },
+                { done: backings.length > 0, icon: Drum, text: "A beat (the music of another song)" },
               ].map((s) => (
                 <div key={s.text} className={`flex items-center gap-3 rounded-xl border p-3 ${s.done ? "border-success/50 bg-success/10" : "border-dashed border-border"}`}>
-                  <span className="text-2xl">{s.icon}</span>
+                  <s.icon className="h-6 w-6 text-brand-strong" />
                   <span className="flex-1">{s.text}</span>
-                  <span className={`text-xs font-semibold ${s.done ? "text-success" : "text-muted"}`}>{s.done ? "✓ Added" : "Not yet"}</span>
+                  <span className={`text-xs font-semibold ${s.done ? "text-success" : "text-muted"}`}>
+                    {s.done ? (
+                      <>
+                        <CheckIcon /> Added
+                      </>
+                    ) : (
+                      "Not yet"
+                    )}
+                  </span>
                 </div>
               ))}
               <p className="text-xs text-muted">As soon as both are in, this panel listens to them and shows you how to make them sound good together.</p>
               {missing === "beat" && leadVocal?.bpm && (
-                <MatchFinder kind="beat" bpm={leadVocal.bpm} title={`🔎 Beats that fit “${leadVocal.trackTitle}” (${leadVocal.bpm.toFixed(0)} BPM)`} />
+                <MatchFinder
+                  kind="beat"
+                  bpm={leadVocal.bpm}
+                  title={
+                    <>
+                      <Search /> Beats that fit “{leadVocal.trackTitle}” ({leadVocal.bpm.toFixed(0)} BPM)
+                    </>
+                  }
+                />
               )}
               {missing === "vocal" && backings[0]?.bpm && (
-                <MatchFinder kind="vocals" bpm={backings[0].bpm} title={`🔎 Vocals that fit “${backings[0].trackTitle}” (${backings[0].bpm.toFixed(0)} BPM)`} />
+                <MatchFinder
+                  kind="vocals"
+                  bpm={backings[0].bpm}
+                  title={
+                    <>
+                      <Search /> Vocals that fit “{backings[0].trackTitle}” ({backings[0].bpm.toFixed(0)} BPM)
+                    </>
+                  }
+                />
               )}
               {lanes.length > 0 && (
                 <button onClick={() => void analyse()} disabled={busy} className="self-start text-xs text-brand-strong hover:underline">
-                  Get sound ideas anyway →
+                  Get sound ideas anyway <ArrowRight />
                 </button>
               )}
             </div>
@@ -855,7 +940,7 @@ export default function AiProducer() {
                           state === "done" ? "bg-success text-white" : state === "now" ? "animate-pulse-glow bg-brand text-white" : "bg-surface-raised"
                         }`}
                       >
-                        {state === "done" ? "✓" : i + 1}
+                        {state === "done" ? <CheckIcon /> : i + 1}
                       </span>
                       {s.label}
                     </li>
@@ -922,19 +1007,29 @@ export default function AiProducer() {
                       onIds.has(auto.id) ? "bg-brand ring-2 ring-brand-strong" : "bg-gradient-to-r from-brand to-vocals hover:brightness-110"
                     }`}
                   >
-                    <span className="block text-base font-bold">{onIds.has(auto.id) ? "▶ On: made to sound good" : "✨ Make it sound good"}</span>
+                    <span className="block text-base font-bold">
+                      {onIds.has(auto.id) ? (
+                        <>
+                          <Play className="fill-current" /> On: made to sound good
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles /> Make it sound good
+                        </>
+                      )}
+                    </span>
                     <span className="mt-0.5 block text-[11px] leading-snug text-white/85">{auto.short}</span>
                   </button>
                   <p className="mt-1.5 text-center text-[11px] text-muted">One tap fixes it all — with the sync and cutting choices below.</p>
                 </div>
               )}
 
-              <Section title="✂ Cutting" hint="How the AI may edit your tracks — everything on is worked out again when you switch">
+              <Section icon={Scissors} title="Cutting" hint="How the AI may edit your tracks — everything on is worked out again when you switch">
                 <div className="flex overflow-hidden rounded-xl border border-border text-xs font-semibold" role="group" aria-label="How the AI may edit your tracks">
                   {([
-                    [false, "✂ Cut into lines", "Tightest fit: the vocal is cut at its silences and every line laid on the beat"],
-                    [true, "▬ Keep tracks whole", "Nothing is cut: tracks are only moved, sped up or slowed, re-keyed and levelled"],
-                  ] as const).map(([whole, label, hint]) => (
+                    [false, Scissors, "Cut into lines", "Tightest fit: the vocal is cut at its silences and every line laid on the beat"],
+                    [true, RectangleHorizontal, "Keep tracks whole", "Nothing is cut: tracks are only moved, sped up or slowed, re-keyed and levelled"],
+                  ] as const).map(([whole, ChoiceIcon, label, hint]) => (
                     <button
                       key={label}
                       onClick={() => chooseWhole(whole)}
@@ -942,14 +1037,14 @@ export default function AiProducer() {
                       title={hint}
                       className={`flex-1 px-2 py-2 transition-colors ${keepWhole === whole ? "bg-brand text-white" : "text-muted hover:text-foreground"}`}
                     >
-                      {label}
+                      <ChoiceIcon /> {label}
                     </button>
                   ))}
                 </div>
               </Section>
 
               {syncs.length > 0 && (
-                <Section title="🔗 Sync templates" hint="How the vocal, the beat and every other lane meet — your pick is used by every style and fix">
+                <Section icon={Link} title="Sync templates" hint="How the vocal, the beat and every other lane meet — your pick is used by every style and fix">
                   <div className="grid grid-cols-2 gap-2">
                     {syncs.map((idea) => {
                       const chosen = idea.id === `sync-${syncId}`;
@@ -972,8 +1067,12 @@ export default function AiProducer() {
               {vocalLane?.bpm && (
                 <details className="group rounded-xl border border-border">
                   <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2.5 text-sm font-bold">
-                    🔎 Find a beat that fits
-                    <span className="text-xs font-normal text-muted group-open:hidden">from the library ▾</span>
+                    <span>
+                      <Search /> Find a beat that fits
+                    </span>
+                    <span className="text-xs font-normal text-muted group-open:hidden">
+                      from the library <ChevronDown />
+                    </span>
                   </summary>
                   <div className="px-3 pb-3">
                     <MatchFinder kind="beat" bpm={vocalLane.bpm} title={`Beats near ${vocalLane.bpm.toFixed(0)} BPM, least stretching first`} />
@@ -983,7 +1082,7 @@ export default function AiProducer() {
 
               {session.notes.map((note) => (
                 <p key={note} className="text-[11px] text-muted">
-                  ℹ {note}
+                  <Info /> {note}
                 </p>
               ))}
             </div>
@@ -993,11 +1092,12 @@ export default function AiProducer() {
             <div className="flex flex-col gap-5">
               {styles.length > 0 ? (
                 <Section
-                  title="🎨 Styles"
+                  icon={Palette}
+                  title="Styles"
                   hint="A whole remix in one tap — synced your way, and your layers and moments stay on"
                   action={
                     <button onClick={surprise} className="shrink-0 rounded-lg border border-border px-2.5 py-1 text-xs font-semibold hover:border-brand">
-                      🎲 Surprise me
+                      <Dices /> Surprise me
                     </button>
                   }
                 >
@@ -1007,7 +1107,7 @@ export default function AiProducer() {
                 <p className="text-xs text-muted">Styles need a vocal and a beat the AI could match.</p>
               )}
               {arrangement.length > 0 && (
-                <Section title="🧩 Song shape & speed" hint="One change to the arrangement at a time">
+                <Section icon={Puzzle} title="Song shape & speed" hint="One change to the arrangement at a time">
                   <div className="flex flex-col">
                     {arrangement.map((idea) => (
                       <Row key={idea.id} idea={idea} on={onIds.has(idea.id)} disabled={!fits(idea)} onClick={() => toggle(idea)} />
@@ -1022,7 +1122,8 @@ export default function AiProducer() {
             <div className="flex flex-col gap-5">
               {moments.length > 0 && (
                 <Section
-                  title="💥 Drops & moments"
+                  icon={Zap}
+                  title="Drops & moments"
                   hint={
                     session.drop
                       ? `The beat's ${session.drop.kind === "drop" ? "drop" : "biggest moment"} is at bar ${session.drop.bar + 1}${partsNote}`
@@ -1033,12 +1134,12 @@ export default function AiProducer() {
                 </Section>
               )}
               {layers.length > 0 && (
-                <Section title="🎤 Vocal layers" hint="Extra lanes that follow the vocal — they stack with everything">
+                <Section icon={Mic} title="Vocal layers" hint="Extra lanes that follow the vocal — they stack with everything">
                   <div className="grid grid-cols-2 gap-2 min-[420px]:grid-cols-3">{layers.map((idea) => tile(idea))}</div>
                 </Section>
               )}
               {otherFixes.length > 0 && (
-                <Section title="🩹 Other fixes" hint="Small problems the AI spotted">
+                <Section icon={Bandage} title="Other fixes" hint="Small problems the AI spotted">
                   <div className="flex flex-col">
                     {otherFixes.map((idea) => (
                       <Row key={idea.id} idea={idea} on={onIds.has(idea.id)} disabled={!fits(idea)} onClick={() => toggle(idea)} />
@@ -1051,11 +1152,11 @@ export default function AiProducer() {
 
           {ready && session && tab === "mix" && (
             <div className="flex flex-col gap-5">
-              <Section title="🎛 Master it" hint="The finishing touch on the whole mix — one undo">
+              <Section icon={SlidersHorizontal} title="Master it" hint="The finishing touch on the whole mix — one undo">
                 <MasterIt vibes={vibesNow} />
               </Section>
               {sounds.length > 0 && (
-                <Section title="✨ Sound" hint="Effects and levels on every lane — one sound at a time">
+                <Section icon={Sparkles} title="Sound" hint="Effects and levels on every lane — one sound at a time">
                   <div className="flex flex-col">
                     {sounds.map((idea) => (
                       <Row key={idea.id} idea={idea} on={onIds.has(idea.id)} disabled={!fits(idea)} onClick={() => toggle(idea)} />
@@ -1064,7 +1165,7 @@ export default function AiProducer() {
                 </Section>
               )}
               {vocalLane && (
-                <Section title="🎚 Fine-tune" hint="Small hands-on fixes — each one is a single undo">
+                <Section icon={SlidersVertical} title="Fine-tune" hint="Small hands-on fixes — each one is a single undo">
                   <FineTune vocal={vocalLane} beat={beatLane} />
                 </Section>
               )}
@@ -1076,12 +1177,13 @@ export default function AiProducer() {
           <footer className="shrink-0 border-t border-border bg-surface px-3 pt-2 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
             {swapNote && (
               <p className="mb-1.5 rounded-md bg-brand/15 px-2 py-1 text-[11px] text-foreground" role="status">
-                {swapNote}
+                {swapNote.icon && <Icon name={swapNote.icon} className="mr-1" />}
+                {swapNote.text}
               </p>
             )}
             <div className="flex items-center gap-1.5">
               <button type="button" onClick={() => stepThrough(-1)} className="h-11 w-11 shrink-0 touch-manipulation rounded-xl border border-border text-sm active:scale-95 active:bg-surface-hover sm:h-9 sm:w-9 sm:rounded-lg sm:text-xs hover:bg-surface-hover" aria-label="Previous idea of this kind (,)" title="Previous idea of this kind (,)">
-                ◀
+                <ChevronLeft className="mx-auto h-5 w-5 sm:h-4 sm:w-4" />
               </button>
               <button
                 onClick={() => {
@@ -1103,17 +1205,30 @@ export default function AiProducer() {
                 aria-expanded={details}
               >
                 <span className="block truncate text-xs font-semibold">
-                  {trial.showing === "idea" ? "▶ " : "⏸ Before · "}
-                  {trying.map((i) => `${i.icon} ${i.title}`).join(" + ")}
+                  {trial.showing === "idea" ? <Play className="mr-1 fill-current" /> : <><Pause className="mr-1 fill-current" />Before · </>}
+                  {trying.map((i, n) => (
+                    <Fragment key={i.id}>
+                      {n > 0 && " + "}
+                      <Icon name={i.icon} className="text-brand-strong" /> {i.title}
+                    </Fragment>
+                  ))}
                 </span>
                 <span className="block text-[10px] text-muted">
                   {trying.length > 1 ? `${trying.length} on together · ` : ""}
-                  {details ? "Hide details ▴" : "What changed? ▾"}
+                  {details ? (
+                    <>
+                      Hide details <ChevronUp />
+                    </>
+                  ) : (
+                    <>
+                      What changed? <ChevronDown />
+                    </>
+                  )}
                   <span className="sm:hidden"> · swipe for more</span>
                 </span>
               </button>
               <button type="button" onClick={() => stepThrough(1)} className="h-11 w-11 shrink-0 touch-manipulation rounded-xl border border-border text-sm active:scale-95 active:bg-surface-hover sm:h-9 sm:w-9 sm:rounded-lg sm:text-xs hover:bg-surface-hover" aria-label="Next idea of this kind (.)" title="Next idea of this kind (.)">
-                ▶
+                <ChevronRight className="mx-auto h-5 w-5 sm:h-4 sm:w-4" />
               </button>
             </div>
             {details && (
@@ -1122,7 +1237,7 @@ export default function AiProducer() {
                   <div key={i.id} className="mb-2 last:mb-0">
                     <p className="flex items-center gap-2 font-semibold text-foreground">
                       <span className="min-w-0 flex-1">
-                        {i.icon} {i.title}
+                        <Icon name={i.icon} className="text-brand-strong" /> {i.title}
                       </span>
                       <button onClick={() => toggle(i)} className="shrink-0 rounded border border-border px-1.5 text-[10px] font-normal text-muted hover:text-danger">
                         take off
@@ -1161,14 +1276,16 @@ export default function AiProducer() {
                   title="Jump to the best moment to hear it (otherwise the playhead stays where you are)"
                   aria-label="Jump to the best part"
                 >
-                  ⤒<span className="max-[400px]:hidden"> Best part</span>
+                  <ArrowUpToLine />
+                  <span className="max-[400px]:hidden"> Best part</span>
                 </button>
               )}
               <button onClick={() => inPlace(revertTrial)} className="shrink-0 rounded-lg border border-border px-3 text-xs font-medium hover:border-danger/60 hover:text-danger" title="Take everything off (⌘Z)">
-                ✕<span className="max-[400px]:hidden"> Undo</span>
+                <X />
+                <span className="max-[400px]:hidden"> Undo</span>
               </button>
               <button onClick={keep} className="min-w-0 flex-1 rounded-lg bg-success py-2 text-xs font-bold text-white hover:opacity-90" title="Keep (Enter)">
-                ✓ Keep it
+                <CheckIcon /> Keep it
               </button>
             </div>
           </footer>

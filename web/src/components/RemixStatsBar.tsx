@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Ellipsis, Heart, Play, Share2 } from "lucide-react";
 import { useStudioStore } from "@/lib/client/studioStore";
 import { shortPath } from "@/lib/shareLinks";
 import ShareMenu from "./ShareMenu";
@@ -109,7 +110,7 @@ export default function RemixStatsBar({
         className="flex items-center gap-1.5 rounded-full bg-surface-raised px-3 py-1.5 text-muted"
         title={`${stats.plays} ${stats.plays === 1 ? "play" : "plays"}`}
       >
-        ▶ <span className="tabular-nums text-foreground">{formatCount(stats.plays)}</span>{" "}
+        <Play /> <span className="tabular-nums text-foreground">{formatCount(stats.plays)}</span>{" "}
         {stats.plays === 1 ? "play" : "plays"}
       </span>
       <button
@@ -123,7 +124,7 @@ export default function RemixStatsBar({
         }`}
         title={signedIn ? (stats.liked ? "Unlike" : "Like") : "Sign in to like"}
       >
-        <span className={stats.liked ? "text-vocals" : ""}>{stats.liked ? "♥" : "♡"}</span>
+        <Heart className={stats.liked ? "fill-current text-vocals" : ""} />
         <span className="tabular-nums">{formatCount(stats.likes)}</span>
       </button>
       <span className="relative flex">
@@ -131,7 +132,7 @@ export default function RemixStatsBar({
           onClick={share}
           className="flex items-center gap-1.5 rounded-l-full border border-border px-3 py-1.5 text-muted transition-colors hover:text-foreground"
         >
-          ↗ Share
+          <Share2 /> Share
         </button>
         <button
           onClick={() => setMenuOpen((v) => !v)}
@@ -139,7 +140,7 @@ export default function RemixStatsBar({
           className="rounded-r-full border border-l-0 border-border px-2.5 py-1.5 text-muted transition-colors hover:text-foreground"
           title="Short link, QR code and embed code"
         >
-          ⋯
+          <Ellipsis />
         </button>
         {menuOpen && <ShareMenu remixId={remixId} title={title} onClose={() => setMenuOpen(false)} />}
       </span>

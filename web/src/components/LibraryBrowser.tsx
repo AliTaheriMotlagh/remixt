@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { Pause, Play, X } from "lucide-react";
 import Waveform from "./Waveform";
 import ReportButton from "./ReportButton";
 import { previewPlayer, usePreviewState } from "@/lib/client/previewPlayer";
@@ -149,7 +150,7 @@ export default function LibraryBrowser({
           ))}
           {tag && (
             <button onClick={() => setTag(null)} className="px-1 text-xs text-muted hover:text-foreground">
-              clear ✕
+              clear <X />
             </button>
           )}
         </div>
@@ -205,7 +206,7 @@ export default function LibraryBrowser({
                     style={{ background: accent }}
                     aria-label={isPlaying ? "Pause preview" : "Play preview"}
                   >
-                    {isPlaying ? "⏸" : "▶"}
+                    {isPlaying ? <Pause className="fill-current" /> : <Play className="fill-current" />}
                   </button>
                   <Waveform
                     peaks={peaksById.get(stem.id) ?? []}

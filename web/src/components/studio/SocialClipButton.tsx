@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Clapperboard, X } from "lucide-react";
 import { downloadBlob, safeFilename } from "@/lib/client/mixdown";
 import { canMakeClips, makeSocialClip, MAX_CLIP_SECONDS, type SocialClip } from "@/lib/client/socialClip";
 import { useStudioStore } from "@/lib/client/studioStore";
@@ -109,7 +110,7 @@ export default function SocialClipButton({ title, artist, remixId }: { title: st
         aria-label="Make a video clip for socials"
         aria-expanded={open}
       >
-        🎬
+        <Clapperboard />
       </button>
       {open && (
         <div
@@ -132,7 +133,7 @@ export default function SocialClipButton({ title, artist, remixId }: { title: st
               className="-m-2 p-2 text-muted hover:text-foreground"
               aria-label="Close"
             >
-              ✕
+              <X />
             </button>
           </div>
           <p className="mt-1 text-xs text-muted">

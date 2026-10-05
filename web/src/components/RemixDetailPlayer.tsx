@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { ArrowRight, ChevronDown, ChevronRight } from "lucide-react";
 import StudioTransport from "./StudioTransport";
 import MixWaveform from "./MixWaveform";
 import StudioShortcuts from "./studio/StudioShortcuts";
@@ -96,7 +97,7 @@ export default function RemixDetailPlayer({
               · {lanes.length} stem{lanes.length === 1 ? "" : "s"} — solo, mute, tempo, key, FX
             </span>
           </span>
-          <span className="text-muted">{showMixer ? "▾" : "▸"}</span>
+          <span className="text-muted">{showMixer ? <ChevronDown /> : <ChevronRight />}</span>
         </button>
         {showMixer && (
           <div className="flex flex-col gap-3 border-t border-border p-3">
@@ -110,7 +111,7 @@ export default function RemixDetailPlayer({
         href={`/studio?remix=${remixId}`}
         className="flex h-10 items-center self-start rounded-lg bg-brand px-4 text-sm font-semibold text-white transition-colors hover:bg-brand-strong"
       >
-        Remix it in the Studio →
+        Remix it in the Studio <ArrowRight className="ml-1" />
       </Link>
       <ContextMenuHost />
       <StudioNotice />

@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
+import { Camera, Headphones } from "lucide-react";
 import { uploadCover } from "@/lib/client/coverImage";
 
 /** The square picture at the top of a remix page; its owner can change or remove it. */
@@ -53,8 +54,8 @@ export default function RemixCover({ remixId, src, title, editable }: { remixId:
           // eslint-disable-next-line @next/next/no-img-element -- served from our own storage route, already sized
           <img src={shown} alt={`Cover of ${title}`} className={`h-full w-full object-cover ${busy ? "opacity-60" : ""}`} />
         ) : (
-          <span className="flex h-full w-full items-center justify-center text-4xl" aria-hidden>
-            🎧
+          <span className="flex h-full w-full items-center justify-center text-4xl text-muted" aria-hidden>
+            <Headphones />
           </span>
         )}
         {editable && (
@@ -64,7 +65,13 @@ export default function RemixCover({ remixId, src, title, editable }: { remixId:
             disabled={busy}
             className="absolute inset-0 flex items-end justify-center bg-gradient-to-t from-black/70 via-black/0 to-black/0 pb-2 text-[11px] font-semibold text-white opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
           >
-            {busy ? "Uploading…" : shown ? "📷 Change cover" : "📷 Add a cover"}
+            {busy ? (
+              "Uploading…"
+            ) : (
+              <span>
+                <Camera /> {shown ? "Change cover" : "Add a cover"}
+              </span>
+            )}
           </button>
         )}
       </div>

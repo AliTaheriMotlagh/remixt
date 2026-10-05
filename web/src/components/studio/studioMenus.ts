@@ -1,5 +1,36 @@
 "use client";
 
+import {
+  ArrowDown,
+  ArrowRightToLine,
+  ArrowUp,
+  ClipboardPaste,
+  Combine,
+  Copy,
+  CopyPlus,
+  Delete,
+  Download,
+  FlipHorizontal2,
+  Headphones,
+  LayoutGrid,
+  Music2,
+  Pencil,
+  Play,
+  Puzzle,
+  RectangleHorizontal,
+  Repeat,
+  Scissors,
+  Settings,
+  SlidersVertical,
+  Spline,
+  SquareDashed,
+  SquareSplitHorizontal,
+  Star,
+  Trash2,
+  VolumeX,
+  WandSparkles,
+  X,
+} from "lucide-react";
 import * as clips from "@/lib/client/clipCommands";
 import { WHOLE, clipId, clipsOf, liveRefs, sameRef, type ClipRef } from "@/lib/client/clipEdit";
 import { audioEngine } from "@/lib/client/audioEngine";
@@ -63,7 +94,7 @@ export function trackModeItems(lane: StudioLane): MenuItem[] {
     { type: "heading", label: whole ? "Track · whole" : `Track · ${lane.clips!.length} clips` },
     {
       label: "Whole track",
-      icon: "▬",
+      icon: RectangleHorizontal,
       checked: whole,
       hint: whole ? "Plays the whole stem as one clip" : "Undo the cuts — the first clip stays put",
       onSelect: () => clips.makeWhole(lane.laneId),
@@ -85,9 +116,9 @@ export function trackModeItems(lane: StudioLane): MenuItem[] {
 
 function laneEssentials(lane: StudioLane): MenuItem[] {
   return [
-    { label: "Mute", icon: "M", shortcut: "M", checked: lane.muted, onSelect: () => store().toggleMute(lane.laneId) },
-    { label: "Solo", icon: "S", shortcut: "S", checked: lane.solo, onSelect: () => store().toggleSolo(lane.laneId) },
-    { label: "Lane settings…", icon: "⚙", onSelect: () => openInspector(lane.laneId, "mix") },
+    { label: "Mute", icon: VolumeX, shortcut: "M", checked: lane.muted, onSelect: () => store().toggleMute(lane.laneId) },
+    { label: "Solo", icon: Headphones, shortcut: "S", checked: lane.solo, onSelect: () => store().toggleSolo(lane.laneId) },
+    { label: "Lane settings…", icon: Settings, onSelect: () => openInspector(lane.laneId, "mix") },
   ];
 }
 
@@ -99,13 +130,13 @@ export function clipMenu(lane: StudioLane, ref: ClipRef, seconds: number): MenuI
   const gain = clip?.gain ?? 1;
   const many = count > 1 ? ` ${count} clips` : "";
   return [
-    { label: "Split here", icon: "✂", onSelect: () => clips.splitAt(seconds, [lane.laneId]) },
-    { label: "Split at playhead", icon: "✂", shortcut: "X", onSelect: () => clips.splitAt() },
+    { label: "Split here", icon: SquareSplitHorizontal, onSelect: () => clips.splitAt(seconds, [lane.laneId]) },
+    { label: "Split at playhead", icon: SquareSplitHorizontal, shortcut: "X", onSelect: () => clips.splitAt() },
     { type: "separator" },
-    { label: `Copy${many}`, icon: "⧉", shortcut: `${mod}C`, onSelect: clips.copy },
-    { label: `Cut${many}`, icon: "✄", shortcut: `${mod}X`, onSelect: clips.cut },
-    { label: "Paste at playhead", icon: "📋", shortcut: `${mod}V`, disabled: !clips.hasClipboard(), onSelect: () => clips.paste() },
-    { label: `Duplicate${many}`, icon: "⊕", shortcut: `${mod}D`, onSelect: () => clips.duplicate() },
+    { label: `Copy${many}`, icon: Copy, shortcut: `${mod}C`, onSelect: clips.copy },
+    { label: `Cut${many}`, icon: Scissors, shortcut: `${mod}X`, onSelect: clips.cut },
+    { label: "Paste at playhead", icon: ClipboardPaste, shortcut: `${mod}V`, disabled: !clips.hasClipboard(), onSelect: () => clips.paste() },
+    { label: `Duplicate${many}`, icon: CopyPlus, shortcut: `${mod}D`, onSelect: () => clips.duplicate() },
     {
       type: "chips",
       label: "Repeat",
@@ -117,7 +148,7 @@ export function clipMenu(lane: StudioLane, ref: ClipRef, seconds: number): MenuI
       ],
     },
     { type: "separator" },
-    { label: "Reverse", icon: "⟲", shortcut: "R", checked: !!clip?.reverse, onSelect: clips.reverse },
+    { label: "Reverse", icon: FlipHorizontal2, shortcut: "R", checked: !!clip?.reverse, onSelect: clips.reverse },
     {
       type: "chips",
       label: "Speed",
@@ -164,7 +195,7 @@ export function clipMenu(lane: StudioLane, ref: ClipRef, seconds: number): MenuI
         { label: "off", onSelect: () => clips.clipFade("both", 0) },
       ],
     },
-    { label: `${clip?.muted ? "Unmute" : "Mute"}${many || " clip"}`, icon: "🔇", shortcut: "⇧M", checked: !!clip?.muted, onSelect: clips.toggleClipMute },
+    { label: `${clip?.muted ? "Unmute" : "Mute"}${many || " clip"}`, icon: VolumeX, shortcut: "⇧M", checked: !!clip?.muted, onSelect: clips.toggleClipMute },
     { type: "heading", label: "Chop & fit" },
     {
       type: "chips",
@@ -193,18 +224,18 @@ export function clipMenu(lane: StudioLane, ref: ClipRef, seconds: number): MenuI
         { label: "cut the end", onSelect: () => clips.trimAtPlayhead("end"), hint: "Drop what's after the playhead" },
       ],
     },
-    { label: "Join clips", icon: "⛓", shortcut: `${mod}J`, disabled: count < 2, hint: "Glue back pieces that follow on", onSelect: clips.join },
+    { label: "Join clips", icon: Combine, shortcut: `${mod}J`, disabled: count < 2, hint: "Glue back pieces that follow on", onSelect: clips.join },
     { type: "separator" },
-    { label: "Move to playhead", icon: "⇥", onSelect: clips.moveToPlayhead },
-    { label: "Loop and play this", icon: "🔁", shortcut: "⇧L", onSelect: clips.loopSelection },
-    { label: "Send to a sample pad", icon: "▦", onSelect: () => clips.toPad(lane.laneId) },
+    { label: "Move to playhead", icon: ArrowRightToLine, onSelect: clips.moveToPlayhead },
+    { label: "Loop and play this", icon: Repeat, shortcut: "⇧L", onSelect: clips.loopSelection },
+    { label: "Send to a sample pad", icon: LayoutGrid, onSelect: () => clips.toPad(lane.laneId) },
     { type: "separator" },
     ...trackModeItems(lane),
-    { label: "Select every clip in this lane", icon: "▭", onSelect: () => clips.selectLaneClips(lane.laneId) },
+    { label: "Select every clip in this lane", icon: SquareDashed, onSelect: () => clips.selectLaneClips(lane.laneId) },
     { type: "separator" },
     {
       label: ref.clipId === WHOLE && count === 1 ? "Delete (removes the lane)" : `Delete${many}`,
-      icon: "🗑",
+      icon: Trash2,
       shortcut: "⌫",
       danger: true,
       onSelect: clips.remove,
@@ -219,25 +250,25 @@ export function laneMenu(lane: StudioLane): MenuItem[] {
   const hasAutomation = !!(lane.automation.volume?.length || lane.automation.filter?.length);
   return [
     ...laneEssentials(lane),
-    { label: "Rename…", icon: "✎", onSelect: () => rename(lane) },
+    { label: "Rename…", icon: Pencil, onSelect: () => rename(lane) },
     {
       type: "chips",
       label: "Move",
       chips: [
-        { label: "▲ up", onSelect: () => (index > 0 ? (startNewStep(), store().moveLane(lane.laneId, -1)) : undefined), hint: "Move this lane up the list" },
-        { label: "▼ down", onSelect: () => (index < last ? (startNewStep(), store().moveLane(lane.laneId, 1)) : undefined), hint: "Move this lane down the list" },
+        { label: "up", icon: ArrowUp, onSelect: () => (index > 0 ? (startNewStep(), store().moveLane(lane.laneId, -1)) : undefined), hint: "Move this lane up the list" },
+        { label: "down", icon: ArrowDown, onSelect: () => (index < last ? (startNewStep(), store().moveLane(lane.laneId, 1)) : undefined), hint: "Move this lane down the list" },
       ],
     },
-    { label: "Tempo & key…", icon: "♩", onSelect: () => openInspector(lane.laneId, "tempo") },
-    { label: "Effects…", icon: "✦", onSelect: () => openInspector(lane.laneId, "fx") },
+    { label: "Tempo & key…", icon: Music2, onSelect: () => openInspector(lane.laneId, "tempo") },
+    { label: "Effects…", icon: WandSparkles, onSelect: () => openInspector(lane.laneId, "fx") },
     {
       label: lane.kind === "vocals" ? "Match with a beat…" : "Match with a vocal…",
-      icon: "🎚",
+      icon: SlidersVertical,
       onSelect: () => openInspector(lane.laneId, "match"),
     },
     {
       label: "Show automation",
-      icon: "〰",
+      icon: Spline,
       checked: automation,
       onSelect: () => useStudioView.getState().toggleAutomation(lane.laneId),
     },
@@ -262,23 +293,23 @@ export function laneMenu(lane: StudioLane): MenuItem[] {
     },
     {
       label: "Split with Demucs…",
-      icon: "🧩",
+      icon: Puzzle,
       hint: lane.kind === "vocals" ? "clean vocal" : "drums · bass · melody",
       onSelect: () => useStudioView.getState().setSplitLane(lane.laneId),
     },
     { type: "separator" },
     ...trackModeItems(lane),
-    { label: "Select all its clips", icon: "▭", onSelect: () => clips.selectLaneClips(lane.laneId) },
+    { label: "Select all its clips", icon: SquareDashed, onSelect: () => clips.selectLaneClips(lane.laneId) },
     { type: "separator" },
     {
       label: "Preview the original stem",
-      icon: "▶",
+      icon: Play,
       onSelect: () =>
         previewPlayer.toggle({ stemId: lane.stemId, title: laneName(lane), artist: lane.artistName, kind: lane.kind }),
     },
     {
       label: "Duplicate lane",
-      icon: "⊕",
+      icon: CopyPlus,
       onSelect: () => {
         startNewStep();
         store().duplicateLane(lane.laneId);
@@ -286,7 +317,7 @@ export function laneMenu(lane: StudioLane): MenuItem[] {
     },
     {
       label: "Export this lane (WAV)",
-      icon: "⤓",
+      icon: Download,
       onSelect: () => {
         useStudioView.getState().notify("Rendering the lane…");
         exportLane(lane, laneName(lane)).catch(() => useStudioView.getState().notify("Couldn't export this lane", "error"));
@@ -295,7 +326,7 @@ export function laneMenu(lane: StudioLane): MenuItem[] {
     { type: "separator" },
     {
       label: "Remove lane",
-      icon: "✕",
+      icon: X,
       danger: true,
       onSelect: () => {
         startNewStep();
@@ -311,11 +342,11 @@ export function trackMenu(lane: StudioLane, seconds: number): MenuItem[] {
   const bar = beatLength(store().projectBpm) * 4;
   const barStart = Math.floor(seconds / bar) * bar;
   return [
-    { label: "Paste here", icon: "📋", shortcut: `${mod}V`, disabled: !clips.hasClipboard(), onSelect: () => clips.paste(at) },
-    { label: "Play from here", icon: "▶", onSelect: () => playFrom(at) },
+    { label: "Paste here", icon: ClipboardPaste, shortcut: `${mod}V`, disabled: !clips.hasClipboard(), onSelect: () => clips.paste(at) },
+    { label: "Play from here", icon: Play, onSelect: () => playFrom(at) },
     {
       label: "Start this lane here",
-      icon: "⇥",
+      icon: ArrowRightToLine,
       onSelect: () => {
         startNewStep();
         clips.selectLaneClips(lane.laneId);
@@ -323,7 +354,7 @@ export function trackMenu(lane: StudioLane, seconds: number): MenuItem[] {
       },
     },
     loopChips(barStart),
-    { label: "Select every clip", icon: "▭", shortcut: `${mod}A`, onSelect: clips.selectAllClips },
+    { label: "Select every clip", icon: SquareDashed, shortcut: `${mod}A`, onSelect: clips.selectAllClips },
     { type: "separator" },
     ...laneEssentials(lane),
   ];
@@ -355,29 +386,29 @@ export function rulerMenu(seconds: number): MenuItem[] {
   const barStart = Math.floor(seconds / bar) * bar;
   const hasLoop = state.loopEnd > state.loopStart;
   return [
-    { label: "Play from here", icon: "▶", onSelect: () => playFrom(snapTime(seconds)) },
-    { label: "Play from this bar", icon: "▶", onSelect: () => playFrom(barStart) },
+    { label: "Play from here", icon: Play, onSelect: () => playFrom(snapTime(seconds)) },
+    { label: "Play from this bar", icon: Play, onSelect: () => playFrom(barStart) },
     loopChips(barStart),
     ...(hasLoop
       ? ([
           {
             label: "Save the loop as a section",
-            icon: "★",
+            icon: Star,
             onSelect: () => {
               const label = window.prompt("Name this section (e.g. chorus, drop, verse 2)", `Section ${state.markers.length + 1}`);
               if (label?.trim()) state.addMarker({ label: label.trim().slice(0, 40), start: state.loopStart, end: state.loopEnd });
             },
           },
-          { label: "Clear the loop", icon: "✕", onSelect: () => state.setLoop({ enabled: false, start: 0, end: 0 }) },
+          { label: "Clear the loop", icon: X, onSelect: () => state.setLoop({ enabled: false, start: 0, end: 0 }) },
         ] as MenuItem[])
       : []),
     { type: "separator" },
-    { label: "Split every lane here", icon: "✂", onSelect: () => clips.splitAt(snapTime(seconds), state.lanes.map((l) => l.laneId)) },
+    { label: "Split every lane here", icon: SquareSplitHorizontal, onSelect: () => clips.splitAt(snapTime(seconds), state.lanes.map((l) => l.laneId)) },
     ...(hasLoop
       ? ([
           {
             label: "Delete the loop's time",
-            icon: "⌫",
+            icon: Delete,
             hint: "Takes it out of every lane — the rest moves up",
             onSelect: () => clips.removeTime(state.loopStart, state.loopEnd),
           },
@@ -392,6 +423,6 @@ export function rulerMenu(seconds: number): MenuItem[] {
         onSelect: () => clips.insertBars(seconds, bars),
       })),
     },
-    { label: "Paste here", icon: "📋", disabled: !clips.hasClipboard(), onSelect: () => clips.paste(snapTime(seconds)) },
+    { label: "Paste here", icon: ClipboardPaste, disabled: !clips.hasClipboard(), onSelect: () => clips.paste(snapTime(seconds)) },
   ];
 }

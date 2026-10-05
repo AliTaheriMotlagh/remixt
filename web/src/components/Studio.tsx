@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Flag, Library, SlidersHorizontal, Sparkles, Users } from "lucide-react";
 import StudioTransport from "./StudioTransport";
 import StudioLibraryPanel from "./StudioLibraryPanel";
 import SamplePads from "./studio/SamplePads";
@@ -257,11 +258,15 @@ export default function Studio({ user }: { user: User | null }) {
         <div className="min-w-0">
           <h1 className="text-xl font-bold tracking-tight">Studio</h1>
           <p className="mt-0.5 truncate text-xs text-muted sm:text-sm">
-            {challenge
-              ? `🏁 Challenge: “${challenge.title}” — publish to enter`
-              : remixTitle
-                ? `Remixing “${remixTitle}” — changes save as a new remix`
-                : "Mix vocals from one song with the beat from another."}
+            {challenge ? (
+              <>
+                <Flag /> Challenge: “{challenge.title}” — publish to enter
+              </>
+            ) : remixTitle ? (
+              `Remixing “${remixTitle}” — changes save as a new remix`
+            ) : (
+              "Mix vocals from one song with the beat from another."
+            )}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -274,7 +279,8 @@ export default function Studio({ user }: { user: User | null }) {
             >
               {startingSession ? "Starting…" : (
                 <>
-                  👥<span className="hidden sm:inline"> Remix together</span>
+                  <Users />
+                  <span className="hidden sm:inline"> Remix together</span>
                   <span className="sm:hidden"> Invite</span>
                 </>
               )}
@@ -286,7 +292,7 @@ export default function Studio({ user }: { user: User | null }) {
             className="hidden rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted transition-colors hover:text-foreground lg:block"
             title={libraryHidden ? "Show the stem library" : "Hide the stem library for a wider timeline"}
           >
-            {libraryHidden ? "📚 Show library" : "📚 Hide library"}
+            <Library /> {libraryHidden ? "Show library" : "Hide library"}
           </button>
           <StudioShortcuts mode="studio" />
         </div>
@@ -333,11 +339,11 @@ export default function Studio({ user }: { user: User | null }) {
             </div>
           ) : lanes.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-10 text-center text-muted sm:p-12">
-              <p className="text-3xl">🎛</p>
+              <SlidersHorizontal className="mx-auto h-8 w-8 text-brand-strong" />
               <p className="mt-2 font-medium text-foreground">Start with a vocal and a beat</p>
               <p className="mt-1 text-sm">
                 Pick them <span className="hidden lg:inline">from the library on the right</span>
-                <span className="lg:hidden">from the library</span> — then cut, loop and arrange them here, and ask ✨ AI for ideas.
+                <span className="lg:hidden">from the library</span> — then cut, loop and arrange them here, and ask <Sparkles /> AI for ideas.
               </p>
               <button
                 onClick={revealLibrary}

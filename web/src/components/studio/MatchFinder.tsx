@@ -1,5 +1,6 @@
 "use client";
 
+import { Play, Plus, Square } from "lucide-react";
 import { useEffect, useState } from "react";
 import { describeFit, rankByTempo, type Candidate } from "@/lib/client/matchFinder";
 import { previewPlayer, usePreviewState } from "@/lib/client/previewPlayer";
@@ -30,7 +31,7 @@ function libraryStems(kind: Kind): Promise<LoadableStem[]> {
   return found;
 }
 
-export default function MatchFinder({ kind, bpm, title }: { kind: Kind; bpm: number | null; title: string }) {
+export default function MatchFinder({ kind, bpm, title }: { kind: Kind; bpm: number | null; title: React.ReactNode }) {
   const lanes = useStudioStore((s) => s.lanes);
   const preview = usePreviewState();
   const [stems, setStems] = useState<LoadableStem[] | null>(null);
@@ -71,7 +72,7 @@ export default function MatchFinder({ kind, bpm, title }: { kind: Kind; bpm: num
                   className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-raised text-[11px] hover:bg-brand hover:text-white"
                   aria-label={playing ? "Stop preview" : `Preview ${stem.track_title}`}
                 >
-                  {playing ? "■" : "▶"}
+                  {playing ? <Square className="fill-current" /> : <Play className="fill-current" />}
                 </button>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-xs font-medium">{stem.track_title}</span>
@@ -80,7 +81,7 @@ export default function MatchFinder({ kind, bpm, title }: { kind: Kind; bpm: num
                   </span>
                 </span>
                 <button onClick={() => add(stem)} className="shrink-0 rounded-md bg-brand px-2 py-1 text-[11px] font-semibold text-white hover:bg-brand-strong">
-                  + Add
+                  <Plus /> Add
                 </button>
               </li>
             );

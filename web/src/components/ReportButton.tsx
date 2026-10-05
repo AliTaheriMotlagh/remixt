@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { Flag } from "lucide-react";
 
 const REASONS: { id: string; label: string }[] = [
   { id: "spam", label: "Spam or misleading" },
@@ -60,7 +61,7 @@ export default function ReportButton({
         aria-expanded={open}
         title={`Report this ${kind === "track" ? "song" : kind}`}
       >
-        ⚑ Report
+        <Flag /> Report
       </button>
       {open && <div className="sheet-backdrop" onClick={() => setOpen(false)} />}
       {open && (

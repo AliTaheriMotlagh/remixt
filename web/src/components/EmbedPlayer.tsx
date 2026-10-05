@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ArrowUpRight, Pause, Play } from "lucide-react";
 import MixWaveform from "./MixWaveform";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/remixLanes";
@@ -91,9 +92,9 @@ export default function EmbedPlayer({
         {state === "starting" || state === "loading" ? (
           <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
         ) : isPlaying ? (
-          "⏸"
+          <Pause className="h-5 w-5 fill-current" />
         ) : (
-          "▶"
+          <Play className="h-5 w-5 fill-current" />
         )}
       </button>
       <div className="min-w-0 flex-1">
@@ -111,7 +112,7 @@ export default function EmbedPlayer({
             className="flex shrink-0 items-center gap-1 text-[11px] font-bold tracking-tight text-brand-strong hover:underline"
           >
             <RemixtMark className="h-4 w-4" />
-            Remixt ↗
+            Remixt <ArrowUpRight />
           </a>
         </div>
         {state === "error" ? (

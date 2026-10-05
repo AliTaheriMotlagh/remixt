@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { Puzzle, X } from "lucide-react";
+import { Icon } from "@/components/Icon";
 import { placeStems, siblingStems } from "@/lib/client/beatParts";
 import { SPLIT_KINDS, canSplitHere, defaultKinds, splitLane, type SplitKind } from "@/lib/client/laneSplit";
 import { useSplitter, type UploadStage } from "@/lib/client/splitter";
@@ -96,13 +98,15 @@ export default function SplitLaneDialog() {
         style={{ animation: "sheet-in 0.18s ease-out" }}
       >
         <div className="flex items-start gap-3">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-beat/20 text-xl">🧩</span>
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-beat/20 text-xl text-beat">
+            <Puzzle />
+          </span>
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-bold">Split with Demucs</h2>
             <p className="truncate text-xs text-muted">“{lane.trackTitle}”</p>
           </div>
           <button onClick={close} disabled={working} className="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:text-foreground disabled:opacity-40" aria-label="Close">
-            ✕
+            <X className="h-5 w-5" />
           </button>
         </div>
 
@@ -126,7 +130,7 @@ export default function SplitLaneDialog() {
                   onChange={() => setKinds(on ? kinds.filter((x) => x !== k.id) : [...kinds, k.id])}
                   className="h-4 w-4 accent-brand"
                 />
-                <span className="text-lg leading-none">{k.icon}</span>
+                <Icon name={k.icon} className="text-lg" />
                 <span className="min-w-0">
                   <span className="block font-semibold">{k.label}</span>
                   <span className={`block text-[10px] ${ready ? "text-success" : "text-muted"}`}>{library === null ? "…" : ready ? "ready — instant" : "needs splitting"}</span>

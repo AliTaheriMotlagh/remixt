@@ -1,18 +1,20 @@
 "use client";
 
+import type { IconName } from "@/components/Icon";
+
 // Words for the AI producer, in plain language for people who've never
 // used a music app: what each idea changes, and the styles to pick from.
 
 export type Aspect = "arrangement" | "tempo" | "key" | "levels" | "effects" | "automation" | "layers";
 
-export const ASPECTS: { id: Aspect; label: string; icon: string }[] = [
-  { id: "arrangement", label: "Timing", icon: "🧩" },
-  { id: "tempo", label: "Speed", icon: "⏱" },
-  { id: "key", label: "Key", icon: "🎼" },
-  { id: "levels", label: "Volume", icon: "🔊" },
-  { id: "effects", label: "Sound", icon: "✨" },
-  { id: "automation", label: "Moves", icon: "〰" },
-  { id: "layers", label: "Layers", icon: "👯" },
+export const ASPECTS: { id: Aspect; label: string; icon: IconName }[] = [
+  { id: "arrangement", label: "Timing", icon: "puzzle" },
+  { id: "tempo", label: "Speed", icon: "timer" },
+  { id: "key", label: "Key", icon: "music" },
+  { id: "levels", label: "Volume", icon: "volume-2" },
+  { id: "effects", label: "Sound", icon: "sparkles" },
+  { id: "automation", label: "Moves", icon: "spline" },
+  { id: "layers", label: "Layers", icon: "users" },
 ];
 
 export const ALL_ASPECTS = ASPECTS.map((a) => a.id);
@@ -23,14 +25,14 @@ export function aspectLabel(aspect: Aspect) {
 
 export type Vibe = "any" | "radio" | "club" | "short" | "lofi" | "chill" | "hard";
 
-export const VIBES: { id: Vibe; label: string; icon: string }[] = [
-  { id: "any", label: "Any", icon: "✨" },
-  { id: "radio", label: "Radio", icon: "📻" },
-  { id: "club", label: "Club", icon: "🪩" },
-  { id: "short", label: "TikTok", icon: "📱" },
-  { id: "lofi", label: "Lo-fi", icon: "📼" },
-  { id: "chill", label: "Chill", icon: "🌙" },
-  { id: "hard", label: "Hard", icon: "🔥" },
+export const VIBES: { id: Vibe; label: string; icon: IconName }[] = [
+  { id: "any", label: "Any", icon: "sparkles" },
+  { id: "radio", label: "Radio", icon: "radio" },
+  { id: "club", label: "Club", icon: "disc-3" },
+  { id: "short", label: "TikTok", icon: "smartphone" },
+  { id: "lofi", label: "Lo-fi", icon: "cassette-tape" },
+  { id: "chill", label: "Chill", icon: "moon" },
+  { id: "hard", label: "Hard", icon: "flame" },
 ];
 
 const VIBE_KEY = "remixt.aiVibe";

@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { ArrowRight, Flag, Heart, Play } from "lucide-react";
+import { PlaceMedal } from "@/components/Icon";
 import ChallengeStemCard from "@/components/ChallengeStemCard";
 import { challengeEntries, getChallenge, listChallenges, type Challenge } from "@/lib/challenges";
 import { pageMetadata } from "@/lib/seo";
@@ -26,7 +28,11 @@ async function ChallengeDetail({ challenge }: { challenge: Challenge }) {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-            {challenge.status === "running" ? "🏁 This week's challenge" : challenge.status === "upcoming" ? "Coming up" : "Finished"} ·{" "}
+            {challenge.status === "running" ? (
+              <>
+                <Flag /> This week&apos;s challenge
+              </>
+            ) : challenge.status === "upcoming" ? "Coming up" : "Finished"} ·{" "}
             {timeLeft(challenge)}
           </p>
           <h2 className="mt-1 text-2xl font-bold">{challenge.title}</h2>
@@ -37,7 +43,7 @@ async function ChallengeDetail({ challenge }: { challenge: Challenge }) {
             href={`/studio?challenge=${challenge.id}`}
             className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-strong"
           >
-            Remix it in the Studio →
+            Remix it in the Studio <ArrowRight />
           </Link>
         )}
       </div>
@@ -65,14 +71,14 @@ async function ChallengeDetail({ challenge }: { challenge: Challenge }) {
                     className="flex items-center gap-3 rounded-lg bg-surface/80 px-3 py-2 text-sm hover:bg-surface-hover"
                   >
                     <span className="w-6 text-center font-mono text-muted">
-                      {challenge.status === "ended" && i < 3 ? ["🥇", "🥈", "🥉"][i] : i + 1}
+                      {challenge.status === "ended" ? <PlaceMedal rank={i + 1} /> : i + 1}
                     </span>
                     <span className="min-w-0 flex-1 truncate">
                       <span className="font-medium">{entry.title}</span>{" "}
                       <span className="text-muted">by {entry.artist_name}</span>
                     </span>
                     <span className="shrink-0 text-xs tabular-nums text-muted">
-                      ♥ {entry.likes} · ▶ {entry.plays}
+                      <Heart /> {entry.likes} · <Play /> {entry.plays}
                     </span>
                   </Link>
                 </li>

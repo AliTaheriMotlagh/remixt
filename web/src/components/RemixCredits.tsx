@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Flag } from "lucide-react";
 import type { RemixCredits as Credits } from "@/lib/credits";
 
 const KIND_LABELS: Record<string, string> = {
@@ -21,7 +22,7 @@ export default function RemixCredits({ credits }: { credits: Credits }) {
               href={`/challenges?id=${challenge.id}`}
               className="rounded-full bg-beat/15 px-2.5 py-0.5 text-xs font-medium text-beat hover:bg-beat/25"
             >
-              🏁 {challenge.title}
+              <Flag /> {challenge.title}
             </Link>
           )}
           {tags.map((tag) => (

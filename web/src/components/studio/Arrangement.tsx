@@ -1,6 +1,29 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  ClipboardPaste,
+  Columns4,
+  Combine,
+  Copy,
+  CopyPlus,
+  Ellipsis,
+  FlipHorizontal2,
+  Grid3x3,
+  Minus,
+  Plus,
+  RectangleHorizontal,
+  Repeat,
+  Spline,
+  SquareCheck,
+  SquareSplitHorizontal,
+  Star,
+  Trash2,
+  VolumeX,
+  X,
+  ZoomIn,
+  ZoomOut,
+} from "lucide-react";
 import { kindColor, kindLabel } from "@/lib/stemKinds";
 import Waveform from "../Waveform";
 import AutomationLane from "./AutomationLane";
@@ -152,8 +175,16 @@ function LaneTrack({
                 style={{ background: `color-mix(in srgb, ${accent} ${isSelected ? 55 : 28}%, transparent)` }}
               >
                 <span className="truncate">{clip.label ?? (arranged ? `${i + 1}` : laneName(lane))}</span>
-                {clip.muted && <span title="Muted clip">🔇</span>}
-                {clip.reverse && <span title="Plays backwards">⟲</span>}
+                {clip.muted && (
+                  <span title="Muted clip">
+                    <VolumeX />
+                  </span>
+                )}
+                {clip.reverse && (
+                  <span title="Plays backwards">
+                    <FlipHorizontal2 />
+                  </span>
+                )}
                 {clip.gain !== undefined && Math.abs(clip.gain - 1) > 0.005 && (
                   <span title="The clip's own level" className="font-mono">
                     {clip.gain > 1 ? "+" : ""}
@@ -284,9 +315,16 @@ function LaneHeader({ lane, focused }: { lane: StudioLane; focused: boolean }) {
               lane.clips?.length ? "bg-brand/20 text-foreground" : "bg-surface-raised text-muted hover:text-foreground"
             }`}
           >
-            {lane.clips?.length ? `✂${lane.clips.length}` : "▬"}
+            {lane.clips?.length ? (
+              <>
+                <SquareSplitHorizontal />
+                {lane.clips.length}
+              </>
+            ) : (
+              <RectangleHorizontal />
+            )}
           </button>
-          {automation && <span className="text-[10px] text-brand-strong max-sm:hidden" title="Automation shown">〰</span>}
+          {automation && <span className="text-[10px] text-brand-strong max-sm:hidden" title="Automation shown"><Spline /></span>}
           <input
             type="range"
             min={0}
@@ -313,7 +351,7 @@ function LaneHeader({ lane, focused }: { lane: StudioLane; focused: boolean }) {
         aria-label={`Options for ${laneName(lane)}`}
         title="Lane options"
       >
-        ⋯
+        <Ellipsis />
       </button>
     </div>
   );
@@ -499,7 +537,7 @@ function Sections() {
               {m.label}
             </button>
             <button onClick={() => removeMarker(m.id)} className="px-1.5 py-0.5 text-muted hover:text-danger" aria-label={`Remove section ${m.label}`}>
-              ✕
+              <X />
             </button>
           </span>
         );
@@ -512,7 +550,7 @@ function Sections() {
           }}
           className="rounded-full border border-dashed border-border px-2.5 py-0.5 text-muted hover:border-brand hover:text-foreground"
         >
-          ★ save loop as a section
+          <Star /> save loop as a section
         </button>
       )}
     </div>
@@ -536,7 +574,7 @@ function SelectionBar() {
         className={`${action} hidden shrink-0 pointer-coarse:flex ${multiSelect ? "!bg-brand/20 !text-foreground" : ""}`}
         title="Tap clips to add them to the selection"
       >
-        ☑ Select
+        <SquareCheck /> Select
       </button>
       {count === 0 ? (
         <span className="truncate px-2 text-[11px] text-muted">
@@ -549,51 +587,60 @@ function SelectionBar() {
             {count} clip{count === 1 ? "" : "s"}
           </span>
           <button onClick={() => commands.splitAt()} className={action} title="Split at the playhead (X)">
-            ✂<span className="max-md:hidden">Split</span>
+            <SquareSplitHorizontal />
+            <span className="max-md:hidden">Split</span>
           </button>
           <button onClick={() => commands.duplicate()} className={action} title="Duplicate (⌘/Ctrl D)">
-            ⊕<span className="max-md:hidden">Duplicate</span>
+            <CopyPlus />
+            <span className="max-md:hidden">Duplicate</span>
           </button>
           <button onClick={() => commands.duplicate(3)} className={action} title="Repeat ×4">
             ×4
           </button>
           <button onClick={commands.reverse} className={action} title="Reverse (R)">
-            ⟲<span className="max-md:hidden">Reverse</span>
+            <FlipHorizontal2 />
+            <span className="max-md:hidden">Reverse</span>
           </button>
           <button onClick={() => commands.quantize("beat")} className={action} title="Snap starts to the beat (Q)">
-            ⌗<span className="max-md:hidden">Quantize</span>
+            <Grid3x3 />
+            <span className="max-md:hidden">Quantize</span>
           </button>
           <button onClick={() => commands.slice()} className={action} title="Slice at every grid line (⇧X)">
-            ▥<span className="max-lg:hidden">Slice</span>
+            <Columns4 />
+            <span className="max-lg:hidden">Slice</span>
           </button>
           {count > 1 && (
             <button onClick={commands.join} className={action} title="Join pieces that follow on (⌘/Ctrl J)">
-              ⛓<span className="max-lg:hidden">Join</span>
+              <Combine />
+              <span className="max-lg:hidden">Join</span>
             </button>
           )}
           <button onClick={commands.toggleClipMute} className={action} title="Mute / unmute the clips (⇧M)">
-            🔇
+            <VolumeX />
           </button>
           <button onClick={() => commands.clipGain(-3)} className={action} title="Clip quieter (−3 dB)">
-            −dB
+            <Minus />
+            dB
           </button>
           <button onClick={() => commands.clipGain(3)} className={action} title="Clip louder (+3 dB)">
-            +dB
+            <Plus />
+            dB
           </button>
           <button onClick={commands.loopSelection} className={action} title="Loop and play the selection (⇧L)">
-            🔁<span className="max-md:hidden">Loop</span>
+            <Repeat />
+            <span className="max-md:hidden">Loop</span>
           </button>
           <button onClick={commands.copy} className={action} title="Copy (⌘/Ctrl C)">
-            ⧉
+            <Copy />
           </button>
           <button onClick={() => commands.paste()} className={action} title="Paste at the playhead (⌘/Ctrl V)">
-            📋
+            <ClipboardPaste />
           </button>
           <button onClick={commands.remove} className={`${action} hover:!text-danger`} title="Delete (⌫)">
-            🗑
+            <Trash2 />
           </button>
           <button onClick={commands.clearSelection} className={action} title="Deselect (Esc)">
-            ✕
+            <X />
           </button>
         </>
       )}
@@ -941,7 +988,7 @@ export default function Arrangement() {
         <SelectionBar />
         <div className="ml-auto flex shrink-0 items-center gap-0.5 border-l border-border pl-1.5">
           <button onClick={() => zoomTo(zoom / 1.6)} disabled={zoom <= 1} className={zoomButton} aria-label="Zoom out" title="Zoom out (⌘/Ctrl-scroll or pinch)">
-            −
+            <ZoomOut />
           </button>
           <button
             onClick={() => zoomTo(1)}
@@ -952,7 +999,7 @@ export default function Arrangement() {
             {zoom <= 1 ? "fit" : `${zoom.toFixed(zoom < 10 ? 1 : 0)}×`}
           </button>
           <button onClick={() => zoomTo(zoom * 1.6)} disabled={zoom >= MAX_ZOOM} className={zoomButton} aria-label="Zoom in" title="Zoom in (⌘/Ctrl-scroll or pinch)">
-            +
+            <ZoomIn />
           </button>
         </div>
       </div>
@@ -969,7 +1016,9 @@ export default function Arrangement() {
               <LaneHeader lane={lane} focused={selectedLaneIds.includes(lane.laneId)} />
               {automationLanes.includes(lane.laneId) && (
                 <div className={`${AUTO_H} flex flex-col justify-center gap-1 border-b border-border/70 bg-background/40 px-2.5 text-[11px]`}>
-                  <span className="font-medium text-muted">〰 Automation</span>
+                  <span className="font-medium text-muted">
+                    <Spline /> Automation
+                  </span>
                   <button
                     onClick={() => toggleAutomation(lane.laneId)}
                     className="w-fit rounded border border-border px-1.5 py-0.5 text-[10px] text-muted hover:text-foreground"

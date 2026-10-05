@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
+import { Music } from "lucide-react";
 import Waveform from "./Waveform";
 import TagInput from "./TagInput";
 import { KIND_INFO, STEM_KINDS, type StemKind } from "@/lib/stemKinds";
@@ -205,8 +206,8 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
           dragOver ? "border-brand bg-brand/5" : "border-border bg-surface hover:bg-surface-hover"
         }`}
       >
-        <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-vocals to-beat text-xl">
-          🎵
+        <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-vocals to-beat text-xl text-white">
+          <Music />
         </div>
         <p className="font-medium">
           <span className="pointer-coarse:hidden">Drop songs or a whole folder here, or click to browse</span>

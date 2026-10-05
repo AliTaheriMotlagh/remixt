@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { Flame, Headphones, Heart, MessageCircle, Pickaxe, Play, type LucideIcon } from "lucide-react";
+import { PlaceMedal } from "@/components/Icon";
 import type { Metadata } from "next";
 import { rankedRemixes, topArtists, type RankedRemix } from "@/lib/social";
 import { pageMetadata } from "@/lib/seo";
@@ -10,20 +12,32 @@ export const metadata: Metadata = pageMetadata({
   path: "/leaderboard",
 });
 
-const MEDALS = ["🥇", "🥈", "🥉"];
-
 function Rank({ index }: { index: number }) {
   return (
     <span className="w-7 shrink-0 text-center text-sm font-bold tabular-nums text-muted">
-      {MEDALS[index] ?? index + 1}
+      <PlaceMedal rank={index + 1} className="text-base" />
     </span>
   );
 }
 
-function RemixBoard({ title, hint, remixes, metric }: { title: string; hint: string; remixes: RankedRemix[]; metric: (r: RankedRemix) => string }) {
+function RemixBoard({
+  icon: BoardIcon,
+  title,
+  hint,
+  remixes,
+  metric,
+}: {
+  icon: LucideIcon;
+  title: string;
+  hint: string;
+  remixes: RankedRemix[];
+  metric: (r: RankedRemix) => React.ReactNode;
+}) {
   return (
     <section className="rounded-2xl border border-border bg-surface p-5">
-      <h2 className="font-semibold">{title}</h2>
+      <h2 className="font-semibold">
+        <BoardIcon className="text-brand-strong" /> {title}
+      </h2>
       <p className="mt-0.5 text-xs text-muted">{hint}</p>
       {remixes.length === 0 ? (
         <p className="mt-4 text-sm text-muted">Nothing here yet.</p>
@@ -106,19 +120,31 @@ export default async function LeaderboardPage() {
 
         <div className="flex flex-col gap-6">
           <RemixBoard
-            title="🔥 Trending this week"
+            icon={Flame}
+            title="Trending this week"
             hint="Most liked and talked about in the last 7 days"
             remixes={trending}
-            metric={(r) => `♥ ${r.likes} · 💬 ${r.comments}`}
+            metric={(r) => (
+              <>
+                <Heart /> {r.likes} · <MessageCircle /> {r.comments}
+              </>
+            )}
           />
           <RemixBoard
-            title="🎧 Most played"
+            icon={Headphones}
+            title="Most played"
             hint="All time"
             remixes={played}
-            metric={(r) => `▶ ${r.plays.toLocaleString()}`}
+            metric={(r) => (
+              <>
+                <Play /> {r.plays.toLocaleString()}
+              </>
+            )}
           />
           <section className="rounded-2xl border border-border bg-surface p-5">
-            <h2 className="font-semibold">⛏️ Top miners this week</h2>
+            <h2 className="font-semibold">
+              <Pickaxe className="text-brand-strong" /> Top miners this week
+            </h2>
             <p className="mt-0.5 text-xs text-muted">XP from splitting songs for people on phones, last 7 days</p>
             {miners.length === 0 ? (
               <p className="mt-4 text-sm text-muted">

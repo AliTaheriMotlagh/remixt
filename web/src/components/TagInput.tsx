@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { X } from "lucide-react";
 import { GENRE_TAGS, MAX_TAGS, MOOD_TAGS, normaliseTag } from "@/lib/tags";
 
 /** Pick genre/mood tags from suggestions, or type your own (Enter or comma adds). */
@@ -41,7 +42,7 @@ export default function TagInput({
             className="rounded-full bg-brand/20 px-2 py-0.5 text-xs text-foreground hover:bg-danger/20"
             title="Remove tag"
           >
-            #{tag} ✕
+            #{tag} <X />
           </button>
         ))}
         <input
