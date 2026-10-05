@@ -19,7 +19,7 @@ export default function ReportButton({
   signedIn,
   className = "",
 }: {
-  kind: "remix" | "comment" | "track";
+  kind: "remix" | "comment" | "track" | "live";
   targetId: string;
   signedIn: boolean;
   className?: string;
@@ -59,7 +59,7 @@ export default function ReportButton({
         onClick={() => setOpen((v) => !v)}
         className="-my-2 py-2 text-xs text-muted hover:text-danger"
         aria-expanded={open}
-        title={`Report this ${kind === "track" ? "song" : kind}`}
+        title={`Report this ${kind === "track" ? "song" : kind === "live" ? "live session" : kind}`}
       >
         <Flag /> Report
       </button>

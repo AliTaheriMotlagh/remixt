@@ -1,12 +1,13 @@
 import { randomUUID } from "crypto";
 import sql from "./db";
 import { ensureSchema } from "./schema";
+import { ensureLiveSchema } from "./live";
 
 // "X liked / commented on / remixed your …" — written when it happens,
 // read from the bell in the nav bar. Nobody is told about their own
 // actions, and toggling a like on and off doesn't send a pile of them.
 
-export type NotificationType = "like" | "comment" | "follow" | "remix" | "challenge" | "split";
+export type NotificationType = "like" | "comment" | "follow" | "remix" | "challenge" | "split" | "live";
 
 export type Notification = {
   id: string;
@@ -20,6 +21,7 @@ export type Notification = {
   remix_id: string | null;
   remix_title: string | null;
   track_title: string | null;
+  live_id: string | null;
 };
 
 export async function notify({
@@ -88,10 +90,11 @@ export async function notifyRemixCreated(remixId: string, actorId: string) {
 
 export async function listNotifications(userId: string, limit = 50): Promise<Notification[]> {
   await ensureSchema();
+  await ensureLiveSchema();
   return sql<Notification[]>`
     SELECT n.id, n.type, n.created_at, n.read_at, n.body,
            actor.id AS actor_id, actor.artist_name AS actor_name, actor.avatar_color AS actor_color,
-           remixes.id AS remix_id, remixes.title AS remix_title, tracks.title AS track_title
+           remixes.id AS remix_id, remixes.title AS remix_title, tracks.title AS track_title, n.live_id
     FROM notifications n
     LEFT JOIN users actor ON actor.id = n.actor_id
     LEFT JOIN remixes ON remixes.id = n.remix_id

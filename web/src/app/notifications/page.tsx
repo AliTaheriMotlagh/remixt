@@ -37,6 +37,8 @@ function describe(n: Notification) {
       );
     case "challenge":
       return <>{n.body ?? "A new remix challenge has started"}</>;
+    case "live":
+      return <>is live now{n.body && <span className="mt-1 block text-muted">“{n.body}”</span>}</>;
     case "split":
       return <>split “{n.track_title ?? n.body ?? "your song"}” for you — it&apos;s in your library, ready to remix</>;
   }
@@ -46,6 +48,7 @@ function hrefFor(n: Notification) {
   if (n.type === "follow" && n.actor_id) return `/artist/${n.actor_id}`;
   if (n.type === "challenge") return "/challenges";
   if (n.type === "split") return "/upload";
+  if (n.type === "live" && n.live_id) return `/live/${n.live_id}`;
   return n.remix_id ? `/remixes/${n.remix_id}` : "#";
 }
 

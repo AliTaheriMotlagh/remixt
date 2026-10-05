@@ -344,3 +344,37 @@ body {
   display: inline-block;
   animation: xp-pop 0.7s ease-out;
 }
+/* --- Live sessions ---------------------------------------------------------- */
+
+/* A reaction drifting up the stage. --x is its sideways wobble, --d how long it lives. */
+@keyframes live-float {
+  0% { transform: translate3d(0, 0, 0) scale(0.6); opacity: 0; }
+  12% { transform: translate3d(0, -1rem, 0) scale(1.15); opacity: 1; }
+  100% { transform: translate3d(var(--x, 0), -11rem, 0) scale(1); opacity: 0; }
+}
+.live-float {
+  position: absolute;
+  bottom: 0.5rem;
+  pointer-events: none;
+  animation: live-float var(--d, 2.6s) ease-out forwards;
+  will-change: transform, opacity;
+}
+
+/* The pulsing dot beside "LIVE". */
+@keyframes live-dot {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 60%, transparent); }
+  50% { box-shadow: 0 0 0 5px transparent; }
+}
+.live-dot {
+  animation: live-dot 1.6s ease-out infinite;
+}
+
+/* A stem's level while the artist plays it. */
+@keyframes live-level {
+  0%, 100% { transform: scaleX(0.55); }
+  50% { transform: scaleX(1); }
+}
+.live-level {
+  transform-origin: left center;
+  animation: live-level var(--d, 0.9s) ease-in-out infinite;
+}

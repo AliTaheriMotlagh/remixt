@@ -2,11 +2,12 @@ import { randomUUID } from "crypto";
 import sql from "./db";
 import { deleteTracks } from "./admin";
 import { ensureSchema } from "./schema";
+import { ensureLiveSchema } from "./live";
 
 // Reports from listeners ("this remix is spam") and takedown requests from
 // rights holders, both landing in the admin panel's Reports tab.
 
-export const REPORT_KINDS = ["remix", "comment", "track", "takedown"] as const;
+export const REPORT_KINDS = ["remix", "comment", "track", "live", "takedown"] as const;
 export type ReportKind = (typeof REPORT_KINDS)[number];
 
 export const REPORT_REASONS = {
@@ -42,7 +43,9 @@ async function targetExists(kind: ReportKind, id: string) {
       ? await sql`SELECT 1 FROM remixes WHERE id = ${id}`
       : kind === "comment"
         ? await sql`SELECT 1 FROM remix_comments WHERE id = ${id}`
-        : await sql`SELECT 1 FROM tracks WHERE id = ${id}`;
+        : kind === "live"
+          ? await sql`SELECT 1 FROM live_streams WHERE id = ${id}`
+          : await sql`SELECT 1 FROM tracks WHERE id = ${id}`;
   return rows.length > 0;
 }
 
@@ -55,6 +58,7 @@ export async function createReport(input: {
   reporterEmail: string | null;
 }): Promise<{ error: string } | { id: string }> {
   await ensureSchema();
+  if (input.kind === "live") await ensureLiveSchema();
   if (input.kind !== "takedown") {
     if (!input.targetId || !(await targetExists(input.kind, input.targetId))) return { error: "Not found" };
   }
@@ -86,14 +90,16 @@ export async function createReport(input: {
 
 export async function listReports(status: Report["status"] | "all" = "open"): Promise<Report[]> {
   await ensureSchema();
+  await ensureLiveSchema();
   return sql<Report[]>`
     SELECT r.id, r.kind, r.target_id, r.reason, r.details, r.status, r.created_at,
            r.reporter_id, reporter.artist_name AS reporter_name,
            COALESCE(r.reporter_email, reporter.email) AS reporter_email,
-           COALESCE(remixes.title, tracks.title, comments.body) AS target_label,
+           COALESCE(remixes.title, tracks.title, comments.body, lives.title) AS target_label,
            CASE
              WHEN remixes.id IS NOT NULL THEN '/remixes/' || remixes.id
              WHEN comments.id IS NOT NULL THEN '/remixes/' || comments.remix_id
+             WHEN lives.id IS NOT NULL THEN '/live/' || lives.id
              WHEN tracks.id IS NOT NULL THEN '/library?q=' || tracks.title
            END AS target_href
     FROM reports r
@@ -101,6 +107,7 @@ export async function listReports(status: Report["status"] | "all" = "open"): Pr
     LEFT JOIN remixes ON r.kind IN ('remix', 'takedown') AND remixes.id = r.target_id
     LEFT JOIN tracks ON r.kind IN ('track', 'takedown') AND tracks.id = r.target_id
     LEFT JOIN remix_comments comments ON r.kind = 'comment' AND comments.id = r.target_id
+    LEFT JOIN live_streams lives ON r.kind = 'live' AND lives.id = r.target_id
     ${status === "all" ? sql`` : sql`WHERE r.status = ${status}`}
     ORDER BY r.created_at DESC
     LIMIT 200
@@ -125,6 +132,8 @@ export async function closeReport(id: string, action: "resolve" | "dismiss" | "r
       await sql`DELETE FROM remix_comments WHERE id = ${target}`;
     } else if (report.kind === "track") {
       await deleteTracks([target]);
+    } else if (report.kind === "live") {
+      await sql`DELETE FROM live_streams WHERE id = ${target}`;
     } else {
       // A remix, or a takedown naming a remix or a song.
       const removed = await sql`DELETE FROM remixes WHERE id = ${target} RETURNING id`;

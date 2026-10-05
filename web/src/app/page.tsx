@@ -5,6 +5,9 @@ import {
   Award,
   Brain,
   Check,
+  Disc3,
+  FlaskConical,
+  Radio,
   Flag,
   Flame,
   Handshake,
@@ -34,6 +37,8 @@ import { getCurrentUser } from "@/lib/auth";
 import { listChallenges } from "@/lib/challenges";
 import { coverUrl, ensureRemixStats } from "@/lib/models";
 import { presenceSnapshot, recentActivity } from "@/lib/presence";
+import LiveCard from "@/components/live/LiveCard";
+import { liveDirectory } from "@/lib/live";
 import {
   XP,
   badgesFor,
@@ -106,7 +111,7 @@ export default async function Home() {
   await ensureRemixStats();
   const user = await getCurrentUser();
 
-  const [statsRows, freshRemixes, trending, podium, challenges, presence, activity, progress] = await Promise.all([
+  const [statsRows, freshRemixes, trending, podium, challenges, presence, activity, progress, liveSessions] = await Promise.all([
     sql<{ tracks: number; remixes: number; artists: number; plays: number }[]>`
       SELECT
         (SELECT COUNT(*)::int FROM tracks WHERE status = 'ready') AS tracks,
@@ -129,6 +134,8 @@ export default async function Home() {
     presenceSnapshot(),
     recentActivity(),
     user ? getArtistProgress(user.id) : Promise.resolve(null),
+    // The home page must load even if the live tables are unreachable.
+    liveDirectory().then((d) => d.live.slice(0, 4)).catch(() => []),
   ]);
   const stats = statsRows[0];
   // Tiny numbers put people off more than no numbers, so each shows once it's worth showing off.
@@ -267,6 +274,45 @@ export default async function Home() {
           </div>
         </section>
       )}
+
+      {/* Live sessions, DJ simulator, examples ----------------------------- */}
+      <section className="border-b border-border bg-surface/40">
+        <div className="mx-auto w-full max-w-6xl px-4 py-14 sm:px-6 sm:py-20">
+          <SectionHeading
+            eyebrow="Watch & play"
+            title="Go live, learn to DJ, see it in action"
+            lead="Perform your remixes for a live room, train in a DJ simulator, or hear exactly what splitting and matching does — no account needed."
+          />
+          {liveSessions.length > 0 && (
+            <div className="mt-8">
+              <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold">
+                <span className="live-dot h-2 w-2 rounded-full bg-danger" aria-hidden /> Live right now
+              </h3>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                {liveSessions.map((s) => (
+                  <LiveCard key={s.id} stream={s} />
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
+            {[
+              { href: "/live", icon: Radio, title: "Live sessions", text: "Hear artists play their stems in real time. Chat, send reactions, or go live yourself.", cta: liveSessions.length ? "See who's live" : "Open Live" },
+              { href: "/dj", icon: Disc3, title: "DJ simulator", text: "Flight-school for DJs: guided missions from beatmatching to a full club night, with a co-pilot and a score.", cta: "Start training" },
+              { href: "/examples", icon: FlaskConical, title: "Splitting & matching examples", text: "Pick a demo song, split it into vocal and beat, then match a vocal to a different beat — and hear before and after.", cta: "Try the examples" },
+            ].map(({ href, icon: Glyph, title, text, cta }) => (
+              <Link key={href} href={href} className="group flex flex-col gap-2 rounded-2xl border border-border bg-surface p-5 transition-colors hover:border-brand">
+                <Glyph className="h-6 w-6 text-brand-strong" />
+                <h3 className="text-lg font-bold">{title}</h3>
+                <p className="text-sm text-muted">{text}</p>
+                <span className="mt-auto pt-2 text-sm font-semibold text-brand-strong">
+                  {cta} <ArrowRight className="inline transition-transform group-hover:translate-x-0.5" />
+                </span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      </section>
 
       {/* Live -------------------------------------------------------------- */}
       <section className="mx-auto w-full max-w-6xl px-4 py-14 sm:px-6 sm:py-20">

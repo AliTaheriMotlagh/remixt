@@ -40,7 +40,7 @@ function randomId() {
 }
 
 /** This browser's anonymous visitor id — the same in every tab. */
-function visitorId(): string {
+export function visitorId(): string {
   try {
     let id = localStorage.getItem(VISITOR_KEY);
     if (!id) {

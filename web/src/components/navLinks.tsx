@@ -3,11 +3,14 @@
 
 import {
   AudioLines,
+  Disc3,
   Flag,
+  FlaskConical,
   House,
   Library,
   LogOut,
   Menu,
+  Radio,
   Shield,
   SlidersVertical,
   Trophy,
@@ -21,6 +24,9 @@ export type NavIconName =
   | "library"
   | "studio"
   | "remixes"
+  | "live"
+  | "dj"
+  | "examples"
   | "challenges"
   | "top"
   | "upload"
@@ -29,15 +35,24 @@ export type NavIconName =
   | "profile"
   | "logout";
 
-export type NavLink = { href: string; label: string; icon: NavIconName };
+export type NavLink = {
+  href: string;
+  label: string;
+  icon: NavIconName;
+  /** In the header, shown from laptop width up; tablets find it under "More". */
+  wideOnly?: boolean;
+};
 
 export const NAV_LINKS: NavLink[] = [
   { href: "/library", label: "Library", icon: "library" },
   { href: "/studio", label: "Studio", icon: "studio" },
   { href: "/remixes", label: "Remixes", icon: "remixes" },
-  { href: "/challenges", label: "Challenges", icon: "challenges" },
-  { href: "/leaderboard", label: "Top", icon: "top" },
+  { href: "/live", label: "Live", icon: "live" },
+  { href: "/dj", label: "DJ", icon: "dj" },
   { href: "/upload", label: "Upload", icon: "upload" },
+  { href: "/examples", label: "Examples", icon: "examples", wideOnly: true },
+  { href: "/challenges", label: "Challenges", icon: "challenges", wideOnly: true },
+  { href: "/leaderboard", label: "Top", icon: "top", wideOnly: true },
 ];
 
 /** On phones: four tabs, and the rest behind "More". */
@@ -50,6 +65,9 @@ export const TAB_LINKS: NavLink[] = [
 
 export const MORE_LINKS: NavLink[] = [
   { href: "/", label: "Home", icon: "home" },
+  { href: "/live", label: "Live sessions", icon: "live" },
+  { href: "/dj", label: "DJ simulator", icon: "dj" },
+  { href: "/examples", label: "Splitting & matching examples", icon: "examples" },
   { href: "/challenges", label: "Challenges", icon: "challenges" },
   { href: "/leaderboard", label: "Top artists & remixes", icon: "top" },
 ];
@@ -65,6 +83,9 @@ const ICONS: Record<NavIconName, LucideIcon> = {
   library: Library,
   studio: SlidersVertical,
   remixes: AudioLines,
+  live: Radio,
+  dj: Disc3,
+  examples: FlaskConical,
   challenges: Flag,
   top: Trophy,
   upload: Upload,

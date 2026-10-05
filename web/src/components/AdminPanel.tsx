@@ -54,7 +54,7 @@ type AdminRemix = {
 
 type AdminReport = {
   id: string;
-  kind: "remix" | "comment" | "track" | "takedown";
+  kind: "remix" | "comment" | "track" | "live" | "takedown";
   target_id: string | null;
   reason: string;
   details: string;

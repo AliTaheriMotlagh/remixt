@@ -12,6 +12,8 @@ import {
   Heart,
   Library,
   MessageCircle,
+  Radio,
+  Disc3,
   Scissors,
   SlidersHorizontal,
   Upload,
@@ -33,6 +35,8 @@ const AREA_LABEL: Record<Area, string> = {
   upload: "uploading a song",
   listening: "listening to remixes",
   challenges: "checking the challenges",
+  live: "at a live session",
+  dj: "on the DJ decks",
   browsing: "looking around",
 };
 
@@ -42,6 +46,8 @@ const AREA_SHORT: Record<Area, { icon: LucideIcon; text: string }> = {
   upload: { icon: Upload, text: "uploading" },
   listening: { icon: Headphones, text: "listening" },
   challenges: { icon: Flag, text: "on challenges" },
+  live: { icon: Radio, text: "at a live session" },
+  dj: { icon: Disc3, text: "on the decks" },
   browsing: { icon: Eye, text: "browsing" },
 };
 

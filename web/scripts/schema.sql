@@ -209,3 +209,65 @@ CREATE INDEX IF NOT EXISTS idx_presence_last_seen ON presence(last_seen);
 -- Remix covers (a picture the owner uploads) and referrals (who invited whom).
 ALTER TABLE remixes ADD COLUMN IF NOT EXISTS cover_key TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by TEXT REFERENCES users(id) ON DELETE SET NULL;
+
+-- Live sessions: an artist performs a published remix and listeners (guests
+-- too) hear it in step, chat and send reactions. lib/live.ts also creates
+-- these on first use.
+CREATE TABLE IF NOT EXISTS live_streams (
+  id TEXT PRIMARY KEY,
+  host_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  tags TEXT[] NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'live', -- scheduled | live | ended
+  remix_id TEXT REFERENCES remixes(id) ON DELETE SET NULL,
+  chat_mode TEXT NOT NULL DEFAULT 'open', -- open | followers | off
+  slow_mode INTEGER NOT NULL DEFAULT 0,
+  state_json TEXT NOT NULL DEFAULT '{}',
+  state_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  state_version INTEGER NOT NULL DEFAULT 0,
+  mod_version INTEGER NOT NULL DEFAULT 0,
+  pinned_event_id BIGINT,
+  peak_viewers INTEGER NOT NULL DEFAULT 0,
+  host_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  scheduled_at TIMESTAMPTZ,
+  started_at TIMESTAMPTZ,
+  ended_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_live_streams_status ON live_streams(status, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_live_streams_host ON live_streams(host_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS live_events (
+  id BIGSERIAL PRIMARY KEY,
+  stream_id TEXT NOT NULL REFERENCES live_streams(id) ON DELETE CASCADE,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  session_id TEXT NOT NULL,
+  guest_name TEXT,
+  kind TEXT NOT NULL, -- chat | reaction
+  body TEXT NOT NULL DEFAULT '',
+  count INTEGER NOT NULL DEFAULT 1,
+  hidden BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_live_events_stream ON live_events(stream_id, id);
+CREATE TABLE IF NOT EXISTS live_viewers (
+  stream_id TEXT NOT NULL REFERENCES live_streams(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL,
+  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+  first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (stream_id, session_id)
+);
+CREATE TABLE IF NOT EXISTS live_reactions (
+  stream_id TEXT NOT NULL REFERENCES live_streams(id) ON DELETE CASCADE,
+  emoji TEXT NOT NULL,
+  total INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (stream_id, emoji)
+);
+CREATE TABLE IF NOT EXISTS live_bans (
+  stream_id TEXT NOT NULL REFERENCES live_streams(id) ON DELETE CASCADE,
+  who TEXT NOT NULL, -- user:<id> or sid:<browser id>
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (stream_id, who)
+);
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS live_id TEXT REFERENCES live_streams(id) ON DELETE CASCADE;

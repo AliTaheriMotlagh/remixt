@@ -15,7 +15,7 @@ export const HEARTBEAT_SECONDS = 30;
 const ONLINE_SECONDS = 75;
 
 /** Where on the site someone is, from the page they're on. */
-export const AREAS = ["studio", "library", "upload", "listening", "challenges", "browsing"] as const;
+export const AREAS = ["studio", "library", "upload", "listening", "challenges", "live", "dj", "browsing"] as const;
 export type Area = (typeof AREAS)[number];
 
 export function areaFor(pathname: string): Area {
@@ -23,6 +23,8 @@ export function areaFor(pathname: string): Area {
   if (pathname.startsWith("/library")) return "library";
   if (pathname.startsWith("/upload")) return "upload";
   if (pathname.startsWith("/remixes") || pathname.startsWith("/artist")) return "listening";
+  if (pathname.startsWith("/live")) return "live";
+  if (pathname.startsWith("/dj") || pathname.startsWith("/examples")) return "dj";
   if (pathname.startsWith("/challenges") || pathname.startsWith("/leaderboard")) return "challenges";
   return "browsing";
 }

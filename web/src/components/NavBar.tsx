@@ -31,16 +31,20 @@ export default function NavBar({ user, isAdmin = false }: { user: User | null; i
                   key={link.href}
                   href={link.href}
                   aria-current={active ? "page" : undefined}
-                  className={`rounded-lg px-2.5 py-2 text-sm font-medium transition-colors lg:px-3 ${
+                  className={`items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors lg:px-3 ${
+                    link.wideOnly ? "hidden lg:flex" : "flex"
+                  } ${
                     active
                       ? "bg-surface-raised text-foreground"
                       : "text-muted hover:bg-surface hover:text-foreground"
                   }`}
                 >
+                  {link.icon === "live" && <span className="live-dot h-1.5 w-1.5 rounded-full bg-danger" aria-hidden />}
                   {link.label}
                 </Link>
               );
             })}
+            <MoreLinks pathname={pathname} />
           </nav>
         </div>
 
@@ -151,6 +155,59 @@ function AccountMenu({ user, isAdmin }: { user: User; isAdmin: boolean }) {
             <NavIcon name="logout" className="h-4 w-4" />
             Log out
           </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Tablets: the links that don't fit in the header, in one menu. Laptops show them all. */
+function MoreLinks({ pathname }: { pathname: string | null }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const hidden = NAV_LINKS.filter((l) => l.wideOnly);
+  const [lastPath, setLastPath] = useState(pathname);
+  if (pathname !== lastPath) {
+    setLastPath(pathname);
+    setOpen(false);
+  }
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    const onKeyDown = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+  const active = hidden.some((l) => isActive(pathname, l.href));
+  return (
+    <div ref={ref} className="relative hidden md:block lg:hidden">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        className={`flex items-center gap-1 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${
+          active ? "bg-surface-raised text-foreground" : "text-muted hover:bg-surface hover:text-foreground"
+        }`}
+      >
+        More <ChevronDown className="h-4 w-4" />
+      </button>
+      {open && (
+        <div role="menu" className="absolute left-0 top-full mt-2 w-48 rounded-xl border border-border bg-surface p-1.5 shadow-xl">
+          {hidden.map((link) => (
+            <Link
+              key={link.href}
+              href={link.href}
+              role="menuitem"
+              className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm hover:bg-surface-hover"
+            >
+              <NavIcon name={link.icon} className="h-4 w-4 text-muted" />
+              {link.label}
+            </Link>
+          ))}
         </div>
       )}
     </div>
