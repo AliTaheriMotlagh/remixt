@@ -16,6 +16,8 @@ export function trackInfoFromMeta(meta: DemoSongMeta): TrackInfo {
     firstBeat: 0,
     bars: meta.bars,
     sections: meta.sections.map((s) => ({ name: s.name, startBar: s.startBar, bars: s.bars, energy: s.energy })),
+    source: "demo",
+    layout: "four",
   };
 }
 

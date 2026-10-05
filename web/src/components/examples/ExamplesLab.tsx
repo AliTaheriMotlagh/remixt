@@ -5,15 +5,17 @@ import Link from "next/link";
 import { ArrowLeft, ArrowRight, Disc3 } from "lucide-react";
 import { LabAudio } from "@/lib/client/examplesPlayer";
 import type { PairSettings } from "@/lib/client/examplesMatch";
+import { trackIdOf } from "@/lib/client/examplesLibrary";
+import { keepOnly, useLibrarySongs } from "./libraryTracks";
 import MatchStep from "./MatchStep";
 import RecipeGallery from "./RecipeGallery";
 import SongPicker from "./SongPicker";
 import SplitStep from "./SplitStep";
 
 const STEPS = [
-  { title: "Pick a song", short: "Pick", blurb: "Six original songs, synthesised in your browser. Tap Preview to hear one." },
+  { title: "Pick a song", short: "Pick", blurb: "A real song from the library, or one of six original demo songs synthesised in your browser." },
   { title: "Split it", short: "Split", blurb: "What a stem splitter hands back: the vocal on its own, and everything else." },
-  { title: "Match a vocal and a beat", short: "Match", blurb: "Put one song's vocal on another's beat. Hear it raw, then matched." },
+  { title: "Match a vocal and a beat", short: "Match", blurb: "Put one song's vocal on another's beat: library songs, demo songs, or one of each. Hear it raw, then matched." },
   { title: "Recipes", short: "Recipes", blurb: "Ready-made pairings that each teach one idea. One tap loads them into Match." },
 ];
 
@@ -26,8 +28,16 @@ export default function ExamplesLab() {
   // One local AudioContext for the page; the Studio's engine is never touched.
   const [audio] = useState(() => new LabAudio());
   const top = useRef<HTMLDivElement>(null);
+  const library = useLibrarySongs();
 
   useEffect(() => () => audio.dispose(), [audio]);
+
+  // Decoded library stems are big: keep only the songs a step is showing,
+  // and let go of all of them when the page closes.
+  useEffect(() => {
+    keepOnly([songId, pair.vocalId, pair.beatId].map(trackIdOf).filter((id): id is string => !!id));
+  }, [songId, pair.vocalId, pair.beatId]);
+  useEffect(() => () => keepOnly([]), []);
 
   const go = (n: number) => {
     setStep(n);
@@ -42,8 +52,8 @@ export default function ExamplesLab() {
         </p>
         <h1 className="text-2xl font-bold sm:text-3xl">See splitting and matching in action</h1>
         <p className="mt-2 max-w-2xl text-sm text-muted">
-          Everything here is synthesised on your device from scratch: original songs, no copyrighted audio, nothing uploaded. Play with a split,
-          then see exactly why two songs do or don&apos;t fit, and what fixes them.
+          Pick a real song from the library (split by the AI splitter when it was uploaded) or an original demo song synthesised on your
+          device. Play with its stems, then see exactly why two songs do or don&apos;t fit, and what fixes them.
         </p>
         <p className="mt-2 text-sm text-muted">
           Want to practise mixing live?{" "}
@@ -93,6 +103,7 @@ export default function ExamplesLab() {
           <div className="flex flex-col gap-4">
             <SongPicker
               audio={audio}
+              library={library}
               songId={songId}
               onPick={(id) => {
                 setSongId(id);
@@ -108,10 +119,10 @@ export default function ExamplesLab() {
             </button>
           </div>
         )}
-        {step === 1 && <SplitStep audio={audio} songId={songId} onNext={() => go(2)} />}
+        {step === 1 && <SplitStep audio={audio} songId={songId} onNext={() => go(2)} library={library} />}
         {step === 2 && (
           <div className="flex flex-col gap-4">
-            <MatchStep audio={audio} settings={pair} onChange={setPair} />
+            <MatchStep audio={audio} settings={pair} onChange={setPair} library={library} />
             <div className="flex flex-wrap justify-between gap-2">
               <button
                 type="button"
@@ -132,6 +143,7 @@ export default function ExamplesLab() {
         )}
         {step === 3 && (
           <RecipeGallery
+            library={library}
             onLoad={(settings) => {
               setPair(settings);
               go(2);

@@ -49,7 +49,7 @@ export default function LiveCard({ stream }: { stream: LiveStream }) {
           <h3 className="truncate text-sm font-semibold">{stream.title}</h3>
           <p className="truncate text-xs text-muted">{stream.host_name}</p>
           <p className="mt-0.5 truncate text-[11px] text-muted">
-            {[stream.remix_title && `Playing ${stream.remix_title}`, time, ...stream.tags.slice(0, 2)].filter(Boolean).join(" · ")}
+            {[stream.mode === "studio" ? "Making a remix live" : stream.remix_title && `Playing ${stream.remix_title}`, time, ...stream.tags.slice(0, 2)].filter(Boolean).join(" · ")}
           </p>
         </div>
       </div>

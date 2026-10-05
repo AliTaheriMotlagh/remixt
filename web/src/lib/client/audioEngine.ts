@@ -96,6 +96,24 @@ class AudioEngine {
   private staleContext = false;
   /** The microphone is open on this context (recording a vocal). */
   private micActive = false;
+  /** A tap on the mix for visuals (the live party's lights and crowd). */
+  private analyser: AnalyserNode | null = null;
+
+  /**
+   * The mix's spectrum, for visuals. Taken before the master fader, so a
+   * listener turning their volume down doesn't dim the lights. Null until
+   * audio has started.
+   */
+  getAnalyser(): AnalyserNode | null {
+    if (!this.ctx || !this.master) return null;
+    if (!this.analyser || this.analyser.context !== this.ctx) {
+      this.analyser = this.ctx.createAnalyser();
+      this.analyser.fftSize = 512;
+      this.analyser.smoothingTimeConstant = 0.75;
+      this.master.input.connect(this.analyser);
+    }
+    return this.analyser;
+  }
 
   /**
    * Recording keeps the phone's audio session in play-and-record mode —

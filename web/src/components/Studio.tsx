@@ -15,6 +15,7 @@ import AiProducer from "./studio/AiProducer";
 import SplitLaneDialog from "./studio/SplitLaneDialog";
 import ContextMenuHost from "./studio/ContextMenu";
 import StudioNotice from "./studio/StudioNotice";
+import LiveStudioBar, { GoLiveStudioButton } from "./live/LiveStudioBar";
 import {
   connectCollab,
   joinSharedSession,
@@ -53,6 +54,10 @@ export default function Studio({ user }: { user: User | null }) {
   const challengeId = searchParams.get("challenge");
   const projectId = searchParams.get("project");
   const joinCode = searchParams.get("join");
+  /** Stems to open with, e.g. from the examples page: /studio?stems=<id>,<id>. */
+  const stemsParam = searchParams.get("stems");
+  /** Making this remix live (see components/live/LiveStudioBar). */
+  const liveId = searchParams.get("live");
   const router = useRouter();
   const [collabError, setCollabError] = useState<string | null>(null);
   const [startingSession, setStartingSession] = useState(false);
@@ -145,11 +150,11 @@ export default function Studio({ user }: { user: User | null }) {
   // Unsaved work from a previous visit (a reload, or the phone dropping
   // the tab): offer it back, but only to an empty Studio.
   useEffect(() => {
-    if (remixId || challengeId || projectId || joinCode || useStudioStore.getState().lanes.length > 0) return;
+    if (remixId || challengeId || projectId || joinCode || stemsParam || useStudioStore.getState().lanes.length > 0) return;
     const saved = readDraft();
     // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage only exists after mount
     if (saved) setDraft(saved);
-  }, [remixId, challengeId, projectId, joinCode]);
+  }, [remixId, challengeId, projectId, joinCode, stemsParam]);
 
   // A shared session is kept on the server; this browser's draft is for solo work.
   useEffect(() => (projectId ? undefined : startDraftAutosave()), [projectId]);
@@ -181,6 +186,35 @@ export default function Studio({ user }: { user: User | null }) {
       cancelled = true;
     };
   }, [challengeId]);
+
+  // /studio?stems=<id>,<id>: start a mix with those stems from the library.
+  useEffect(() => {
+    const ids = (stemsParam ?? "").split(",").filter((id) => /^[\w-]{8,64}$/.test(id)).slice(0, 8);
+    if (!ids.length) return;
+    let cancelled = false;
+    void (async () => {
+      const res = await fetch("/api/stems").catch(() => null);
+      const data = await res?.json().catch(() => null);
+      if (cancelled || !Array.isArray(data?.stems)) return;
+      const found = ids
+        .map((id) => (data.stems as { id: string }[]).find((s) => s.id === id))
+        .filter((s): s is NonNullable<typeof s> => !!s) as unknown as Parameters<ReturnType<typeof useStudioStore.getState>["addStem"]>[0][];
+      if (!found.length) return;
+      const store = useStudioStore.getState();
+      if (store.lanes.length > 0 && !window.confirm("Open these stems? This replaces the mix that's open (save it first if you want it).")) return;
+      audioEngine.stop();
+      store.clearLanes();
+      // The beat first, so the vocal sits on top in the lane list.
+      for (const stem of [...found].sort((a, b) => (a.kind === "vocals" ? 1 : 0) - (b.kind === "vocals" ? 1 : 0))) store.addStem(stem);
+      resetHistory();
+      markDraftDirty();
+      // Off the address, so a reload doesn't ask again.
+      router.replace("/studio");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [stemsParam, router]);
 
   function restoreDraft() {
     if (!draft) return;
@@ -271,6 +305,7 @@ export default function Studio({ user }: { user: User | null }) {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {!liveId && !projectId && <GoLiveStudioButton signedIn={!!user} />}
           {!projectId && (
             <button
               onClick={startTogether}
@@ -303,6 +338,7 @@ export default function Studio({ user }: { user: User | null }) {
 
       <div className={`mt-4 grid grid-cols-1 gap-5 ${libraryHidden ? "" : "lg:grid-cols-[minmax(0,1fr)_280px]"}`}>
         <div className="flex min-w-0 flex-col gap-3">
+          {liveId && user && <LiveStudioBar streamId={liveId} userId={user.id} />}
           {projectId && user && <CollabBar userId={user.id} onLeave={() => void leaveTogether()} />}
           {draft && lanes.length === 0 && (
             <div className="flex flex-wrap items-center gap-3 rounded-xl border border-brand/50 bg-brand/10 px-4 py-3 text-sm">

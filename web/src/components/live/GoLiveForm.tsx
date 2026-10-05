@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CalendarClock, Radio } from "lucide-react";
+import { CalendarClock, Play, Radio, SlidersHorizontal } from "lucide-react";
 import TagInput from "@/components/TagInput";
 import { DESCRIPTION_MAX, TITLE_MAX } from "@/lib/liveShared";
 
@@ -18,6 +18,7 @@ function localInputValue(date: Date) {
 /** Set up a session: what you'll play, who can chat, and whether it starts now or later. */
 export default function GoLiveForm({ remixes, defaultTitle }: { remixes: RemixChoice[]; defaultTitle: string }) {
   const router = useRouter();
+  const [mode, setMode] = useState<"studio" | "perform">("studio");
   const [title, setTitle] = useState(defaultTitle);
   const [description, setDescription] = useState("");
   const [tags, setTags] = useState<string[]>([]);
@@ -37,17 +38,19 @@ export default function GoLiveForm({ remixes, defaultTitle }: { remixes: RemixCh
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        mode,
         title,
         description,
         tags,
-        remixId: remixId || null,
+        remixId: mode === "perform" ? remixId || null : null,
         chatMode,
         slowMode,
         scheduledAt: when === "later" ? new Date(scheduledAt).toISOString() : null,
       }),
     }).catch(() => null);
     const data = await res?.json().catch(() => null);
-    if (res?.ok) return router.push(`/live/${data.id}`);
+    // A studio session runs from the Studio; a performance from its console.
+    if (res?.ok) return router.push(mode === "studio" ? `/studio?live=${data.id}` : `/live/${data.id}`);
     // Already live: take them back to it.
     if (res?.status === 409 && data?.id) return router.push(`/live/${data.id}`);
     setBusy(false);
@@ -61,6 +64,27 @@ export default function GoLiveForm({ remixes, defaultTitle }: { remixes: RemixCh
         <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={TITLE_MAX} required minLength={2} className="input" placeholder="Friday night remix set" />
       </label>
 
+      <fieldset className="flex flex-col gap-2">
+        <legend className="mb-1.5 text-sm font-medium">What kind of session?</legend>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {(
+            [
+              { id: "studio", icon: SlidersHorizontal, label: "Make a remix live", hint: "Open the Studio on air: the room watches you add stems, cut clips, add effects — and hears every change." },
+              { id: "perform", icon: Play, label: "Perform a remix", hint: "Play one of your published remixes and work its stems live: mute, solo, ride the faders." },
+            ] as const
+          ).map(({ id, icon: Icon, label, hint }) => (
+            <label key={id} className={`flex cursor-pointer flex-col gap-1 rounded-xl border p-3 text-sm ${mode === id ? "border-brand bg-brand/10" : "border-border hover:border-brand/50"}`}>
+              <input type="radio" name="mode" checked={mode === id} onChange={() => setMode(id)} className="sr-only" />
+              <span className="flex items-center gap-2 font-semibold">
+                <Icon className="h-4 w-4" /> {label}
+              </span>
+              <span className="text-xs text-muted">{hint}</span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+
+      {mode === "perform" && (
       <label className="flex flex-col gap-1.5 text-sm font-medium">
         What are you playing?
         <select value={remixId} onChange={(e) => setRemixId(e.target.value)} className="input">
@@ -82,6 +106,7 @@ export default function GoLiveForm({ remixes, defaultTitle }: { remixes: RemixCh
           )}
         </span>
       </label>
+      )}
 
       <label className="flex flex-col gap-1.5 text-sm font-medium">
         About this session <span className="font-normal text-muted">(optional)</span>

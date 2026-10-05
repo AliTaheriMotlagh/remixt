@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { resolveColor } from "@/components/Waveform";
 
 /**
  * A static waveform from peaks, with an optional moving playhead. The
@@ -40,7 +41,7 @@ export default function Wave({
       if (!g) return;
       g.scale(dpr, dpr);
       g.clearRect(0, 0, w, height);
-      g.fillStyle = color;
+      g.fillStyle = resolveColor(color, wrap);
       g.globalAlpha = dim ? 0.25 : 0.9;
       const mid = height / 2;
       const bars = Math.min(peaks.length, Math.floor(w / 2));

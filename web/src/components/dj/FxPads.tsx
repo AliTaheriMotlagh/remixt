@@ -6,10 +6,11 @@ import { HoldButton } from "./ui";
 
 const PAD = "min-h-14 text-xs sm:text-sm px-1";
 
-function TapPad({ label, onClick, hint, tone }: { label: string; onClick: () => void; hint: string; tone: string }) {
+function TapPad({ label, onClick, hint, tone, dj }: { label: string; onClick: () => void; hint: string; tone: string; dj?: string }) {
   return (
     <button
       type="button"
+      data-dj={dj}
       onClick={onClick}
       title={hint}
       aria-label={`${label}: ${hint}`}
@@ -25,8 +26,8 @@ export default function FxPads({ engine }: { engine: DjEngine }) {
   return (
     <section aria-label="FX and sampler pads" className="flex flex-col gap-2 rounded-2xl border border-border bg-surface p-3">
       <h3 className="text-xs font-bold uppercase tracking-wide">FX &amp; pads</h3>
-      <div className="grid grid-cols-5 gap-1.5">
-        <TapPad label="Echo out" hint="The dry music drops away and an echo rings out (key 1)" onClick={() => engine.echoOut()} tone="bg-beat" />
+      <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-5">
+        <TapPad dj="FX-echo" label="Echo out" hint="The dry music drops away and an echo rings out (key 1)" onClick={() => engine.echoOut()} tone="bg-beat" />
         <HoldButton label="Echo: hold for an echo on the music" title="Hold for an echo" onDown={() => engine.echoHold(true)} onUp={() => engine.echoHold(false)} className={PAD} litClass="bg-beat/70 text-black" idleClass="bg-beat/40 text-foreground">
           Echo
         </HoldButton>

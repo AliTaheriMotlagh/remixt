@@ -12,6 +12,9 @@ let applied: Promise<void> | null = null;
 export function ensureSchema(): Promise<void> {
   applied ??= (async () => {
     await ensureSocialSchema();
+    // Featured example songs (the /examples page shows them first, with their credit).
+    await sql`ALTER TABLE tracks ADD COLUMN IF NOT EXISTS featured_example BOOLEAN NOT NULL DEFAULT false`;
+    await sql`ALTER TABLE tracks ADD COLUMN IF NOT EXISTS example_credit TEXT`;
     // Already set up (the usual case): one quick look instead of twenty
     // statements on every cold start. project_members is created last.
     const [ready] = await sql<{ ok: boolean }[]>`SELECT to_regclass('project_members') IS NOT NULL AS ok`;

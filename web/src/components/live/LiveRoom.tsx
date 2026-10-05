@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Eye, Headphones, Link2, RefreshCw, Volume2, VolumeX, WifiOff } from "lucide-react";
 import FollowButton from "@/components/FollowButton";
@@ -14,6 +14,12 @@ import LiveChat from "./LiveChat";
 import Recap from "./Recap";
 import { ReactionBar, ReactionLayer, compactNumber, type ReactionLayerHandle } from "./Reactions";
 import { StageClock, StageHeader, StageProgress, StemStrips } from "./Stage";
+import ReadOnlyStudio, { type StudioActivity } from "./ReadOnlyStudio";
+import PartyStage, { readBands, type PartyHandle } from "./PartyStage";
+import { hostPosition } from "@/lib/client/liveSync";
+import type { PartyMusic, PartyPerson } from "@/lib/client/party/partyWorld";
+import { applyLiveMix, type LiveMix } from "@/lib/client/liveStudio";
+import { describeMixChanges } from "@/lib/client/liveStudioDiff";
 
 const VOLUME_KEY = "remixt_live_volume";
 
@@ -70,11 +76,37 @@ export default function LiveRoom({
   userId: string | null;
 }) {
   const layer = useRef<ReactionLayerHandle>(null);
+  const party = useRef<PartyHandle>(null);
+  const studio = stream.mode === "studio";
+  // Studio sessions: the host's mix, applied here as it changes, and what changed in words.
+  const [studioReady, setStudioReady] = useState(false);
+  const [activity, setActivity] = useState<StudioActivity[]>([]);
+  const lastMix = useRef<LiveMix | null>(null);
+  const activityId = useRef(0);
   const conn = useLiveConnection(stream.id, {
     isHost: false,
     onReactions: (bursts) => {
-      for (const b of bursts) layer.current?.burst(b.emoji, Math.min(b.count, 4));
+      for (const b of bursts) {
+        layer.current?.burst(b.emoji, Math.min(b.count, 2));
+        for (let i = 0; i < Math.min(b.count, 3); i++) party.current?.react(b.emoji, b.userId);
+      }
     },
+    onChat: (events) => {
+      for (const e of events) party.current?.say(e.is_host ? "__dj" : (e.user_id ?? (e.mine ? "you" : null)), e.body);
+    },
+    onMix: studio
+      ? (raw) => {
+          const applied = applyLiveMix(raw);
+          if (!applied) return;
+          const lines = describeMixChanges(lastMix.current, applied);
+          lastMix.current = applied;
+          setStudioReady(true);
+          if (lines.length) {
+            const at = Date.now();
+            setActivity((list) => [...lines.map((text) => ({ id: activityId.current++, text, at })).reverse(), ...list].slice(0, 80));
+          }
+        }
+      : undefined,
   });
   const live = conn.stream;
   const status = live?.status ?? stream.status;
@@ -94,15 +126,55 @@ export default function LiveRoom({
   }, []);
 
   const follower = useLiveFollower({
-    remixId: status === "live" ? remixId : null,
+    remixId: status === "live" && !studio ? remixId : null,
     stream: live,
     serverNow: conn.serverNow,
     tuned,
     muted,
     volume,
+    studioReady: studio ? studioReady : undefined,
   });
   const lanes = useStudioStore((s) => s.lanes);
   const playing = !!live?.state.playing && status === "live" && !live.hostAway;
+
+  // The party: who's on the floor (you among them), and the beat they dance to.
+  const audience = conn.audience;
+  const crowd = useMemo(() => {
+    const people: PartyPerson[] = (audience?.signedIn ?? [])
+      .filter((p) => p.id !== stream.host_id)
+      .map((p) => ({ id: p.id, name: p.name, color: p.color, you: p.id === userId }));
+    let guests = audience?.guests ?? 0;
+    if (userId && !people.some((p) => p.you)) people.unshift({ id: userId, name: "You", color: "#8b5cf6", you: true });
+    if (!userId) {
+      people.unshift({ id: "you", name: "You", color: "#a78bfa", you: true });
+      guests = Math.max(0, guests - 1);
+    }
+    return { people, guests };
+  }, [audience, userId, stream.host_id]);
+  const { serverNow } = conn;
+  const liveRef = useRef(live);
+  const tunedRef = useRef(false);
+  const bands = useRef(new Uint8Array(256));
+  useEffect(() => {
+    liveRef.current = live;
+  });
+  const partyMusic = useCallback((): PartyMusic => {
+    const s = useStudioStore.getState();
+    const bpm = s.projectBpm || 120;
+    const l = liveRef.current;
+    let on = false;
+    let position = 0;
+    if (tunedRef.current && s.isPlaying) {
+      on = true;
+      position = s.playhead;
+    } else if (l && l.status === "live" && l.state.playing && !l.hostAway) {
+      // Not listening (yet): the floor still dances to the host's clock.
+      on = true;
+      position = hostPosition(l.state, l.stateAt, serverNow());
+    }
+    const levels = on && tunedRef.current ? readBands(audioEngine.getAnalyser(), bands.current) : { low: 0.55, mid: 0.45, high: 0.35 };
+    return { playing: on, beats: (position * bpm) / 60, bpm, ...levels };
+  }, [serverNow]);
 
   const [recap, setRecap] = useState<RecapData | null>(null);
   useEffect(() => {
@@ -125,6 +197,7 @@ export default function LiveRoom({
 
   function react(emoji: string) {
     layer.current?.burst(emoji, 1);
+    party.current?.react(emoji, userId ?? "you");
     setReactionTotals((t) => ({ ...t, [emoji]: (t[emoji] ?? 0) + 1 }));
     conn.sendReaction(emoji);
   }
@@ -132,6 +205,7 @@ export default function LiveRoom({
   async function tuneIn() {
     // Inside the tap, so phones let the sound start later.
     await audioEngine.prepareAudio().catch(() => {});
+    tunedRef.current = true;
     setTuned(true);
   }
 
@@ -173,7 +247,7 @@ export default function LiveRoom({
   const title = live?.title ?? stream.title;
   const viewers = live?.viewers ?? stream.viewers;
   const away = !!live?.hostAway && status === "live";
-  const hasStage = !!remixId && status === "live";
+  const hasStage = (studio || !!remixId) && status === "live";
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-5 sm:px-6 sm:py-8">
@@ -244,9 +318,33 @@ export default function LiveRoom({
 
           {status === "live" && (
             <section aria-label="Stage" className="flex flex-col gap-3">
+              <PartyStage
+                ref={party}
+                hostName={stream.host_name}
+                hostColor={stream.host_color}
+                title={live?.title ?? stream.title}
+                crowd={crowd.people}
+                guests={crowd.guests}
+                music={partyMusic}
+              >
+                <ReactionLayer ref={layer} className="rounded-xl" />
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-3 pb-2 pt-8">
+                  <p className="text-[11px] text-white/80">
+                    {away
+                      ? "The DJ stepped away — back in a moment"
+                      : !hasStage
+                        ? "Warming up — the DJ is picking the first track"
+                        : playing
+                          ? tuned
+                            ? "You're on the floor — react to dance: 🔥 jump · 💃 spin · 🙌 hands up"
+                            : "The party's on — tap “Tune in” to hear it"
+                          : "Paused by the DJ"}
+                  </p>
+                </div>
+              </PartyStage>
               <div className="relative">
                 <StageHeader
-                  title={stream.remix_title ?? "Live set"}
+                  title={studio ? "Making a remix live in the Studio" : (stream.remix_title ?? "Live set")}
                   artist={stream.host_name}
                   cover={cover}
                   state={live?.state ?? null}
@@ -267,7 +365,6 @@ export default function LiveRoom({
                     </div>
                   </div>
                 </StageHeader>
-                <ReactionLayer ref={layer} className="rounded-xl" />
               </div>
 
               {hasStage ? (
@@ -332,7 +429,9 @@ export default function LiveRoom({
                 </p>
               )}
 
-              {hasStage && lanes.length > 0 && (
+              {hasStage && studio && <ReadOnlyStudio activity={activity} />}
+
+              {hasStage && !studio && lanes.length > 0 && (
                 <div>
                   <h2 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">Stems — as the host plays them</h2>
                   <StemStrips lanes={lanes} playing={playing} />

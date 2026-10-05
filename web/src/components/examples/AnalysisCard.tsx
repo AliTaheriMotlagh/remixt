@@ -1,9 +1,9 @@
 "use client";
 
 import { AlertTriangle, CheckCircle2, Info, XCircle } from "lucide-react";
-import { TEMPO_MODE_LABELS, driftPerBarMs, type Level, type PairAnalysis, type PairSettings } from "@/lib/client/examplesMatch";
+import { bpmLabel } from "@/lib/client/examplesLibrary";
+import { TEMPO_MODE_LABELS, driftPerBarMs, type Level, type PairAnalysis, type PairSettings, type PairSong } from "@/lib/client/examplesMatch";
 import { keyLabel } from "@/lib/client/musicKey";
-import type { DemoSongMeta } from "@/lib/client/demoSongs";
 
 const LEVEL_STYLE: Record<Level, { text: string; bg: string; Icon: typeof Info }> = {
   perfect: { text: "text-success", bg: "bg-success/10 border-success/30", Icon: CheckCircle2 },
@@ -42,8 +42,8 @@ export default function AnalysisCard({
   settings,
   analysis: a,
 }: {
-  vocal: DemoSongMeta;
-  beat: DemoSongMeta;
+  vocal: PairSong;
+  beat: PairSong;
   settings: PairSettings;
   analysis: PairAnalysis;
 }) {
@@ -54,7 +54,7 @@ export default function AnalysisCard({
       <header className="mb-3 flex flex-wrap items-center gap-2">
         <overall.Icon className={`text-lg ${overall.text}`} />
         <h3 className="text-base font-bold">{a.overall.title}</h3>
-        <span className="text-xs text-muted">
+        <span className="min-w-0 break-words text-xs text-muted">
           {vocal.title} (vocal) over {beat.title} (beat)
         </span>
       </header>
@@ -62,9 +62,9 @@ export default function AnalysisCard({
         <div className="flex flex-col gap-2">
           <h4 className="text-xs font-semibold uppercase tracking-wide text-muted">Tempo</h4>
           <dl className="flex flex-col gap-1">
-            <Row label="Vocal">{vocal.bpm} BPM</Row>
-            <Row label="Beat">{beat.bpm} BPM</Row>
-            {a.readingNote !== "as written" && <Row label="Vocal counted as">{`${a.reading} BPM (${a.readingNote})`}</Row>}
+            <Row label="Vocal">{bpmLabel(vocal.bpm)} BPM</Row>
+            <Row label="Beat">{bpmLabel(beat.bpm)} BPM</Row>
+            {a.readingNote !== "as written" && <Row label="Vocal counted as">{`${bpmLabel(a.reading)} BPM (${a.readingNote})`}</Row>}
             <Row label="Gap, unmatched">{`${Math.abs(a.rawGapBpm).toFixed(0)} BPM (${a.rawGapPct.toFixed(0)}%)`}</Row>
             <Row label="Who moves">{TEMPO_MODE_LABELS[settings.mode].label}</Row>
             <Row label="Both end up at">{`${a.targetBpm.toFixed(1)} BPM`}</Row>

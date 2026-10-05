@@ -11,6 +11,8 @@ import { useStudioStore } from "@/lib/client/studioStore";
 import type { ChatMode, LiveStream, Recap as RecapData } from "@/lib/live";
 import { TITLE_MAX } from "@/lib/liveShared";
 import { LiveBadge } from "./LiveRoom";
+import PartyStage from "./PartyStage";
+import { useCrowd, useHostParty } from "./useHostParty";
 import LiveChat from "./LiveChat";
 import Recap from "./Recap";
 import { ReactionBar, ReactionLayer, compactNumber, type ReactionLayerHandle } from "./Reactions";
@@ -43,12 +45,16 @@ export default function HostConsole({
   cover: string | null;
 }) {
   const layer = useRef<ReactionLayerHandle>(null);
+  const { party: partyRef, music: partyMusic, onReactions: partyReactions, onChat: partyChat } = useHostParty();
   const conn = useLiveConnection(initial.id, {
     isHost: true,
     onReactions: (bursts) => {
-      for (const b of bursts) layer.current?.burst(b.emoji, Math.min(b.count, 5));
+      for (const b of bursts) layer.current?.burst(b.emoji, Math.min(b.count, 3));
+      partyReactions(bursts);
     },
+    onChat: partyChat,
   });
+  const crowd = useCrowd(conn.audience);
   const live = conn.stream;
   const status = live?.status ?? initial.status;
 
@@ -105,13 +111,14 @@ export default function HostConsole({
     noteRef.current = note;
   });
   const statusRef = useRef(status);
+  const over = useRef(false);
   useEffect(() => {
     statusRef.current = status;
   });
   const publishing = useRef(false);
   const queued = useRef(false);
   const publish = useCallback(async () => {
-    if (statusRef.current !== "live" || loaded.current === null) return;
+    if (statusRef.current !== "live" || over.current || loaded.current === null) return;
     if (publishing.current) {
       queued.current = true;
       return;
@@ -223,6 +230,8 @@ export default function HostConsole({
 
   async function endSession() {
     setConfirmEnd(false);
+    // Nothing more goes out once it's over (the pause below would send one last state).
+    over.current = true;
     audioEngine.pause();
     const result = await api(`/api/live/${initial.id}`, "PATCH", { action: "end" });
     if (!result.ok) return setError(result.error);
@@ -346,6 +355,15 @@ export default function HostConsole({
 
           {/* Stage + transport */}
           <section aria-label="Performance" className="flex flex-col gap-3">
+            <PartyStage
+              ref={partyRef}
+              hostName={initial.host_name}
+              hostColor={initial.host_color}
+              title={title}
+              crowd={crowd.people}
+              guests={crowd.guests}
+              music={partyMusic}
+            />
             <div className="relative">
               <StageHeader
                 title={chosen?.title ?? "Pick a track to perform"}

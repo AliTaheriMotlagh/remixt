@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, ChevronDown, Download, Loader2, Pause, Play, Scissors, Volume2, VolumeX } from "lucide-react";
+import { ArrowRight, ChevronDown, Download, Loader2, Pause, Play, Scissors } from "lucide-react";
 import {
   audioBufferToWav,
   demoFileName,
@@ -11,7 +11,11 @@ import {
   type DemoStem,
 } from "@/lib/client/demoSongs";
 import type { LabAudio, LabPlayback } from "@/lib/client/examplesPlayer";
+import { isLibraryId } from "@/lib/client/examplesLibrary";
+import LibrarySplit from "./LibrarySplit";
+import type { LibraryState } from "./libraryTracks";
 import { SongBadges } from "./SongPicker";
+import StemRow from "./StemRow";
 import Wave from "./Wave";
 import { useDemoSong } from "./useDemoSong";
 
@@ -28,78 +32,27 @@ const COLORS: Record<string, string> = {
 };
 const STAGES = ["Listening to the whole song…", "Separating the vocal…", "Separating drums, bass and the rest…", "Done"];
 
-function StemRow({
-  label,
-  hint,
-  color,
-  peaks,
-  muted,
-  soloed,
-  onMute,
-  onSolo,
-  onDownload,
-  fraction,
-  small,
-  revealed,
+/** Step 2: what a splitter hands back, for a library song (real splitter output) or a demo song. */
+export default function SplitStep({
+  audio,
+  songId,
+  onNext,
+  library,
 }: {
-  label: string;
-  hint?: string;
-  color: string;
-  peaks: Float32Array;
-  muted: boolean;
-  soloed: boolean;
-  onMute: () => void;
-  onSolo: () => void;
-  onDownload: () => void;
-  fraction: (() => number) | null;
-  small?: boolean;
-  revealed: boolean;
+  audio: LabAudio;
+  songId: string;
+  onNext: () => void;
+  library: LibraryState;
 }) {
-  return (
-    <div
-      className={`rounded-xl border border-border bg-surface p-3 transition-all duration-700 ${revealed ? "translate-y-0 opacity-100" : "translate-y-3 opacity-0"} ${small ? "ml-3 sm:ml-6" : ""}`}
-    >
-      <div className="mb-2 flex flex-wrap items-center gap-2">
-        <span className="size-2.5 rounded-full" style={{ background: color }} aria-hidden />
-        <span className="text-sm font-semibold">{label}</span>
-        {hint && <span className="hidden text-xs text-muted sm:inline">{hint}</span>}
-        <div className="ml-auto flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={onSolo}
-            aria-pressed={soloed}
-            aria-label={`Solo ${label}`}
-            className={`min-h-8 min-w-8 rounded-md border px-2 text-xs font-bold ${soloed ? "border-drums bg-drums text-black" : "border-border text-muted hover:text-foreground"}`}
-          >
-            S
-          </button>
-          <button
-            type="button"
-            onClick={onMute}
-            aria-pressed={muted}
-            aria-label={`Mute ${label}`}
-            className={`flex min-h-8 min-w-8 items-center justify-center rounded-md border px-2 text-xs font-bold ${muted ? "border-danger bg-danger text-white" : "border-border text-muted hover:text-foreground"}`}
-          >
-            {muted ? <VolumeX /> : <Volume2 />}
-          </button>
-          <button
-            type="button"
-            onClick={onDownload}
-            aria-label={`Download ${label} as WAV`}
-            title="Download WAV"
-            className="flex min-h-8 min-w-8 items-center justify-center rounded-md border border-border px-2 text-muted hover:text-foreground"
-          >
-            <Download />
-          </button>
-        </div>
-      </div>
-      <Wave peaks={peaks} color={color} height={small ? 36 : 52} dim={muted} fraction={fraction} label={`${label} waveform`} />
-    </div>
+  return isLibraryId(songId) ? (
+    <LibrarySplit audio={audio} songId={songId} onNext={onNext} library={library} />
+  ) : (
+    <DemoSplit audio={audio} songId={songId} onNext={onNext} />
   );
 }
 
-/** Step 2: what a splitter hands back — and a before/after you can hear. */
-export default function SplitStep({ audio, songId, onNext }: { audio: LabAudio; songId: string; onNext: () => void }) {
+/** A demo song's exact stems, and a before/after you can hear. */
+function DemoSplit({ audio, songId, onNext }: { audio: LabAudio; songId: string; onNext: () => void }) {
   const meta = demoSongMeta(songId)!;
   const { song, loading, error } = useDemoSong(songId);
   const [phase, setPhase] = useState<"idle" | "splitting" | "done">("idle");

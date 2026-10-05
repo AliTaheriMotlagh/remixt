@@ -9,8 +9,9 @@ const stateSchema = z.object({
   position: z.number().min(0).max(6 * 3600),
   lanes: z
     .array(z.object({ muted: z.boolean(), solo: z.boolean(), volume: z.number().min(0).max(2) }))
-    .max(32),
+    .max(64),
   note: z.string().trim().max(80).optional(),
+  selected: z.array(z.string().max(64)).max(32).optional(),
 });
 
 export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {

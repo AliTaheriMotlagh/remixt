@@ -37,6 +37,8 @@ type AdminTrack = {
   artist_name: string;
   email: string;
   used_in_remixes: number;
+  featured_example: boolean;
+  example_credit: string | null;
 };
 
 type AdminRemix = {
@@ -282,6 +284,28 @@ function SongsTab({ onChange }: { onChange: () => void }) {
     onChange();
   }
 
+  async function feature(track: AdminTrack) {
+    let credit: string | null = null;
+    if (!track.featured_example) {
+      const answer = prompt(
+        `Feature “${track.title}” on the examples page.\n\nCredit line (artist, and the licence or permission you have — e.g. “by Jane Doe · CC BY 4.0”):`,
+        track.example_credit ?? `by ${track.artist_name}`
+      );
+      if (answer === null) return;
+      credit = answer.trim() || null;
+    }
+    setBusy(track.id);
+    setError(
+      await send(`/api/admin/tracks/${track.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ featured: !track.featured_example, credit }),
+      })
+    );
+    setBusy(null);
+    reload();
+  }
+
   return (
     <div>
       <div className="flex flex-col gap-2 sm:flex-row">
@@ -319,6 +343,16 @@ function SongsTab({ onChange }: { onChange: () => void }) {
               </p>
               {track.error && <p className="truncate text-xs text-danger">{track.error}</p>}
             </div>
+            {track.status === "ready" && (
+              <button
+                onClick={() => feature(track)}
+                disabled={busy === track.id}
+                className={`shrink-0 rounded-lg border px-3 py-1.5 text-xs ${track.featured_example ? "border-brand bg-brand/15 text-brand-strong" : "border-border text-muted hover:text-foreground"}`}
+                title={track.featured_example ? `Featured on /examples${track.example_credit ? ` — ${track.example_credit}` : ""}` : "Show this song first on /examples"}
+              >
+                {track.featured_example ? "★ Example" : "☆ Feature"}
+              </button>
+            )}
             <button onClick={() => remove(track)} disabled={busy === track.id} className={dangerButton}>
               {busy === track.id ? "Deleting…" : "Delete"}
             </button>

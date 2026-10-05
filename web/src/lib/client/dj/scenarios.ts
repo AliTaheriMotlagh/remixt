@@ -28,6 +28,10 @@ export type CheckCtx = {
 export type Objective = {
   id: string;
   text: string;
+  /** Lessons: the control to spotlight (a `data-dj` id such as "A-play", "M-xfader"). */
+  target?: string;
+  /** Lessons: why this step matters, shown under the instruction. */
+  why?: string;
   /** Fraction (0..1) for objectives that take time. */
   progress?: (c: CheckCtx) => number;
   check: (c: CheckCtx) => boolean;
@@ -54,6 +58,27 @@ export type MissionSetup = {
   phaseOffsetMs?: number;
 };
 
+/** What kind of exercise: the original training missions, or the Learn → Practice → Test curriculum and real gigs. */
+export type ScenarioCategory = "mission" | "lesson" | "drill" | "test" | "gig";
+
+/** Console limits for an exercise (beatmatching by ear hides the BPM and switches SYNC off, say). */
+export type ScenarioRules = {
+  noSync?: boolean;
+  hideBpm?: boolean;
+  noQuantize?: boolean;
+  /** Hide the beat-match meter (the phase gauge gives the answer away). */
+  noMeter?: boolean;
+};
+
+export type QuizQuestion = {
+  q: string;
+  options: string[];
+  answer: number;
+  explain: string;
+  /** Show the Camelot wheel with the question. */
+  wheel?: boolean;
+};
+
 export type Mission = {
   id: string;
   number: number;
@@ -68,6 +93,24 @@ export type Mission = {
   /** Seconds. The mission ends (scored as it stands) when this runs out. */
   timeLimit?: number;
   kind?: "club";
+  category?: ScenarioCategory;
+  /** Curriculum level (1–5). */
+  level?: number;
+  rules?: ScenarioRules;
+  /** Gear this exercise is built for; the session switches to it (scratching needs turntables). */
+  gear?: string;
+  /** Tests: theory questions asked before the practical part (or alone, with no objectives). */
+  quiz?: QuizQuestion[] | ((seed: number) => QuizQuestion[]);
+  /** A different starting setup per attempt (drills vary every run). */
+  setupFor?: (seed: number) => MissionSetup;
+  /** An AI DJ plays this deck (back-to-back). */
+  aiDeck?: DeckId;
+  /** Scripted surprises: e.g. "power" stops Deck A at 12 s for the recovery gig. */
+  events?: { at: number; kind: "stop-a" | "stop-playing" }[];
+  /** The library songs option makes sense here (needs from missionTracks.ts). */
+  libraryFriendly?: boolean;
+  /** Minutes, for the curriculum cards. */
+  minutes?: number;
 };
 
 const fitOk = (f: KeyFit | null) => f === "same" || f === "relative" || f === "neighbour";
@@ -106,15 +149,17 @@ export const MISSIONS: Mission[] = [
     setup: { decks: { A: { trackId: "neon-drive", volume: 0.25 }, B: { trackId: "warehouse-lights", volume: 0.8 } }, crossfader: -1 },
     weights: { smoothness: 1 },
     objectives: [
-      { id: "play", text: "Press PLAY on Deck A", check: (c) => c.snap.decks.A.playing, hint: () => "Press the big PLAY button on Deck A (or the Q key)." },
+      { id: "play", target: "A-play", text: "Press PLAY on Deck A", check: (c) => c.snap.decks.A.playing, hint: () => "Press the big PLAY button on Deck A (or the Q key)." },
       {
         id: "volume",
+        target: "A-volume",
         text: "Raise Deck A's channel fader above 60% so you can hear it",
         check: (c) => c.snap.decks.A.playing && c.snap.decks.A.volume >= 0.6,
         hint: (c) => (c.snap.decks.A.volume < 0.6 ? "Slide Deck A's volume fader up. It starts low on purpose." : null),
       },
       {
         id: "cue",
+        target: "A-cue",
         text: "Press CUE: Deck A jumps back to the start and stops",
         check: (c) => {
           const a = c.snap.decks.A;
@@ -125,6 +170,7 @@ export const MISSIONS: Mission[] = [
       },
       {
         id: "loop",
+        target: "A-loops",
         text: "Press PLAY again, then hold a 4-beat loop for 4 seconds",
         progress: (c) => Math.min(1, c.holdTime("loop") / 4),
         check: (c) => {
@@ -158,9 +204,10 @@ export const MISSIONS: Mission[] = [
     weights: { tempo: 3, smoothness: 1 },
     scoreFrom: 2,
     objectives: [
-      { id: "startB", text: "Press PLAY on Deck B (the crowd can't hear it yet)", check: (c) => c.snap.decks.B.playing, hint: () => "Press PLAY on Deck B (the P key)." },
+      { id: "startB", target: "B-play", text: "Press PLAY on Deck B (the crowd can't hear it yet)", check: (c) => c.snap.decks.B.playing, hint: () => "Press PLAY on Deck B (the P key)." },
       {
         id: "match",
+        target: "B-tempo",
         text: "Match Deck B's tempo to Deck A within 0.5 BPM",
         check: (c) => c.hold("match", c.d.bothPlaying && Math.abs(c.d.tempoDiff) <= 0.5, 1.5),
         progress: (c) => Math.min(1, c.holdTime("match") / 1.5),
@@ -204,6 +251,7 @@ export const MISSIONS: Mission[] = [
     objectives: [
       {
         id: "nudge",
+        target: "B-jog",
         text: "Nudge Deck B until the phase offset is under 30 ms",
         check: (c) => c.hold("nudge", c.d.bothPlaying && Math.abs(c.d.phaseMs) < 30, 1),
         hint: (c) => phaseHint(c, "B", 30),
@@ -245,6 +293,7 @@ export const MISSIONS: Mission[] = [
     objectives: [
       {
         id: "bring-in",
+        target: "M-xfader",
         text: "Bring Deck B in with its low cut: crossfader to the middle",
         check: (c) =>
           c.hold(
@@ -259,6 +308,7 @@ export const MISSIONS: Mission[] = [
       },
       {
         id: "swap",
+        target: "M-eq",
         text: "EQ swap: Deck A's low goes down while Deck B's low comes up, within 2 bars",
         check: (c) => c.eqSwap("A", 2),
         hint: (c) =>
@@ -304,8 +354,8 @@ export const MISSIONS: Mission[] = [
         hint: (c) => {
           const b = c.snap.decks.B.track;
           const a = c.snap.decks.A.track;
-          if (!b || !a) return "Open the library on Deck B and pick a track. Look for a Camelot code next to 5A.";
-          return `${b.camelot} is too far from ${a.camelot}. Try a track with a code like 4A, 5A, 6A or 5B.`;
+          if (!b || !a) return `Open the library on Deck B and pick a track. Look for a Camelot code next to ${a?.camelot ?? "Deck A's"} (tick "Fits the other deck").`;
+          return `${b.camelot} is too far from ${a.camelot}. Try a track coded ${camelotNeighbours(a.camelot).join(", ")}.`;
         },
       },
       {
@@ -344,7 +394,7 @@ export const MISSIONS: Mission[] = [
         "Producers have long done this with acapellas and instrumentals. With stem separation, any song can become either. Both parts must be in the same tempo and compatible keys, as in the Match step of the Examples lab.",
       tips: [
         "Use the stem buttons under each deck: drums, bass, chords, vocal. Lit means killed.",
-        "The two songs here are tempo-matched and in relative keys (5A and 5B).",
+        "The two songs here are tempo-matched and in compatible keys (with demo songs: 5A and 5B, relative keys).",
         "Keep the beats locked while you blend.",
       ],
     },
@@ -361,6 +411,7 @@ export const MISSIONS: Mission[] = [
     objectives: [
       {
         id: "vocal-only",
+        target: "A-stems",
         text: "Deck A: kill drums, bass and chords: leave only the vocal",
         check: (c) => {
           const s = c.snap.decks.A.stems;
@@ -374,6 +425,7 @@ export const MISSIONS: Mission[] = [
       },
       {
         id: "beat-only",
+        target: "B-stems",
         text: "Deck B: kill the vocal: leave the instrumental",
         check: (c) => {
           const s = c.snap.decks.B.stems;
@@ -466,6 +518,7 @@ export const MISSIONS: Mission[] = [
       },
       {
         id: "sweep",
+        target: "M-filter-A",
         text: "Sweep the filter into high-pass (past +0.6) while looping",
         check: (c) => c.snap.decks.A.loop.active && c.snap.decks.A.filter >= 0.6,
         hint: () => "Slide Deck A's filter to the right (high-pass) so the sound thins out.",
@@ -545,6 +598,15 @@ export const MISSIONS: Mission[] = [
     ],
   },
 ];
+
+/** Same code, ±1 and the A/B twin: the codes that blend with `code`. */
+export function camelotNeighbours(code: string) {
+  const n = Number.parseInt(code, 10);
+  const l = code.endsWith("B") ? "B" : "A";
+  if (!Number.isFinite(n)) return [code];
+  const wrap = (v: number) => ((v + 11) % 12) + 1;
+  return [`${n}${l}`, `${wrap(n - 1)}${l}`, `${wrap(n + 1)}${l}`, `${n}${l === "A" ? "B" : "A"}`];
+}
 
 function countPlayed(c: CheckCtx) {
   let n = 0;

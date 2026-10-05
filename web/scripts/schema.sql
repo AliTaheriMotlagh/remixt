@@ -271,3 +271,12 @@ CREATE TABLE IF NOT EXISTS live_bans (
   PRIMARY KEY (stream_id, who)
 );
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS live_id TEXT REFERENCES live_streams(id) ON DELETE CASCADE;
+-- Featured example songs: real songs an admin picks for the /examples page.
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS featured_example BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS example_credit TEXT;
+
+-- Studio sessions: the host makes a remix live in the Studio, and the whole
+-- mix travels with the session (see lib/live.ts).
+ALTER TABLE live_streams ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'perform'; -- perform | studio
+ALTER TABLE live_streams ADD COLUMN IF NOT EXISTS mix_json TEXT NOT NULL DEFAULT '';
+ALTER TABLE live_streams ADD COLUMN IF NOT EXISTS mix_version INTEGER NOT NULL DEFAULT 0;

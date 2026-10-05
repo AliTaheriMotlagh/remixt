@@ -18,6 +18,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     userId: user?.id ?? null,
     modVersion: Number(q.get("mv") ?? -1),
     heartbeat: q.get("hb") === "1",
+    mixVersion: q.has("xv") ? Number(q.get("xv")) : undefined,
   });
   if (!feed) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json(feed, { headers: { "Cache-Control": "no-store" } });

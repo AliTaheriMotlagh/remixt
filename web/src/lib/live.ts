@@ -29,6 +29,11 @@ const ABANDONED_MINUTES = 15;
 
 export type LiveStatus = "scheduled" | "live" | "ended";
 export type ChatMode = "open" | "followers" | "off";
+/** "perform": playing a published remix. "studio": making one live in the Studio. */
+export type LiveMode = "perform" | "studio";
+
+/** A studio session's mix is capped at this many bytes of JSON. */
+export const MIX_MAX_BYTES = 768 * 1024;
 
 /** What the host is doing on stage, as the listeners need it. Lanes are in the remix's lane order. */
 export type LiveStageState = {
@@ -38,12 +43,15 @@ export type LiveStageState = {
   lanes: { muted: boolean; solo: boolean; volume: number }[];
   /** A line the host puts up ("Drop incoming…"). */
   note?: string;
+  /** Studio sessions: the lanes the host has selected (shown highlighted to listeners). */
+  selected?: string[];
 };
 
 export const IDLE_STATE: LiveStageState = { playing: false, position: 0, lanes: [] };
 
 export type LiveStream = {
   id: string;
+  mode: LiveMode;
   host_id: string;
   host_name: string;
   host_color: string;
@@ -139,6 +147,9 @@ export function ensureLiveSchema(): Promise<void> {
         PRIMARY KEY (stream_id, who)
       )
     `;
+    await sql`ALTER TABLE live_streams ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'perform'`;
+    await sql`ALTER TABLE live_streams ADD COLUMN IF NOT EXISTS mix_json TEXT NOT NULL DEFAULT ''`;
+    await sql`ALTER TABLE live_streams ADD COLUMN IF NOT EXISTS mix_version INTEGER NOT NULL DEFAULT 0`;
     await sql`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS live_id TEXT REFERENCES live_streams(id) ON DELETE CASCADE`;
   })();
   schema.catch(() => (schema = null));
@@ -154,7 +165,7 @@ const viewersNow = () => sql`
 
 function streamSelect() {
   return sql`
-    SELECT s.id, s.host_id, u.artist_name AS host_name, u.avatar_color AS host_color, s.title, s.description, s.tags,
+    SELECT s.id, s.mode, s.host_id, u.artist_name AS host_name, u.avatar_color AS host_color, s.title, s.description, s.tags,
            s.status, s.remix_id, r.title AS remix_title, r.cover_key AS remix_cover_key, s.chat_mode, s.slow_mode,
            s.scheduled_at, s.started_at, s.ended_at, s.created_at, s.peak_viewers, ${viewersNow()} AS viewers
     FROM live_streams s
@@ -224,6 +235,7 @@ export async function hostStreams(hostId: string, limit = 10): Promise<LiveStrea
 // --- Creating and running a session ---------------------------------------------------
 
 export type NewStream = {
+  mode: LiveMode;
   title: string;
   description: string;
   tags: string[];
@@ -244,9 +256,9 @@ export async function createStream(hostId: string, input: NewStream): Promise<st
   const id = randomUUID();
   const goLiveNow = !input.scheduledAt;
   await sql`
-    INSERT INTO live_streams (id, host_id, title, description, tags, status, remix_id, chat_mode, slow_mode,
+    INSERT INTO live_streams (id, mode, host_id, title, description, tags, status, remix_id, chat_mode, slow_mode,
                               scheduled_at, started_at)
-    VALUES (${id}, ${hostId}, ${input.title}, ${input.description}, ${normaliseTags(input.tags)},
+    VALUES (${id}, ${input.mode}, ${hostId}, ${input.title}, ${input.description}, ${normaliseTags(input.tags)},
             ${goLiveNow ? "live" : "scheduled"}, ${input.remixId}, ${input.chatMode}, ${input.slowMode},
             ${input.scheduledAt}, ${goLiveNow ? sql`now()` : null})
   `;
@@ -318,6 +330,16 @@ export async function updateStream(id: string, patch: StreamPatch) {
   }
 }
 
+/** A studio session's whole mix (lanes, clips, effects, tempo), as the host's Studio has it. */
+export async function publishMix(id: string, mixJson: string) {
+  const [row] = await sql<{ version: number }[]>`
+    UPDATE live_streams SET mix_json = ${mixJson}, mix_version = mix_version + 1, host_seen_at = now()
+    WHERE id = ${id} AND status = 'live' AND mode = 'studio'
+    RETURNING mix_version AS version
+  `;
+  return row?.version ?? null;
+}
+
 export async function publishState(id: string, state: LiveStageState) {
   await sql`
     UPDATE live_streams SET state_json = ${JSON.stringify(state)}, state_at = now(),
@@ -345,6 +367,9 @@ export type LiveEvent = {
 
 export type FeedStream = {
   status: LiveStatus;
+  mode: LiveMode;
+  /** Studio sessions: bumped whenever the host's mix changes. */
+  mixVersion: number;
   title: string;
   remixId: string | null;
   state: LiveStageState;
@@ -370,13 +395,17 @@ export type Feed = {
   events: LiveEvent[];
   /** Messages the host has hidden lately, so listeners drop them. */
   hidden: number[];
-  /** Only for the host. */
+  /** Who's watching: always for the host, with heartbeats for listeners (the party's crowd). */
   audience?: Audience;
+  /** Studio sessions: the host's mix, when it changed since the tab's `mixVersion` (null: nothing yet). */
+  mix?: unknown;
   you: { banned: boolean };
 };
 
 type StreamRow = {
   id: string;
+  mode: LiveMode;
+  mix_version: number;
   host_id: string;
   status: LiveStatus;
   title: string;
@@ -401,6 +430,7 @@ function parseState(raw: string): LiveStageState {
       position: typeof value.position === "number" && value.position >= 0 ? value.position : 0,
       lanes: Array.isArray(value.lanes) ? value.lanes : [],
       ...(typeof value.note === "string" && value.note ? { note: value.note } : {}),
+      ...(Array.isArray(value.selected) ? { selected: value.selected.filter((v) => typeof v === "string").slice(0, 32) } : {}),
     };
   } catch {
     return { ...IDLE_STATE };
@@ -421,11 +451,19 @@ const eventColumns = (sessionId = "") => sql`
  */
 export async function readFeed(
   streamId: string,
-  opts: { after: number; sessionId: string; userId: string | null; modVersion: number; heartbeat: boolean }
+  opts: {
+    after: number;
+    sessionId: string;
+    userId: string | null;
+    modVersion: number;
+    heartbeat: boolean;
+    /** The mix version the tab has; a different one gets the mix with the feed. */
+    mixVersion?: number;
+  }
 ): Promise<Feed | null> {
   await ensureLiveSchema();
   const [row] = await sql<StreamRow[]>`
-    SELECT s.id, s.host_id, s.status, s.title, s.remix_id, s.state_json,
+    SELECT s.id, s.mode, s.mix_version, s.host_id, s.status, s.title, s.remix_id, s.state_json,
            (extract(epoch FROM s.state_at) * 1000)::float8 AS state_at, s.state_version, s.mod_version,
            s.chat_mode, s.slow_mode, s.pinned_event_id::float8 AS pinned_event_id, s.peak_viewers,
            (s.status = 'live' AND s.host_seen_at < now() - make_interval(secs => ${HOST_AWAY_SECONDS})) AS away,
@@ -498,8 +536,21 @@ export async function readFeed(
     pinned = p ?? null;
   }
 
+  // A studio session's mix only travels when it has changed since the tab's copy.
+  let mix: unknown = undefined;
+  if (row.mode === "studio" && opts.mixVersion !== undefined && opts.mixVersion !== row.mix_version) {
+    const [m] = await sql<{ mix_json: string }[]>`SELECT mix_json FROM live_streams WHERE id = ${streamId}`;
+    try {
+      mix = m?.mix_json ? JSON.parse(m.mix_json) : null;
+    } catch {
+      mix = null;
+    }
+  }
+
+  // Who's here: the host's audience list, and the crowd on everyone's dance
+  // floor (sent with a listener's heartbeat, every few polls).
   let audience: Audience | undefined;
-  if (isHost) {
+  if (isHost || (live && opts.heartbeat)) {
     const [members, guests] = await Promise.all([
       sql<{ id: string; name: string; color: string }[]>`
         SELECT DISTINCT ON (u.id) u.id, u.artist_name AS name, u.avatar_color AS color
@@ -520,6 +571,8 @@ export async function readFeed(
     now: row.now,
     stream: {
       status: row.status,
+      mode: row.mode,
+      mixVersion: row.mix_version,
       title: row.title,
       remixId: row.remix_id,
       state: parseState(row.state_json),
@@ -538,6 +591,7 @@ export async function readFeed(
     hidden: hiddenRows.map((h) => h.id),
     audience,
     you: { banned: bans.length > 0 },
+    mix,
   };
 }
 

@@ -109,6 +109,9 @@ export default function RemixComments({
           <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={post}
+              // Keeps the keyboard up, so the tab bar doesn't jump back under the tap (see LiveChat).
+              onPointerDown={(e) => e.preventDefault()}
+              onMouseDown={(e) => e.preventDefault()}
               disabled={busy || !draft.trim()}
               className="rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-strong disabled:opacity-50 pointer-coarse:px-4 pointer-coarse:py-2.5 pointer-coarse:text-sm"
             >

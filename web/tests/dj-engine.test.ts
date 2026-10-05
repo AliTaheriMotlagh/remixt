@@ -23,6 +23,9 @@ class FakeParam {
   setTargetAtTime(v: number) {
     this.value = v;
   }
+  exponentialRampToValueAtTime(v: number) {
+    this.value = v;
+  }
   cancelScheduledValues() {}
 }
 
@@ -297,5 +300,144 @@ describe("cleanup", () => {
     engine.dispose();
     const sources = ctx.created.filter((n) => n.startedWith);
     assert.ok(sources.length > 0 && sources.every((n) => n.stopped));
+  });
+});
+
+/** A library-style track: two stems (vocal + beat) and a grid that starts 0.4 s in. */
+function twoStemTrack(): LoadedTrack {
+  const info = { ...djTrackInfo("warehouse-lights")!, id: "lib:t", firstBeat: 0.4, source: "library" as const, layout: "two" as const };
+  const buf = { duration: info.duration } as unknown as AudioBuffer;
+  return { info, stems: { vocal: buf, beat: buf }, peaks: {}, overview: new Float32Array(1) };
+}
+
+describe("player features", () => {
+  test("hot cues: set snaps to the beat with quantize; a jump keeps the phase", () => {
+    const { engine, ctx } = setup();
+    const t = track("warehouse-lights");
+    const beat = 60 / t.info.bpm;
+    engine.loadTrack("A", t);
+    engine.setQuantize("A", true);
+    engine.seek("A", 8 * beat + 0.03);
+    engine.hotCueDown("A", 0);
+    assert.ok(Math.abs(engine.deckState("A").hotCues[0]! - 8 * beat) < 1e-9);
+    engine.seek("A", 20 * beat + 0.25 * beat);
+    engine.play("A");
+    ctx.currentTime += 0.01;
+    engine.hotCueDown("A", 0);
+    engine.hotCueUp("A", 0);
+    const pos = engine.deckPosition("A");
+    assert.ok(Math.abs(pos - (8 * beat + 0.25 * beat) - 0.004) < 0.01, `pos ${pos}`);
+    engine.clearHotCue("A", 0);
+    assert.equal(engine.deckState("A").hotCues[0], null);
+    engine.dispose();
+  });
+
+  test("slip mode: leaving a loop rejoins where the track would be", () => {
+    const { engine, ctx } = setup();
+    const t = track("warehouse-lights");
+    engine.loadTrack("A", t);
+    engine.setSlip("A", true);
+    engine.seek("A", 30);
+    engine.play("A");
+    ctx.currentTime += 0.01;
+    engine.loopBeats("A", 1);
+    ctx.currentTime += 5;
+    assert.ok(engine.deckState("A").slipPosition! > 34.9);
+    engine.loopExit("A");
+    ctx.currentTime += 0.004;
+    assert.ok(Math.abs(engine.deckPosition("A") - 35) < 0.02, `pos ${engine.deckPosition("A")}`);
+    engine.dispose();
+  });
+
+  test("loop ½× and 2×", () => {
+    const { engine, ctx } = setup();
+    engine.loadTrack("A", track("warehouse-lights"));
+    engine.seek("A", 20);
+    engine.play("A");
+    ctx.currentTime += 0.01;
+    engine.loopBeats("A", 4);
+    engine.resizeLoop("A", 0.5);
+    assert.equal(engine.deckState("A").loop.beats, 2);
+    engine.resizeLoop("A", 2);
+    engine.resizeLoop("A", 2);
+    assert.equal(engine.deckState("A").loop.beats, 8);
+    engine.dispose();
+  });
+
+  test("scratching moves the record with the hand and carries on playing after", () => {
+    const { engine, ctx } = setup();
+    engine.loadTrack("A", track("warehouse-lights"));
+    engine.seek("A", 10);
+    engine.play("A");
+    ctx.currentTime += 0.01 + 1;
+    engine.scratchStart("A");
+    assert.equal(engine.deckState("A").scratching, true);
+    engine.scratchMove("A", 0.5);
+    engine.scratchMove("A", -0.2);
+    engine.scratchMove("A", 0.3);
+    assert.ok(Math.abs(engine.deckPosition("A") - 11.6) < 1e-6);
+    assert.equal(engine.snapshot().fx.scratchTurn, 2);
+    engine.scratchEnd("A");
+    assert.equal(engine.deckState("A").playing, true);
+    ctx.currentTime += 1;
+    assert.ok(Math.abs(engine.deckPosition("A") - 12.6) < 0.02);
+    engine.dispose();
+  });
+
+  test("key lock needs the JS voice: without one it stays off", () => {
+    const { engine } = setup();
+    engine.loadTrack("A", track("warehouse-lights"));
+    engine.setKeyLock("A", true);
+    assert.equal(engine.deckState("A").keyLock, false);
+    engine.dispose();
+  });
+
+  test("a two-stem track plays its two stems; BEAT kills drums, bass and melody together", () => {
+    const { engine, ctx } = setup();
+    engine.loadTrack("A", twoStemTrack());
+    assert.ok(Math.abs(engine.deckState("A").cue - 0.4) < 1e-9, "auto cue on the first beat");
+    const before = ctx.created.filter((n) => n.startedWith).length;
+    engine.play("A");
+    assert.equal(ctx.created.filter((n) => n.startedWith).length - before, 2);
+    engine.setBeatKill("A", true);
+    const s = engine.deckState("A").stems;
+    assert.ok(s.drums && s.bass && s.chords && !s.vocal);
+    engine.dispose();
+  });
+
+  test("mission setups land on bar lines of an offset grid, with the phase as set", async () => {
+    const { engine, ctx } = setup();
+    const phase = MISSIONS.find((m) => m.id === "phase")!;
+    // Same song on both decks, so B's tempo stays as A's.
+    const setupSame = { ...phase.setup, decks: { A: phase.setup.decks.A, B: { ...phase.setup.decks.B!, tempoPct: 0 } } };
+    await engine.applySetup(setupSame, async () => twoStemTrack());
+    assert.ok(Math.abs(engine.deckState("A").position - (0.4 + 8 * (240 / 124))) < 1e-6, "starts on bar 8 of the grid");
+    ctx.currentTime += 0.5;
+    const d = derive(engine.snapshot());
+    assert.ok(Math.abs(d.phaseMs - phase.setup.phaseOffsetMs!) < 1.5, `phase ${d.phaseMs}`);
+    engine.dispose();
+  });
+
+  test("talkover and sampler show up in the snapshot", () => {
+    const { engine } = setup();
+    engine.setTalkover(true);
+    assert.equal(engine.snapshot().mix.talkover, true);
+    engine.setTalkover(false);
+    engine.sample("laser");
+    assert.equal(engine.snapshot().fx["sample:laser"], 1);
+    engine.dispose();
+  });
+
+  test("turntable motor start spins up, then runs at speed", () => {
+    const { engine, ctx } = setup();
+    engine.loadTrack("A", track("warehouse-lights"));
+    engine.seek("A", 10);
+    engine.play("A", ctx.currentTime, 0.5);
+    ctx.currentTime += 0.25;
+    const mid = engine.deckPosition("A");
+    assert.ok(Math.abs(mid - (10 + 0.25 * 0.25 / (2 * 0.5))) < 1e-9, `mid ${mid}`);
+    ctx.currentTime += 0.75;
+    assert.ok(Math.abs(engine.deckPosition("A") - (10 + 0.25 + 0.5)) < 1e-9);
+    engine.dispose();
   });
 });

@@ -7,7 +7,7 @@ import { pageMetadata } from "@/lib/seo";
 
 export const metadata = pageMetadata({
   title: "Go live",
-  description: "Perform a remix live for anyone to watch, chat and react.",
+  description: "Make or perform a remix live for anyone to watch, chat and react.",
   path: "/live/new",
   noindex: true,
 });
@@ -28,7 +28,8 @@ export default async function NewLivePage() {
       </Link>
       <h1 className="mt-2 text-3xl font-bold">Go live</h1>
       <p className="mt-2 text-muted">
-        Perform a remix for anyone to watch. Listeners hear the same stems you play — in step with you — and chat and react while you do.
+        Make a remix in the Studio while the room watches, or perform one you&apos;ve published. Everyone hears what you play, in step
+        with you, dances on the 3D floor, and chats and reacts while you do — guests too.
       </p>
       <div className="mt-8">
         <GoLiveForm remixes={remixes} defaultTitle={`${user.artist_name}'s live set`} />

@@ -1,10 +1,18 @@
-// What matching a vocal to a beat means, worked out for two demo songs with
-// the same helpers the Studio uses (musicKey.ts): the tempo ratio, who keeps
-// their tempo, and the key shift. Pure, so the Examples lab and the tests
-// share it.
+// What matching a vocal to a beat means, worked out for two songs (demo
+// songs, or analysed library songs) with the same helpers the Studio uses
+// (musicKey.ts): the tempo ratio, who keeps their tempo, and the key shift.
+// Pure, so the Examples lab and the tests share it.
 
 import { bestKeyShift, camelotCode, keyFit, keyLabel, transposeKey, type KeyFit, type MusicalKey } from "./musicKey";
 import type { DemoSongMeta } from "./demoSongDefs";
+
+/** What matching needs to know about a song (a demo song's metadata fits, and so does an analysed library song). */
+export type PairSong = Pick<DemoSongMeta, "title" | "bpm" | "key" | "camelot">;
+/** Plus where the loop starts, in the song's bars, and which bars are sung — for the bar grid. */
+export type GridSong = PairSong & Pick<DemoSongMeta, "chorusBar" | "vocalBars">;
+
+/** Tempo for text: whole numbers as is, a measured 121.53 as 121.5. */
+const bpmText = (bpm: number) => (Math.abs(bpm - Math.round(bpm)) < 0.05 ? String(Math.round(bpm)) : bpm.toFixed(1));
 
 export type TempoMode = "beat" | "vocal" | "middle";
 export type PairSettings = {
@@ -68,7 +76,7 @@ export type PairAnalysis = {
 
 const signed = (n: number) => (n > 0 ? `+${n}` : String(n));
 
-export function analyzePair(vocal: DemoSongMeta, beat: DemoSongMeta, settings: PairSettings): PairAnalysis {
+export function analyzePair(vocal: PairSong, beat: PairSong, settings: PairSettings): PairAnalysis {
   const reading = nearestReading(vocal.bpm, beat.bpm);
   const readingNote = reading === vocal.bpm ? "as written" : reading > vocal.bpm ? "double-time" : "half-time";
   const targetBpm =
@@ -153,15 +161,15 @@ function judgeTempo(
   stretchPct: number,
   readingNote: PairAnalysis["readingNote"],
   mode: TempoMode,
-  vocal: DemoSongMeta,
-  beat: DemoSongMeta,
+  vocal: PairSong,
+  beat: PairSong,
   target: number
 ): PairAnalysis["tempoVerdict"] {
   const where = `${Math.round(target * 10) / 10} BPM`;
   const half =
     readingNote === "as written"
       ? ""
-      : ` The vocal's ${vocal.bpm} BPM is read as ${readingNote === "double-time" ? "double" : "half"} time, so it rides the beat as a ${readingNote === "double-time" ? "slow, spacious" : "busy, double-speed"} line.`;
+      : ` The vocal's ${bpmText(vocal.bpm)} BPM is read as ${readingNote === "double-time" ? "double" : "half"} time, so it rides the beat as a ${readingNote === "double-time" ? "slow, spacious" : "busy, double-speed"} line.`;
   if (stretchPct < 0.5)
     return { level: "perfect", title: `Perfect: both already at ${where}`, detail: `No stretching needed.${half}` };
   if (stretchPct <= 4)
@@ -182,8 +190,8 @@ function judgeTempo(
 }
 
 function judgeKey(o: {
-  vocal: DemoSongMeta;
-  beat: DemoSongMeta;
+  vocal: PairSong;
+  beat: PairSong;
   semitones: number;
   rawKeyFit: KeyFit;
   shiftedFit: KeyFit;
@@ -241,7 +249,7 @@ export type GridRect = { x: number; w: number; sung: boolean };
  * the target grid, so they line up. Raw: each at its own tempo, so the
  * vocal's bars slide away from the beat's.
  */
-export function gridRects(vocal: DemoSongMeta, beat: DemoSongMeta, a: PairAnalysis, matched: boolean): { bars: number; rects: GridRect[] } {
+export function gridRects(vocal: GridSong, beat: PairSong, a: PairAnalysis, matched: boolean): { bars: number; rects: GridRect[] } {
   const rects: GridRect[] = [];
   const bars = a.loopBars;
   const startV = vocal.chorusBar;
@@ -261,7 +269,7 @@ export function gridRects(vocal: DemoSongMeta, beat: DemoSongMeta, a: PairAnalys
 }
 
 /** How far a bar line of the vocal slides from the beat's each bar, in ms (raw playback). */
-export function driftPerBarMs(vocal: DemoSongMeta, beat: DemoSongMeta, a: PairAnalysis) {
+export function driftPerBarMs(vocal: PairSong, beat: PairSong, a: PairAnalysis) {
   const barV = (240 / vocal.bpm) * a.vocalFactor;
   const barB = 240 / beat.bpm;
   return Math.abs(barV - barB) * 1000;

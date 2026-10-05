@@ -89,14 +89,19 @@ export function alignShiftSeconds(deck: DeckState, other: DeckState, deckId: Dec
   return (realMs / 1000) * deck.rate;
 }
 
-/** The pitch change a tempo fader causes, in semitones (vinyl-style playback: no key lock). */
+/** The pitch change a tempo fader causes, in semitones (vinyl-style playback, without key lock). */
 export function pitchShiftSemitones(rate: number) {
   return 12 * Math.log2(rate);
 }
 
+/** The pitch change a deck is actually making: none with key lock (master tempo) on. */
+export function deckPitchShift(deck: Pick<DeckState, "rate" | "keyLock">) {
+  return deck.keyLock ? 0 : pitchShiftSemitones(deck.rate);
+}
+
 export function effectiveKey(deck: DeckState): { key: MusicalKey; cents: number } | null {
   if (!deck.track) return null;
-  const s = pitchShiftSemitones(deck.rate);
+  const s = deckPitchShift(deck);
   // A shift under three-quarters of a semitone is a detune, not a new key.
   const whole = Math.sign(s) * Math.floor(Math.abs(s) + 0.25);
   return { key: transposeKey(deck.track.key, whole), cents: Math.round((s - whole) * 100) };

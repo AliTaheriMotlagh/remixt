@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import HostConsole from "@/components/live/HostConsole";
 import LiveRoom from "@/components/live/LiveRoom";
 import { getCurrentUser } from "@/lib/auth";
@@ -30,7 +30,10 @@ export default async function LiveSessionPage({ params }: { params: Promise<{ id
   if (!stream) notFound();
   const cover = stream.remix_id ? coverUrl(stream.remix_id, stream.remix_cover_key) : null;
 
-  if (user?.id === stream.host_id) {
+  // A studio session is run from the Studio itself.
+  if (user?.id === stream.host_id && stream.mode === "studio" && stream.status !== "ended") redirect(`/studio?live=${id}`);
+
+  if (user?.id === stream.host_id && stream.mode === "perform") {
     const remixes = await performableRemixes(user.id);
     return <HostConsole stream={stream} remixes={remixes} cover={cover} />;
   }

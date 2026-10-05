@@ -308,6 +308,10 @@ export default function LiveChat({
             />
             <button
               type="submit"
+              // Keeps the keyboard up: on phones, losing focus brings the tab
+              // bar back, the page jumps, and the tap misses the button.
+              onPointerDown={(e) => e.preventDefault()}
+              onMouseDown={(e) => e.preventDefault()}
               disabled={busy || !draft.trim() || cooldown > 0}
               className="flex shrink-0 items-center gap-1.5 rounded-lg bg-brand px-3 text-sm font-semibold text-white hover:bg-brand-strong disabled:opacity-50"
               aria-label="Send message"

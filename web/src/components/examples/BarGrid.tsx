@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { gridRects, type PairAnalysis } from "@/lib/client/examplesMatch";
-import type { DemoSongMeta } from "@/lib/client/demoSongs";
+import { gridRects, type GridSong, type PairAnalysis, type PairSong } from "@/lib/client/examplesMatch";
 
 /**
  * The vocal's bars against the beat's bar lines. Matched, they sit exactly
@@ -15,8 +14,8 @@ export default function BarGrid({
   matched,
   fraction,
 }: {
-  vocal: DemoSongMeta;
-  beat: DemoSongMeta;
+  vocal: GridSong;
+  beat: PairSong;
   analysis: PairAnalysis;
   matched: boolean;
   fraction: (() => number) | null;

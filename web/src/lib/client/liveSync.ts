@@ -20,7 +20,7 @@ const CHAT_KEEP = 300;
 /** Listeners report in as viewers every this many polls. */
 const HEARTBEAT_EVERY = 4;
 
-export type LiveReactionBurst = { id: number; emoji: string; count: number };
+export type LiveReactionBurst = { id: number; emoji: string; count: number; userId: string | null };
 
 export type LiveFeedState = {
   stream: FeedStream | null;
@@ -54,7 +54,17 @@ export function useLiveConnection(
     isHost,
     initialChat = [],
     onReactions,
-  }: { isHost: boolean; initialChat?: LiveEvent[]; onReactions?: (bursts: LiveReactionBurst[]) => void }
+    onMix,
+    onChat,
+  }: {
+    isHost: boolean;
+    initialChat?: LiveEvent[];
+    onReactions?: (bursts: LiveReactionBurst[]) => void;
+    /** Studio sessions: called with the host's mix whenever it changes (null before there is one). */
+    onMix?: (mix: unknown) => void;
+    /** New chat messages as they arrive (not the history a tab opens with). */
+    onChat?: (events: LiveEvent[]) => void;
+  }
 ): LiveConnection {
   const [state, setState] = useState<LiveFeedState>({
     stream: null,
@@ -71,11 +81,16 @@ export function useLiveConnection(
   const bestRtt = useRef(Infinity);
   const wake = useRef<(() => void) | null>(null);
   const reactionsRef = useRef(onReactions);
+  const mixRef = useRef(onMix);
+  const chatRef = useRef(onChat);
+  const mixVersion = useRef(-1);
   const pending = useRef<Record<string, number>>({});
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     reactionsRef.current = onReactions;
+    mixRef.current = onMix;
+    chatRef.current = onChat;
   });
 
   useEffect(() => {
@@ -96,6 +111,7 @@ export function useLiveConnection(
           mv: String(modVersion.current),
           hb: heartbeat ? "1" : "0",
         });
+        if (mixRef.current) params.set("xv", String(mixVersion.current));
         const res = await fetch(`/api/live/${streamId}/feed?${params}`, { cache: "no-store" });
         if (res.status === 404) {
           if (!cancelled) setState((s) => ({ ...s, missing: true }));
@@ -114,15 +130,22 @@ export function useLiveConnection(
           bestRtt.current = Math.min(bestRtt.current * 1.2 + 5, rtt);
         }
 
+        // The first answer is the history; only later ones are "just said".
+        const opening = after.current === 0;
         const chatEvents: LiveEvent[] = [];
         const bursts: LiveReactionBurst[] = [];
         for (const event of feed.events) {
           after.current = Math.max(after.current, event.id);
           if (event.kind === "reaction") {
-            if (!event.mine) bursts.push({ id: event.id, emoji: event.body, count: event.count });
+            if (!event.mine) bursts.push({ id: event.id, emoji: event.body, count: event.count, userId: event.user_id });
           } else chatEvents.push(event);
         }
         if (bursts.length) reactionsRef.current?.(bursts);
+        if (!opening && chatEvents.length) chatRef.current?.(chatEvents);
+        if (feed.mix !== undefined && mixRef.current) {
+          mixVersion.current = feed.stream.mixVersion;
+          mixRef.current(feed.mix);
+        }
 
         const hiddenSet = new Set(feed.hidden);
         const refreshHidden = feed.hidden.length > 0 || feed.stream.modVersion !== modVersion.current;
@@ -248,6 +271,7 @@ export function useLiveFollower({
   tuned,
   muted,
   volume,
+  studioReady,
 }: {
   remixId: string | null;
   stream: FeedStream | null;
@@ -255,8 +279,16 @@ export function useLiveFollower({
   tuned: boolean;
   muted: boolean;
   volume: number;
+  /**
+   * Studio sessions: there's no remix to load — the host's mix is put into
+   * the Studio's store as it arrives (liveStudio.ts) — and this says
+   * whether one has arrived yet. Leave undefined to follow a remix.
+   */
+  studioReady?: boolean;
 }) {
-  const [status, setStatus] = useState<FollowStatus>("idle");
+  const [loadStatus, setStatus] = useState<FollowStatus>("idle");
+  const studio = studioReady !== undefined;
+  const status: FollowStatus = studio ? (studioReady ? "ready" : "loading") : loadStatus;
   const [blocked, setBlocked] = useState(false);
   const [drift, setDrift] = useState(0);
   const loadedRemix = useRef<string | null>(null);
@@ -267,6 +299,7 @@ export function useLiveFollower({
 
   // Load (or swap) the remix the host is performing.
   useEffect(() => {
+    if (studio) return;
     if (!remixId) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- nothing to load is a plain state
       setStatus("idle");
@@ -296,7 +329,7 @@ export function useLiveFollower({
     return () => {
       cancelled = true;
     };
-  }, [remixId]);
+  }, [remixId, studio]);
 
   useEffect(
     () => () => {
@@ -311,13 +344,20 @@ export function useLiveFollower({
   useEffect(() => {
     if (status !== "ready" || !stream) return;
     const { lanes, setMasterVolume } = useStudioStore.getState();
+    setMasterVolume?.(muted ? 0 : volume);
+    // In a studio session the mix itself carries every lane's state; the
+    // stage state adds which lanes the host has selected.
+    if (studio) {
+      const ids = new Set(lanes.map((l) => l.laneId));
+      useStudioStore.setState({ selectedLaneIds: (stream.state.selected ?? []).filter((id) => ids.has(id)) });
+      return;
+    }
     const theirs = stream.state.lanes;
     useStudioStore.setState({
       lanes: lanes.map((lane, i) =>
         theirs[i] ? { ...lane, muted: theirs[i].muted, solo: theirs[i].solo, volume: theirs[i].volume } : lane
       ),
     });
-    setMasterVolume?.(muted ? 0 : volume);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, version, muted, volume]);
 
@@ -336,7 +376,11 @@ export function useLiveFollower({
       busy = true;
       try {
         const store = useStudioStore.getState();
-        const target = hostPosition(stream.state, stream.stateAt, serverNow());
+        let target = hostPosition(stream.state, stream.stateAt, serverNow());
+        // A host looping a section goes round it, not on past its end.
+        if (store.loopEnabled && store.loopEnd - store.loopStart > 0.05 && target > store.loopEnd) {
+          target = store.loopStart + ((target - store.loopStart) % (store.loopEnd - store.loopStart));
+        }
         const length = store.duration || Infinity;
         if (!stream.state.playing || stream.status !== "live" || target >= length) {
           if (store.isPlaying) audioEngine.pause();

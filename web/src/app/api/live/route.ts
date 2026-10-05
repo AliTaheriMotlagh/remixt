@@ -18,6 +18,8 @@ export async function GET() {
 }
 
 const createSchema = z.object({
+  /** "studio": make a remix live in the Studio; "perform": play a published one. */
+  mode: z.enum(["perform", "studio"]).default("perform"),
   title: z.string().trim().min(2).max(TITLE_MAX),
   description: z.string().trim().max(DESCRIPTION_MAX).default(""),
   tags: z.array(z.string().max(40)).max(8).default([]),
@@ -41,6 +43,7 @@ export async function POST(req: NextRequest) {
   if (scheduledAt && (scheduledAt.getTime() < Date.now() - 60_000 || scheduledAt.getTime() > Date.now() + 30 * 86_400_000)) {
     return NextResponse.json({ error: "Pick a time within the next 30 days" }, { status: 400 });
   }
+  if (input.mode === "studio") input.remixId = null;
   if (input.remixId && !(await ownsPublishedRemix(user.id, input.remixId))) {
     return NextResponse.json({ error: "Pick one of your published remixes to perform" }, { status: 400 });
   }

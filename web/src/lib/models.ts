@@ -81,7 +81,8 @@ export async function getLibraryStems(): Promise<StemWithTrack[]> {
   await ensureSchema();
   return sql<StemWithTrack[]>`
     SELECT stems.*, tracks.title as track_title, tracks.tags as track_tags, tracks.duration as track_duration,
-           tracks.bpm as track_bpm, users.artist_name, users.id as artist_id
+           tracks.bpm as track_bpm, users.artist_name, users.id as artist_id,
+           tracks.featured_example AS track_featured, tracks.example_credit AS track_credit
     FROM stems
     JOIN tracks ON tracks.id = stems.track_id
     JOIN users ON users.id = tracks.owner_id

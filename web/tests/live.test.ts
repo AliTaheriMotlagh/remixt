@@ -105,7 +105,7 @@ describe("live sessions", () => {
     assert.equal(f.stream.status, "live");
     assert.equal(f.stream.remixId, remixId);
     assert.equal(f.stream.viewers, 1);
-    assert.equal(f.audience, undefined, "only the host sees the audience");
+    assert.equal(f.audience.guests, 1, "the crowd comes with a heartbeat");
 
     // Guests chat under a name; links are stripped; fast repeats are slowed.
     await ok(await chat(g1, id, "hello  there http://spam.example/x", "Ada"));
@@ -217,6 +217,53 @@ describe("live sessions", () => {
     const dir2 = await ok(await fetch(`${BASE_URL}/api/live`));
     assert.ok(!dir2.live.some((s: { id: string }) => s.id === id));
     assert.equal((await feed(guest("y"), id)).stream.status, "ended");
+  });
+
+  test("a studio session carries the host's whole mix to listeners, only when it changes", async () => {
+    // A perform session has no mix.
+    const perform = await ok(await json(stranger, "POST", "/api/live", { title: "Perform" }));
+    await ok(await json(stranger, "PUT", `/api/live/${perform.id}/mix`, { lanes: [], project: {} }), 409);
+    await ok(await json(stranger, "PATCH", `/api/live/${perform.id}`, { action: "end" }));
+
+    const { id } = await ok(await json(stranger, "POST", "/api/live", { mode: "studio", title: "Making it live", remixId }));
+    const info = await ok(await fetch(`${BASE_URL}/api/live/${id}`));
+    assert.equal(info.stream.mode, "studio");
+    assert.equal(info.stream.remix_id, null, "a studio session doesn't perform a remix");
+
+    const g = guest("watcher");
+    let f = await ok(await g.fetch(`/api/live/${id}/feed?sid=${g.sid}&after=0&mv=-1&hb=1&xv=-1`));
+    assert.equal(f.stream.mode, "studio");
+    assert.equal(f.mix, null, "nothing sent yet");
+
+    const mix = { lanes: [{ laneId: "l1", stemId: "s1", kind: "vocals", trackTitle: "A", muted: false, volume: 1 }], project: { projectBpm: 124 } };
+    await ok(await json(fan, "PUT", `/api/live/${id}/mix`, mix), 403);
+    await ok(await json(stranger, "PUT", `/api/live/${id}/mix`, { lanes: "nope", project: {} }), 400);
+    const big = { lanes: [{ laneId: "x", stemId: "y", peaks: new Array(200_000).fill(0.5) }], project: {} };
+    await ok(await json(stranger, "PUT", `/api/live/${id}/mix`, big), 413);
+    const put = await ok(await json(stranger, "PUT", `/api/live/${id}/mix`, mix));
+
+    f = await ok(await g.fetch(`/api/live/${id}/feed?sid=${g.sid}&after=0&mv=-1&hb=0&xv=${f.stream.mixVersion}`));
+    assert.equal(f.stream.mixVersion, put.version);
+    assert.deepEqual(f.mix, mix);
+    // Already has it: not sent again.
+    f = await ok(await g.fetch(`/api/live/${id}/feed?sid=${g.sid}&after=0&mv=-1&hb=0&xv=${put.version}`));
+    assert.equal(f.mix, undefined);
+    // Tabs that don't ask for the mix never get it.
+    f = await ok(await g.fetch(`/api/live/${id}/feed?sid=${g.sid}&after=0&mv=-1&hb=0`));
+    assert.equal(f.mix, undefined);
+
+    // The selection travels with the stage state.
+    await ok(await json(stranger, "PUT", `/api/live/${id}/state`, { playing: false, position: 3, lanes: [], selected: ["l1"] }));
+    f = await feed(g, id);
+    assert.deepEqual(f.stream.state.selected, ["l1"]);
+
+    // The host's own page sends them to the Studio.
+    const page = await stranger.fetch(`/live/${id}`, { redirect: "manual" });
+    assert.equal(page.status, 307);
+    assert.match(page.headers.get("location") ?? "", /\/studio\?live=/);
+
+    await ok(await json(stranger, "PATCH", `/api/live/${id}`, { action: "end" }));
+    await ok(await json(stranger, "PUT", `/api/live/${id}/mix`, mix), 409);
   });
 
   test("anyone can read the directory and pages render", async () => {

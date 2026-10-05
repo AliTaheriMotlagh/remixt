@@ -18,7 +18,7 @@ type WaveformProps = {
  * `fillStyle` and the bars silently fall back to black. Resolve the
  * variable against the element first, then re-apply the alpha.
  */
-function resolveColor(color: string, el: Element): string {
+export function resolveColor(color: string, el: Element): string {
   const match = color.match(/^var\((--[\w-]+)\)([0-9a-f]{2})?$/i);
   if (!match) return color;
   const value = getComputedStyle(el).getPropertyValue(match[1]).trim();
