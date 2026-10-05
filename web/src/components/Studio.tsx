@@ -249,7 +249,7 @@ export default function Studio({ user }: { user: User | null }) {
   return (
     // With the AI producer docked on the right, the Studio makes room for it.
     <div
-      className={`touch-targets mx-auto w-full max-w-[110rem] px-3 py-4 max-lg:pb-24 sm:px-5 sm:py-5 ${
+      className={`touch-targets mx-auto w-full max-w-[110rem] px-3 py-4 max-lg:pb-[calc(6rem+var(--ai-sheet-h,0px))] sm:px-5 sm:py-5 ${
         aiOpen ? "lg:max-w-none lg:pr-[28.25rem]" : ""
       }`}
     >
@@ -394,7 +394,7 @@ export default function Studio({ user }: { user: User | null }) {
         </aside>
       </div>
 
-      {!libraryOpen && (
+      {!libraryOpen && !aiOpen && (
         <button
           onClick={() => setLibraryOpen(true)}
           className="bottom-float fixed right-4 z-40 flex h-12 items-center gap-2 rounded-full bg-brand px-5 text-sm font-semibold text-white shadow-lg shadow-brand/30 hover:bg-brand-strong lg:hidden"

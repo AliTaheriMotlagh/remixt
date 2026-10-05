@@ -322,6 +322,9 @@ function keepWhatsPlaying() {
   if (useAiTrial.getState().trial) keepTrial();
 }
 
+type Sheet = "mini" | "half" | "full";
+const SHEETS: Sheet[] = ["mini", "half", "full"];
+
 export default function AiProducer() {
   const open = useStudioView((s) => s.aiOpen);
   const setOpen = useStudioView((s) => s.setAiOpen);
@@ -348,6 +351,27 @@ export default function AiProducer() {
     setSyncId(loadSync());
   }, []);
   const [tab, setTab] = useState<Tab>("sync");
+  /** Below desktop width it's a sheet: mini (just the controls), half (the mix stays in view) or full. */
+  const [sheet, setSheet] = useState<Sheet>("half");
+  const sheetRef = useRef<HTMLElement>(null);
+  const drag = useRef<{ y: number; at: Sheet; moved: boolean } | null>(null);
+  // The Studio pads its bottom by the sheet's height, so every lane stays reachable behind it.
+  useEffect(() => {
+    const el = sheetRef.current;
+    if (!open || !el) return;
+    const root = document.documentElement;
+    const phone = window.matchMedia("(max-width: 63.99rem)");
+    const publish = () => root.style.setProperty("--ai-sheet-h", phone.matches ? `${el.offsetHeight}px` : "0px");
+    const observer = new ResizeObserver(publish);
+    observer.observe(el);
+    phone.addEventListener("change", publish);
+    publish();
+    return () => {
+      observer.disconnect();
+      phone.removeEventListener("change", publish);
+      root.style.removeProperty("--ai-sheet-h");
+    };
+  }, [open]);
   /** "X takes the place of Y" — shown in the bottom bar for a few seconds. */
   const [swapNote, setSwapNote] = useState<string | null>(null);
   useEffect(() => {
@@ -596,6 +620,29 @@ export default function AiProducer() {
 
   if (!open) return null;
 
+  // The grab bar: drag up or down to snap between sizes, tap to step through them.
+  const onGrabDown = (e: React.PointerEvent) => {
+    drag.current = { y: e.clientY, at: sheet, moved: false };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onGrabMove = (e: React.PointerEvent) => {
+    const d = drag.current;
+    if (!d) return;
+    const dy = e.clientY - d.y;
+    if (Math.abs(dy) < 40) return;
+    const at = SHEETS.indexOf(d.at);
+    const next = SHEETS[Math.max(0, Math.min(SHEETS.length - 1, at + (dy < 0 ? 1 : -1)))];
+    d.moved = true;
+    d.y = e.clientY;
+    d.at = next;
+    setSheet(next);
+  };
+  const onGrabUp = () => {
+    const d = drag.current;
+    drag.current = null;
+    if (d && !d.moved) setSheet((s) => (s === "full" ? "mini" : SHEETS[SHEETS.indexOf(s) + 1]));
+  };
+
   const auto = byId("auto-good");
   const styles = ideas.filter((i) => i.kind === "full");
   const syncs = ideas.filter((i) => i.kind === "sync");
@@ -630,26 +677,48 @@ export default function AiProducer() {
 
   return (
     <>
-      <div className="fixed inset-0 z-[55] bg-black/40 lg:hidden" onClick={close} />
+      {/* Only the full sheet covers the mix; at half or mini the lanes stay playable behind it. */}
+      {sheet === "full" && <div className="fixed inset-0 z-[55] bg-black/40 lg:hidden" onClick={() => setSheet("half")} />}
       <aside
+        ref={sheetRef}
         aria-label="AI producer"
-        className="touch-targets fixed z-[56] flex flex-col border-border bg-background shadow-2xl max-lg:inset-x-0 max-lg:bottom-0 max-lg:mx-auto max-lg:max-h-[90dvh] max-lg:max-w-2xl max-lg:rounded-t-2xl max-lg:border max-lg:border-b-0 lg:top-[var(--header-h)] lg:right-0 lg:bottom-0 lg:w-[27rem] lg:border-l"
+        data-sheet={sheet}
+        className={`touch-targets fixed z-[56] flex flex-col border-border bg-background shadow-2xl transition-[height] duration-200 max-lg:inset-x-0 max-lg:bottom-0 max-lg:mx-auto max-lg:max-w-2xl max-lg:rounded-t-2xl max-lg:border max-lg:border-b-0 max-lg:pb-[env(safe-area-inset-bottom)] lg:top-[var(--header-h)] lg:right-0 lg:bottom-0 lg:w-[27rem] lg:border-l ${
+          sheet === "full" ? "max-lg:h-[92dvh]" : sheet === "half" ? "max-lg:h-[52dvh] landscape:max-lg:h-[70dvh]" : "max-lg:h-auto"
+        }`}
         style={{ animation: "sheet-in 0.2s ease-out" }}
       >
-        <div className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-border lg:hidden" aria-hidden />
+        <button
+          type="button"
+          onPointerDown={onGrabDown}
+          onPointerMove={onGrabMove}
+          onPointerUp={onGrabUp}
+          onPointerCancel={() => (drag.current = null)}
+          className="flex h-6 w-full shrink-0 touch-none cursor-grab items-center justify-center lg:hidden"
+          aria-label={`Resize panel (now ${sheet})`}
+        >
+          <span className="h-1 w-10 rounded-full bg-border" aria-hidden />
+        </button>
         <header className="flex shrink-0 items-center gap-2.5 px-4 pt-2.5 pb-2">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand to-vocals text-lg">✨</span>
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-bold">AI producer</h2>
             <p className="truncate text-[11px] text-muted">Tap to hear it · options stack · nothing&apos;s final until you keep it</p>
           </div>
+          <button
+            onClick={() => setSheet((s) => (s === "mini" ? "half" : "mini"))}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-surface hover:text-foreground lg:hidden"
+            aria-label={sheet === "mini" ? "Show ideas" : "Shrink to just the controls"}
+          >
+            {sheet === "mini" ? "▴" : "▾"}
+          </button>
           <button onClick={close} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-surface hover:text-foreground" aria-label="Close (keeps what's playing)">
             ✕
           </button>
         </header>
 
         {ready && (
-          <nav className="flex shrink-0 gap-1 border-b border-border px-3 pb-2" aria-label="AI producer sections">
+          <nav className={`flex shrink-0 gap-1 overflow-x-auto border-b ${sheet === "mini" ? "max-lg:hidden" : ""} border-border px-3 pb-2`} aria-label="AI producer sections">
             {TABS.map((t) => {
               const count = onIn(t.id);
               return (
@@ -674,7 +743,7 @@ export default function AiProducer() {
           </nav>
         )}
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3">
+        <div className={`min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 ${sheet === "mini" ? "max-lg:hidden" : ""}`}>
           {lanes.length === 0 || missing ? (
             <div className="flex flex-col gap-3 py-2 text-sm">
               <p className="text-base font-bold">Let&apos;s make a remix</p>
