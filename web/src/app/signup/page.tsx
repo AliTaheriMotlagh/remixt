@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import RemixtMark from "@/components/RemixtMark";
 
 export default function SignupPage() {
@@ -12,6 +12,11 @@ export default function SignupPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [invited, setInvited] = useState(false);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the URL is only readable after mount here
+    setInvited(new URLSearchParams(window.location.search).has("invited"));
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -41,6 +46,9 @@ export default function SignupPage() {
         <Link href="/" aria-label="Remixt home" className="mb-6 inline-block">
           <RemixtMark className="h-12 w-12" />
         </Link>
+        {invited && (
+          <p className="mb-4 rounded-xl border border-brand/40 bg-brand/10 px-3 py-2 text-sm">🎉 A friend invited you — make your first remix together.</p>
+        )}
         <h1 className="text-2xl font-bold">Become an artist</h1>
         <p className="mt-1 text-sm text-muted">
           Create an account to upload songs and publish remixes.

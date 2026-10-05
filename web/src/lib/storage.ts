@@ -105,6 +105,8 @@ const CONTENT_TYPES: Record<string, string> = {
   ".webm": "audio/webm",
   ".opus": "audio/ogg",
   ".mp4": "audio/mp4",
+  ".jpg": "image/jpeg",
+  ".png": "image/png",
 };
 
 export function contentTypeFor(key: string): string {

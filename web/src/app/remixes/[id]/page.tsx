@@ -8,9 +8,10 @@ import RemixStatsBar from "@/components/RemixStatsBar";
 import RemixComments from "@/components/RemixComments";
 import ReportButton from "@/components/ReportButton";
 import RemixCredits from "@/components/RemixCredits";
+import RemixCover from "@/components/RemixCover";
 import { getRemixCredits } from "@/lib/credits";
 import { getArtistProgress, getComments } from "@/lib/social";
-import { getRemixCard, getRemixStats } from "@/lib/models";
+import { coverUrl, ensureRemixStats, getRemixCard, getRemixStats } from "@/lib/models";
 import type { Metadata } from "next";
 import { JsonLd, pageMetadata } from "@/lib/seo";
 import { SITE_NAME, absoluteUrl } from "@/lib/site";
@@ -23,6 +24,7 @@ type RemixRow = {
   owner_id: string;
   artist_name: string;
   artist_id: string;
+  cover_key: string | null;
 };
 
 export async function generateMetadata({
@@ -53,6 +55,7 @@ export default async function RemixDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  await ensureRemixStats();
   const rows = await sql<RemixRow[]>`
     SELECT remixes.*, users.artist_name, users.id as artist_id
     FROM remixes JOIN users ON users.id = remixes.owner_id
@@ -84,7 +87,7 @@ export default async function RemixDetailPage({
             "@type": "MusicRecording",
             name: remix.title,
             url,
-            image: absoluteUrl(`/remixes/${remix.id}/opengraph-image`),
+            image: absoluteUrl(coverUrl(remix.id, remix.cover_key) ?? `/remixes/${remix.id}/opengraph-image`),
             datePublished: new Date(remix.created_at).toISOString(),
             byArtist: { "@type": "Person", name: remix.artist_name, url: absoluteUrl(`/artist/${remix.artist_id}`) },
             genre: credits.tags.length ? credits.tags : undefined,
@@ -98,7 +101,9 @@ export default async function RemixDetailPage({
         />
       )}
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+        <div className="flex min-w-0 items-start gap-4">
+          <RemixCover remixId={remix.id} src={coverUrl(remix.id, remix.cover_key)} title={remix.title} editable={isOwner} />
+          <div className="min-w-0 pt-1">
           <h1 className="text-2xl font-bold">{remix.title}</h1>
           <p className="mt-1 text-sm text-muted">
             by{" "}
@@ -114,6 +119,7 @@ export default async function RemixDetailPage({
               </span>
             )}
           </p>
+          </div>
         </div>
         {isOwner ? (
           <RemixOwnerControls remixId={remix.id} initialPublished={remix.published} initialTags={credits.tags} />

@@ -1,5 +1,6 @@
 import { ImageResponse } from "next/og";
-import { getRemixCard } from "@/lib/models";
+import { coverUrl, getRemixCard } from "@/lib/models";
+import { absoluteUrl } from "@/lib/site";
 import { markDataUri } from "@/lib/brand";
 
 // The picture a shared remix link shows in WhatsApp, Telegram, X, iMessage…
@@ -13,7 +14,8 @@ export default async function Image({ params }: { params: Promise<{ id: string }
   const remix = await getRemixCard(id).catch(() => undefined);
   // Private remixes get the plain card — their details aren't public.
   const card = remix?.published ? remix : undefined;
-  const bars = Array.from({ length: 48 }, (_, i) => 30 + Math.abs(Math.sin(i * 0.7) * Math.cos(i * 0.23)) * 70);
+  const cover = card ? await coverDataUri(coverUrl(card.id, card.cover_key)) : null;
+  const bars = Array.from({ length: cover ? 30 : 48 }, (_, i) => 30 + Math.abs(Math.sin(i * 0.7) * Math.cos(i * 0.23)) * 70);
 
   return new ImageResponse(
     (
@@ -28,8 +30,18 @@ export default async function Image({ params }: { params: Promise<{ id: string }
           color: "white",
           background: "linear-gradient(135deg, #1a0b2e 0%, #3b0764 45%, #0c4a6e 100%)",
           fontFamily: "sans-serif",
+          position: "relative",
         }}
       >
+        {cover && (
+          <img
+            src={cover}
+            width={340}
+            height={340}
+            alt=""
+            style={{ position: "absolute", top: 64, right: 64, borderRadius: 28, objectFit: "cover", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}
+          />
+        )}
         <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 32, fontWeight: 700 }}>
           <img src={markDataUri("tile")} width={56} height={56} alt="" />
           Remixt
@@ -50,7 +62,7 @@ export default async function Image({ params }: { params: Promise<{ id: string }
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div style={{ fontSize: 68, fontWeight: 800, lineHeight: 1.05, maxWidth: 1072 }}>
+          <div style={{ fontSize: 68, fontWeight: 800, lineHeight: 1.05, maxWidth: cover ? 680 : 1072 }}>
             {card ? card.title.slice(0, 60) : "Remix vocals and beats from any song"}
           </div>
           <div style={{ fontSize: 32, opacity: 0.85 }}>
@@ -68,4 +80,18 @@ export default async function Image({ params }: { params: Promise<{ id: string }
     ),
     size
   );
+}
+
+/** The owner's cover, inlined: the card renderer can't be relied on to fetch it itself. */
+async function coverDataUri(path: string | null): Promise<string | null> {
+  if (!path) return null;
+  try {
+    const res = await fetch(absoluteUrl(path), { signal: AbortSignal.timeout(4000) });
+    if (!res.ok) return null;
+    const type = res.headers.get("content-type") ?? "image/jpeg";
+    if (!/^image\/(jpeg|png)/.test(type)) return null;
+    return `data:${type};base64,${Buffer.from(await res.arrayBuffer()).toString("base64")}`;
+  } catch {
+    return null;
+  }
 }

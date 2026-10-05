@@ -598,6 +598,7 @@ export default async function Home() {
 }
 
 const NO_NUMBERS: ArtistNumbers = {
+  referrals: 0,
   published: 0,
   tracks: 0,
   likes: 0,

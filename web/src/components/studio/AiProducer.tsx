@@ -322,6 +322,25 @@ function keepWhatsPlaying() {
   if (useAiTrial.getState().trial) keepTrial();
 }
 
+/** Who's producing: ranks the ideas that suit that producer's taste first (nothing is hidden). */
+type Persona = { id: string; label: string; icon: string; vibes: Vibe[] };
+const PERSONAS: Persona[] = [
+  { id: "any", label: "Any style", icon: "✨", vibes: [] },
+  { id: "club", label: "Club DJ", icon: "🪩", vibes: ["club", "hard"] },
+  { id: "lofi", label: "Lo-fi", icon: "📼", vibes: ["lofi", "chill"] },
+  { id: "radio", label: "Radio hit", icon: "📻", vibes: ["radio", "short"] },
+];
+const PERSONA_KEY = "remixt-ai-persona";
+function loadPersona(): string {
+  try {
+    return localStorage.getItem(PERSONA_KEY) ?? "any";
+  } catch {
+    return "any";
+  }
+}
+/** How well an idea suits a persona: shared vibes, so a stable sort keeps the rest in order. */
+const suits = (idea: Idea, persona: Persona) => idea.vibes.filter((v) => persona.vibes.includes(v)).length;
+
 type Sheet = "mini" | "half" | "full";
 const SHEETS: Sheet[] = ["mini", "half", "full"];
 
@@ -345,16 +364,26 @@ export default function AiProducer() {
   const [keepWhole, setKeepWhole] = useState(false);
   /** The sync template every idea uses (see IdeaOptions.sync). */
   const [syncId, setSyncId] = useState("perfect");
+  const [personaId, setPersonaId] = useState("any");
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage only exists after mount
     setKeepWhole(loadKeepWhole());
     setSyncId(loadSync());
+    setPersonaId(loadPersona());
   }, []);
+  const persona = PERSONAS.find((p) => p.id === personaId) ?? PERSONAS[0];
+  function choosePersona(id: string) {
+    setPersonaId(id);
+    try {
+      localStorage.setItem(PERSONA_KEY, id);
+    } catch {}
+  }
   const [tab, setTab] = useState<Tab>("sync");
   /** Below desktop width it's a sheet: mini (just the controls), half (the mix stays in view) or full. */
   const [sheet, setSheet] = useState<Sheet>("half");
   const sheetRef = useRef<HTMLElement>(null);
   const drag = useRef<{ y: number; at: Sheet; moved: boolean } | null>(null);
+  const swipe = useRef<{ x: number; done: boolean } | null>(null);
   // The Studio pads its bottom by the sheet's height, so every lane stays reachable behind it.
   useEffect(() => {
     const el = sheetRef.current;
@@ -537,7 +566,10 @@ export default function AiProducer() {
     if (!session) return;
     const bpm = bpmNow();
     const pick = <T,>(list: T[]) => list[Math.floor(Math.random() * list.length)];
-    const styles = ideas.filter((i) => i.kind === "full" && ideaFits(i, startLanes()));
+    const fitting = ideas.filter((i) => i.kind === "full" && ideaFits(i, startLanes()));
+    // With a producer picked, the surprise comes from their kind of styles.
+    const liked = fitting.filter((i) => suits(i, persona) > 0);
+    const styles = liked.length ? liked : fitting;
     const style = pick(styles.length ? styles : ideas.filter((i) => ideaFits(i, startLanes())));
     // A new style (with its timing and sound) on top of what's on: layers and fixes stay.
     if (!style || !tryIdea(session, style, { add: true })) return;
@@ -552,15 +584,33 @@ export default function AiProducer() {
   function stepThrough(delta: number) {
     if (!session) return;
     const last = trying[trying.length - 1];
-    const list = ideas.filter((i) => ideaFits(i, startLanes()) && (!last || i.kind === last.kind) && (i.id === last?.id || !onIds.has(i.id)));
-    if (!list.length) return;
-    const next = list[(list.findIndex((i) => i.id === last?.id) + delta + list.length) % list.length];
-    if (next.id === last?.id) return;
-    const bpm = bpmNow();
-    if (tryIdea(session, next, { add: true, replace: last?.id })) {
-      keepPlace(bpm);
-      playOn();
+    const usable = (i: Idea) => ideaFits(i, startLanes()) && (i.id === last?.id || !onIds.has(i.id));
+    // The same kind as the last one tried; when that's the only one of its
+    // kind (the one-tap "auto" idea, say), every other idea is fair game.
+    let list = ideas.filter((i) => usable(i) && (!last || i.kind === last.kind));
+    if (list.length < 2) list = ideas.filter(usable);
+    if (!list.length || (list.length === 1 && list[0].id === last?.id)) {
+      setSwapNote("No other ideas fit the mix right now");
+      return;
     }
+    const from = list.findIndex((i) => i.id === last?.id);
+    // Walk on until one fits: an idea that can't be placed is skipped, not a dead end.
+    for (let n = 1; n <= list.length; n++) {
+      const next = list[(((from < 0 && delta < 0 ? 0 : from) + delta * n) % list.length + list.length) % list.length];
+      if (next.id === last?.id) continue;
+      if (next.kind === "sync" && last?.kind === "sync") {
+        chooseSync(next);
+        return;
+      }
+      const bpm = bpmNow();
+      if (tryIdea(session, next, { add: true, replace: last?.id })) {
+        keepPlace(bpm);
+        playOn();
+        setSwapNote(`${next.icon} ${next.title}`);
+        return;
+      }
+    }
+    setSwapNote("No other ideas fit the mix right now");
   }
 
   function keep() {
@@ -644,10 +694,11 @@ export default function AiProducer() {
   };
 
   const auto = byId("auto-good");
-  const styles = ideas.filter((i) => i.kind === "full");
+  const ranked = (list: Idea[]) => (persona.vibes.length ? [...list].sort((a, b) => suits(b, persona) - suits(a, persona)) : list);
+  const styles = ranked(ideas.filter((i) => i.kind === "full"));
   const syncs = ideas.filter((i) => i.kind === "sync");
   const isLayer = (i: Idea) => i.id.startsWith("layer-");
-  const moments = ideas.filter((i) => i.kind === "moment" && !isLayer(i));
+  const moments = ranked(ideas.filter((i) => i.kind === "moment" && !isLayer(i)));
   const layers = ideas.filter(isLayer);
   // The Mix check's own fixes aren't in the list; these are the rest.
   const otherFixes = ideas.filter((i) => i.kind === "fix");
@@ -744,6 +795,23 @@ export default function AiProducer() {
         )}
 
         <div className={`min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 ${sheet === "mini" ? "max-lg:hidden" : ""}`}>
+          {ready && (tab === "styles" || tab === "moments") && (
+            <div className="-mx-4 mb-3 flex gap-1.5 overflow-x-auto px-4 pb-0.5" role="radiogroup" aria-label="Producer style — ideas that suit it come first">
+              {PERSONAS.map((p) => (
+                <button
+                  key={p.id}
+                  role="radio"
+                  aria-checked={persona.id === p.id}
+                  onClick={() => choosePersona(p.id)}
+                  className={`shrink-0 rounded-full border px-3 py-1 text-[11px] font-semibold whitespace-nowrap transition-colors ${
+                    persona.id === p.id ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted hover:text-foreground"
+                  }`}
+                >
+                  <span aria-hidden>{p.icon}</span> {p.label}
+                </button>
+              ))}
+            </div>
+          )}
           {lanes.length === 0 || missing ? (
             <div className="flex flex-col gap-3 py-2 text-sm">
               <p className="text-base font-bold">Let&apos;s make a remix</p>
@@ -1012,10 +1080,28 @@ export default function AiProducer() {
               </p>
             )}
             <div className="flex items-center gap-1.5">
-              <button onClick={() => stepThrough(-1)} className="h-9 w-9 shrink-0 rounded-lg border border-border text-xs hover:bg-surface-hover" aria-label="Previous idea of this kind (,)" title="Previous idea of this kind (,)">
+              <button type="button" onClick={() => stepThrough(-1)} className="h-11 w-11 shrink-0 touch-manipulation rounded-xl border border-border text-sm active:scale-95 active:bg-surface-hover sm:h-9 sm:w-9 sm:rounded-lg sm:text-xs hover:bg-surface-hover" aria-label="Previous idea of this kind (,)" title="Previous idea of this kind (,)">
                 ◀
               </button>
-              <button onClick={() => setDetails((d) => !d)} className="min-w-0 flex-1 px-1 text-left" aria-expanded={details}>
+              <button
+                onClick={() => {
+                  if (swipe.current?.done) return;
+                  setDetails((d) => !d);
+                }}
+                onPointerDown={(e) => (swipe.current = { x: e.clientX, done: false })}
+                onPointerUp={(e) => {
+                  const start = swipe.current;
+                  if (!start || e.pointerType === "mouse") return;
+                  const dx = e.clientX - start.x;
+                  // A swipe on the bar flips through ideas, like a phone's photo viewer.
+                  if (Math.abs(dx) > 50) {
+                    start.done = true;
+                    stepThrough(dx < 0 ? 1 : -1);
+                  }
+                }}
+                className="min-w-0 flex-1 touch-pan-y px-1 text-left"
+                aria-expanded={details}
+              >
                 <span className="block truncate text-xs font-semibold">
                   {trial.showing === "idea" ? "▶ " : "⏸ Before · "}
                   {trying.map((i) => `${i.icon} ${i.title}`).join(" + ")}
@@ -1023,9 +1109,10 @@ export default function AiProducer() {
                 <span className="block text-[10px] text-muted">
                   {trying.length > 1 ? `${trying.length} on together · ` : ""}
                   {details ? "Hide details ▴" : "What changed? ▾"}
+                  <span className="sm:hidden"> · swipe for more</span>
                 </span>
               </button>
-              <button onClick={() => stepThrough(1)} className="h-9 w-9 shrink-0 rounded-lg border border-border text-xs hover:bg-surface-hover" aria-label="Next idea of this kind (.)" title="Next idea of this kind (.)">
+              <button type="button" onClick={() => stepThrough(1)} className="h-11 w-11 shrink-0 touch-manipulation rounded-xl border border-border text-sm active:scale-95 active:bg-surface-hover sm:h-9 sm:w-9 sm:rounded-lg sm:text-xs hover:bg-surface-hover" aria-label="Next idea of this kind (.)" title="Next idea of this kind (.)">
                 ▶
               </button>
             </div>

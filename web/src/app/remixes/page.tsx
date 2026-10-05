@@ -1,5 +1,8 @@
 import Link from "next/link";
 import sql from "@/lib/db";
+import { coverUrl, ensureRemixStats } from "@/lib/models";
+import { remixOfTheDay } from "@/lib/social";
+import RemixOfTheDay from "@/components/RemixOfTheDay";
 import { getCurrentUser } from "@/lib/auth";
 import { ensureSchema } from "@/lib/schema";
 import { pageMetadata } from "@/lib/seo";
@@ -24,6 +27,7 @@ type RemixRow = {
   play_count: number;
   like_count: number;
   tags: string[];
+  cover_key: string | null;
 };
 
 function tabHref(tab: Tab, tag: string | null) {
@@ -64,10 +68,12 @@ export default async function RemixesPage({
   const tab: Tab = requested === "trending" || requested === "following" ? requested : "latest";
   const tag = tagParam?.trim().toLowerCase() || null;
   await ensureSchema();
+  await ensureRemixStats();
   const popularTags = await sql<{ tag: string; n: number }[]>`
     SELECT tag, COUNT(*)::int AS n FROM remixes, UNNEST(remixes.tags) AS tag
     WHERE remixes.published GROUP BY tag ORDER BY n DESC, tag LIMIT 16
   `;
+  const featured = tab === "latest" && !tag ? await remixOfTheDay().catch(() => null) : null;
   const user = tab === "following" ? await getCurrentUser() : null;
   const needsSignIn = tab === "following" && !user;
 
@@ -79,7 +85,7 @@ export default async function RemixesPage({
     SELECT remixes.id, remixes.title, remixes.created_at, users.artist_name, users.id as artist_id,
            COUNT(DISTINCT remix_lanes.id)::int as lane_count,
            STRING_AGG(DISTINCT tracks.title, ',') as source_titles,
-           remixes.play_count, remixes.tags,
+           remixes.play_count, remixes.tags, remixes.cover_key,
            (SELECT COUNT(*) FROM remix_likes WHERE remix_likes.remix_id = remixes.id)::int as like_count
     FROM remixes
     JOIN users ON users.id = remixes.owner_id
@@ -112,6 +118,8 @@ export default async function RemixesPage({
         Published remixes from the community — mixes of vocals and beats
         pulled from different songs.
       </p>
+
+      {featured && <RemixOfTheDay remix={featured} />}
 
       <div className="mt-6 flex gap-1">
         {TABS.map((t) => (
@@ -186,7 +194,16 @@ export default async function RemixesPage({
               href={`/remixes/${remix.id}`}
               className="group rounded-2xl border border-border bg-surface p-5 transition-colors hover:border-brand/50 hover:bg-surface-hover"
             >
-              <div className="mb-3 flex h-20 items-center justify-center gap-1 overflow-hidden rounded-lg bg-gradient-to-br from-vocals-dim to-beat-dim">
+              {remix.cover_key ? (
+                // eslint-disable-next-line @next/next/no-img-element -- our own storage route, already square and small
+                <img
+                  src={coverUrl(remix.id, remix.cover_key)!}
+                  alt=""
+                  loading="lazy"
+                  className="mb-3 aspect-[2/1] w-full rounded-lg object-cover transition-transform duration-300 group-hover:scale-[1.02]"
+                />
+              ) : (
+                <div className="mb-3 flex h-20 items-center justify-center gap-1 overflow-hidden rounded-lg bg-gradient-to-br from-vocals-dim to-beat-dim">
                 {Array.from({ length: 20 }).map((_, i) => (
                   <span
                     key={i}
@@ -194,7 +211,8 @@ export default async function RemixesPage({
                     style={{ height: `${20 + Math.sin(i * 1.3) * 15 + 15}%` }}
                   />
                 ))}
-              </div>
+                </div>
+              )}
               <h3 className="font-semibold">{remix.title}</h3>
               <p className="mt-1 text-sm text-muted">by {remix.artist_name}</p>
               {remix.source_titles && (

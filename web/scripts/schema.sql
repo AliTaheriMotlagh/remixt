@@ -205,3 +205,7 @@ CREATE TABLE IF NOT EXISTS presence (
   last_seen TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_presence_last_seen ON presence(last_seen);
+
+-- Remix covers (a picture the owner uploads) and referrals (who invited whom).
+ALTER TABLE remixes ADD COLUMN IF NOT EXISTS cover_key TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by TEXT REFERENCES users(id) ON DELETE SET NULL;

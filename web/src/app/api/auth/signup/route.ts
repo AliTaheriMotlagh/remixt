@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import sql from "@/lib/db";
 import { createSessionCookie, hashPassword } from "@/lib/auth";
+import { ensureRemixStats } from "@/lib/models";
+import { REF_COOKIE } from "@/lib/referral";
 
 const schema = z.object({
   email: z.string().email(),
@@ -39,7 +41,16 @@ export async function POST(req: NextRequest) {
     VALUES (${id}, ${email.toLowerCase()}, ${passwordHash}, ${artistName}, ${avatarColor})
   `;
 
+  // Came from a friend's invite link: remember who, for their XP.
+  const ref = req.cookies.get(REF_COOKIE)?.value;
+  if (ref && ref !== id) {
+    await ensureRemixStats();
+    await sql`UPDATE users SET referred_by = (SELECT id FROM users WHERE id = ${ref}) WHERE id = ${id}`.catch(() => {});
+  }
+
   await createSessionCookie(id);
 
-  return NextResponse.json({ id, email, artistName });
+  const res = NextResponse.json({ id, email, artistName });
+  res.cookies.delete(REF_COOKIE);
+  return res;
 }

@@ -119,6 +119,8 @@ export type ArtistNumbers = {
   /** Most likes and most plays on any one of their remixes. */
   bestLikes: number;
   bestPlays: number;
+  /** Friends who joined from their invite link and have made something (so empty sign-ups don't count). */
+  referrals: number;
 };
 
 /** XP per thing done — kept in one place so the leaderboard's SQL agrees with it. */
@@ -132,6 +134,7 @@ export const XP = {
   /** The base pay; each split's actual reward (with bonuses) is stored with it. */
   splitForOthers: REWARD.base,
   playsPer: 5,
+  referral: 75,
 };
 
 export function xpFor(n: ArtistNumbers) {
@@ -143,6 +146,7 @@ export function xpFor(n: ArtistNumbers) {
     n.likesGiven * XP.likeGiven +
     n.commentedOn * XP.commentedOn +
     n.splitXp +
+    (n.referrals ?? 0) * XP.referral +
     Math.floor(n.plays / XP.playsPer)
   );
 }
@@ -205,6 +209,7 @@ export function badgesFor(n: ArtistNumbers): Badge[] {
     badge("in-the-mix", "💬", "In the Mix", "Comment on 10 remixes by others", n.commentedOn, 10),
     badge("helping-hand", "⛏️", "Helping Hand", "Split 5 songs for people on phones", n.splitsForOthers, 5),
     badge("rig-runner", "🖥️", "Rig Runner", "Split 25 songs for people on phones", n.splitsForOthers, 25),
+    badge("talent-scout", "📣", "Talent Scout", "Bring 3 friends who make something", n.referrals ?? 0, 3),
     badge("mining-legend", "💎", "Mining Legend", "Split 100 songs for people on phones", n.splitsForOthers, 100),
   ];
 }
@@ -231,7 +236,11 @@ function numbersQuery(userFilter: ReturnType<typeof sql>) {
          SELECT COUNT(*) AS n FROM remix_likes l JOIN remixes r ON r.id = l.remix_id
          WHERE r.owner_id = users.id AND r.published AND l.user_id <> users.id GROUP BY r.id
        ) best)::int AS "bestLikes",
-      (SELECT COALESCE(MAX(r.play_count), 0) FROM remixes r WHERE r.owner_id = users.id AND r.published)::int AS "bestPlays"
+      (SELECT COALESCE(MAX(r.play_count), 0) FROM remixes r WHERE r.owner_id = users.id AND r.published)::int AS "bestPlays",
+      (SELECT COUNT(*) FROM users friend WHERE friend.referred_by = users.id AND (
+         EXISTS (SELECT 1 FROM remixes r WHERE r.owner_id = friend.id AND r.published)
+         OR EXISTS (SELECT 1 FROM tracks t WHERE t.owner_id = friend.id AND t.status = 'ready')
+       ))::int AS referrals
     FROM users
     ${userFilter}
   `;
@@ -317,4 +326,28 @@ export async function rankedRemixes(by: "trending" | "played", limit = 10): Prom
     LIMIT ${limit}
   `;
   return rows;
+}
+
+// --- Remix of the day ----------------------------------------------------------------
+
+export type FeaturedRemix = { id: string; title: string; artist_id: string; artist_name: string; cover_key: string | null; plays: number; likes: number };
+
+/**
+ * One remix to put in the spotlight today: the week's most liked and
+ * commented, or — on a quiet week — a published one picked by the date,
+ * so everyone sees the same one all day and it changes tomorrow.
+ */
+export async function remixOfTheDay(): Promise<FeaturedRemix | null> {
+  await ensureSocialSchema();
+  const [top] = await rankedRemixes("trending", 1);
+  const [row] = await sql<FeaturedRemix[]>`
+    SELECT remixes.id, remixes.title, users.id AS artist_id, users.artist_name, remixes.cover_key,
+           remixes.play_count AS plays,
+           (SELECT COUNT(*) FROM remix_likes l WHERE l.remix_id = remixes.id)::int AS likes
+    FROM remixes JOIN users ON users.id = remixes.owner_id
+    WHERE remixes.published ${top ? sql`AND remixes.id = ${top.id}` : sql``}
+    ORDER BY md5(remixes.id || current_date::text)
+    LIMIT 1
+  `;
+  return row ?? null;
 }

@@ -5,6 +5,8 @@ import { getCurrentUser } from "@/lib/auth";
 import { getTracksByOwner, getStemsByTrack } from "@/lib/models";
 import ArtistBioEditor from "@/components/ArtistBioEditor";
 import ArtistProgressCard from "@/components/ArtistProgressCard";
+import InviteCard from "@/components/InviteCard";
+import { invitePath } from "@/lib/referral";
 import FollowButton from "@/components/FollowButton";
 import { getArtistProgress, getFollowState } from "@/lib/social";
 import type { Metadata } from "next";
@@ -133,6 +135,7 @@ export default async function ArtistPage({
       </div>
 
       {progress && <ArtistProgressCard progress={progress} isOwner={isOwner} />}
+      {isOwner && <InviteCard url={absoluteUrl(invitePath(artist.id))} referrals={progress?.numbers.referrals ?? 0} />}
 
       <section className="mt-12">
         <h2 className="text-lg font-semibold">

@@ -115,6 +115,9 @@ let statsSchema: Promise<void> | null = null;
 export function ensureRemixStats(): Promise<void> {
   statsSchema ??= (async () => {
     await sql`ALTER TABLE remixes ADD COLUMN IF NOT EXISTS play_count INTEGER NOT NULL DEFAULT 0`;
+    // Later additions: remix covers and referrals (also in scripts/schema.sql).
+    await sql`ALTER TABLE remixes ADD COLUMN IF NOT EXISTS cover_key TEXT`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by TEXT REFERENCES users(id) ON DELETE SET NULL`;
     await sql`
       CREATE TABLE IF NOT EXISTS remix_likes (
         remix_id TEXT NOT NULL REFERENCES remixes(id) ON DELETE CASCADE,
@@ -153,7 +156,13 @@ export type RemixCard = {
   source_titles: string[];
   plays: number;
   likes: number;
+  cover_key: string | null;
 };
+
+/** Where a remix's cover is served; the key in the query busts caches when it's replaced. */
+export function coverUrl(remixId: string, coverKey: string | null | undefined): string | null {
+  return coverKey ? `/api/remixes/${remixId}/cover?v=${encodeURIComponent(coverKey.split("/").pop() ?? "")}` : null;
+}
 
 /**
  * What a shared link needs to describe a remix — its title, artist, the
@@ -163,7 +172,7 @@ export type RemixCard = {
 export const getRemixCard = cache(async (id: string): Promise<RemixCard | undefined> => {
   await ensureRemixStats();
   const rows = await sql<(Omit<RemixCard, "source_titles"> & { source_titles: string | null })[]>`
-    SELECT remixes.id, remixes.title, remixes.published, remixes.owner_id, users.artist_name,
+    SELECT remixes.id, remixes.title, remixes.published, remixes.owner_id, users.artist_name, remixes.cover_key,
            remixes.play_count AS plays,
            (SELECT COUNT(*) FROM remix_likes WHERE remix_likes.remix_id = remixes.id)::int AS likes,
            (SELECT STRING_AGG(DISTINCT tracks.title, '\u0001') FROM remix_lanes
