@@ -35,6 +35,9 @@ const nextConfig: NextConfig = {
   // route that runs it.
   outputFileTracingIncludes: {
     "/api/import": ["./bin/yt-dlp*"],
+    // The share cards' font, read from disk (lib/ogText.tsx).
+    "/opengraph-image": ["./assets/fonts/*.ttf"],
+    "/remixes/\\[id\\]/opengraph-image": ["./assets/fonts/*.ttf"],
   },
   turbopack: {
     root: path.join(__dirname),

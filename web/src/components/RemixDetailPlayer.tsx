@@ -15,17 +15,20 @@ import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/rem
 import { useStudioStore } from "@/lib/client/studioStore";
 import { resetHistory } from "@/lib/client/studioHistory";
 import type { User } from "@/lib/auth";
-import { setMixCredit } from "@/lib/client/mediaSession";
+import { setPlayingRemix } from "@/lib/client/mediaSession";
 
 export default function RemixDetailPlayer({
   remixId,
   title,
   artistName,
+  cover,
   user,
 }: {
   remixId: string;
   title: string;
   artistName: string;
+  /** The cover's URL, shown on the lock screen while it plays. */
+  cover: string | null;
   user: User | null;
 }) {
   const lanes = useStudioStore((s) => s.lanes);
@@ -57,11 +60,12 @@ export default function RemixDetailPlayer({
 
   useEffect(() => () => audioEngine.stop(), []);
 
-  // On the lock screen, this remix is by its artist (not the stems' artists).
+  // On the lock screen, this remix is by its artist (not the stems'
+  // artists), with its cover.
   useEffect(() => {
-    setMixCredit(artistName);
-    return () => setMixCredit(null);
-  }, [artistName]);
+    setPlayingRemix({ artist: artistName, cover });
+    return () => setPlayingRemix(null);
+  }, [artistName, cover]);
 
   // The placeholder takes the same space as the player, so nothing below it
   // (the comments) jumps when the audio arrives.

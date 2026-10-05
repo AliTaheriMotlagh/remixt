@@ -32,7 +32,7 @@ import Countdown from "@/components/landing/Countdown";
 import { LivePanel, OnlineAvatars, OnlineBadge } from "@/components/landing/Live";
 import { getCurrentUser } from "@/lib/auth";
 import { listChallenges } from "@/lib/challenges";
-import { ensureRemixStats } from "@/lib/models";
+import { coverUrl, ensureRemixStats } from "@/lib/models";
 import { presenceSnapshot, recentActivity } from "@/lib/presence";
 import {
   XP,
@@ -53,6 +53,7 @@ type RemixPreview = {
   artist_id: string;
   artist_name: string;
   avatar_color: string;
+  cover_key: string | null;
   plays: number;
   likes: number;
 };
@@ -115,7 +116,7 @@ export default async function Home() {
     `,
     sql<RemixPreview[]>`
       SELECT remixes.id, remixes.title, users.id AS artist_id, users.artist_name, users.avatar_color,
-             remixes.play_count AS plays,
+             remixes.cover_key, remixes.play_count AS plays,
              (SELECT COUNT(*) FROM remix_likes l WHERE l.remix_id = remixes.id)::int AS likes
       FROM remixes JOIN users ON users.id = remixes.owner_id
       WHERE remixes.published
@@ -550,13 +551,23 @@ export default async function Home() {
                   className="group rounded-2xl border border-border bg-surface p-4 transition-all hover:-translate-y-0.5 hover:border-brand/50 hover:bg-surface-hover"
                 >
                   <div className="relative mb-3 flex h-24 items-center justify-center gap-[3px] overflow-hidden rounded-xl bg-gradient-to-br from-vocals-dim to-beat-dim px-3">
-                    {barsFor(remix.id, 32).map((h, i) => (
-                      <span
-                        key={i}
-                        className="w-1 flex-1 rounded-full bg-white/40 transition-colors group-hover:bg-white/80"
-                        style={{ height: `${h}%` }}
+                    {remix.cover_key ? (
+                      // eslint-disable-next-line @next/next/no-img-element -- our own storage route, already square and small
+                      <img
+                        src={coverUrl(remix.id, remix.cover_key)!}
+                        alt=""
+                        loading="lazy"
+                        className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
                       />
-                    ))}
+                    ) : (
+                      barsFor(remix.id, 32).map((h, i) => (
+                        <span
+                          key={i}
+                          className="w-1 flex-1 rounded-full bg-white/40 transition-colors group-hover:bg-white/80"
+                          style={{ height: `${h}%` }}
+                        />
+                      ))
+                    )}
                     <span className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100">
                       <span className="flex h-12 w-12 items-center justify-center rounded-full bg-brand text-lg text-white shadow-lg">
                         <Play className="fill-current" />

@@ -11,7 +11,7 @@ import RemixCredits from "@/components/RemixCredits";
 import RemixCover from "@/components/RemixCover";
 import { getRemixCredits } from "@/lib/credits";
 import { getArtistProgress, getComments } from "@/lib/social";
-import { coverUrl, ensureRemixStats, getRemixCard, getRemixStats } from "@/lib/models";
+import { coverUrl, ensureRemixStats, getRemixCard, getRemixStats, shareImageUrl } from "@/lib/models";
 import type { Metadata } from "next";
 import { JsonLd, pageMetadata } from "@/lib/seo";
 import { SITE_NAME, absoluteUrl } from "@/lib/site";
@@ -45,7 +45,7 @@ export async function generateMetadata({
     type: "music.song",
     // The card this route draws (opengraph-image.tsx), named outright:
     // setting openGraph here would otherwise drop it.
-    image: { url: `/remixes/${id}/opengraph-image`, width: 1200, height: 630, alt: `${remix.title} — remix by ${remix.artist_name}` },
+    image: { url: shareImageUrl(id, remix.cover_key), width: 1200, height: 630, alt: `${remix.title} — remix by ${remix.artist_name}` },
   });
 }
 
@@ -87,7 +87,10 @@ export default async function RemixDetailPage({
             "@type": "MusicRecording",
             name: remix.title,
             url,
-            image: absoluteUrl(coverUrl(remix.id, remix.cover_key) ?? `/remixes/${remix.id}/opengraph-image`),
+            // The square cover first (what search results show beside a song), then the share card.
+            image: [coverUrl(remix.id, remix.cover_key), shareImageUrl(remix.id, remix.cover_key)]
+              .filter((src): src is string => !!src)
+              .map((src) => absoluteUrl(src)),
             datePublished: new Date(remix.created_at).toISOString(),
             byArtist: { "@type": "Person", name: remix.artist_name, url: absoluteUrl(`/artist/${remix.artist_id}`) },
             genre: credits.tags.length ? credits.tags : undefined,
@@ -132,7 +135,13 @@ export default async function RemixDetailPage({
 
       <RemixStatsBar remixId={remix.id} title={remix.title} initial={stats} signedIn={!!user} />
 
-      <RemixDetailPlayer remixId={remix.id} title={remix.title} artistName={remix.artist_name} user={user} />
+      <RemixDetailPlayer
+        remixId={remix.id}
+        title={remix.title}
+        artistName={remix.artist_name}
+        cover={coverUrl(remix.id, remix.cover_key)}
+        user={user}
+      />
 
       <RemixComments remixId={remix.id} initial={comments} userId={user?.id ?? null} isRemixOwner={isOwner} />
     </div>

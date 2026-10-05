@@ -1,7 +1,8 @@
 import { ImageResponse } from "next/og";
-import { coverUrl, getRemixCard } from "@/lib/models";
-import { absoluteUrl } from "@/lib/site";
+import { getRemixCard } from "@/lib/models";
 import { markDataUri } from "@/lib/brand";
+import { CardText, cardFonts } from "@/lib/ogText";
+import { contentTypeFor, serveObject } from "@/lib/storage";
 
 // The picture a shared remix link shows in WhatsApp, Telegram, X, iMessage…
 
@@ -14,7 +15,7 @@ export default async function Image({ params }: { params: Promise<{ id: string }
   const remix = await getRemixCard(id).catch(() => undefined);
   // Private remixes get the plain card — their details aren't public.
   const card = remix?.published ? remix : undefined;
-  const cover = card ? await coverDataUri(coverUrl(card.id, card.cover_key)) : null;
+  const [cover, fonts] = await Promise.all([card ? coverDataUri(card.cover_key) : null, cardFonts()]);
   const bars = Array.from({ length: cover ? 30 : 48 }, (_, i) => 30 + Math.abs(Math.sin(i * 0.7) * Math.cos(i * 0.23)) * 70);
 
   return new ImageResponse(
@@ -29,7 +30,7 @@ export default async function Image({ params }: { params: Promise<{ id: string }
           padding: 64,
           color: "white",
           background: "linear-gradient(135deg, #1a0b2e 0%, #3b0764 45%, #0c4a6e 100%)",
-          fontFamily: "sans-serif",
+          fontFamily: "Vazirmatn",
           position: "relative",
         }}
       >
@@ -62,15 +63,19 @@ export default async function Image({ params }: { params: Promise<{ id: string }
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div style={{ fontSize: 68, fontWeight: 800, lineHeight: 1.05, maxWidth: cover ? 680 : 1072 }}>
-            {card ? card.title.slice(0, 60) : "Remix vocals and beats from any song"}
+          <div style={{ display: "flex", fontSize: 68, fontWeight: 700, lineHeight: 1.15, maxWidth: cover ? 680 : 1072 }}>
+            {card ? <CardText text={card.title.slice(0, 60)} wordGap={18} /> : "Remix vocals and beats from any song"}
           </div>
-          <div style={{ fontSize: 32, opacity: 0.85 }}>
-            {card ? `Remix by ${card.artist_name}` : "Split a song, mix it with another, share it"}
+          <div style={{ display: "flex", fontSize: 32, opacity: 0.85 }}>
+            {card ? <CardText text={`Remix by ${card.artist_name}`} wordGap={9} /> : "Split a song, mix it with another, share it"}
           </div>
           {card && (
             <div style={{ display: "flex", gap: 32, fontSize: 26, opacity: 0.75 }}>
-              {card.source_titles.length > 0 && <span>{card.source_titles.slice(0, 3).join(" + ").slice(0, 70)}</span>}
+              {card.source_titles.length > 0 && (
+                <span style={{ display: "flex" }}>
+                  <CardText text={card.source_titles.slice(0, 3).join(" + ").slice(0, 70)} wordGap={7} />
+                </span>
+              )}
               <span>{card.plays} plays</span>
               <span>{card.likes} likes</span>
             </div>
@@ -78,17 +83,23 @@ export default async function Image({ params }: { params: Promise<{ id: string }
         </div>
       </div>
     ),
-    size
+    { ...size, fonts }
   );
 }
 
-/** The owner's cover, inlined: the card renderer can't be relied on to fetch it itself. */
-async function coverDataUri(path: string | null): Promise<string | null> {
-  if (!path) return null;
+/**
+ * The owner's cover, inlined: the card renderer can't be relied on to fetch
+ * it itself. Read straight from storage rather than through the site's own
+ * address, which a server can't always reach from inside (Docker, previews).
+ */
+async function coverDataUri(key: string | null): Promise<string | null> {
+  if (!key) return null;
   try {
-    const res = await fetch(absoluteUrl(path), { signal: AbortSignal.timeout(4000) });
+    let res = await serveObject(key, null);
+    const location = res.headers.get("location");
+    if (location) res = await fetch(location, { signal: AbortSignal.timeout(4000) });
     if (!res.ok) return null;
-    const type = res.headers.get("content-type") ?? "image/jpeg";
+    const type = res.headers.get("content-type") ?? contentTypeFor(key);
     if (!/^image\/(jpeg|png)/.test(type)) return null;
     return `data:${type};base64,${Buffer.from(await res.arrayBuffer()).toString("base64")}`;
   } catch {

@@ -36,6 +36,7 @@ import {
   type StudioDraft,
 } from "@/lib/client/studioDraft";
 import type { User } from "@/lib/auth";
+import { coverUrl } from "@/lib/cover";
 
 function formatAgo(timestamp: number) {
   const minutes = Math.round((Date.now() - timestamp) / 60000);
@@ -203,7 +204,7 @@ export default function Studio({ user }: { user: User | null }) {
         loadRemix(
           (data.lanes as RemixLaneApi[]).map(laneFromApi),
           projectFromApi(data.remix),
-          data.remix ? { id: data.remix.id, title: data.remix.title } : null
+          data.remix ? { id: data.remix.id, title: data.remix.title, cover: coverUrl(data.remix.id, data.remix.cover_key) } : null
         );
         // A different project: nothing to undo back into, and nothing unsaved.
         resetHistory();

@@ -296,6 +296,7 @@ export type RankedRemix = {
   title: string;
   artist_id: string;
   artist_name: string;
+  cover_key: string | null;
   plays: number;
   likes: number;
   comments: number;
@@ -311,7 +312,7 @@ export async function rankedRemixes(by: "trending" | "played", limit = 10): Prom
   await ensureSocialSchema();
   const rows = await sql<RankedRemix[]>`
     SELECT * FROM (
-      SELECT remixes.id, remixes.title, users.id AS artist_id, users.artist_name,
+      SELECT remixes.id, remixes.title, users.id AS artist_id, users.artist_name, remixes.cover_key,
              remixes.play_count AS plays,
              (SELECT COUNT(*) FROM remix_likes l WHERE l.remix_id = remixes.id)::int AS likes,
              (SELECT COUNT(*) FROM remix_comments c WHERE c.remix_id = remixes.id)::int AS comments,

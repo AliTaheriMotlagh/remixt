@@ -159,9 +159,15 @@ export type RemixCard = {
   cover_key: string | null;
 };
 
-/** Where a remix's cover is served; the key in the query busts caches when it's replaced. */
-export function coverUrl(remixId: string, coverKey: string | null | undefined): string | null {
-  return coverKey ? `/api/remixes/${remixId}/cover?v=${encodeURIComponent(coverKey.split("/").pop() ?? "")}` : null;
+export { coverUrl } from "./cover";
+
+/**
+ * The share card's address. It changes with the cover, so WhatsApp,
+ * Telegram, X… fetch the new picture instead of keeping the old one.
+ */
+export function shareImageUrl(remixId: string, coverKey: string | null | undefined): string {
+  const version = coverKey?.split("/").pop();
+  return `/remixes/${remixId}/opengraph-image${version ? `?v=${encodeURIComponent(version)}` : ""}`;
 }
 
 /**

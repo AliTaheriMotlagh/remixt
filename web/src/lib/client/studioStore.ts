@@ -438,7 +438,12 @@ type StudioState = {
   _setLaneRendering: (laneId: string, rendering: boolean) => void;
 };
 
-export type SourceRemix = { id: string; title: string };
+export type SourceRemix = {
+  id: string;
+  title: string;
+  /** Its cover, for the lock screen while it plays (see mediaSession). */
+  cover?: string | null;
+};
 
 export type ProjectSettings = {
   projectBpm: number;

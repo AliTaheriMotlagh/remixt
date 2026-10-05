@@ -81,7 +81,7 @@ export default function RemixCover({ remixId, src, title, editable }: { remixId:
         </button>
       )}
       {error && <p className="max-w-36 text-[11px] text-danger">{error}</p>}
-      {editable && <input ref={input} type="file" accept="image/*" className="hidden" onChange={(e) => void pick(e.target.files?.[0])} />}
+      {editable && <input ref={input} type="file" accept="image/*,.heic,.heif" className="hidden" onChange={(e) => void pick(e.target.files?.[0])} />}
     </div>
   );
 }

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Flame, Headphones, Heart, MessageCircle, Pickaxe, Play, type LucideIcon } from "lucide-react";
 import { PlaceMedal } from "@/components/Icon";
 import type { Metadata } from "next";
+import { coverUrl } from "@/lib/models";
 import { rankedRemixes, topArtists, type RankedRemix } from "@/lib/social";
 import { pageMetadata } from "@/lib/seo";
 import { topMiners } from "@/lib/splitQueue";
@@ -17,6 +18,23 @@ function Rank({ index }: { index: number }) {
     <span className="w-7 shrink-0 text-center text-sm font-bold tabular-nums text-muted">
       <PlaceMedal rank={index + 1} className="text-base" />
     </span>
+  );
+}
+
+/** The remix's cover, or a gradient tile with its initial when it has none. */
+function RemixThumb({ remix }: { remix: RankedRemix }) {
+  const cover = coverUrl(remix.id, remix.cover_key);
+  return (
+    <Link href={`/remixes/${remix.id}`} className="shrink-0" tabIndex={-1} aria-hidden>
+      {cover ? (
+        // eslint-disable-next-line @next/next/no-img-element -- our own storage route, already square and small
+        <img src={cover} alt="" loading="lazy" className="h-10 w-10 rounded-lg object-cover" />
+      ) : (
+        <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-br from-vocals-dim to-beat-dim text-sm font-bold text-white/80">
+          {remix.title.slice(0, 1).toUpperCase()}
+        </span>
+      )}
+    </Link>
   );
 }
 
@@ -46,6 +64,7 @@ function RemixBoard({
           {remixes.map((r, i) => (
             <li key={r.id} className="flex items-center gap-2">
               <Rank index={i} />
+              <RemixThumb remix={r} />
               <div className="min-w-0 flex-1">
                 <Link href={`/remixes/${r.id}`} className="block truncate text-sm font-medium hover:underline">
                   {r.title}

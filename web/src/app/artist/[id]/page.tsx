@@ -1,8 +1,9 @@
 import Link from "next/link";
+import { Headphones } from "lucide-react";
 import { notFound } from "next/navigation";
 import sql from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
-import { getTracksByOwner, getStemsByTrack } from "@/lib/models";
+import { coverUrl, ensureRemixStats, getTracksByOwner, getStemsByTrack } from "@/lib/models";
 import ArtistBioEditor from "@/components/ArtistBioEditor";
 import ArtistProgressCard from "@/components/ArtistProgressCard";
 import InviteCard from "@/components/InviteCard";
@@ -75,10 +76,11 @@ export default async function ArtistPage({
     }))
   );
 
+  await ensureRemixStats(); // adds cover_key on databases from before covers
   const remixes = await sql<
-    { id: string; title: string; published: boolean; created_at: string }[]
+    { id: string; title: string; published: boolean; created_at: string; cover_key: string | null }[]
   >`
-    SELECT id, title, published, created_at FROM remixes
+    SELECT id, title, published, created_at, cover_key FROM remixes
     WHERE owner_id = ${artist.id} AND (published = true OR ${isOwner})
     ORDER BY created_at DESC
   `;
@@ -99,11 +101,15 @@ export default async function ArtistPage({
             description: artist.bio || undefined,
             url: absoluteUrl(`/artist/${artist.id}`),
           },
-          hasPart: published.slice(0, 20).map((r) => ({
-            "@type": "MusicRecording",
-            name: r.title,
-            url: absoluteUrl(`/remixes/${r.id}`),
-          })),
+          hasPart: published.slice(0, 20).map((r) => {
+            const cover = coverUrl(r.id, r.cover_key);
+            return {
+              "@type": "MusicRecording",
+              name: r.title,
+              url: absoluteUrl(`/remixes/${r.id}`),
+              image: cover ? absoluteUrl(cover) : undefined,
+            };
+          }),
         }}
       />
       <div className="flex items-center gap-4">
@@ -149,9 +155,17 @@ export default async function ArtistPage({
               <Link
                 key={remix.id}
                 href={`/remixes/${remix.id}`}
-                className="rounded-xl border border-border bg-surface p-4 transition-colors hover:border-brand/50 hover:bg-surface-hover"
+                className="flex items-center gap-3 rounded-xl border border-border bg-surface p-3 transition-colors hover:border-brand/50 hover:bg-surface-hover"
               >
-                <div className="flex items-center justify-between gap-2">
+                {remix.cover_key ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- our own storage route, already square and small
+                  <img src={coverUrl(remix.id, remix.cover_key)!} alt="" loading="lazy" className="h-12 w-12 shrink-0 rounded-lg object-cover" />
+                ) : (
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-vocals-dim to-beat-dim text-white/70">
+                    <Headphones />
+                  </span>
+                )}
+                <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
                   <h3 className="truncate font-medium">{remix.title}</h3>
                   {!remix.published && (
                     <span className="shrink-0 rounded-full bg-surface-raised px-2 py-0.5 text-[10px] text-muted">

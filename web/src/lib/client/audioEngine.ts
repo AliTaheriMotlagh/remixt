@@ -13,7 +13,13 @@ import { scheduleModulation } from "./modulation";
 import { renderPitchTempo } from "./pitchTempo";
 import { previewPlayer } from "./previewPlayer";
 import { keepScreenOn } from "./wakeLock";
-import { getMixCredit, setNowPlaying } from "./mediaSession";
+import { getPlayingRemix, setNowPlaying } from "./mediaSession";
+import {
+  disableNowPlayingAnchor,
+  onNowPlayingAnchorLost,
+  startNowPlayingAnchor,
+  stopNowPlayingAnchor,
+} from "./nowPlayingAnchor";
 import { fetchStem } from "./stemFetch";
 import {
   beatLength,
@@ -416,6 +422,10 @@ class AudioEngine {
     // library preview that's still running. Done before resuming, since on
     // iOS a playing <audio> element can hold the context interrupted.
     previewPlayer.stop();
+    // What the lock screen and Dynamic Island hold on to (see
+    // nowPlayingAnchor); started here, still inside the tap. Not while
+    // recording, which has the phone's audio set up for the microphone.
+    const anchored = !this.micActive && startNowPlayingAnchor();
 
     const ctx = await this.unlock({ keepContext: this.micActive });
     if (request !== this.playRequest) return;
@@ -423,6 +433,9 @@ class AudioEngine {
       // Scheduling now would show the transport as playing with a frozen
       // clock and no sound. Fail instead; the next tap gets a new context.
       this.staleContext = true;
+      // If the phone wouldn't start the mix beside the silent <audio>,
+      // the next tap tries without it.
+      if (anchored) disableNowPlayingAnchor();
       throw new PlaybackBlockedError();
     }
 
@@ -481,6 +494,7 @@ class AudioEngine {
 
     this.stopAllSources();
     this.stopMetronome();
+    stopNowPlayingAnchor();
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
@@ -493,6 +507,7 @@ class AudioEngine {
     this.playRequest++;
     this.stopAllSources();
     this.stopMetronome();
+    stopNowPlayingAnchor();
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
@@ -761,10 +776,12 @@ function reportMixNowPlaying(state: ReturnType<typeof useStudioStore.getState>) 
     return;
   }
   const artists = [...new Set(state.lanes.map((l) => l.artistName))];
+  const remix = getPlayingRemix();
   setNowPlaying("mix", {
     title: state.sourceRemix?.title ?? state.challenge?.title ?? "Untitled mix",
-    artist: getMixCredit() ?? artists.slice(0, 3).join(" × "),
+    artist: remix?.artist ?? artists.slice(0, 3).join(" × "),
     album: "Remixt",
+    artwork: remix ? remix.cover : state.sourceRemix?.cover,
     playing: state.isPlaying,
     position: state.playhead,
     duration: state.duration,
@@ -778,6 +795,11 @@ function reportMixNowPlaying(state: ReturnType<typeof useStudioStore.getState>) 
 // ...and the other way round: a library preview pauses the mix (or cancels
 // a play that's still loading) instead of playing over it.
 previewPlayer.onStart(() => audioEngine.pause());
+
+// A call or another app's audio paused the lock screen's player: pause the mix with it.
+onNowPlayingAnchorLost(() => {
+  if (useStudioStore.getState().isPlaying) audioEngine.pause();
+});
 
 if (typeof window !== "undefined") {
   const lastTransforms = new Map<string, { tempo: number; pitch: number }>();

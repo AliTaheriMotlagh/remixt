@@ -2,9 +2,10 @@
 
 import { NOW_PLAYING_ARTWORK } from "@/lib/brand";
 
-// What's playing, for the phone's lock screen and Control Center, Android's
-// media notification, and the media controls in desktop browsers and OSes:
-// title, artist and the Remixt mark, with play/pause/seek buttons that work.
+// What's playing, for the phone's lock screen, Control Center and Dynamic
+// Island, Android's media notification, watches, car screens, and the media
+// controls in desktop browsers and OSes: title, artist and the remix's cover
+// (the Remixt mark when it has none), with play/pause/seek buttons that work.
 // The two things that play report here — library previews (previewPlayer)
 // and the mix (audioEngine) — and a preview, being the more recent, wins.
 
@@ -12,6 +13,8 @@ export type NowPlaying = {
   title: string;
   artist: string;
   album: string;
+  /** The remix's cover (a path on this site); null shows the Remixt mark. */
+  artwork?: string | null;
   playing: boolean;
   /** Seconds. */
   position: number;
@@ -26,7 +29,7 @@ type Owner = "preview" | "mix";
 
 const owners: Record<Owner, NowPlaying | null> = { preview: null, mix: null };
 let current: NowPlaying | null = null;
-let mixCredit: string | null = null;
+let playingRemix: PlayingRemix | null = null;
 let lastKey = "";
 let lastPlaybackState: MediaSessionPlaybackState | null = null;
 // Where the OS was last told the playhead was; it counts on from there by itself.
@@ -42,18 +45,28 @@ export function setNowPlaying(owner: Owner, value: NowPlaying | null) {
   apply();
 }
 
+/** A remix's page or embed, playing the mix: who it's by and its cover. */
+export type PlayingRemix = { artist: string; cover: string | null };
+
 /**
- * Who the mix is credited to on the lock screen ("remix by …") while a
- * remix's own page or embed is playing it; null for the Studio, which lists
- * the artists of the stems in it.
+ * Set while a remix's own page or embed is playing the mix, so the lock
+ * screen credits the remix's artist and shows its cover; null for the
+ * Studio, which lists the artists of the stems in it.
  */
-export function setMixCredit(credit: string | null) {
-  mixCredit = credit;
+export function setPlayingRemix(remix: PlayingRemix | null) {
+  playingRemix = remix;
   apply();
 }
 
-export function getMixCredit() {
-  return mixCredit;
+export function getPlayingRemix() {
+  return playingRemix;
+}
+
+function artworkFor(src: string | null | undefined): MediaImage[] {
+  if (!src) return NOW_PLAYING_ARTWORK;
+  // Covers are square JPEGs (or PNGs) up to 1000px. Only the cover is
+  // listed: given the mark too, Android picks whichever size suits it best.
+  return [{ src: new URL(src, location.href).href, sizes: "1000x1000" }];
 }
 
 function setHandlers(session: MediaSession) {
@@ -99,14 +112,14 @@ function apply() {
     return;
   }
 
-  const key = `${current.title}\n${current.artist}\n${current.album}`;
+  const key = `${current.title}\n${current.artist}\n${current.album}\n${current.artwork ?? ""}`;
   if (key !== lastKey) {
     lastKey = key;
     session.metadata = new MediaMetadata({
       title: current.title,
       artist: current.artist,
       album: current.album,
-      artwork: NOW_PLAYING_ARTWORK,
+      artwork: artworkFor(current.artwork),
     });
     lastPosition.duration = -1;
   }
