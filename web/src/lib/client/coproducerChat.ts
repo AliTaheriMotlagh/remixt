@@ -111,13 +111,15 @@ function describeCall(name: string, input: Record<string, unknown>, result: stri
     case "try_ideas":
       return `Trying: ${((parsed.tried as string[] | undefined) ?? []).join(" + ") || "nothing fitted"}${score}`;
     case "undo_try":
-      return "Took the idea off";
+      return "Took everything off";
+    case "take_off":
+      return `Switched a change off${score}`;
     case "keep_changes":
       return "Kept the changes";
     case "adjust_lane":
-      return `Adjusted a lane${score}`;
+      return `Trying a change — switch it on or off below${score}`;
     case "change_speed":
-      return `Changed the speed to ${parsed.project_bpm} BPM`;
+      return `Trying ${parsed.project_bpm} BPM — switch it on or off below${score}`;
     case "play":
       return `Playing from ${typeof input.from_seconds === "number" ? `${Math.round(input.from_seconds)}s` : "the playhead"}`;
     default:

@@ -11,10 +11,12 @@ Who you're talking to: often someone who has never used a music app. Avoid jargo
 How you work:
 - You can't hear audio yourself. Your ears are the Studio's analysis, through your tools: get_mix (what's in the mix, the Mix check and a 0–100 score), listen_closely (tempo, keys, how many sung notes sit in the beat's chords at each pitch shift, the vocal's sections, the beat's drop) and best_versions (every ready-made idea scored as it would sound). Only state what the tools tell you.
 - Before suggesting changes, call get_mix. When the person asks to make it sound good or better, call best_versions and try the best one.
-- Prefer try_ideas: ideas are worked out by the Studio's own engine (timing, sync, keys, styles, drops, sound) and are tried non-destructively — the person hears them, compares Before/After, and keeps or undoes them. Use adjust_lane for small hands-on changes the ideas don't cover (a lane's volume, pitch, timing nudge, or effects); those are normal edits the person can undo.
+- Prefer try_ideas: ideas are worked out by the Studio's own engine (timing, sync, keys, styles, drops, sound). Use adjust_lane and change_speed for small hands-on changes the ideas don't cover (a lane's volume, pitch, timing nudge, effects; the whole song's speed).
+- Everything you change is tried, not kept: each idea and each of your hands-on changes shows in the Studio with its own on/off switch (and switches for its parts — timing, key, volume, sound), so the person can hear it with and without, compare Before/After, and keep or undo it. To take one change back, use take_off with its id; it stays listed, switched off.
 - After you change something, say what you changed and why in one or two lines, tell them what to listen for, and call play so they hear it (from the moment that matters, if you know it). Ask them to press Keep if they like it.
 - If something can't be fixed well (the vocal and beat are very far apart in tempo or key, or the vocal is rap with no melody to tune), say so honestly and suggest an alternative, like picking another beat.
-- Don't change things the person didn't ask about, and never keep_changes unless they asked you to keep them.`;
+- Don't change things the person didn't ask about, and never keep_changes unless they asked you to keep them.
+- get_mix's "trying" shows what's on, what the person switched off, and which parts of an idea they switched off — respect those choices; don't switch them back on unless asked.`;
 
 /** The tools, in the Messages API's shape (JSON Schema inputs). */
 export const COPRODUCER_TOOLS = [
@@ -72,6 +74,17 @@ export const COPRODUCER_TOOLS = [
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
+    name: "take_off",
+    description:
+      "Switches one change off — an idea or one of your hands-on changes, by the id get_mix's trying list (or adjust_lane / change_speed) gave — keeping the rest on. It stays listed, so the person can switch it back on. Returns the new score.",
+    input_schema: {
+      type: "object",
+      properties: { id: { type: "string" } },
+      required: ["id"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "keep_changes",
     description: "Keeps what's being tried, as one undo step. Only when the person asks to keep it.",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
@@ -79,7 +92,7 @@ export const COPRODUCER_TOOLS = [
   {
     name: "adjust_lane",
     description:
-      "A hands-on change to one lane (keeps any idea being tried first). All fields optional; effect values are absolute. volume 0–1.5 (1 = as loaded); pitch_semitones -12…12 (vocals keep their natural voice); nudge_beats moves the lane earlier (negative) or later in beats; effects: reverb/delay/width/drive/duck 0–1, eq_low/eq_mid/eq_high in dB (-12…12), highpass/lowpass in Hz, compress true/false, pan -1…1. Returns the new score.",
+      "A hands-on change to one lane, tried on top of whatever is on (the person can switch it off, compare and keep or undo it, like an idea). All fields optional; effect values are absolute. volume 0–1.5 (1 = as loaded); pitch_semitones -12…12 (vocals keep their natural voice); nudge_beats moves the lane earlier (negative) or later in beats; effects: reverb/delay/width/drive/duck 0–1, eq_low/eq_mid/eq_high in dB (-12…12), highpass/lowpass in Hz, compress true/false, pan -1…1. Returns the change's id and the new score.",
     input_schema: {
       type: "object",
       properties: {
@@ -113,7 +126,8 @@ export const COPRODUCER_TOOLS = [
   },
   {
     name: "change_speed",
-    description: "Makes the whole song faster or slower (every lane together, pitch unchanged). factor 0.8–1.25, e.g. 1.05 = 5% faster.",
+    description:
+      "Makes the whole song faster or slower (every lane together, pitch unchanged), tried on top of whatever is on like adjust_lane. factor 0.8–1.25, e.g. 1.05 = 5% faster. Returns the change's id.",
     input_schema: {
       type: "object",
       properties: { factor: { type: "number", minimum: 0.8, maximum: 1.25 } },

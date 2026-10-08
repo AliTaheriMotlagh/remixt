@@ -52,18 +52,25 @@ export function transpose(laneId: string, semitones: number) {
  * starts and automation all scaled, so the arrangement keeps its shape.
  */
 export function changeSpeed(k: number) {
+  const change = speedChange(k);
+  if (!change) return;
+  startNewStep();
+  store().applyLanePatches(change.patches, change.projectBpm);
+}
+
+/** What changeSpeed changes, without changing it (null when a lane would go past 0.5–2× speed). */
+export function speedChange(k: number): { patches: Record<string, LanePatch>; projectBpm: number } | null {
   const { lanes, projectBpm } = store();
   const patches: Record<string, LanePatch> = {};
   for (const lane of lanes) {
     const ratio = lane.tempoRatio * k;
-    if (ratio < 0.5 || ratio > 2) return;
+    if (ratio < 0.5 || ratio > 2) return null;
     const automation = Object.fromEntries(
       Object.entries(lane.automation).map(([param, points]) => [param, (points as AutoPoint[] | undefined)?.map((p) => ({ ...p, t: p.t / k }))])
     );
     patches[lane.laneId] = { tempoRatio: ratio, offsetSeconds: lane.offsetSeconds / k, automation };
   }
-  startNewStep();
-  store().applyLanePatches(patches, Math.round(projectBpm * k * 10) / 10);
+  return { patches, projectBpm: Math.round(projectBpm * k * 10) / 10 };
 }
 
 export type Space = "dry" | "room" | "hall";

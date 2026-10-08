@@ -84,9 +84,31 @@ export type Idea = {
    * on their own. Undoing the idea puts the beat back.
    */
   lanes?: LaneChange;
+  /**
+   * A change the co-producer made by hand (Ask AI) rather than an idea the
+   * studio worked out: applied on top of everything else, to wherever the
+   * lanes are then, so it can be switched on and off like any idea.
+   */
+  edits?: HandEdit[];
 };
 
 export type LaneChange = { add: StudioLane[]; remove: string[] };
+
+/** One hands-on change: to a lane (and the vocal layers that follow it), or the whole song's speed. */
+export type HandEdit =
+  | {
+      laneId: string;
+      volume?: number;
+      pitchSemitones?: number;
+      fx?: Partial<LaneFx>;
+      muted?: boolean;
+      /** Moves the lane (and its layers) later, or earlier when negative, by this many seconds. */
+      nudgeSeconds?: number;
+    }
+  | {
+      /** The whole song faster (above 1) or slower, everything together. */
+      speed: number;
+    };
 
 export type IdeaOptions = {
   vibe: Vibe;
@@ -2148,21 +2170,39 @@ export function wholeIfAsked(session: Session, idea: Idea | null): Idea | null {
   return draft.idea({ id, role, icon, title, short, why, kind, vibes, listenAt, lanes });
 }
 
+/** One family of ideas, worked out for a session. */
+type IdeaSource = (session: Session) => Idea[];
+
+/** Every family of ideas, in the order they're listed. */
+const SOURCES: IdeaSource[] = [
+  (session) => {
+    const auto = makeItGood(session);
+    return auto ? [auto] : [];
+  },
+  syncTemplateIdeas,
+  fixIdeas,
+  fullRemixIdeas,
+  speedStyleIdeas,
+  momentIdeas,
+  rhythmIdeas,
+  layerIdeas,
+  (session) => (session.pair ? arrangementIdeas(session) : []),
+  soundIdeas,
+];
+
+/**
+ * Which family made each idea (ids are stable), so one idea can be worked
+ * out again on its own — not every idea the studio has, every time.
+ */
+const sourceOf = new Map<string, IdeaSource>();
+
 /** All the studio's ideas for the session — each kind with those suiting the chosen vibe first. */
 export function studioIdeas(session: Session): Idea[] {
-  const auto = makeItGood(session);
-  const all = [
-    ...(auto ? [auto] : []),
-    ...syncTemplateIdeas(session),
-    ...fixIdeas(session),
-    ...fullRemixIdeas(session),
-    ...speedStyleIdeas(session),
-    ...momentIdeas(session),
-    ...rhythmIdeas(session),
-    ...layerIdeas(session),
-    ...(session.pair ? arrangementIdeas(session) : []),
-    ...soundIdeas(session),
-  ];
+  const all = SOURCES.flatMap((source) => {
+    const ideas = source(session);
+    for (const idea of ideas) sourceOf.set(idea.id, source);
+    return ideas;
+  });
   return rankIdeas(
     all.map((idea) => wholeIfAsked(session, idea)).filter((idea): idea is Idea => !!idea),
     session.options.vibe
@@ -2216,15 +2256,20 @@ export async function syncEverythingIdea(session: Session): Promise<Idea | null>
  * on it, when they're combined). Null when it no longer makes sense there.
  */
 export function recompileIdea(idea: Idea, session: Session): Idea | null {
-  // Locking every lane to one tempo sets all their timing outright: it holds.
-  if (idea.id === SYNC_ID) return idea;
+  // Locking every lane to one tempo sets all their timing outright: it holds
+  // (kept whole if the person has asked for that since).
+  if (idea.id === SYNC_ID) return wholeIfAsked(session, idea);
   if (idea.id.startsWith("fix:")) return mixFix(session, fixesOf(idea));
-  return studioIdeas(session).find((i) => i.id === idea.id) ?? null;
+  const source = sourceOf.get(idea.id);
+  if (!source) return studioIdeas(session).find((i) => i.id === idea.id) ?? null;
+  const again = source(session).find((i) => i.id === idea.id);
+  return again ? wholeIfAsked(session, again) : null;
 }
 
-/** The ideas worked out again for `session` (the mix after the person changed it). */
+/** The ideas worked out again for `session` (the mix after the person changed it, or new options). */
 export function reworkIdeas(session: Session, ideas: Idea[]): Idea[] {
-  return [...studioIdeas(session), ...ideas.filter((idea) => idea.id === SYNC_ID)];
+  const locked = ideas.filter((idea) => idea.id === SYNC_ID).map((idea) => wholeIfAsked(session, idea));
+  return [...studioIdeas(session), ...locked.filter((idea): idea is Idea => !!idea)];
 }
 
 // --- Applying --------------------------------------------------------------------------------
@@ -2262,6 +2307,8 @@ function slotOf(idea: Idea): string | null {
  */
 export function compatible(a: Idea, b: Idea) {
   if (a.id === b.id) return false;
+  // Hands-on changes go on top of whatever is on.
+  if (a.edits || b.edits) return true;
   const timing = (i: Idea) => i.aspects.includes("arrangement") || i.aspects.includes("tempo");
   if (timing(a) && timing(b)) return false;
   const slot = slotOf(a);

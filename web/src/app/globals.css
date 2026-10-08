@@ -270,9 +270,10 @@ body {
   }
 }
 
-/* Room for the bars fixed at the bottom, for things floating above them. */
+/* Room for the bars fixed at the bottom, for things floating above them
+   (and above the AI producer's sheet on a phone, which sets --ai-sheet-h). */
 .bottom-float {
-  bottom: calc(max(var(--bottom-chrome), env(safe-area-inset-bottom)) + 0.75rem);
+  bottom: calc(max(var(--bottom-chrome), env(safe-area-inset-bottom), var(--ai-sheet-h, 0px)) + 0.75rem);
 }
 
 /* --- Home page ------------------------------------------------------------ */

@@ -1,22 +1,21 @@
 "use client";
 
-import { checkMix, findDrop, harmonyOf, ideaFits, type Idea, type Session } from "./aiIdeas";
-import { keepTrial, revertTrial, tryIdea, useAiTrial } from "./aiTrial";
+import { checkMix, findDrop, harmonyOf, ideaFits, type HandEdit, type Idea, type Session } from "./aiIdeas";
+import { aspectsOfEdits, keepTrial, removeFromTrial, revertTrial, tryIdea, tryIdeas, useAiTrial } from "./aiTrial";
 import { audioEngine } from "./audioEngine";
 import { describeSections } from "./pairMatch";
 import { bestVersions, scoreMix } from "./mixScore";
 import { keyLabel } from "./musicKey";
 import { useBeatModel } from "./neuralBeats";
-import { changeSpeed, nudge } from "./quickAdjust";
-import { startNewStep } from "./studioHistory";
-import { effectiveKey, laneName, useStudioStore, type LaneFx, type LanePatch } from "./studioStore";
+import { speedChange } from "./quickAdjust";
+import { beatLength, effectiveKey, laneName, useStudioStore, type LaneFx } from "./studioStore";
 import type { CoproducerToolName } from "@/lib/coproducer";
 
 // The co-producer's hands: what each of its tools (lib/coproducer.ts)
 // does in the Studio. They run here, in the browser, on the person's own
-// mix — ideas through the same try / keep / undo as the AI producer panel,
-// hands-on changes as ordinary undoable edits — and answer with plain
-// facts for Claude to reason over.
+// mix — ideas, and its own hands-on changes too, through the same try /
+// switch on-off / keep / undo as the AI producer panel — and answer with
+// plain facts for Claude to reason over.
 
 export type CoproducerContext = {
   /** What the AI producer heard (null until it has listened). */
@@ -77,6 +76,38 @@ function report(session: Session) {
 
 const json = (value: unknown): Result => ({ content: JSON.stringify(value) });
 
+let handCount = 0;
+
+/** A hands-on change, tried like an idea: listed with a switch, compared Before/After, kept or undone. */
+function handIdea(title: string, lines: string[], edits: HandEdit[]): Idea {
+  return {
+    id: `hand:${++handCount}`,
+    role: "engineer",
+    kind: "idea",
+    icon: "message-circle",
+    title,
+    short: "Your co-producer's change",
+    why: "Made by your co-producer (Ask AI)",
+    lines,
+    patches: {},
+    aspects: aspectsOfEdits(edits),
+    vibes: [],
+    stems: {},
+    edits,
+  };
+}
+
+/** What's on (and switched off) right now, for the co-producer. */
+function trying() {
+  const trial = useAiTrial.getState().trial;
+  if (!trial) return null;
+  return {
+    on: trial.ideas.map((i) => ({ id: i.id, title: i.title, ...(trial.without[i.id]?.length ? { parts_switched_off: trial.without[i.id] } : {}) })),
+    switched_off: trial.off.map((i) => ({ id: i.id, title: i.title })),
+    showing: trial.showing,
+  };
+}
+
 /** Carries out one tool call. Never throws: problems come back as error results Claude can read. */
 export async function runCoproducerTool(name: string, input: Record<string, unknown>, ctx: CoproducerContext): Promise<Result> {
   try {
@@ -91,23 +122,24 @@ async function run(name: CoproducerToolName, input: Record<string, unknown>, ctx
   if (name === "play") {
     const from = typeof input.from_seconds === "number" ? input.from_seconds : null;
     if (from !== null) audioEngine.seek(Math.max(0, Math.min(from, studio.duration)));
-    if (!useStudioStore.getState().isPlaying) await audioEngine.play().catch(() => {});
+    if (!useStudioStore.getState().isPlaying) await audioEngine.play({ join: true }).catch(() => {});
     return json({ playing: true, from_seconds: round(useStudioStore.getState().playhead) });
   }
   if (name === "undo_try") {
     revertTrial();
     return json({ ok: true, note: "Back to the mix as it was before trying" });
   }
+  if (name === "take_off") {
+    const id = String(input.id ?? "");
+    const session = ctx.session();
+    const trial = useAiTrial.getState().trial;
+    if (!session || !trial?.ideas.some((i) => i.id === id)) return { content: `${id} isn't on — get_mix lists what's on`, isError: true };
+    removeFromTrial(session, id);
+    return json({ ok: true, trying: trying(), ...report(session) });
+  }
   if (name === "keep_changes") {
     const kept = keepTrial();
     return json({ kept: kept.map((i) => i.title), note: kept.length ? "Kept as one undo step" : "Nothing was being tried" });
-  }
-  if (name === "change_speed") {
-    const factor = Number(input.factor);
-    if (!(factor >= 0.8 && factor <= 1.25)) return { content: "factor must be between 0.8 and 1.25", isError: true };
-    if (useAiTrial.getState().trial) keepTrial();
-    changeSpeed(factor);
-    return json({ project_bpm: useStudioStore.getState().projectBpm });
   }
 
   const session = await ctx.listen();
@@ -123,7 +155,7 @@ async function run(name: CoproducerToolName, input: Record<string, unknown>, ctx
       project_bpm: studio.projectBpm,
       lanes: lanesNow(),
       working_on: { vocal: session.vocal?.laneId ?? null, beat: session.beat?.laneId ?? null },
-      trying: trial ? { ideas: trial.ideas.map((i) => ({ id: i.id, title: i.title })), showing: trial.showing } : null,
+      trying: trying(),
       ...report(session),
       notes: session.notes,
       beat_model: beatModel.status,
@@ -181,13 +213,11 @@ async function run(name: CoproducerToolName, input: Record<string, unknown>, ctx
     const missing = ids.filter((id) => !ideas.some((i) => i.id === id));
     if (missing.length) return { content: `No idea with id ${missing.join(", ")} — call list_ideas for the ids`, isError: true };
     if (input.replace) revertTrial();
-    const tried: string[] = [];
-    const failed: string[] = [];
-    for (const id of ids) {
-      const idea = ideas.find((i) => i.id === id)!;
-      if (tryIdea(session, idea, { add: true })) tried.push(idea.title);
-      else failed.push(idea.title);
-    }
+    // All in one go: the mix is worked out once, not once per idea.
+    const wanted = ids.map((id) => ideas.find((i) => i.id === id)!);
+    const went = new Set(tryIdeas(session, wanted).map((i) => i.id));
+    const tried = wanted.filter((i) => went.has(i.id)).map((i) => i.title);
+    const failed = wanted.filter((i) => !went.has(i.id)).map((i) => i.title);
     const on = useAiTrial.getState().trial?.ideas ?? [];
     return json({
       tried,
@@ -201,35 +231,55 @@ async function run(name: CoproducerToolName, input: Record<string, unknown>, ctx
     const laneId = String(input.lane_id ?? "");
     const lane = useStudioStore.getState().lanes.find((l) => l.laneId === laneId);
     if (!lane) return { content: `No lane ${laneId} — get_mix lists the lane ids`, isError: true };
-    if (useAiTrial.getState().trial) keepTrial();
-    const patch: LanePatch = {};
-    if (typeof input.volume === "number") patch.volume = Math.max(0, Math.min(1.5, input.volume));
-    if (typeof input.pitch_semitones === "number") patch.pitchSemitones = Math.max(-12, Math.min(12, Math.round(input.pitch_semitones)));
+    const edit: HandEdit = { laneId };
+    const lines: string[] = [];
+    const name = laneName(lane);
+    if (typeof input.volume === "number") {
+      edit.volume = Math.max(0, Math.min(1.5, input.volume));
+      lines.push(`${name}: volume ${Math.round(edit.volume * 100)}%`);
+    }
+    if (typeof input.pitch_semitones === "number") {
+      edit.pitchSemitones = Math.max(-12, Math.min(12, Math.round(input.pitch_semitones)));
+      lines.push(`${name}: pitch ${edit.pitchSemitones > 0 ? "+" : ""}${edit.pitchSemitones} semitones`);
+    }
+    if (typeof input.nudge_beats === "number" && input.nudge_beats) {
+      edit.nudgeSeconds = input.nudge_beats * beatLength(useStudioStore.getState().projectBpm);
+      lines.push(`${name}: ${Math.abs(input.nudge_beats)} beat${Math.abs(input.nudge_beats) === 1 ? "" : "s"} ${input.nudge_beats > 0 ? "later" : "earlier"}`);
+    }
+    if (typeof input.muted === "boolean") {
+      edit.muted = input.muted;
+      lines.push(`${name}: ${input.muted ? "muted" : "unmuted"}`);
+    }
     const fx = input.effects && typeof input.effects === "object" ? (input.effects as Record<string, unknown>) : null;
     if (fx) {
       const names: Record<string, keyof LaneFx> = {
         reverb: "reverb", delay: "delay", width: "width", drive: "drive", duck: "duck",
         eq_low: "eqLow", eq_mid: "eqMid", eq_high: "eqHigh", highpass: "highpass", lowpass: "lowpass", compress: "compress", pan: "pan",
       };
-      const next: LaneFx = { ...lane.fx };
+      const changes: Partial<LaneFx> = {};
       for (const [k, v] of Object.entries(fx)) {
         const field = names[k];
         if (!field || (typeof v !== "number" && typeof v !== "boolean")) continue;
-        (next as Record<string, unknown>)[field] = v;
+        (changes as Record<string, unknown>)[field] = v;
+        lines.push(`${name}: ${k.replace("_", " ")} ${typeof v === "boolean" ? (v ? "on" : "off") : v}`);
       }
-      patch.fx = next;
+      if (Object.keys(changes).length) edit.fx = changes;
     }
-    if (Object.keys(patch).length) {
-      startNewStep();
-      useStudioStore.getState().applyLanePatches({ [laneId]: patch });
-    }
-    if (typeof input.nudge_beats === "number" && input.nudge_beats) nudge(laneId, input.nudge_beats);
-    if (typeof input.muted === "boolean" && input.muted !== lane.muted) {
-      startNewStep();
-      useStudioStore.getState().toggleMute(laneId);
-    }
-    const fresh = await ctx.listen();
-    return json({ ok: true, ...(fresh ? report(fresh) : {}) });
+    if (!lines.length) return { content: "Nothing to change — give at least one field", isError: true };
+    // Tried like an idea, on top of what's on: the person can switch it off, compare, keep or undo it.
+    const idea = handIdea(lines.length === 1 ? lines[0] : `${name}: ${lines.length} changes`, lines, [edit]);
+    if (!tryIdea(session, idea, { add: true })) return { content: "That lane isn't in the mix any more", isError: true };
+    return json({ id: idea.id, ok: true, trying: trying(), ...report(session) });
+  }
+
+  if (name === "change_speed") {
+    const factor = Number(input.factor);
+    if (!(factor >= 0.8 && factor <= 1.25)) return { content: "factor must be between 0.8 and 1.25", isError: true };
+    if (!speedChange(factor)) return { content: "A lane would play too fast or too slow at that speed", isError: true };
+    const percent = Math.round((factor - 1) * 1000) / 10;
+    const idea = handIdea(`Whole song ${percent > 0 ? `${percent}% faster` : `${-percent}% slower`}`, [`Every lane ${percent > 0 ? "faster" : "slower"} together, pitch unchanged`], [{ speed: factor }]);
+    if (!tryIdea(session, idea, { add: true })) return { content: "Couldn't change the speed", isError: true };
+    return json({ id: idea.id, project_bpm: useStudioStore.getState().projectBpm, trying: trying(), ...report(session) });
   }
 
   return { content: `Unknown tool ${name}`, isError: true };

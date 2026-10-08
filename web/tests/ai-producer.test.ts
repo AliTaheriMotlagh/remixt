@@ -15,17 +15,31 @@ import {
   masterFor,
   mixFix,
   mixSignature,
+  recompileIdea,
   studioIdeas,
   timingSignature,
   type Idea,
   type Session,
 } from "../src/lib/client/aiIdeas.ts";
-import { compare, keepTrial, revertTrial, tryIdea, useAiTrial } from "../src/lib/client/aiTrial.ts";
+import {
+  aspectsOfEdits,
+  compare,
+  dismissOff,
+  keepTrial,
+  partsOf,
+  removeFromTrial,
+  revertTrial,
+  switchPart,
+  tryIdea,
+  tryIdeas,
+  useAiTrial,
+} from "../src/lib/client/aiTrial.ts";
 import { gain, nudge, transpose } from "../src/lib/client/quickAdjust.ts";
 import type { BeatStructure } from "../src/lib/client/arrange.ts";
 import { normaliseLane } from "../src/lib/client/clipEdit.ts";
 import { resetHistory, undo } from "../src/lib/client/studioHistory.ts";
-import { DEFAULT_FX, useStudioStore, type LoadableStem, type StudioLane } from "../src/lib/client/studioStore.ts";
+import { DEFAULT_FX, subscribeMix, useStudioStore, type LoadableStem, type StudioLane } from "../src/lib/client/studioStore.ts";
+import type { HandEdit } from "../src/lib/client/aiIdeas.ts";
 
 /** 120 BPM: a bar is 2 seconds. */
 const BPM = 120;
@@ -243,6 +257,146 @@ describe("trying ideas", () => {
     assert.deepEqual(keepTrial().map((i) => i.id), ["sound-punch"]);
     assert.equal(state().lanes, tried);
     assert.equal(useAiTrial.getState().trial, null);
+  });
+
+  test("several ideas put on in one go come out the same as one after another", () => {
+    const picks = [get("sound-lofi"), get("parts-drop"), get("moment-acapella")];
+    for (const idea of picks) tryIdea(s, idea, { add: true });
+    const oneByOne = { lanes: state().lanes, ids: useAiTrial.getState().trial!.ideas.map((i) => i.id) };
+    revertTrial();
+
+    assert.deepEqual(tryIdeas(s, picks).map((i) => i.id), picks.map((i) => i.id));
+    assert.deepEqual(useAiTrial.getState().trial!.ideas.map((i) => i.id), oneByOne.ids);
+    assert.deepEqual(state().lanes, oneByOne.lanes);
+    revertTrial();
+    assert.deepEqual(state().lanes, [beat, vocal, drums]);
+  });
+
+  test("an idea worked out again on its own matches the one in the full list", () => {
+    // Clips get a fresh random id each time they're cut.
+    const sameCuts = (patches: Idea["patches"]) => JSON.parse(JSON.stringify(patches, (key, value) => (key === "id" ? undefined : value)));
+    for (const idea of ideas) {
+      const again = recompileIdea(idea, s);
+      assert.ok(again, idea.id);
+      assert.deepEqual(sameCuts(again.patches), sameCuts(idea.patches), idea.id);
+      assert.deepEqual(again.aspects, idea.aspects, idea.id);
+    }
+  });
+
+  test("an idea switched off stays listed, to switch back on", () => {
+    tryIdea(s, get("sound-lofi"));
+    tryIdea(s, get("parts-drop"), { add: true });
+    removeFromTrial(s, "sound-lofi");
+    let trial = useAiTrial.getState().trial!;
+    assert.deepEqual(trial.ideas.map((i) => i.id), ["parts-drop"]);
+    assert.deepEqual(trial.off.map((i) => i.id), ["sound-lofi"]);
+    assert.equal(state().lanes.find((l) => l.laneId === "beat")!.fx.drive, 0, "the lo-fi sound is off");
+
+    removeFromTrial(s, "parts-drop");
+    trial = useAiTrial.getState().trial!;
+    assert.ok(trial, "with everything off, both are still listed");
+    assert.deepEqual(trial.ideas, []);
+    assert.deepEqual(trial.off.map((i) => i.id), ["parts-drop", "sound-lofi"]);
+    assert.deepEqual(state().lanes, [beat, vocal, drums], "everything off: the mix as it was");
+
+    assert.ok(tryIdea(s, get("sound-lofi"), { add: true }));
+    assert.ok(state().lanes.find((l) => l.laneId === "beat")!.fx.drive > 0, "back on");
+    assert.deepEqual(useAiTrial.getState().trial!.off.map((i) => i.id), ["parts-drop"]);
+    dismissOff("parts-drop");
+    assert.deepEqual(useAiTrial.getState().trial!.off, []);
+  });
+
+  test("keeping with everything switched off keeps nothing", () => {
+    tryIdea(s, get("sound-lofi"));
+    removeFromTrial(s, "sound-lofi");
+    assert.deepEqual(keepTrial(), []);
+    assert.equal(useAiTrial.getState().trial, null);
+    assert.deepEqual(state().lanes, [beat, vocal, drums]);
+  });
+
+  test("each part of an idea switches off on its own", () => {
+    const slowed = get("full-slowed");
+    assert.deepEqual(partsOf(slowed), ["timing", "key", "effects"]);
+    tryIdea(s, slowed);
+    const full = state().lanes;
+    const vocalNow = () => state().lanes.find((l) => l.laneId === "vocal")!;
+    const fullVocal = full.find((l) => l.laneId === "vocal")!;
+    assert.notEqual(fullVocal.pitchSemitones, 0, "slowed lowers the pitch");
+
+    switchPart(s, "full-slowed", "key", false);
+    assert.equal(vocalNow().pitchSemitones, 0, "its key change is off");
+    assert.equal(vocalNow().tempoRatio, fullVocal.tempoRatio, "its speed stays");
+    assert.deepEqual(vocalNow().fx, fullVocal.fx, "and its sound");
+    assert.deepEqual(useAiTrial.getState().trial!.without, { "full-slowed": ["key"] });
+
+    switchPart(s, "full-slowed", "timing", false);
+    assert.equal(vocalNow().tempoRatio, vocal.tempoRatio, "its speed is off too");
+    assert.equal(state().projectBpm, BPM);
+
+    switchPart(s, "full-slowed", "key", true);
+    switchPart(s, "full-slowed", "timing", true);
+    assert.deepEqual(state().lanes, full, "all back on: as it was");
+  });
+
+  test("the co-producer's hands-on changes go on top of an idea and switch off like one", () => {
+    tryIdea(s, get("full-slowed"));
+    const styled = state().lanes;
+    const styledBpm = state().projectBpm;
+    const styledVocal = styled.find((l) => l.laneId === "vocal")!;
+    const hand = (id: string, edits: HandEdit[]): Idea => ({
+      id, role: "engineer", kind: "idea", icon: "message-circle", title: id, short: "", why: "", lines: [], patches: {}, aspects: aspectsOfEdits(edits), vibes: [], stems: {}, edits,
+    });
+    const vocalNow = () => state().lanes.find((l) => l.laneId === "vocal")!;
+
+    assert.ok(tryIdea(s, hand("hand:1", [{ laneId: "vocal", volume: 1.3, fx: { reverb: 0.4 } }]), { add: true }));
+    assert.deepEqual(useAiTrial.getState().trial!.ideas.map((i) => i.id), ["full-slowed", "hand:1"], "the style stays on");
+    assert.equal(vocalNow().volume, 1.3);
+    assert.deepEqual(vocalNow().fx, { ...styledVocal.fx, reverb: 0.4 }, "only the effect it set changes");
+    assert.equal(vocalNow().tempoRatio, styledVocal.tempoRatio);
+
+    switchPart(s, "hand:1", "effects", false);
+    assert.deepEqual(vocalNow().fx, styledVocal.fx);
+    assert.equal(vocalNow().volume, 1.3);
+
+    assert.ok(tryIdea(s, hand("hand:2", [{ speed: 1.1 }]), { add: true }), "a speed change goes on top of a style too");
+    assert.equal(state().projectBpm, Math.round(styledBpm * 1.1 * 10) / 10);
+
+    removeFromTrial(s, "hand:1");
+    removeFromTrial(s, "hand:2");
+    assert.deepEqual(state().lanes, styled, "both off: the style alone");
+    assert.deepEqual(useAiTrial.getState().trial!.off.map((i) => i.id), ["hand:2", "hand:1"]);
+  });
+
+  test("worked out again (new options, a fresh listen), what was switched off stays off", () => {
+    tryIdea(s, get("full-slowed"));
+    tryIdea(s, get("sound-lofi"), { add: true });
+    switchPart(s, "full-slowed", "key", false);
+    removeFromTrial(s, "sound-lofi");
+    const was = revertTrial()!;
+    assert.deepEqual(state().lanes, [beat, vocal, drums]);
+
+    tryIdeas(s, was.ideas, { after: was });
+    const trial = useAiTrial.getState().trial!;
+    assert.deepEqual(trial.ideas.map((i) => i.id), ["full-slowed"]);
+    assert.deepEqual(trial.off.map((i) => i.id), ["sound-lofi"]);
+    assert.deepEqual(trial.without, { "full-slowed": ["key"] });
+    assert.equal(state().lanes.find((l) => l.laneId === "vocal")!.pitchSemitones, 0);
+  });
+
+  test("the audio engine hears each try once, as where it ended up", () => {
+    const heard: { from: StudioLane[]; to: StudioLane[] }[] = [];
+    const stop = subscribeMix((now, before) => heard.push({ from: before.lanes, to: now.lanes }));
+    try {
+      tryIdea(s, get("full-slowed"));
+      const first = state().lanes;
+      tryIdea(s, get("sound-lofi"), { add: true });
+      assert.equal(heard.length, 2, "not once per step of the building");
+      assert.deepEqual(heard[0].from, [beat, vocal, drums]);
+      assert.equal(heard[1].from, first, "from the first try straight to the second");
+      assert.equal(heard[1].to, state().lanes);
+    } finally {
+      stop();
+    }
   });
 
   test("a kept idea is one undo step; undo while trying just reverts", () => {

@@ -1,9 +1,11 @@
 "use client";
 
 import { create } from "zustand";
-import { compatible, rebaseSession, recompileIdea, timingSignature, type Idea, type Session } from "./aiIdeas";
+import { ALL_ASPECTS, type Aspect } from "./aiControl";
+import { compatible, leadOf, rebaseSession, recompileIdea, timingSignature, type HandEdit, type Idea, type Session } from "./aiIdeas";
+import { speedChange } from "./quickAdjust";
 import { interceptHistory, recordStep, useStudioHistory, withoutRecording } from "./studioHistory";
-import { useStudioStore, type StudioLane } from "./studioStore";
+import { asOneChange, useStudioStore, type LanePatch, type StudioLane } from "./studioStore";
 
 // Auditioning AI ideas the way a DAW auditions presets. The mix as it was
 // before the first try is kept aside; every try starts again from it, so
@@ -14,17 +16,54 @@ import { useStudioStore, type StudioLane } from "./studioStore";
 // once: each is worked out again on top of the ones before it, the
 // arrangement first, so a filter opens where the vocal now comes in.
 //
+// Every change can be switched on and off: an idea switched off stays
+// listed (with a switch to put it back), and each part of an idea — its
+// timing, key, levels, sound, moves, layers — can be switched off on its
+// own. The co-producer's hands-on changes (Ask AI) are tried the same way.
+//
 // None of the trying is recorded as undo steps. If the person edits the
 // mix while an idea is on, the idea is kept (undo takes back their edit,
 // then the idea); undo while trying just reverts.
 
 type Mix = { lanes: StudioLane[]; duration: number; projectBpm: number };
 
+/** A part of an idea that can be switched off on its own. */
+export type Part = "timing" | "key" | "levels" | "effects" | "automation" | "layers";
+
+/** The parts, with the aspects of an idea each covers (timing and speed go together: clips are placed for the speed). */
+export const PARTS: { id: Part; label: string; aspects: Aspect[] }[] = [
+  { id: "timing", label: "Timing & speed", aspects: ["arrangement", "tempo"] },
+  { id: "key", label: "Key", aspects: ["key"] },
+  { id: "levels", label: "Volume", aspects: ["levels"] },
+  { id: "effects", label: "Sound", aspects: ["effects"] },
+  { id: "automation", label: "Moves", aspects: ["automation"] },
+  { id: "layers", label: "Layers", aspects: ["layers"] },
+];
+
+/** What each part sets on a lane. */
+const FIELDS: Record<Part, (keyof LanePatch)[]> = {
+  timing: ["clips", "offsetSeconds", "tempoRatio", "bpm"],
+  key: ["pitchSemitones", "musicalKey"],
+  levels: ["volume", "muted"],
+  effects: ["fx"],
+  automation: ["automation"],
+  layers: [],
+};
+
+/** The parts an idea changes. */
+export function partsOf(idea: Idea): Part[] {
+  return PARTS.filter((p) => p.aspects.some((a) => idea.aspects.includes(a))).map((p) => p.id);
+}
+
 export type Trial = {
   /** The mix before any idea was tried — every try starts from here. */
   baseline: Mix;
   /** The ideas on, in the order they were added. */
   ideas: Idea[];
+  /** Ideas switched off since trying started, last switched off first — listed so they can go back on. */
+  off: Idea[];
+  /** By idea: the parts of it switched off. */
+  without: Record<string, Part[]>;
   /** The mix with them on. */
   result: Mix;
   /** A/B: which one is in the mix right now. */
@@ -56,13 +95,20 @@ function setMix(mix: Mix) {
 
 /**
  * Arrangement and tempo first: the others are worked out on top of where
- * they put things. Ideas that swap the beat for its parts go last, so the
- * parts take on whatever the others did to the beat.
+ * they put things. Ideas that swap the beat for its parts go after, so the
+ * parts take on whatever the others did to the beat; hands-on changes
+ * last, on top of everything.
  */
 function ordered(ideas: Idea[]) {
   const timing = (i: Idea) => i.aspects.includes("arrangement") || i.aspects.includes("tempo");
   const swaps = (i: Idea) => !!i.lanes;
-  return [...ideas.filter(timing), ...ideas.filter((i) => !timing(i) && !swaps(i)), ...ideas.filter((i) => !timing(i) && swaps(i))];
+  const studio = ideas.filter((i) => !i.edits);
+  return [
+    ...studio.filter(timing),
+    ...studio.filter((i) => !timing(i) && !swaps(i)),
+    ...studio.filter((i) => !timing(i) && swaps(i)),
+    ...ideas.filter((i) => i.edits),
+  ];
 }
 
 /** Takes lanes out and puts new ones in, as an idea asks. */
@@ -73,22 +119,123 @@ function swapLanes(change: NonNullable<Idea["lanes"]>) {
   useStudioStore.setState({ lanes: [...kept, ...added] });
 }
 
-/** The baseline with `ideas` on; the ones that couldn't go on are left out. */
-function build(session: Session, baseline: Mix, ideas: Idea[]): { result: Mix; on: Idea[] } {
-  setMix(baseline);
-  const on: Idea[] = [];
-  const inSync = session.timing === timingSignature(baseline.lanes, baseline.projectBpm);
-  for (const idea of ordered(ideas)) {
-    const compiled = on.length === 0 && inSync ? idea : recompileIdea(idea, rebaseSession(session));
-    if (!compiled) continue;
-    quietly(() => {
-      if (compiled.lanes) swapLanes(compiled.lanes);
-      // Also works the duration out again for any lanes swapped in.
-      useStudioStore.getState().applyLanePatches(compiled.patches, compiled.projectBpm);
-    });
-    on.push(idea);
+/** An idea with some of its parts left out. */
+function withoutParts(idea: Idea, off: Part[]): Idea {
+  if (!off.length) return idea;
+  const dropped = new Set(off.flatMap((part) => FIELDS[part]));
+  // Lanes it adds alongside (vocal layers) are its "layers" part; a swap (the beat for its parts) always goes.
+  const noLayers = off.includes("layers") && !!idea.lanes?.add.length && !idea.lanes.remove.length;
+  const added = new Set(noLayers ? idea.lanes!.add.map((l) => l.laneId) : []);
+  const patches: Record<string, LanePatch> = {};
+  for (const [laneId, patch] of Object.entries(idea.patches)) {
+    if (added.has(laneId)) continue;
+    const kept = Object.fromEntries(Object.entries(patch).filter(([field]) => !dropped.has(field as keyof LanePatch)));
+    if (Object.keys(kept).length) patches[laneId] = kept;
   }
+  return {
+    ...idea,
+    patches,
+    projectBpm: off.includes("timing") ? undefined : idea.projectBpm,
+    lanes: noLayers ? undefined : idea.lanes,
+  };
+}
+
+/** What a set of hands-on changes touches (for listing them, and switching their parts). */
+export function aspectsOfEdits(edits: HandEdit[]): Aspect[] {
+  const found = new Set<Aspect>();
+  for (const edit of edits) {
+    if ("speed" in edit) {
+      found.add("tempo");
+      continue;
+    }
+    if (edit.nudgeSeconds) found.add("arrangement");
+    if (edit.pitchSemitones !== undefined) found.add("key");
+    if (edit.volume !== undefined || edit.muted !== undefined) found.add("levels");
+    if (edit.fx) found.add("effects");
+  }
+  return ALL_ASPECTS.filter((a) => found.has(a));
+}
+
+/** Makes hands-on changes to the mix as it is now, leaving out the parts switched off. False if none applied. */
+function applyEdits(edits: HandEdit[], off: Part[]) {
+  let applied = false;
+  for (const edit of edits) {
+    const store = useStudioStore.getState();
+    if ("speed" in edit) {
+      if (off.includes("timing")) continue;
+      const change = speedChange(edit.speed);
+      if (!change) continue;
+      store.applyLanePatches(change.patches, change.projectBpm);
+      applied = true;
+      continue;
+    }
+    const lane = store.lanes.find((l) => l.laneId === edit.laneId);
+    if (!lane) continue;
+    const patch: LanePatch = {};
+    if (!off.includes("levels") && edit.volume !== undefined) patch.volume = edit.volume;
+    if (!off.includes("levels") && edit.muted !== undefined) patch.muted = edit.muted;
+    if (!off.includes("key") && edit.pitchSemitones !== undefined) patch.pitchSemitones = edit.pitchSemitones;
+    if (!off.includes("effects") && edit.fx) patch.fx = { ...lane.fx, ...edit.fx };
+    if (Object.keys(patch).length) {
+      store.applyLanePatches({ [edit.laneId]: patch });
+      applied = true;
+    }
+    if (!off.includes("timing") && edit.nudgeSeconds) {
+      const ids = store.lanes.filter((l) => l.laneId === edit.laneId || leadOf(l.laneId) === edit.laneId).map((l) => l.laneId);
+      useStudioStore.getState().moveLanes(ids, edit.nudgeSeconds);
+      applied = true;
+    }
+  }
+  return applied;
+}
+
+/**
+ * The baseline with `ideas` on; the ones that couldn't go on are left out.
+ * Worked out as one change of the mix, so the audio engine only hears
+ * where it ends up (see asOneChange).
+ */
+function build(session: Session, baseline: Mix, ideas: Idea[], without: Record<string, Part[]>): { result: Mix; on: Idea[] } {
+  const on: Idea[] = [];
+  asOneChange(() => {
+    setMix(baseline);
+    const inSync = session.timing === timingSignature(baseline.lanes, baseline.projectBpm);
+    for (const idea of ordered(ideas)) {
+      const off = without[idea.id] ?? [];
+      if (idea.edits) {
+        let applied = false;
+        quietly(() => (applied = applyEdits(idea.edits!, off)));
+        if (applied || off.length) on.push(idea);
+        continue;
+      }
+      const compiled = on.length === 0 && inSync ? idea : recompileIdea(idea, rebaseSession(session));
+      if (!compiled) continue;
+      const kept = withoutParts(compiled, off);
+      quietly(() => {
+        if (kept.lanes) swapLanes(kept.lanes);
+        // Also works the duration out again for any lanes swapped in.
+        useStudioStore.getState().applyLanePatches(kept.patches, kept.projectBpm);
+      });
+      on.push(idea);
+    }
+  });
   return { result: currentMix(), on };
+}
+
+/**
+ * Puts what's wanted on and records it as the trial. Ideas that were
+ * switched off stay listed; with nothing on and nothing listed, it's over.
+ */
+function settle(session: Session, baseline: Mix, wanted: Idea[], from: Pick<Trial, "off" | "without"> | null): Idea[] {
+  const without = from?.without ?? {};
+  const { result, on } = build(session, baseline, wanted, without);
+  const off = (from?.off ?? []).filter((i) => !on.some((o) => o.id === i.id));
+  if (!on.length && !off.length) {
+    setMix(baseline);
+    useAiTrial.setState({ trial: null });
+    return [];
+  }
+  useAiTrial.setState({ trial: { baseline, ideas: on, off, without, result, showing: "idea" } });
+  return on;
 }
 
 /**
@@ -106,24 +253,61 @@ export function tryIdea(
   const baseline = trial?.baseline ?? currentMix();
   const ideas =
     add && trial ? [...trial.ideas.filter((i) => i.id !== idea.id && i.id !== replace && compatible(i, idea)), idea] : [idea];
-  const { result, on } = build(session, baseline, ideas);
-  if (!on.length) {
-    setMix(baseline);
-    useAiTrial.setState({ trial: null });
-    return false;
-  }
-  useAiTrial.setState({ trial: { baseline, ideas: on, result, showing: "idea" } });
+  const on = settle(session, baseline, ideas, trial);
   return on.some((i) => i.id === idea.id);
 }
 
-/** Takes one idea off, keeping the rest on. */
+/**
+ * Puts several ideas on at once, on top of what's on, worked out together
+ * in one go (the mix is built once, not once per idea). Returns the ones
+ * that went on. `after`: a trial just reverted to be worked out again (new
+ * options, a fresh listen) — what was switched off in it stays off.
+ */
+export function tryIdeas(session: Session, ideas: Idea[], { after = null }: { after?: Trial | null } = {}): Idea[] {
+  const { trial } = useAiTrial.getState();
+  const from = trial ?? after;
+  if (!ideas.length) {
+    // Nothing to put on, but things switched off to keep listing.
+    if (!trial && after?.off.length) settle(session, currentMix(), [], after);
+    return [];
+  }
+  const baseline = trial?.baseline ?? currentMix();
+  const wanted = ideas.reduce<Idea[]>((list, idea) => [...list.filter((i) => compatible(i, idea)), idea], trial?.ideas ?? []);
+  const on = settle(session, baseline, wanted, from);
+  return ideas.filter((idea) => on.some((i) => i.id === idea.id));
+}
+
+/** Switches one idea off, keeping the rest on — it stays listed, to switch back on. */
 export function removeFromTrial(session: Session, ideaId: string) {
   const { trial } = useAiTrial.getState();
   if (!trial) return;
+  const idea = trial.ideas.find((i) => i.id === ideaId);
+  if (!idea) return;
   const rest = trial.ideas.filter((i) => i.id !== ideaId);
-  if (!rest.length) return revertTrial();
-  const { result, on } = build(session, trial.baseline, rest);
-  useAiTrial.setState({ trial: { ...trial, ideas: on, result, showing: "idea" } });
+  settle(session, trial.baseline, rest, { ...trial, off: [idea, ...trial.off.filter((i) => i.id !== ideaId)] });
+}
+
+/** Forgets an idea that was switched off (it's no longer listed). */
+export function dismissOff(ideaId: string) {
+  const { trial } = useAiTrial.getState();
+  if (!trial) return;
+  const off = trial.off.filter((i) => i.id !== ideaId);
+  if (!off.length && !trial.ideas.length) return revertTrial();
+  useAiTrial.setState({ trial: { ...trial, off } });
+}
+
+/** Switches one part of an idea (its timing, key, levels…) on or off. */
+export function switchPart(session: Session, ideaId: string, part: Part, on: boolean) {
+  const { trial } = useAiTrial.getState();
+  if (!trial) return;
+  const offNow = trial.without[ideaId] ?? [];
+  const next = on ? offNow.filter((p) => p !== part) : [...new Set([...offNow, part])];
+  const without = { ...trial.without, [ideaId]: next };
+  if (!trial.ideas.some((i) => i.id === ideaId)) {
+    useAiTrial.setState({ trial: { ...trial, without } });
+    return;
+  }
+  settle(session, trial.baseline, trial.ideas, { ...trial, without });
 }
 
 /** A/B: the original or the idea in the mix (flips when not given). */
@@ -140,18 +324,23 @@ export function compare(showing?: Trial["showing"]) {
 export function keepTrial(): Idea[] {
   const { trial } = useAiTrial.getState();
   if (!trial) return [];
+  if (!trial.ideas.length) {
+    revertTrial();
+    return [];
+  }
   if (trial.showing === "original") setMix(trial.result);
   recordStep(trial.baseline);
   useAiTrial.setState({ trial: null });
   return trial.ideas;
 }
 
-/** Puts the original mix back. */
-export function revertTrial() {
+/** Puts the original mix back. Returns what was being tried (to work it out again, see tryIdeas). */
+export function revertTrial(): Trial | null {
   const { trial } = useAiTrial.getState();
-  if (!trial) return;
+  if (!trial) return null;
   setMix(trial.baseline);
   useAiTrial.setState({ trial: null });
+  return trial;
 }
 
 // Undo while trying means "not this": back to the original. Redo has

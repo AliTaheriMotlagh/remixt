@@ -190,6 +190,7 @@ export type LanePatch = Partial<
     | "clips"
     | "automation"
     | "name"
+    | "muted"
   >
 >;
 
@@ -1112,6 +1113,44 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     });
   },
 }));
+
+type MixListener = (state: StudioState, prev: StudioState) => void;
+
+let holding = 0;
+let heldFrom: StudioState | null = null;
+const mixListeners = new Set<MixListener>();
+
+/**
+ * Runs `change` — any number of store updates — as one change for the
+ * listeners subscribed with subscribeMix: they hear only where it ended up.
+ * An AI idea is built by putting the original mix back and laying each idea
+ * on it; the audio engine mustn't render or re-schedule each step on the way.
+ */
+export function asOneChange(change: () => void) {
+  if (holding++ === 0) heldFrom = useStudioStore.getState();
+  try {
+    change();
+  } finally {
+    if (--holding === 0) {
+      const from = heldFrom!;
+      heldFrom = null;
+      const to = useStudioStore.getState();
+      if (to !== from) for (const listener of mixListeners) listener(to, from);
+    }
+  }
+}
+
+/** Like useStudioStore.subscribe, but a change made with asOneChange arrives once, as a whole. */
+export function subscribeMix(listener: MixListener) {
+  mixListeners.add(listener);
+  const unsubscribe = useStudioStore.subscribe((state, prev) => {
+    if (!holding) listener(state, prev);
+  });
+  return () => {
+    mixListeners.delete(listener);
+    unsubscribe();
+  };
+}
 
 /** Equal-power crossfader gain for a lane on side A or B (1 for lanes on neither). */
 export function crossfaderGain(lane: Pick<StudioLane, "xfade">, position: number) {
