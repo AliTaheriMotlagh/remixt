@@ -376,13 +376,16 @@ docker save remixt | gzip | ssh root@your-server 'gunzip | docker load'
 
 #### The AI co-producer
 
-The Studio's **Ask AI** tab is Claude, working in the person's mix with the
-same tools as the AI producer. It runs on **each person's own Anthropic API
-key** — the site doesn't pay for it. They paste a key from
-[console.anthropic.com](https://console.anthropic.com/settings/keys) and
-choose to keep it on their account (encrypted with `AI_KEY_SECRET`, see
-`web/src/lib/aiKeys.ts`) or in their browser only. The table for saved
-keys comes with `node scripts/migrate.mjs`.
+The Studio's **Ask AI** tab is an AI working in the person's mix with the
+same tools as the AI producer. It runs on **each person's own key** — the
+site doesn't pay for it: an Anthropic key
+([console.anthropic.com](https://console.anthropic.com/settings/keys)) for
+Claude, and/or an OpenRouter key ([openrouter.ai/keys](https://openrouter.ai/keys))
+for Claude or any other model OpenRouter carries that can use tools. They
+choose to keep each key on their account (encrypted with `AI_KEY_SECRET`,
+see `web/src/lib/aiKeys.ts`) or in their browser only. OpenRouter is called
+from the server (`web/src/lib/openrouter.ts`), never from the browser. The
+table for saved keys is created on first use (and by `node scripts/migrate.mjs`).
 
 ### Updating and backups
 

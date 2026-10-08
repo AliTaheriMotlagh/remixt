@@ -281,15 +281,24 @@ ALTER TABLE live_streams ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'pe
 ALTER TABLE live_streams ADD COLUMN IF NOT EXISTS mix_json TEXT NOT NULL DEFAULT '';
 ALTER TABLE live_streams ADD COLUMN IF NOT EXISTS mix_version INTEGER NOT NULL DEFAULT 0;
 
--- The AI co-producer: each person's own Anthropic API key, so the AI's
--- calls are on their account. Encrypted (AES-256-GCM) with AI_KEY_SECRET,
--- or a key derived from SESSION_SECRET — see src/lib/aiKeys.ts. Never sent
--- back to the browser.
+-- The AI co-producer: each person's own API keys (Anthropic and/or
+-- OpenRouter, one of each), so the AI's calls are on their account.
+-- Encrypted (AES-256-GCM) with AI_KEY_SECRET, or a key derived from
+-- SESSION_SECRET — see src/lib/aiKeys.ts. Never sent back to the browser.
 CREATE TABLE IF NOT EXISTS user_ai_keys (
-  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   provider TEXT NOT NULL DEFAULT 'anthropic',
   key_cipher TEXT NOT NULL,
   key_hint TEXT NOT NULL,
   model TEXT NOT NULL DEFAULT 'claude-opus-5-5',
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, provider)
 );
+-- Before OpenRouter it was one key per person: widen the key.
+DO $$ BEGIN
+  IF (SELECT count(*) FROM information_schema.key_column_usage
+      WHERE table_name = 'user_ai_keys' AND constraint_name = 'user_ai_keys_pkey') = 1 THEN
+    ALTER TABLE user_ai_keys DROP CONSTRAINT user_ai_keys_pkey;
+    ALTER TABLE user_ai_keys ADD PRIMARY KEY (user_id, provider);
+  END IF;
+END $$;

@@ -1,18 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { getCurrentUser } from "@/lib/auth";
-import { DEFAULT_AI_MODEL, isAiModel, looksLikeKey, savedAiKey, type AiModel } from "@/lib/aiKeys";
+import { DEFAULT_AI_MODEL, isAiModel, isModelFor, isProvider, looksLikeKey, savedAiKey, type AiModel, type AiProvider } from "@/lib/aiKeys";
 import { COPRODUCER_SYSTEM, COPRODUCER_TOOLS } from "@/lib/coproducer";
+import { OpenRouterError, openRouterTurn } from "@/lib/openrouter";
 
-// One turn of the AI co-producer: the conversation so far goes to Claude
-// with the Studio's tools, on the person's own Anthropic key, and Claude's
-// reply comes back as it is — text, and the tool calls the Studio then
-// carries out in the browser (see components/studio/CoProducer.tsx), which
-// sends the results back here for the next turn.
+// One turn of the AI co-producer: the conversation so far goes to the model
+// with the Studio's tools, on the person's own key — Claude through
+// Anthropic, or any tool-using model through OpenRouter (translated, see
+// lib/openrouter.ts) — and the reply comes back in the Messages API's
+// shape: text, and the tool calls the Studio then carries out in the
+// browser (see components/studio/CoProducer.tsx), which sends the results
+// back here for the next turn.
 //
-// The key is the one saved on their account, or — for someone who keeps it
-// in their browser only — sent with this request (x-anthropic-key) and
-// used for this call alone. It's never logged or stored from here.
+// The key is the one saved on their account for that provider, or — for
+// someone who keeps it in their browser only — sent with this request
+// (x-ai-key) and used for this call alone. It's never logged or stored here.
 
 export const maxDuration = 300;
 
@@ -22,7 +25,7 @@ const MAX_BODY = 3_000_000;
 export async function POST(req: NextRequest) {
   const text = await req.text().catch(() => "");
   if (!text || text.length > MAX_BODY) return NextResponse.json({ error: "The conversation is too long — start a new one" }, { status: 413 });
-  let body: { messages?: unknown; model?: unknown };
+  let body: { messages?: unknown; model?: unknown; provider?: unknown };
   try {
     body = JSON.parse(text);
   } catch {
@@ -37,17 +40,34 @@ export async function POST(req: NextRequest) {
   ) {
     return NextResponse.json({ error: "Bad request" }, { status: 400 });
   }
+  const provider: AiProvider = isProvider(body.provider) ? body.provider : "anthropic";
 
-  const fromBrowser = req.headers.get("x-anthropic-key")?.trim();
+  const fromBrowser = (req.headers.get("x-ai-key") ?? req.headers.get("x-anthropic-key"))?.trim();
   const user = fromBrowser ? null : await getCurrentUser();
-  const saved = user ? await savedAiKey(user.id) : null;
-  const apiKey = fromBrowser && looksLikeKey(fromBrowser) ? fromBrowser : saved?.apiKey;
+  const saved = user ? await savedAiKey(user.id, provider) : null;
+  const apiKey = fromBrowser && looksLikeKey(provider, fromBrowser) ? fromBrowser : saved?.apiKey;
+  const who = provider === "anthropic" ? "Anthropic" : "OpenRouter";
   if (!apiKey) {
-    return NextResponse.json({ error: "Add your Anthropic API key to talk to the co-producer", needsKey: true }, { status: 400 });
+    return NextResponse.json({ error: `Add your ${who} key to talk to the co-producer`, needsKey: true }, { status: 400 });
   }
-  const model: AiModel = isAiModel(body.model) ? body.model : (saved?.model ?? DEFAULT_AI_MODEL);
-  // A declined request is re-run on the fallback model Anthropic picks for
-  // the reason it was declined. (Not offered for Haiku.)
+
+  if (provider === "openrouter") {
+    const model = isModelFor("openrouter", body.model) ? body.model : saved?.model;
+    if (!model) return NextResponse.json({ error: "Pick an OpenRouter model" }, { status: 400 });
+    try {
+      return NextResponse.json(await openRouterTurn(apiKey, model, COPRODUCER_SYSTEM, COPRODUCER_TOOLS, messages as Anthropic.Beta.BetaMessageParam[]));
+    } catch (error) {
+      const status = error instanceof OpenRouterError ? error.status : 502;
+      const detail = error instanceof Error ? error.message : "";
+      if (status === 401 || status === 403) return NextResponse.json({ error: "OpenRouter rejected your key — check it, or add a new one", needsKey: true }, { status: 401 });
+      if (status === 402) return NextResponse.json({ error: "Your OpenRouter account is out of credits — add some at openrouter.ai/credits" }, { status: 402 });
+      if (status === 429) return NextResponse.json({ error: "OpenRouter is rate-limiting this model — wait a moment, or pick another" }, { status: 429 });
+      if (status === 400 || status === 404) return NextResponse.json({ error: `OpenRouter couldn't use that request${detail ? `: ${detail}` : ""} — try another model` }, { status: 400 });
+      return NextResponse.json({ error: `OpenRouter had a problem${detail ? ` (${detail})` : ""} — try again` }, { status: 502 });
+    }
+  }
+
+  const model: AiModel = isAiModel(body.model) ? body.model : saved && isAiModel(saved.model) ? saved.model : DEFAULT_AI_MODEL;
   const fallback = model === "claude-haiku-5-5" ? {} : { betas: ["server-side-fallback-2026-07-01" as const], fallbacks: "default" as const };
 
   try {

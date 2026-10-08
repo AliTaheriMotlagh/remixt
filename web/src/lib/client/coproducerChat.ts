@@ -5,7 +5,8 @@ import { MAX_TOOL_ROUNDS } from "@/lib/coproducer";
 import { runCoproducerTool, type CoproducerContext } from "./coproducerTools";
 
 // Talking to the co-producer: one conversation, sent turn by turn to
-// /api/ai/chat (which calls Claude on the person's own key), with the tool
+// /api/ai/chat (which calls Claude — directly, or any model through
+// OpenRouter — on the person's own key), with the tool
 // calls Claude makes carried out here in the Studio and their results sent
 // back, until Claude answers. The history is kept exactly as Claude sent it
 // (thinking blocks included) and only ever appended to.
@@ -19,39 +20,55 @@ export type ChatEvent =
   | { type: "tool"; name: string; summary: string; isError?: boolean }
   | { type: "error"; text: string; needsKey?: boolean };
 
-const BROWSER_KEY = "remixt.anthropicKey";
-const MODEL_KEY = "remixt.aiModel";
+export type Provider = "anthropic" | "openrouter";
 
-/** A key kept in this browser only (never stored on the server). */
-export function browserKey(): string | null {
+const PROVIDER_KEY = "remixt.aiProvider";
+const browserKeyName = (provider: Provider) => `remixt.aiKey.${provider}`;
+const modelKeyName = (provider: Provider) => `remixt.aiModel.${provider}`;
+
+function read(name: string) {
   try {
-    return localStorage.getItem(BROWSER_KEY);
+    return localStorage.getItem(name);
   } catch {
     return null;
   }
 }
 
-export function setBrowserKey(key: string | null) {
+function write(name: string, value: string | null) {
   try {
-    if (key) localStorage.setItem(BROWSER_KEY, key);
-    else localStorage.removeItem(BROWSER_KEY);
+    if (value) localStorage.setItem(name, value);
+    else localStorage.removeItem(name);
   } catch {
     // Private mode: kept for this visit only (in the component's state).
   }
 }
 
-export function savedModelChoice(): string | null {
-  try {
-    return localStorage.getItem(MODEL_KEY);
-  } catch {
-    return null;
-  }
+/** The provider the person last talked through. */
+export function savedProvider(): Provider {
+  return read(PROVIDER_KEY) === "openrouter" ? "openrouter" : "anthropic";
 }
 
-export function saveModelChoice(model: string) {
-  try {
-    localStorage.setItem(MODEL_KEY, model);
-  } catch {}
+export function saveProvider(provider: Provider) {
+  write(PROVIDER_KEY, provider);
+}
+
+/** A key kept in this browser only (never stored on the server). */
+export function browserKey(provider: Provider): string | null {
+  // Keys saved before OpenRouter was added.
+  return read(browserKeyName(provider)) ?? (provider === "anthropic" ? read("remixt.anthropicKey") : null);
+}
+
+export function setBrowserKey(provider: Provider, key: string | null) {
+  write(browserKeyName(provider), key);
+  if (provider === "anthropic" && !key) write("remixt.anthropicKey", null);
+}
+
+export function savedModelChoice(provider: Provider): string | null {
+  return read(modelKeyName(provider)) ?? (provider === "anthropic" ? read("remixt.aiModel") : null);
+}
+
+export function saveModelChoice(provider: Provider, model: string) {
+  write(modelKeyName(provider), model);
 }
 
 type TurnResponse = {
@@ -62,11 +79,11 @@ type TurnResponse = {
   needsKey?: boolean;
 };
 
-async function sendTurn(messages: Message[], model: string, key: string | null): Promise<TurnResponse> {
+async function sendTurn(messages: Message[], provider: Provider, model: string, key: string | null): Promise<TurnResponse> {
   const res = await fetch("/api/ai/chat", {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...(key ? { "x-anthropic-key": key } : {}) },
-    body: JSON.stringify({ messages, model }),
+    headers: { "Content-Type": "application/json", ...(key ? { "x-ai-key": key } : {}) },
+    body: JSON.stringify({ messages, provider, model }),
   });
   const data = (await res.json().catch(() => ({ error: "The server sent something unreadable" }))) as TurnResponse;
   if (!res.ok) throw Object.assign(new Error(data.error ?? `HTTP ${res.status}`), { needsKey: !!data.needsKey });
@@ -117,14 +134,14 @@ export async function converse(
   history: Message[],
   text: string,
   ctx: CoproducerContext,
-  { model, key, onEvent, shouldStop }: { model: string; key: string | null; onEvent: (e: ChatEvent) => void; shouldStop: () => boolean }
+  { provider, model, key, onEvent, shouldStop }: { provider: Provider; model: string; key: string | null; onEvent: (e: ChatEvent) => void; shouldStop: () => boolean }
 ): Promise<Message[]> {
   let messages: Message[] = [...history, { role: "user", content: text }];
   onEvent({ type: "user", text });
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
     let response: TurnResponse;
     try {
-      response = await sendTurn(messages, model, key);
+      response = await sendTurn(messages, provider, model, key);
     } catch (error) {
       onEvent({ type: "error", text: error instanceof Error ? error.message : "Couldn't reach the co-producer", needsKey: !!(error as { needsKey?: boolean }).needsKey });
       // The unanswered message is dropped, so the history stays valid to send again.

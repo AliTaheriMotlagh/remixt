@@ -1,17 +1,35 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, KeyRound, Loader2, MessageCircle, RotateCcw, Square, Trash2, Wand2, Wrench } from "lucide-react";
-import { browserKey, converse, saveModelChoice, savedModelChoice, setBrowserKey, type ChatEvent, type Message } from "@/lib/client/coproducerChat";
+import { ArrowUp, KeyRound, Loader2, RotateCcw, Square, Trash2, Wand2, Wrench } from "lucide-react";
+import {
+  browserKey,
+  converse,
+  saveModelChoice,
+  saveProvider,
+  savedModelChoice,
+  savedProvider,
+  setBrowserKey,
+  type ChatEvent,
+  type Message,
+  type Provider,
+} from "@/lib/client/coproducerChat";
 import type { CoproducerContext } from "@/lib/client/coproducerTools";
 
-// The AI co-producer: a chat with Claude that can listen to the mix
+// The AI co-producer: a chat with an AI that can listen to the mix
 // (through the Studio's analysis), try the AI producer's ideas, adjust
-// lanes and play the result. It runs on the person's own Anthropic API key
-// — saved to their account (encrypted), or kept in this browser only.
+// lanes and play the result. It runs on the person's own key — Anthropic
+// (Claude) or OpenRouter (Claude or any other tool-using model), each saved
+// to their account (encrypted) or kept in this browser only.
 
 type Model = { id: string; label: string; hint: string };
-type KeyState = { signedIn: boolean; saved: boolean; hint: string | null; model: string | null; models: Model[] };
+type RouterModel = { id: string; name: string; context: number; promptPerMillion: number | null; completionPerMillion: number | null };
+type KeyState = { signedIn: boolean; saved: Partial<Record<Provider, { hint: string; model: string }>>; models: Model[] };
+
+const PROVIDERS: { id: Provider; label: string; prefix: string; getKey: string; billed: string }[] = [
+  { id: "anthropic", label: "Claude", prefix: "sk-ant-", getKey: "https://console.anthropic.com/settings/keys", billed: "your Anthropic account" },
+  { id: "openrouter", label: "OpenRouter", prefix: "sk-or-", getKey: "https://openrouter.ai/keys", billed: "your OpenRouter credits" },
+];
 
 const SUGGESTIONS = [
   "Make it sound as good as you can",
@@ -21,32 +39,121 @@ const SUGGESTIONS = [
   "Give the chorus more energy",
 ];
 
-function KeySetup({ state, onReady }: { state: KeyState; onReady: (mode: "account" | "browser", key: string | null) => void }) {
+let routerModels: Promise<RouterModel[]> | null = null;
+
+/** OpenRouter's tool-using models, from the server (OpenRouter isn't reachable from everywhere). */
+function loadRouterModels(): Promise<RouterModel[]> {
+  routerModels ??= fetch("/api/ai/models")
+    .then((res) => res.json())
+    .then((data: { openrouter?: RouterModel[] }) => data.openrouter ?? [])
+    .catch(() => {
+      routerModels = null;
+      return [];
+    });
+  return routerModels;
+}
+
+/** A starting OpenRouter model: one of Claude's, if OpenRouter carries them. */
+function defaultRouterModel(list: RouterModel[]) {
+  return (list.find((m) => m.id.startsWith("anthropic/") && m.id.includes("sonnet")) ?? list.find((m) => m.id.startsWith("anthropic/")) ?? list[0])?.id ?? "";
+}
+
+const price = (m: RouterModel) =>
+  m.promptPerMillion === null ? "" : m.promptPerMillion === 0 && m.completionPerMillion === 0 ? "free" : `$${m.promptPerMillion} in · $${m.completionPerMillion} out per million tokens`;
+
+/** Picks a model: Claude's three, or any of OpenRouter's (searchable). */
+function ModelPicker({ provider, models, value, onChange, compact = false }: { provider: Provider; models: Model[]; value: string; onChange: (id: string) => void; compact?: boolean }) {
+  const [list, setList] = useState<RouterModel[] | null>(null);
+  useEffect(() => {
+    if (provider !== "openrouter") return;
+    let cancelled = false;
+    void loadRouterModels().then((found) => {
+      if (cancelled) return;
+      setList(found);
+      if (!value && found.length) onChange(defaultRouterModel(found));
+    });
+    return () => {
+      cancelled = true;
+    };
+    // Loaded once per provider; `value` only seeds the default.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider]);
+
+  if (provider === "anthropic") {
+    return (
+      <select value={value} onChange={(e) => onChange(e.target.value)} className={`input text-xs ${compact ? "!w-auto !py-0.5 text-[11px]" : "!py-1"}`} aria-label="Model">
+        {models.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.label}
+            {compact ? "" : ` — ${m.hint}`}
+          </option>
+        ))}
+      </select>
+    );
+  }
+  const chosen = list?.find((m) => m.id === value);
+  return (
+    // In the chat's header it takes a row of its own: model ids are long.
+    <span className={`flex min-w-0 flex-col gap-0.5 ${compact ? "order-last basis-full" : ""}`}>
+      <input
+        list="openrouter-models"
+        value={value}
+        onChange={(e) => onChange(e.target.value.trim())}
+        placeholder={list ? `Search ${list.length} models — e.g. anthropic/, openai/, google/` : "Loading models…"}
+        name="openrouter-model"
+        autoComplete="off"
+        spellCheck={false}
+        className={`input font-mono text-xs ${compact ? "!py-0.5 text-[11px]" : "!py-1"}`}
+        aria-label="OpenRouter model"
+      />
+      <datalist id="openrouter-models">
+        {list?.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.name}
+            {price(m) ? ` — ${price(m)}` : ""}
+          </option>
+        ))}
+      </datalist>
+      {!compact && (
+        <span className="text-[10px] text-muted">
+          {chosen ? `${chosen.name}${price(chosen) ? ` · ${price(chosen)}` : ""}` : list && value ? "Not one of OpenRouter's tool-using models — pick from the list" : "Only models that can use tools are listed"}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function KeySetup({ provider, state, onReady }: { provider: Provider; state: KeyState; onReady: (mode: "account" | "browser", key: string | null, model: string) => void }) {
+  const info = PROVIDERS.find((p) => p.id === provider)!;
   const [key, setKey] = useState("");
-  const [model, setModel] = useState(state.model ?? state.models[0]?.id ?? "claude-opus-5-5");
+  const [model, setModel] = useState(savedModelChoice(provider) ?? state.saved[provider]?.model ?? (provider === "anthropic" ? state.models[0]?.id ?? "claude-opus-5-5" : ""));
   const [where, setWhere] = useState<"account" | "browser">(state.signedIn ? "account" : "browser");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function save() {
     const trimmed = key.trim();
-    if (!/^sk-ant-/.test(trimmed)) {
-      setError("An Anthropic API key starts with sk-ant-");
+    if (!trimmed.startsWith(info.prefix)) {
+      setError(`A${provider === "anthropic" ? "n Anthropic" : "n OpenRouter"} key starts with ${info.prefix}`);
+      return;
+    }
+    if (!model) {
+      setError("Pick a model");
       return;
     }
     setError(null);
-    saveModelChoice(model);
+    saveModelChoice(provider, model);
     if (where === "browser") {
-      setBrowserKey(trimmed);
-      onReady("browser", trimmed);
+      setBrowserKey(provider, trimmed);
+      onReady("browser", trimmed, model);
       return;
     }
     setBusy(true);
     try {
-      const res = await fetch("/api/ai/key", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: trimmed, model }) });
+      const res = await fetch("/api/ai/key", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, key: trimmed, model }) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "Couldn't save the key");
-      onReady("account", null);
+      onReady("account", null, model);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't save the key");
     } finally {
@@ -57,12 +164,15 @@ function KeySetup({ state, onReady }: { state: KeyState; onReady: (mode: "accoun
   return (
     <div className="flex flex-col gap-3 rounded-2xl border border-border bg-surface p-3 text-xs">
       <p className="flex items-center gap-2 text-sm font-bold">
-        <KeyRound className="text-brand-strong" /> Connect your AI
+        <KeyRound className="text-brand-strong" /> Connect {provider === "anthropic" ? "Claude" : "OpenRouter"}
       </p>
       <p className="text-muted">
-        The co-producer is Claude, working in your Studio: it listens to the mix, tries ideas, fixes things and explains what it did. It uses your own Anthropic API key, so its
-        calls are billed to your Anthropic account.{" "}
-        <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" className="text-brand-strong underline">
+        The co-producer works in your Studio: it listens to the mix, tries ideas, fixes things and explains what it did.{" "}
+        {provider === "anthropic"
+          ? "It's Claude, on your own Anthropic API key"
+          : "Through OpenRouter it can be Claude or any other model that can use tools, on your own OpenRouter key"}
+        , so its calls are billed to {info.billed}.{" "}
+        <a href={info.getKey} target="_blank" rel="noreferrer" className="text-brand-strong underline">
           Get a key
         </a>
       </p>
@@ -71,7 +181,7 @@ function KeySetup({ state, onReady }: { state: KeyState; onReady: (mode: "accoun
         // manager fill a saved login email into the nearest text box (the
         // Studio's stem search). Masked with CSS instead.
         type="text"
-        name="anthropic-api-key"
+        name={`${provider}-api-key`}
         autoComplete="off"
         data-1p-ignore
         data-lpignore="true"
@@ -79,30 +189,24 @@ function KeySetup({ state, onReady }: { state: KeyState; onReady: (mode: "accoun
         style={{ WebkitTextSecurity: "disc" } as React.CSSProperties}
         value={key}
         onChange={(e) => setKey(e.target.value)}
-        placeholder="sk-ant-…"
+        placeholder={`${info.prefix}…`}
         className="input font-mono text-xs"
-        aria-label="Anthropic API key"
+        aria-label={`${info.label} API key`}
       />
       <label className="flex flex-col gap-1 text-[11px] text-muted">
         Model
-        <select value={model} onChange={(e) => setModel(e.target.value)} className="input !py-1 text-xs">
-          {state.models.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.label} — {m.hint}
-            </option>
-          ))}
-        </select>
+        <ModelPicker provider={provider} models={state.models} value={model} onChange={setModel} />
       </label>
       <fieldset className="flex flex-col gap-1.5">
         <legend className="mb-1 text-[11px] text-muted">Keep the key</legend>
         <label className={`flex items-start gap-2 ${state.signedIn ? "" : "opacity-50"}`}>
-          <input type="radio" name="where" checked={where === "account"} disabled={!state.signedIn} onChange={() => setWhere("account")} className="mt-0.5" />
+          <input type="radio" name={`where-${provider}`} checked={where === "account"} disabled={!state.signedIn} onChange={() => setWhere("account")} className="mt-0.5" />
           <span>
             <span className="font-semibold">On my account</span> — encrypted, works on all your devices{!state.signedIn && " (sign in first)"}
           </span>
         </label>
         <label className="flex items-start gap-2">
-          <input type="radio" name="where" checked={where === "browser"} onChange={() => setWhere("browser")} className="mt-0.5" />
+          <input type="radio" name={`where-${provider}`} checked={where === "browser"} onChange={() => setWhere("browser")} className="mt-0.5" />
           <span>
             <span className="font-semibold">In this browser only</span> — never stored on our server
           </span>
@@ -122,11 +226,31 @@ function KeySetup({ state, onReady }: { state: KeyState; onReady: (mode: "accoun
   );
 }
 
+/** Claude (Anthropic) or OpenRouter — each with its own key and model. */
+function ProviderSwitch({ value, onChange, disabled }: { value: Provider; onChange: (p: Provider) => void; disabled: boolean }) {
+  return (
+    <div className="flex shrink-0 overflow-hidden rounded-lg border border-border text-[11px] font-semibold" role="group" aria-label="AI provider">
+      {PROVIDERS.map((p) => (
+        <button
+          key={p.id}
+          onClick={() => onChange(p.id)}
+          disabled={disabled}
+          aria-pressed={value === p.id}
+          className={`px-2.5 py-1 ${value === p.id ? "bg-brand text-white" : "text-muted hover:text-foreground"}`}
+        >
+          {p.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function CoProducer({ ctx, question }: { ctx: CoproducerContext; question?: { id: number; text: string } | null }) {
   const [keyState, setKeyState] = useState<KeyState | null>(null);
-  const [mode, setMode] = useState<"account" | "browser" | null>(null);
-  const [key, setKey] = useState<string | null>(null);
-  const [model, setModel] = useState("claude-opus-5-5");
+  const [provider, setProvider] = useState<Provider>("anthropic");
+  // Keys kept in this browser, by provider (read after mount — localStorage).
+  const [keys, setKeys] = useState<Partial<Record<Provider, string>>>({});
+  const [models, setModels] = useState<Record<Provider, string>>({ anthropic: "claude-opus-5-5", openrouter: "" });
   const [history, setHistory] = useState<Message[]>([]);
   const [events, setEvents] = useState<ChatEvent[]>([]);
   const [draft, setDraft] = useState("");
@@ -136,22 +260,20 @@ export default function CoProducer({ ctx, question }: { ctx: CoproducerContext; 
 
   useEffect(() => {
     let cancelled = false;
+    const done = (state: KeyState) => {
+      if (cancelled) return;
+      setKeyState(state);
+      setProvider(savedProvider());
+      setKeys({ anthropic: browserKey("anthropic") ?? undefined, openrouter: browserKey("openrouter") ?? undefined });
+      setModels({
+        anthropic: savedModelChoice("anthropic") ?? state.saved.anthropic?.model ?? "claude-opus-5-5",
+        openrouter: savedModelChoice("openrouter") ?? state.saved.openrouter?.model ?? "",
+      });
+    };
     void fetch("/api/ai/key")
       .then((res) => res.json())
-      .then((state: KeyState) => {
-        if (cancelled) return;
-        setKeyState(state);
-        const local = browserKey();
-        const chosen = savedModelChoice() ?? state.model;
-        if (chosen && state.models.some((m) => m.id === chosen)) setModel(chosen);
-        if (local) {
-          setMode("browser");
-          setKey(local);
-        } else if (state.saved) {
-          setMode("account");
-        }
-      })
-      .catch(() => !cancelled && setKeyState({ signedIn: false, saved: false, hint: null, model: null, models: [{ id: "claude-opus-5-5", label: "Claude Opus 5.5", hint: "Best ideas and judgement" }] }));
+      .then((state: KeyState) => done({ ...state, saved: state.saved ?? {} }))
+      .catch(() => done({ signedIn: false, saved: {}, models: [{ id: "claude-opus-5-5", label: "Claude Opus 5.5", hint: "Best ideas and judgement" }] }));
     return () => {
       cancelled = true;
     };
@@ -167,19 +289,30 @@ export default function CoProducer({ ctx, question }: { ctx: CoproducerContext; 
     if (question) setDraft(question.text);
   }, [question]);
 
+  /** How the current provider is connected: its key in this browser, on the account, or not yet. */
+  const mode: "browser" | "account" | null = keys[provider] ? "browser" : keyState?.saved[provider] ? "account" : null;
+  const model = models[provider];
+
   async function send(text: string) {
     const message = text.trim();
     if (!message || busy) return;
     setDraft("");
     setBusy(true);
     stop.current = false;
+    const asked = provider;
     try {
       const next = await converse(history, message, ctx, {
+        provider,
         model,
-        key: mode === "browser" ? key : null,
+        key: mode === "browser" ? keys[provider]! : null,
         onEvent: (e) => {
           setEvents((list) => [...list, e]);
-          if (e.type === "error" && e.needsKey) setMode(null);
+          // A rejected key: back to connecting this provider.
+          if (e.type === "error" && e.needsKey) {
+            setBrowserKey(asked, null);
+            setKeys((k) => ({ ...k, [asked]: undefined }));
+            setKeyState((s) => (s ? { ...s, saved: { ...s.saved, [asked]: undefined } } : s));
+          }
         },
         shouldStop: () => stop.current,
       });
@@ -191,19 +324,26 @@ export default function CoProducer({ ctx, question }: { ctx: CoproducerContext; 
 
   async function forgetKey() {
     if (mode === "browser") {
-      setBrowserKey(null);
-      setKey(null);
+      setBrowserKey(provider, null);
+      setKeys((k) => ({ ...k, [provider]: undefined }));
     } else {
-      await fetch("/api/ai/key", { method: "DELETE" }).catch(() => {});
-      setKeyState((s) => (s ? { ...s, saved: false, hint: null } : s));
+      await fetch(`/api/ai/key?provider=${provider}`, { method: "DELETE" }).catch(() => {});
+      setKeyState((s) => (s ? { ...s, saved: { ...s.saved, [provider]: undefined } } : s));
     }
-    setMode(null);
+  }
+
+  function chooseProvider(next: Provider) {
+    setProvider(next);
+    saveProvider(next);
   }
 
   function chooseModel(id: string) {
-    setModel(id);
-    saveModelChoice(id);
-    if (mode === "account") void fetch("/api/ai/key", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: id }) }).catch(() => {});
+    setModels((m) => ({ ...m, [provider]: id }));
+    saveModelChoice(provider, id);
+    const valid = provider === "anthropic" || /^[\w.-]+\/[\w.:~-]+$/.test(id);
+    if (mode === "account" && valid) {
+      void fetch("/api/ai/key", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, model: id }) }).catch(() => {});
+    }
   }
 
   if (!keyState) {
@@ -215,31 +355,29 @@ export default function CoProducer({ ctx, question }: { ctx: CoproducerContext; 
   }
   if (!mode) {
     return (
-      <KeySetup
-        state={keyState}
-        onReady={(how, k) => {
-          setMode(how);
-          setKey(k);
-          if (how === "account") setKeyState((s) => (s ? { ...s, saved: true } : s));
-          const chosen = savedModelChoice();
-          if (chosen) setModel(chosen);
-        }}
-      />
+      <div className="flex flex-col gap-2">
+        <ProviderSwitch value={provider} onChange={chooseProvider} disabled={busy} />
+        <KeySetup
+          key={provider}
+          provider={provider}
+          state={keyState}
+          onReady={(how, k, chosen) => {
+            setModels((m) => ({ ...m, [provider]: chosen }));
+            if (how === "browser") setKeys((all) => ({ ...all, [provider]: k ?? undefined }));
+            else setKeyState((s) => (s ? { ...s, saved: { ...s.saved, [provider]: { hint: "", model: chosen } } } : s));
+          }}
+        />
+      </div>
     );
   }
 
+  const hint = keyState.saved[provider]?.hint;
   return (
     <div className="flex min-h-full flex-col gap-3">
-      <div className="flex items-center gap-2 text-[11px] text-muted">
-        <MessageCircle className="text-brand-strong" />
-        <select value={model} onChange={(e) => chooseModel(e.target.value)} className="input !w-auto !py-0.5 text-[11px]" aria-label="Model">
-          {keyState.models.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.label}
-            </option>
-          ))}
-        </select>
-        <span className="min-w-0 flex-1 truncate">{mode === "browser" ? "key in this browser" : `key on your account${keyState.hint ? ` (${keyState.hint})` : ""}`}</span>
+      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted">
+        <ProviderSwitch value={provider} onChange={chooseProvider} disabled={busy} />
+        <ModelPicker provider={provider} models={keyState.models} value={model} onChange={chooseModel} compact />
+        <span className="min-w-0 flex-1 truncate">{mode === "browser" ? "key in this browser" : `key on your account${hint ? ` (${hint})` : ""}`}</span>
         {events.length > 0 && (
           <button
             onClick={() => {
