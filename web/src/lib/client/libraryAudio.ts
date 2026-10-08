@@ -134,7 +134,7 @@ export type SongAnalysis = {
 export async function analyzeSong(song: LibrarySong, beat: AudioBuffer, vocals: AudioBuffer): Promise<SongAnalysis> {
   const [beatA, vocalA] = await Promise.all([
     analyzeStem(song.stems.beat!.id, beat),
-    analyzeStem(song.stems.vocals!.id, vocals),
+    analyzeStem(song.stems.vocals!.id, vocals, "vocals"),
   ]);
   const source = song.bpm ?? beatA.bpmEstimate ?? vocalA.bpmEstimate ?? 120;
   let bpm = refineTempo(beatA, source);

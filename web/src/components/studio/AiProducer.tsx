@@ -16,6 +16,8 @@ import {
   Drum,
   Info,
   Link,
+  Loader2,
+  MessageCircle,
   Mic,
   Minus,
   Palette,
@@ -31,6 +33,7 @@ import {
   SlidersVertical,
   Sparkles,
   Stethoscope,
+  Trophy,
   X,
   Zap,
   type LucideIcon,
@@ -59,12 +62,17 @@ import {
   type Step,
 } from "@/lib/client/aiIdeas";
 import { compare, keepTrial, removeFromTrial, revertTrial, tryIdea, useAiTrial } from "@/lib/client/aiTrial";
+import type { CoproducerContext } from "@/lib/client/coproducerTools";
+import { bestVersions, scoreMix, scoreWord, type MixScore, type Version } from "@/lib/client/mixScore";
+import { beatModelEnabled, setBeatModelEnabled, useBeatModel } from "@/lib/client/neuralBeats";
+import { setStretchEngine, stretchEngine } from "@/lib/client/pitchTempo";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { changeSpeed, gain, nudge, setSpace, spaceOf, transpose, type Space } from "@/lib/client/quickAdjust";
 import { startNewStep } from "@/lib/client/studioHistory";
 import { MASTER_PRESETS, laneName, useStudioStore, type StudioLane } from "@/lib/client/studioStore";
 import { loadKeepWhole, loadSync, saveKeepWhole, saveSync, type Vibe } from "@/lib/client/aiControl";
 import { masterPresetOf } from "./MasterPanel";
+import CoProducer from "./CoProducer";
 import MatchFinder from "./MatchFinder";
 import { useStudioView } from "@/lib/client/studioView";
 import { useKeepScreenOn } from "@/lib/client/wakeLock";
@@ -114,13 +122,14 @@ function playOn() {
   if (!useStudioStore.getState().isPlaying) void audioEngine.play().catch(() => {});
 }
 
-type Tab = "sync" | "styles" | "moments" | "mix";
+type Tab = "sync" | "styles" | "moments" | "mix" | "ask";
 
 const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: "sync", label: "Sync", icon: Link },
   { id: "styles", label: "Styles", icon: Palette },
   { id: "moments", label: "Moments", icon: Zap },
   { id: "mix", label: "Mix", icon: SlidersVertical },
+  { id: "ask", label: "Ask AI", icon: MessageCircle },
 ];
 
 /** Ideas that place the vocal or change the speed — only one of those is on at a time. */
@@ -219,7 +228,7 @@ function Row({ idea, on, disabled, onClick }: { idea: Idea; on: boolean; disable
   );
 }
 
-function MixCheck({ checks, onFix, canFix, trying }: { checks: Check[]; onFix: (fix: FixId) => void; canFix: (fix?: FixId) => boolean; trying: boolean }) {
+function MixCheck({ checks, onFix, canFix, trying, total }: { checks: Check[]; onFix: (fix: FixId) => void; canFix: (fix?: FixId) => boolean; trying: boolean; total: MixScore | null }) {
   const good = checks.filter((c) => c.status === "good").length;
   const score = checks.length ? good / checks.length : 1;
   return (
@@ -230,6 +239,7 @@ function MixCheck({ checks, onFix, canFix, trying }: { checks: Check[]; onFix: (
           Mix check{trying && <span className="ml-1.5 text-[11px] font-normal text-muted">(with the idea on)</span>}
         </h3>
         <span className={`text-xs font-bold tabular-nums ${score === 1 ? "text-success" : score >= 0.5 ? "text-amber-400" : "text-danger"}`}>
+          {total ? `${total.total}/100 · ` : ""}
           {good} / {checks.length} good
         </span>
       </div>
@@ -239,6 +249,7 @@ function MixCheck({ checks, onFix, canFix, trying }: { checks: Check[]; onFix: (
           style={{ width: `${Math.max(4, score * 100)}%` }}
         />
       </div>
+      {total && <p className="mt-1.5 text-[11px] text-muted">{scoreWord(total.total)} — scored on speed, groove, bars, harmony, balance, how natural it sounds and the ending</p>}
       <ul className="mt-2.5 flex flex-col gap-1.5">
         {checks.map((c) => (
           <li key={c.id} className="flex items-start gap-2 text-xs">
@@ -376,6 +387,139 @@ function MasterIt({ vibes }: { vibes: Vibe[] }) {
   );
 }
 
+/**
+ * The AI auditioning its own ideas: every whole-mix idea scored as it
+ * would sound (mixScore.ts), best first, each one tap to hear.
+ */
+function BestVersions({ session, ideas, onTry, onIds }: { session: Session; ideas: Idea[]; onTry: (idea: Idea) => void; onIds: Set<string> }) {
+  const [result, setResult] = useState<{ now: MixScore; versions: Version[] } | null>(null);
+  const [working, setWorking] = useState(false);
+  function find() {
+    setWorking(true);
+    // A frame to show it's working: scoring every idea takes a moment.
+    setTimeout(() => {
+      const found = bestVersions(session, ideas, 4);
+      setResult(found);
+      setWorking(false);
+      const best = found.versions[0];
+      if (best && best.score.total > found.now.total && !onIds.has(best.idea.id)) onTry(best.idea);
+    }, 30);
+  }
+  return (
+    <div className="rounded-2xl border border-border bg-surface p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <h3 className="text-sm font-bold">
+            <Trophy className="mr-1.5 text-brand-strong" />
+            Find the best version
+          </h3>
+          <p className="text-[11px] text-muted">The AI scores every way it could sync and style this mix, and plays you the best one</p>
+        </div>
+        <button onClick={find} disabled={working} className="shrink-0 rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-strong disabled:opacity-60">
+          {working ? <Loader2 className="animate-spin" /> : result ? "Again" : "Find it"}
+        </button>
+      </div>
+      {result && (
+        <ul className="mt-2.5 flex flex-col gap-1.5">
+          <li className="flex items-center gap-2 text-[11px] text-muted">
+            <span className="w-8 shrink-0 text-right font-bold tabular-nums">{result.now.total}</span>
+            <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-raised">
+              <span className="block h-full rounded-full bg-muted/60" style={{ width: `${result.now.total}%` }} />
+            </span>
+            <span className="w-28 shrink-0 truncate">your mix now</span>
+          </li>
+          {result.versions.map((v) => (
+            <li key={v.idea.id}>
+              <button onClick={() => onTry(v.idea)} className={`flex w-full items-center gap-2 rounded-lg px-0 py-0.5 text-left text-[11px] hover:bg-surface-hover ${onIds.has(v.idea.id) ? "font-semibold text-foreground" : ""}`} title={v.score.parts.map((p) => `${p.label}: ${Math.round(p.score * 100)} — ${p.text}`).join("\n")}>
+                <span className="w-8 shrink-0 text-right font-bold tabular-nums">{v.score.total}</span>
+                <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-raised">
+                  <span className={`block h-full rounded-full ${v.score.total >= 85 ? "bg-success" : v.score.total >= 70 ? "bg-brand" : "bg-amber-400"}`} style={{ width: `${v.score.total}%` }} />
+                </span>
+                <span className="w-28 shrink-0 truncate">
+                  {onIds.has(v.idea.id) && <Play className="mr-0.5 fill-current" />}
+                  {v.idea.title}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** How the Studio listens and stretches: the beat model and the high-quality stretcher, each with a switch. */
+function Engines() {
+  const model = useBeatModel();
+  const [beatsOn, setBeatsOn] = useState(true);
+  const [hq, setHq] = useState(true);
+  const [rerendering, setRerendering] = useState(false);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage only exists after mount
+    setBeatsOn(beatModelEnabled());
+    setHq(stretchEngine() === "hq");
+  }, []);
+  const status =
+    !beatsOn || model.status === "off"
+      ? "off — bars come from the Studio's own tracker"
+      : model.status === "loading"
+        ? model.fromCache
+          ? "starting…"
+          : `downloading ${Math.round((100 * model.loaded) / Math.max(1, model.total))}% of ${(model.total / 1e6).toFixed(0)} MB (first time only)`
+        : model.status === "failed"
+          ? `couldn't load (${model.error ?? "error"}) — using the Studio's own tracker`
+          : model.working
+            ? "listening to the beat…"
+            : model.status === "ready"
+              ? "on — hears every beat and where each bar starts"
+              : "on — loads when the AI first listens";
+  return (
+    <details className="group rounded-xl border border-border text-[11px]">
+      <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2 font-semibold">
+        <span>
+          <Sparkles /> Listening & sound engines
+        </span>
+        <ChevronDown className="text-muted group-open:rotate-180" />
+      </summary>
+      <div className="flex flex-col gap-2.5 px-3 pb-3">
+        <label className="flex items-start gap-2">
+          <input
+            type="checkbox"
+            checked={beatsOn}
+            onChange={(e) => {
+              setBeatsOn(e.target.checked);
+              setBeatModelEnabled(e.target.checked);
+            }}
+            className="mt-0.5"
+          />
+          <span>
+            <span className="font-semibold">AI beat tracking</span> (Beat This! model, ~10 MB, runs on this device)
+            <span className="block text-muted">{status}</span>
+          </span>
+        </label>
+        <label className="flex items-start gap-2">
+          <input
+            type="checkbox"
+            checked={hq}
+            disabled={rerendering}
+            onChange={(e) => {
+              setHq(e.target.checked);
+              setStretchEngine(e.target.checked ? "hq" : "classic");
+              setRerendering(true);
+              void audioEngine.rerenderAll().finally(() => setRerendering(false));
+            }}
+            className="mt-0.5"
+          />
+          <span>
+            <span className="font-semibold">High-quality stretch</span> — cleaner speed and key changes, voices keep their natural tone
+            <span className="block text-muted">{rerendering ? "re-rendering the lanes…" : hq ? "on (Signalsmith Stretch)" : "off (classic SoundTouch)"}</span>
+          </span>
+        </label>
+      </div>
+    </details>
+  );
+}
+
 /** Fine-tuning works on the mix as it is: an idea being tried is kept first. */
 function keepWhatsPlaying() {
   if (useAiTrial.getState().trial) keepTrial();
@@ -399,6 +543,19 @@ function loadPersona(): string {
 }
 /** How well an idea suits a persona: shared vibes, so a stable sort keeps the rest in order. */
 const suits = (idea: Idea, persona: Persona) => idea.vibes.filter((v) => persona.vibes.includes(v)).length;
+
+/**
+ * What the AI producer heard last, for the co-producer's tools — which run
+ * outside React (in the middle of a conversation) and need it at once,
+ * not on the next render. There's one AI producer panel.
+ */
+const heard: { session: Session | null; ideas: Idea[] } = { session: null, ideas: [] };
+
+function keepHeard(session: Session, ideas: Idea[]) {
+  heard.session = session;
+  heard.ideas = ideas;
+  return session;
+}
 
 type Sheet = "mini" | "half" | "full";
 const SHEETS: Sheet[] = ["mini", "half", "full"];
@@ -438,6 +595,12 @@ export default function AiProducer() {
     } catch {}
   }
   const [tab, setTab] = useState<Tab>("sync");
+  // A lane's "Ask AI" (in the lane inspector) opens the chat with its question.
+  const question = useStudioView((s) => s.aiQuestion);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- following the store: a question asked elsewhere
+    if (question) setTab("ask");
+  }, [question]);
   /** Below desktop width it's a sheet: mini (just the controls), half (the mix stays in view) or full. */
   const [sheet, setSheet] = useState<Sheet>("half");
   const sheetRef = useRef<HTMLElement>(null);
@@ -481,6 +644,7 @@ export default function AiProducer() {
   const trying = trial?.ideas ?? [];
   const byId = (id?: string) => ideas.find((i) => i.id === id);
   const checks = useMemo(() => (session ? checkMix(session, lanes) : []), [session, lanes]);
+  const total = useMemo(() => (session && session.pair ? scoreMix(session, lanes) : null), [session, lanes]);
 
   /** Listens to the lanes and works out the ideas. */
   async function analyse(whole = keepWhole, { reapply = false } = {}) {
@@ -503,6 +667,7 @@ export default function AiProducer() {
       setIdeas(all);
       putBackOn(fresh, all, wasOn);
       keepPlace(bpm);
+      return { session: fresh, ideas: all };
     } catch (err) {
       if (id === run.current) setError(err instanceof Error ? err.message : "Couldn't listen to the lanes");
     } finally {
@@ -513,6 +678,34 @@ export default function AiProducer() {
   useEffect(() => {
     analyseRef.current = analyse;
   });
+
+  // The co-producer reads the latest session and ideas (see `heard`), and can ask for a listen.
+  useEffect(() => {
+    heard.session = session;
+    heard.ideas = ideas;
+  });
+  const [coproducer] = useState<CoproducerContext>(() => ({
+    session: () => heard.session,
+    ideas: () => heard.ideas,
+    listen: async () => {
+      const { lanes: now, projectBpm: bpm } = useStudioStore.getState();
+      if (!now.length) return null;
+      const current = heard.session;
+      if (!current || current.signature !== mixSignature(now)) {
+        const found = await analyseRef.current();
+        return found ? keepHeard(found.session, found.ideas) : heard.session;
+      }
+      // Moved since (kept an idea, adjusted a lane): rework the ideas for where things are now.
+      if (!useAiTrial.getState().trial && current.timing !== timingSignature(now, bpm)) {
+        const rebased = rebaseSession(current);
+        const reworked = reworkIdeas(rebased, heard.ideas);
+        setSession(rebased);
+        setIdeas(reworked);
+        return keepHeard(rebased, reworked);
+      }
+      return current;
+    },
+  }));
 
   // Opening the panel, or changing which lanes there are, starts listening by itself.
   // (Not again after it failed: the person retries.)
@@ -778,6 +971,7 @@ export default function AiProducer() {
     styles: (i) => i.kind === "full" || (i.kind === "idea" && i.role !== "engineer"),
     moments: (i) => i.kind === "moment" || (i.kind === "fix" && !i.id.startsWith("fix:")),
     mix: (i) => i.kind === "idea" && i.role === "engineer",
+    ask: () => false,
   };
   const onIn = (t: Tab) => trying.filter(inTab[t]).length;
   const tile = (idea: Idea, badge?: string) => (
@@ -829,7 +1023,7 @@ export default function AiProducer() {
           </button>
         </header>
 
-        {ready && (
+        {(ready || (!busy && lanes.length > 0)) && (
           <nav className={`flex shrink-0 gap-1 overflow-x-auto border-b ${sheet === "mini" ? "max-lg:hidden" : ""} border-border px-3 pb-2`} aria-label="AI producer sections">
             {TABS.map((t) => {
               const count = onIn(t.id);
@@ -873,7 +1067,7 @@ export default function AiProducer() {
               ))}
             </div>
           )}
-          {lanes.length === 0 || missing ? (
+          {(lanes.length === 0 || missing) && tab !== "ask" ? (
             <div className="flex flex-col gap-3 py-2 text-sm">
               <p className="text-base font-bold">Let&apos;s make a remix</p>
               <p className="text-muted">The AI needs a vocal and a beat to work with. Pick them from the library — any vocal over any song.</p>
@@ -992,11 +1186,14 @@ export default function AiProducer() {
               {checks.length > 0 && (
                 <MixCheck
                   checks={checks}
+                  total={total}
                   trying={!!trial && trial.showing === "idea"}
                   canFix={(fix) => !!fix && fixable.has(fix) && !fixesOn.has(fix)}
                   onFix={fixCheck}
                 />
               )}
+
+              {session.pair && <BestVersions session={session} ideas={ideas} onIds={onIds} onTry={(idea) => (onIds.has(idea.id) ? undefined : toggle(idea))} />}
 
               {auto && (
                 <div>
@@ -1085,6 +1282,8 @@ export default function AiProducer() {
                   <Info /> {note}
                 </p>
               ))}
+
+              <Engines />
             </div>
           )}
 
@@ -1171,6 +1370,11 @@ export default function AiProducer() {
               )}
             </div>
           )}
+
+          {/* Kept mounted on the other tabs (and while listening), so the conversation carries on. */}
+          <div hidden={tab !== "ask"} className="min-h-full">
+            <CoProducer ctx={coproducer} question={question} />
+          </div>
         </div>
 
         {trial && current && (

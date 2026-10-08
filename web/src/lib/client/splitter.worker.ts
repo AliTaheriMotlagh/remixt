@@ -11,6 +11,7 @@ import { CONSTANTS } from "demucs-web/constants";
 import { prepareModelInput, standaloneIspec, standaloneMask } from "demucs-web/processor";
 import { createMp3Encoder } from "wasm-media-encoders";
 import { estimateTempoDecimated, tempoDecimation } from "./analysis";
+import { cachedDownload } from "./modelCache";
 import type { SplitOutput, SplitResult, SplitterRequest, SplitterResponse, StemBitrate } from "./splitterProtocol";
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -24,121 +25,6 @@ const cancelled = new Set<number>();
 
 function post(message: SplitterResponse, transfer: Transferable[] = []) {
   self.postMessage(message, transfer);
-}
-
-/**
- * Fetches a large file once and keeps it in Cache Storage, so every visit
- * after the first loads the splitter from disk. Reports bytes as they
- * arrive. If caching isn't available (private windows, full disk) it still
- * works — it just downloads again next time.
- */
-async function cachedDownload(
-  url: string,
-  onBytes: (loaded: number, total: number | null, fromCache: boolean) => void
-): Promise<ArrayBuffer> {
-  // `caches` doesn't exist at all outside secure contexts (e.g. a phone
-  // opening the dev server by its LAN address over plain http).
-  const cache =
-    typeof caches === "undefined" ? null : await caches.open(CACHE_NAME).catch(() => null);
-  const hit = await cache?.match(url);
-  if (hit) {
-    const buffer = await hit.arrayBuffer();
-    onBytes(buffer.byteLength, buffer.byteLength, true);
-    return buffer;
-  }
-
-  const bytes = await resumableDownload(url, (loaded, total) => onBytes(loaded, total, false));
-  try {
-    await cache?.put(url, new Response(bytes, { headers: { "Content-Type": "application/octet-stream" } }));
-  } catch {
-    // Over quota — fine, it's only a cache.
-  }
-  return bytes.buffer;
-}
-
-const STALL_MS = 20_000;
-const MAX_ATTEMPTS = 8;
-
-/**
- * Downloads a large file, surviving flaky connections: if no bytes arrive
- * for STALL_MS the request is dropped and picked up again from where it
- * stopped with a Range request, rather than starting 200 MB over. The
- * final size is checked against what the server announced, so a truncated
- * file never gets cached.
- *
- * When the size is announced, bytes go straight into one buffer of that
- * size. Collecting chunks and joining them at the end would briefly need
- * twice the model's size in memory, which is enough to get the tab killed
- * on a phone.
- */
-async function resumableDownload(
-  url: string,
-  onBytes: (loaded: number, total: number | null) => void
-): Promise<Uint8Array<ArrayBuffer>> {
-  let chunks: Uint8Array[] = [];
-  let whole: Uint8Array<ArrayBuffer> | null = null;
-  let loaded = 0;
-  let total: number | null = null;
-
-  for (let attempt = 1; ; attempt++) {
-    const controller = new AbortController();
-    let stall = setTimeout(() => controller.abort(), STALL_MS);
-    try {
-      const response = await fetch(url, {
-        signal: controller.signal,
-        headers: loaded > 0 ? { Range: `bytes=${loaded}-` } : undefined,
-      });
-      if (!response.ok || !response.body) {
-        throw new Error(`Couldn't download ${url.split("/").pop()} (HTTP ${response.status})`);
-      }
-      if (loaded > 0 && response.status !== 206) {
-        // The server ignored the Range header; start again from zero.
-        chunks = [];
-        loaded = 0;
-      }
-      if (total === null) {
-        const range = response.headers.get("content-range")?.match(/\/(\d+)$/);
-        total = range ? Number(range[1]) : Number(response.headers.get("content-length")) || null;
-        if (total && loaded === 0) whole = new Uint8Array(total);
-      }
-
-      const reader = response.body.getReader();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        clearTimeout(stall);
-        stall = setTimeout(() => controller.abort(), STALL_MS);
-        if (whole) {
-          if (loaded + value.length > whole.length) throw new Error("the download is bigger than announced");
-          whole.set(value, loaded);
-        } else {
-          chunks.push(value);
-        }
-        loaded += value.length;
-        onBytes(loaded, total);
-      }
-      clearTimeout(stall);
-      if (total !== null && loaded < total) throw new Error("connection closed early");
-      break;
-    } catch (err) {
-      clearTimeout(stall);
-      if (attempt >= MAX_ATTEMPTS) {
-        throw err instanceof Error && err.name !== "AbortError"
-          ? err
-          : new Error("The download keeps stalling — check your connection and try again");
-      }
-      await new Promise((resolve) => setTimeout(resolve, Math.min(8000, 1000 * attempt)));
-    }
-  }
-
-  if (whole) return whole;
-  const bytes = new Uint8Array(loaded);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return bytes;
 }
 
 async function init(request: Extract<SplitterRequest, { type: "init" }>) {
@@ -159,8 +45,8 @@ async function init(request: Extract<SplitterRequest, { type: "init" }>) {
   };
 
   const [model, wasm] = await Promise.all([
-    cachedDownload(request.modelUrl, track("model")),
-    cachedDownload(request.wasmUrl, track("wasm")),
+    cachedDownload(CACHE_NAME, request.modelUrl, track("model")),
+    cachedDownload(CACHE_NAME, request.wasmUrl, track("wasm")),
   ]);
 
   post({ type: "starting" });
@@ -203,7 +89,7 @@ async function init(request: Extract<SplitterRequest, { type: "init" }>) {
       weights = null;
     }
   }
-  processor ??= await create(["wasm"], weights ?? (await cachedDownload(request.modelUrl, () => {})));
+  processor ??= await create(["wasm"], weights ?? (await cachedDownload(CACHE_NAME, request.modelUrl, () => {})));
 
   post({ type: "ready", backend, threads });
 }

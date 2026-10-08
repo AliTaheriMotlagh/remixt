@@ -72,12 +72,60 @@ class BeatGrid {
 // same stems at the same tempo more than once.
 const gridCache = new WeakMap<StemAnalysis, Map<string, BeatGrid | null>>();
 
+/** Share of the grid's beats (where the model heard any) that must land on one of its beats. */
+const NEURAL_AGREEMENT = 0.6;
+/** How near a grid beat must be to one of the model's to count as agreeing. */
+const NEURAL_TOLERANCE = 0.07;
+
+/**
+ * The beat model's beats (StemAnalysis.neural) as a grid at `bpm`. Its
+ * beats go into the same tempo-following tracker as onsets would (see
+ * trackBeats), as spikes — the downbeats a little stronger — so the grid
+ * keeps `bpm` while taking its positions from the model: a flam heard as
+ * two beats, a break where it heard none, or the model counting double or
+ * half time are all bridged. Null when the grid and the model mostly
+ * disagree (it heard another tempo or metre) — then the onsets decide.
+ */
+export function neuralGrid(analysis: Pick<StemAnalysis, "neural" | "energy" | "onsetRate">, bpm: number): Float64Array | null {
+  const heard = analysis.neural;
+  if (!heard || heard.beats.length < 8) return null;
+  const rate = analysis.onsetRate;
+  const n = analysis.energy.length;
+  const spikes = new Float32Array(n);
+  const spike = (t: number, weight: number) => {
+    const i = Math.round(t * rate);
+    if (i >= 0 && i < n) spikes[i] += weight;
+  };
+  for (const b of heard.beats) spike(b, 1);
+  for (const d of heard.downbeats) spike(d, 0.5);
+  // Held tightly to `bpm`: the model's spikes are strong enough to pull a
+  // looser tracker onto a tempo of their own.
+  const grid = trackBeats({ onsets: spikes, onsetRate: rate } as StemAnalysis, bpm, 400);
+  if (grid.length < 8) return null;
+  const spacing = Array.from(grid.slice(1), (t, i) => t - grid[i]).sort((a, b) => a - b)[(grid.length - 1) >> 1];
+  if (Math.abs(Math.log(spacing * (bpm / 60))) > 0.05) return null;
+  const first = heard.beats[0];
+  const last = heard.beats[heard.beats.length - 1];
+  let inside = 0;
+  let agree = 0;
+  let j = 0;
+  for (const t of grid) {
+    if (t < first - NEURAL_TOLERANCE || t > last + NEURAL_TOLERANCE) continue;
+    inside++;
+    while (j + 1 < heard.beats.length && heard.beats[j + 1] <= t) j++;
+    const near = Math.min(Math.abs(heard.beats[j] - t), Math.abs((heard.beats[j + 1] ?? Infinity) - t));
+    if (near <= NEURAL_TOLERANCE) agree++;
+  }
+  return inside > 0 && agree / inside >= NEURAL_AGREEMENT ? grid : null;
+}
+
 function beatGrid(analysis: StemAnalysis, bpm: number, tightness: number) {
   let byTempo = gridCache.get(analysis);
   if (!byTempo) gridCache.set(analysis, (byTempo = new Map()));
-  const key = `${bpm.toFixed(3)}|${tightness}`;
+  // The model's beats can arrive after a first look without them.
+  const key = `${bpm.toFixed(3)}|${tightness}|${analysis.neural ? "model" : "onsets"}`;
   if (!byTempo.has(key)) {
-    const times = trackBeats(analysis, bpm, tightness);
+    const times = neuralGrid(analysis, bpm) ?? trackBeats(analysis, bpm, tightness);
     byTempo.set(key, times.length >= 8 ? new BeatGrid(times, 60 / bpm) : null);
   }
   return byTempo.get(key)!;
@@ -135,6 +183,8 @@ export const UNSURE_DOWNBEAT = 0.15;
  * is strongest there. Scores, 0..2, indexed by beat number mod 4.
  */
 function downbeatScores(analysis: StemAnalysis, grid: BeatGrid) {
+  const fromModel = modelDownbeatScores(analysis, grid);
+  if (fromModel) return fromModel;
   const { times } = grid;
   const n = times.length;
   const rate = analysis.onsetRate;
@@ -155,6 +205,28 @@ function downbeatScores(analysis: StemAnalysis, grid: BeatGrid) {
   const kickScore = normalised(kick);
   const changeScore = normalised(change);
   return kickScore.map((k, i) => k + changeScore[i]);
+}
+
+/**
+ * The same scores from the beat model's downbeats: which beat of the grid,
+ * counted in fours, they keep landing on. The model hears "the one" far
+ * more surely than kick and level changes do. Null without enough of them.
+ */
+function modelDownbeatScores(analysis: StemAnalysis, grid: BeatGrid): number[] | null {
+  const downbeats = analysis.neural?.downbeats;
+  if (!downbeats || downbeats.length < 4) return null;
+  const counts = [0, 0, 0, 0];
+  let matched = 0;
+  const near = grid.period * 0.25;
+  for (const d of downbeats) {
+    const i = Math.round(grid.position(d));
+    if (i < 0 || i >= grid.times.length || Math.abs(grid.times[i] - d) > near) continue;
+    counts[mod4(i)]++;
+    matched++;
+  }
+  if (matched < 4) return null;
+  // On the same 0..2 scale as the onset scores.
+  return counts.map((c) => (2 * c) / Math.max(...counts));
 }
 
 /** How far the best score is ahead of the runner-up, 0..1. */

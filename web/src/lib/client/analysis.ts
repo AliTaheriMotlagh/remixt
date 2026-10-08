@@ -1,5 +1,7 @@
 "use client";
 
+import type { NeuralBeats } from "./beatNet";
+import { melodyKeyScores, noteProfile, sungSeconds, trackMelody, type Melody } from "./melody";
 import type { MusicalKey } from "./musicKey";
 
 // Client-side audio analysis for the Studio's key detection and auto-match.
@@ -8,7 +10,8 @@ import type { MusicalKey } from "./musicKey";
 // Results are cached per stem: they only depend on the audio itself.
 
 /** Analysis rate: plenty for key and rhythm, and a quarter of the work. */
-const RATE = 11025;
+export const ANALYSIS_RATE = 11025;
+const RATE = ANALYSIS_RATE;
 /** Envelope block size — ~11.6 ms, the precision beat alignment gets. */
 const BLOCK = 128;
 const FFT_SIZE = 4096;
@@ -40,14 +43,27 @@ export type StemAnalysis = {
   chroma: Float32Array;
   /** Frames per second of `chroma`. */
   chromaRate: number;
+  /**
+   * A vocal's pitch, frame by frame (vocal stems only, see melody.ts): the
+   * notes actually sung, which its key is read from and the harmony check
+   * compares against a beat's chords.
+   */
+  melody?: Melody;
+  /**
+   * The beats and downbeats the beat model heard (see neuralBeats.ts), when
+   * it has listened to this stem. Bar finding uses them over the onset
+   * tracker below.
+   */
+  neural?: NeuralBeats;
 };
 
 const cache = new Map<string, Promise<StemAnalysis>>();
 
-export function analyzeStem(stemId: string, buffer: AudioBuffer): Promise<StemAnalysis> {
+/** `kind` "vocals" also follows the voice's pitch (see StemAnalysis.melody). */
+export function analyzeStem(stemId: string, buffer: AudioBuffer, kind?: string): Promise<StemAnalysis> {
   const cached = cache.get(stemId);
   if (cached) return cached;
-  const promise = runAnalysis(buffer);
+  const promise = runAnalysis(buffer, kind === "vocals");
   cache.set(stemId, promise);
   promise.catch(() => cache.delete(stemId));
   return promise;
@@ -55,11 +71,30 @@ export function analyzeStem(stemId: string, buffer: AudioBuffer): Promise<StemAn
 
 const yieldToUI = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-async function runAnalysis(buffer: AudioBuffer): Promise<StemAnalysis> {
-  const mono = await downmix(buffer);
+/** A vocal with less clear singing than this has its key read from its sound alone. */
+const MIN_SUNG_SECONDS = 8;
+
+async function runAnalysis(buffer: AudioBuffer, vocal: boolean): Promise<StemAnalysis> {
+  return analyzeMono(await downmix(buffer), vocal);
+}
+
+/** The analysis of mono samples already at the analysis rate (11025 Hz) — what analyzeStem runs, without Web Audio. */
+export async function analyzeMono(mono: Float32Array, vocal = false): Promise<StemAnalysis> {
   const { energy, onsets } = envelopes(mono);
   const lowOnsets = envelopes(lowPass(mono)).onsets;
-  const { key, confidence, frames } = await detectKey(mono);
+  const { scores, frames } = await detectKey(mono);
+  const melody = vocal ? await trackMelody(mono, RATE) : undefined;
+  // A vocal's key from the notes it sings, with its sound as a tie-breaker.
+  if (melody && sungSeconds(melody) >= MIN_SUNG_SECONDS) {
+    const fromNotes = melodyKeyScores(noteProfile(melody));
+    for (const s of scores) {
+      const notes = fromNotes.find((n) => n.key.tonic === s.key.tonic && n.key.mode === s.key.mode)!;
+      s.score = notes.score + 0.35 * s.score;
+    }
+  }
+  scores.sort((a, b) => b.score - a.score);
+  const key = scores[0].key;
+  const confidence = Math.max(0, Math.min(1, (scores[0].score - scores[1].score) * 5));
   const onsetRate = RATE / BLOCK;
   return {
     key,
@@ -73,6 +108,7 @@ async function runAnalysis(buffer: AudioBuffer): Promise<StemAnalysis> {
     bpmEstimate: estimateBpm(onsets, onsetRate),
     chroma: frames,
     chromaRate: RATE / FFT_HOP,
+    ...(melody ? { melody } : {}),
   };
 }
 
@@ -497,9 +533,8 @@ export function estimateTempoDecimated(decimated: Float32Array, rate: number): n
 const MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88];
 const MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.6, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
 
-async function detectKey(
-  mono: Float32Array
-): Promise<{ key: MusicalKey; confidence: number; frames: Float32Array }> {
+/** How well the stem's sound fits each of the 24 keys, and its chroma frames. */
+async function detectKey(mono: Float32Array): Promise<{ scores: { key: MusicalKey; score: number }[]; frames: Float32Array }> {
   const { total: chroma, frames } = await chromagram(mono);
 
   const scores: { key: MusicalKey; score: number }[] = [];
@@ -508,9 +543,7 @@ async function detectKey(
     scores.push({ key: { tonic, mode: "major" }, score: correlation(rotated, MAJOR_PROFILE) });
     scores.push({ key: { tonic, mode: "minor" }, score: correlation(rotated, MINOR_PROFILE) });
   }
-  scores.sort((a, b) => b.score - a.score);
-  const confidence = Math.max(0, Math.min(1, (scores[0].score - scores[1].score) * 5));
-  return { key: scores[0].key, confidence, frames };
+  return { scores, frames };
 }
 
 function correlation(a: number[], b: number[]) {

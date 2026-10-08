@@ -280,3 +280,16 @@ ALTER TABLE tracks ADD COLUMN IF NOT EXISTS example_credit TEXT;
 ALTER TABLE live_streams ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'perform'; -- perform | studio
 ALTER TABLE live_streams ADD COLUMN IF NOT EXISTS mix_json TEXT NOT NULL DEFAULT '';
 ALTER TABLE live_streams ADD COLUMN IF NOT EXISTS mix_version INTEGER NOT NULL DEFAULT 0;
+
+-- The AI co-producer: each person's own Anthropic API key, so the AI's
+-- calls are on their account. Encrypted (AES-256-GCM) with AI_KEY_SECRET,
+-- or a key derived from SESSION_SECRET — see src/lib/aiKeys.ts. Never sent
+-- back to the browser.
+CREATE TABLE IF NOT EXISTS user_ai_keys (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL DEFAULT 'anthropic',
+  key_cipher TEXT NOT NULL,
+  key_hint TEXT NOT NULL,
+  model TEXT NOT NULL DEFAULT 'claude-opus-5-5',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

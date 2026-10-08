@@ -371,6 +371,18 @@ docker save remixt | gzip | ssh root@your-server 'gunzip | docker load'
 | `COOKIE_SECURE` | `true` | `false` only to try it over plain HTTP. Sign-in fails otherwise. |
 | `ADMIN_EMAILS` | *(unset)* | Comma-separated emails of accounts that get the Admin page (`/admin`). |
 | `PUBLIC_BASE_URL` | *(unset)* | The site's address, e.g. `https://remix.example.com`, so shared links show their preview image. Not needed on Vercel. |
+| `AI_KEY_SECRET` | *(from `SESSION_SECRET`)* | Encrypts the Anthropic API keys people save for the AI co-producer. Set it so changing `SESSION_SECRET` doesn't make saved keys unreadable. |
+| `NEXT_PUBLIC_BEAT_MODEL_URL` | *(beat-this-rs on GitHub)* | Where browsers download the ~10 MB beat-tracking model from — host a copy yourself to not depend on GitHub. It needs CORS (`Access-Control-Allow-Origin: *`). |
+
+#### The AI co-producer
+
+The Studio's **Ask AI** tab is Claude, working in the person's mix with the
+same tools as the AI producer. It runs on **each person's own Anthropic API
+key** — the site doesn't pay for it. They paste a key from
+[console.anthropic.com](https://console.anthropic.com/settings/keys) and
+choose to keep it on their account (encrypted with `AI_KEY_SECRET`, see
+`web/src/lib/aiKeys.ts`) or in their browser only. The table for saved
+keys comes with `node scripts/migrate.mjs`.
 
 ### Updating and backups
 

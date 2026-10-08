@@ -8,6 +8,7 @@ import {
   CopyPlus,
   Download,
   LayoutGrid,
+  MessageCircle,
   Play,
   RectangleHorizontal,
   Spline,
@@ -536,6 +537,12 @@ function EditTab({ lane }: { lane: StudioLane }) {
   );
 }
 
+/** The question the lane's "Ask AI" starts with — the person can change it before sending. */
+function askAbout(lane: StudioLane) {
+  const what = lane.kind === "vocals" ? "this vocal" : "this beat";
+  return `About “${laneName(lane)}” (lane ${lane.laneId}): how can ${what} sit better in the mix? Check its timing, key and sound, and try a fix.`;
+}
+
 function InspectorBody({ lane, onClose }: { lane: StudioLane; onClose?: () => void }) {
   const tab = useStudioView((s) => s.inspectorTab);
   const setTab = useStudioView((s) => s.setInspectorTab);
@@ -550,6 +557,14 @@ function InspectorBody({ lane, onClose }: { lane: StudioLane; onClose?: () => vo
             {kindLabel(lane.kind)} · {lane.artistName}
           </p>
         </div>
+        <button
+          onClick={() => useStudioView.getState().askAi(askAbout(lane))}
+          className="mb-2 flex h-8 shrink-0 items-center gap-1 rounded-lg border border-border px-2.5 text-[11px] font-semibold text-muted hover:border-brand hover:text-foreground"
+          title="Ask the AI co-producer about this lane"
+        >
+          <MessageCircle className="text-brand-strong" />
+          <span className="max-sm:hidden">Ask AI</span>
+        </button>
         <nav className="ml-auto flex min-w-0 gap-0.5 self-end overflow-x-auto scrollbar-thin max-md:hidden" aria-label="Lane settings">
           {TABS.map((t) => (
             <button

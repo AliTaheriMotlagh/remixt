@@ -29,6 +29,9 @@ type ViewState = {
   setInspectorTab: (tab: InspectorTab) => void;
   aiOpen: boolean;
   setAiOpen: (open: boolean) => void;
+  /** A question waiting for the AI co-producer (opens it on its chat, filled in, unsent). */
+  aiQuestion: { id: number; text: string } | null;
+  askAi: (text: string) => void;
   /** The lane being split with Demucs (its dialog is open), if any. */
   splitLaneId: string | null;
   setSplitLane: (laneId: string | null) => void;
@@ -57,6 +60,8 @@ export const useStudioView = create<ViewState>((set) => ({
   setInspectorTab: (inspectorTab) => set({ inspectorTab }),
   aiOpen: false,
   setAiOpen: (aiOpen) => set({ aiOpen }),
+  aiQuestion: null,
+  askAi: (text) => set({ aiOpen: true, aiQuestion: { id: Date.now(), text } }),
   splitLaneId: null,
   setSplitLane: (splitLaneId) => set({ splitLaneId }),
   notice: null,

@@ -4,6 +4,7 @@ import { analyzeStem, beatPhase, findPhrases, refineTempo, type StemAnalysis } f
 import { isBacking } from "@/lib/stemKinds";
 import { PRE_ROLL, TAIL, arrangeVocal, beatStructure } from "./arrange";
 import { audioEngine } from "./audioEngine";
+import { hearBeats } from "./neuralBeats";
 import { fetchStem } from "./stemFetch";
 import { bestKeyShift, keyLabel } from "./musicKey";
 import { withoutHistory } from "./studioHistory";
@@ -32,7 +33,19 @@ import {
 export async function analyzeLane(lane: StudioLane): Promise<StemAnalysis | null> {
   await audioEngine.ensureLane(lane.laneId, lane.stemId);
   const buffer = audioEngine.getRawBuffer(lane.laneId);
-  return buffer ? analyzeStem(lane.stemId, buffer) : null;
+  return buffer ? analyzeStem(lane.stemId, buffer, lane.kind) : null;
+}
+
+/**
+ * A beat lane analysed, with the beat model's beats and downbeats on it
+ * (see neuralBeats.ts) — what finding its bars needs. Without the model
+ * (turned off, or it couldn't load) it's the plain analysis.
+ */
+export async function analyzeBeatLane(lane: StudioLane): Promise<StemAnalysis | null> {
+  const analysis = await analyzeLane(lane);
+  const buffer = audioEngine.getRawBuffer(lane.laneId);
+  if (analysis && buffer && isBacking(lane.kind)) await hearBeats(analysis, lane.stemId, buffer);
+  return analysis;
 }
 
 const guideCache = new Map<string, Promise<StemAnalysis | null>>();
@@ -51,14 +64,33 @@ export function analyzeGuide(lane: StudioLane): Promise<StemAnalysis | null> {
     const { id } = (await res.json()) as { id: string | null };
     if (!id) return null;
     const inProject = useStudioStore.getState().lanes.find((l) => l.stemId === id);
-    if (inProject) return analyzeLane(inProject);
+    if (inProject) return analyzeBeatLane(inProject);
     const data = await fetchStem(id);
     // Decoding needs a context but not a running one.
     const buffer = await new OfflineAudioContext(1, 1, 44100).decodeAudioData(data);
-    return analyzeStem(id, buffer);
+    const analysis = await analyzeStem(id, buffer);
+    // Its beats and downbeats say where the singer's bars are.
+    await hearBeats(analysis, id, buffer);
+    return analysis;
   })().catch(() => null);
   guideCache.set(lane.stemId, promise);
   return promise;
+}
+
+const beatsAttempted = new Set<string>();
+
+/**
+ * Has the beat model listen to every beat lane in the background, as soon
+ * as it's in the mix — so the AI producer has its beats and downbeats
+ * ready when it's opened, instead of waiting for them then.
+ */
+export async function listenForBeats() {
+  const { lanes } = useStudioStore.getState();
+  for (const lane of lanes) {
+    if (!isBacking(lane.kind) || beatsAttempted.has(lane.stemId)) continue;
+    beatsAttempted.add(lane.stemId);
+    await analyzeBeatLane(lane).catch(() => null);
+  }
 }
 
 const keyAttempted = new Set<string>();
@@ -465,7 +497,7 @@ export async function suggestMatches(steps: MatchSteps): Promise<MatchSuggestion
   await Promise.all(
     lanes.map(async (lane) => {
       const [analysis, guide] = await Promise.all([
-        analyzeLane(lane),
+        isBacking(lane.kind) && steps.arrange ? analyzeBeatLane(lane) : analyzeLane(lane),
         lane.kind === "vocals" && (steps.arrange || steps.tempo) ? analyzeGuide(lane) : null,
       ]);
       if (analysis) analyses.set(lane.laneId, analysis);

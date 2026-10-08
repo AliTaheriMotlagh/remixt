@@ -317,6 +317,7 @@ class AudioEngine {
               const rendered = await renderPitchTempo(ctx, slice, {
                 tempo: lane.tempoRatio * (clip.stretch ?? 1),
                 pitchSemitones: lane.pitchSemitones,
+                voice: lane.kind === "vocals",
               });
               this.lanes.get(laneId)?.clipBuffers.set(key, rendered);
             })
@@ -374,6 +375,7 @@ class AudioEngine {
         const processed = await renderPitchTempo(ctx, entry.rawBuffer, {
           tempo: lane.tempoRatio,
           pitchSemitones: lane.pitchSemitones,
+          voice: lane.kind === "vocals",
         });
         const current = this.lanes.get(laneId);
         if (!current) return;
@@ -393,6 +395,20 @@ class AudioEngine {
 
     this.transforming.set(laneId, promise);
     return promise;
+  }
+
+  /**
+   * Renders every stretched or re-keyed lane and clip again — after the
+   * stretch engine was switched (see pitchTempo.ts), so it's heard at once.
+   */
+  async rerenderAll(): Promise<void> {
+    this.padBuffers.clear();
+    const ids = [...this.lanes.keys()];
+    for (const entry of this.lanes.values()) {
+      entry.appliedTempo = Number.NaN;
+      entry.clipBuffers.clear();
+    }
+    await Promise.all(ids.flatMap((id) => [this.ensureTransform(id), this.ensureClips(id)]));
   }
 
   removeLane(laneId: string) {
@@ -637,7 +653,7 @@ class AudioEngine {
         const ctx = this.getContext();
         const slice = sliceBuffer(ctx, raw, pad.from, pad.to, pad.reverse);
         if (!slice) return null;
-        return renderPitchTempo(ctx, slice, { tempo: pad.tempoRatio, pitchSemitones: pad.pitchSemitones });
+        return renderPitchTempo(ctx, slice, { tempo: pad.tempoRatio, pitchSemitones: pad.pitchSemitones, voice: pad.kind === "vocals" });
       });
       pending.catch(() => this.padBuffers.delete(key));
       this.padBuffers.set(key, pending);

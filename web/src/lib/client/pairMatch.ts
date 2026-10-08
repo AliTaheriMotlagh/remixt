@@ -18,7 +18,7 @@ import {
   type SectionPlacement,
   type SuggestedLayout,
 } from "./arrange";
-import { analyzeGuide, analyzeLane } from "./autoMatch";
+import { analyzeBeatLane, analyzeGuide, analyzeLane } from "./autoMatch";
 import { bestKeyShift, keyLabel, type MusicalKey } from "./musicKey";
 import {
   DEFAULT_FX,
@@ -154,7 +154,7 @@ export async function preparePair(vocalLaneId: string, beatLaneId: string): Prom
 
   const [vocalAnalysis, beatAnalysis, guide] = await Promise.all([
     analyzeLane(vocalLane),
-    analyzeLane(beatLane),
+    analyzeBeatLane(beatLane),
     analyzeGuide(vocalLane),
   ]);
   if (!vocalAnalysis || !beatAnalysis) throw new Error("Couldn't load the audio of those lanes.");

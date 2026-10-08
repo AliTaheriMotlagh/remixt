@@ -9,6 +9,7 @@ import { findParts } from "./beatParts";
 import { asWholeTake, clipEnd, clipId, clipStart, clipsOf, moveClips, normaliseLane, playsInOrder, stutterLane } from "./clipEdit";
 import { DEFAULT_OPTIONS, findChorus, planFromOptions, type Entry, type MatchOptions, type Structure } from "./matchOptions";
 import { tempoFit } from "./matchFinder";
+import { adviseShift, harmonyStatus, pickShift, scanHarmony, type HarmonyScan } from "./harmony";
 import { bestKeyShift, keyFit, keyLabel, transposeKey } from "./musicKey";
 import { pairPlanPatches, preparePair, type PairContext, type TempoChoice } from "./pairMatch";
 import {
@@ -630,11 +631,58 @@ function extendBeat(draft: Draft, structure: BeatStructure) {
 }
 
 /** The keys the vocal and beat sound in now. */
-function keysNow(pair: PairContext, vocal: StudioLane, beat: StudioLane) {
+export function keysNow(pair: PairContext, vocal: StudioLane, beat: StudioLane) {
   return {
     vocalKey: effectiveKey(vocal) ?? transposeKey(pair.vocalAnalysis.key, vocal.pitchSemitones),
     beatKey: effectiveKey(beat) ?? transposeKey(pair.beatAnalysis.key, beat.pitchSemitones),
   };
+}
+
+/**
+ * How the vocal's sung notes sit on the beat's chords in the draft as it
+ * is now (harmony.ts) — null for rap, speech or too little singing, where
+ * only the key labels can be gone by.
+ */
+export function harmonyOf(session: Session, lanes: { vocal: StudioLane; beat: StudioLane }): HarmonyScan | null {
+  const { pair } = session;
+  if (!pair || lanes.vocal.laneId !== pair.vocalLaneId || lanes.beat.laneId !== pair.beatLaneId) return null;
+  return scanHarmony({ analysis: pair.vocalAnalysis, lane: lanes.vocal }, { analysis: pair.beatAnalysis, lane: lanes.beat });
+}
+
+/** Below this share of held notes in the beat's chords, a pair the labels call fine is still worth moving. */
+const CLEARLY_OFF = 0.4;
+/** …and only for a big measured improvement. */
+const BIG_GAIN = 0.1;
+
+/**
+ * The vocal shift (semitones; the beat moves the opposite way) that puts
+ * the two in tune. The key labels propose (`labelShift`, null when they
+ * call the keys fine); the vocal's notes over the beat's chords decide —
+ * a label shift that measurably sounds worse is not made, a better one
+ * nearby is taken, and a pair the labels misread is caught. Without a
+ * melody to measure, the labels decide as before.
+ */
+function chooseShift(draft: Draft, labelShift: number | null): { shift: number; scan: HarmonyScan | null; overruled: boolean } {
+  const { vocal, beat } = draft.session;
+  const scan = vocal && beat ? harmonyOf(draft.session, { vocal: draft.lane(vocal.laneId), beat: draft.lane(beat.laneId) }) : null;
+  if (!scan) return { shift: labelShift ?? 0, scan: null, overruled: false };
+  if (labelShift !== null) {
+    const pick = pickShift(scan, [labelShift]);
+    return { shift: pick.shift, scan, overruled: pick.shift !== labelShift };
+  }
+  if (scan.now.inChord >= CLEARLY_OFF) return { shift: 0, scan, overruled: false };
+  const advice = adviseShift(scan);
+  return advice.best.fit - scan.now.fit >= BIG_GAIN ? { shift: advice.shift, scan, overruled: true } : { shift: 0, scan, overruled: false };
+}
+
+const share = (x: number) => `${Math.round(x * 100)}%`;
+
+/** What the harmony measurement says about a shift, for the "what changes" list. */
+function harmonyLine(scan: HarmonyScan, vocalShift: number) {
+  const after = scan.byShift.get(((vocalShift + 6) % 12 + 12) % 12 - 6) ?? scan.now;
+  return vocalShift
+    ? `${share(scan.now.inChord)} → ${share(after.inChord)} of the sung notes now sit in the beat's chords`
+    : `${share(scan.now.inChord)} of the sung notes already sit in the beat's chords`;
 }
 
 /** Shifts the beat (its parts follow it, see lockAllLanes) to the vocal's key when they clash. */
@@ -644,11 +692,17 @@ function fixBeatKey(draft: Draft) {
   const b = draft.lane(beat.laneId);
   const { vocalKey, beatKey } = keysNow(pair, draft.lane(vocal.laneId), b);
   const fit = keyFit(beatKey, vocalKey);
-  if (fit !== "far" && fit !== "clash") return null;
-  const shift = bestKeyShift(beatKey, vocalKey).semitones;
-  if (!shift) return null;
+  const labels = fit === "far" || fit === "clash" ? bestKeyShift(beatKey, vocalKey).semitones : null;
+  // Measured as the vocal's shift: moving the beat up is the vocal moving down.
+  const choice = chooseShift(draft, labels === null ? null : -labels);
+  const shift = -choice.shift;
+  if (!shift) {
+    if (labels && choice.scan) draft.lines.push(`Keys read as ${keyLabel(vocalKey)} and ${keyLabel(beatKey)}, but ${harmonyLine(choice.scan, 0)} — left as it is`);
+    return null;
+  }
   draft.patch(b.laneId, { pitchSemitones: b.pitchSemitones + shift });
   draft.lines.push(`Beat pitch ${st(b.pitchSemitones + shift)} → plays in ${keyLabel(transposeKey(beatKey, shift))}, the vocal's key (${keyLabel(vocalKey)})`);
+  if (choice.scan) draft.lines.push(`Measured: ${harmonyLine(choice.scan, choice.shift)}`);
   return { shift };
 }
 
@@ -766,12 +820,17 @@ function fixKey(draft: Draft) {
   const v = draft.lane(vocal.laneId);
   const { vocalKey, beatKey } = keysNow(pair, v, draft.lane(beat.laneId));
   const fit = keyFit(vocalKey, beatKey);
-  if (fit !== "far" && fit !== "clash") return null;
-  const shift = bestKeyShift(vocalKey, beatKey).semitones;
-  if (!shift) return null;
+  const labels = fit === "far" || fit === "clash" ? bestKeyShift(vocalKey, beatKey).semitones : null;
+  const choice = chooseShift(draft, labels);
+  const { shift } = choice;
+  if (!shift) {
+    if (labels && choice.scan) draft.lines.push(`Keys read as ${keyLabel(vocalKey)} and ${keyLabel(beatKey)}, but ${harmonyLine(choice.scan, 0)} — left as sung`);
+    return null;
+  }
   const pitch = v.pitchSemitones + shift;
   draft.patch(v.laneId, { pitchSemitones: pitch });
-  draft.lines.push(`Vocal pitch ${st(pitch)} → sings in ${keyLabel(transposeKey(vocalKey, shift))}, which fits the beat's ${keyLabel(beatKey)}`);
+  draft.lines.push(`Vocal pitch ${st(pitch)} → sings in ${keyLabel(transposeKey(vocalKey, shift))}, ${choice.overruled ? "where its notes fit" : "which fits"} the beat's ${keyLabel(beatKey)}`);
+  if (choice.scan) draft.lines.push(`Measured: ${harmonyLine(choice.scan, shift)}`);
   return { shift, vocalKey, beatKey, fit };
 }
 
@@ -2276,19 +2335,60 @@ export function checkMix(session: Session, lanes: StudioLane[]): Check[] {
     });
     const { vocalKey, beatKey } = keysNow(pair, vocal, beat);
     const fit = keyFit(vocalKey, beatKey);
-    checks.push({
-      id: "key",
-      icon: "music",
-      label: "Key",
-      status: fit === "clash" ? "bad" : fit === "far" ? "warn" : "good",
-      text:
-        fit === "clash"
-          ? `The keys clash (${keyLabel(vocalKey)} over ${keyLabel(beatKey)}) — notes sound wrong together`
-          : fit === "far"
-            ? `The keys rub a little (${keyLabel(vocalKey)} over ${keyLabel(beatKey)})`
-            : `In tune together (${keyLabel(vocalKey)} over ${keyLabel(beatKey)})`,
-      fix: "key",
-    });
+    // Measured when the vocal has a melody: its notes against the beat's chords, where they land now.
+    const scan = harmonyOf(session, { vocal, beat });
+    if (scan) {
+      const status = harmonyStatus(scan.now);
+      const advice = adviseShift(scan);
+      checks.push({
+        id: "key",
+        icon: "music",
+        label: "Key",
+        status,
+        text:
+          status === "good"
+            ? `In tune — ${share(scan.now.inChord)} of the sung notes sit in the beat's chords (${keyLabel(vocalKey)} over ${keyLabel(beatKey)})`
+            : `Only ${share(scan.now.inChord)} of the sung notes sit in the beat's chords — ${status === "bad" ? "notes sound wrong together" : "some lines rub"}${
+                advice.shift ? ` (${st(advice.shift)} on the vocal gets ${share(advice.best.inChord)})` : ""
+              }`,
+        fix: "key",
+      });
+    } else {
+      checks.push({
+        id: "key",
+        icon: "music",
+        label: "Key",
+        status: fit === "clash" ? "bad" : fit === "far" ? "warn" : "good",
+        text:
+          fit === "clash"
+            ? `The keys clash (${keyLabel(vocalKey)} over ${keyLabel(beatKey)}) — notes sound wrong together`
+            : fit === "far"
+              ? `The keys rub a little (${keyLabel(vocalKey)} over ${keyLabel(beatKey)})`
+              : `In tune together (${keyLabel(vocalKey)} over ${keyLabel(beatKey)})`,
+        fix: "key",
+      });
+    }
+
+    // Stretched or re-keyed far, any voice starts to sound processed.
+    const bend = Math.max(Math.abs(Math.log(vocal.tempoRatio)), Math.abs(Math.log(beat.tempoRatio)));
+    const pitchBend = Math.abs(vocal.pitchSemitones);
+    if (bend > Math.log(1.1) || pitchBend > 3) {
+      const which = Math.abs(Math.log(vocal.tempoRatio)) >= Math.abs(Math.log(beat.tempoRatio)) ? "vocal" : "beat";
+      const ratio = which === "vocal" ? vocal.tempoRatio : beat.tempoRatio;
+      checks.push({
+        id: "natural",
+        icon: "mic",
+        label: "Natural sound",
+        status: bend > Math.log(1.22) || pitchBend > 5 ? "bad" : "warn",
+        text: [
+          bend > Math.log(1.1) ? `The ${which} plays ${share(Math.abs(ratio - 1))} ${ratio > 1 ? "faster" : "slower"} than recorded` : "",
+          pitchBend > 3 ? `the vocal is ${st(vocal.pitchSemitones)} from how it was sung` : "",
+        ]
+          .filter(Boolean)
+          .join(", and ")
+          .concat(" — it can start to sound processed. “Meet halfway” bends both less, or pick a beat closer in tempo and key."),
+      });
+    }
   }
 
   if (vocal && backing.length) {

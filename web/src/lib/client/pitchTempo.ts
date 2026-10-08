@@ -3,19 +3,56 @@
 import { SimpleFilter, SoundTouch, WebAudioBufferSource } from "soundtouchjs";
 import type { PitchTempoRequest, PitchTempoResponse } from "./pitchTempo.worker";
 
-// Renders a new AudioBuffer with an independent tempo and pitch applied,
-// using SoundTouch's offline (non-realtime) processing pipeline. This is a
-// "freeze"/bounce-style operation, not live DSP — we run it once whenever
-// a lane's pitch or tempo changes, then play the resulting buffer back
-// normally. That keeps multi-lane transport sync simple: after the
+// Renders a new AudioBuffer with an independent tempo and pitch applied.
+// This is a "freeze"/bounce-style operation, not live DSP — we run it once
+// whenever a lane's pitch or tempo changes, then play the resulting buffer
+// back normally. That keeps multi-lane transport sync simple: after the
 // transform, buffer duration == real playback duration, same as today.
+//
+// Two engines. High quality (the default) is Signalsmith Stretch, a
+// spectral stretcher, run through an OfflineAudioContext: far fewer of the
+// warbles and echoes a vocal picks up when it's sped up or re-keyed, and
+// it keeps a voice's formants where they were when its pitch moves, so a
+// vocal shifted a few semitones doesn't turn into a chipmunk or a giant.
+// Classic is SoundTouch (time-domain), kept as the fallback for browsers
+// where the high-quality engine can't run, and as a choice.
+
+export type StretchEngine = "hq" | "classic";
+const ENGINE_KEY = "remixt.stretchEngine";
+
+export function stretchEngine(): StretchEngine {
+  try {
+    return localStorage.getItem(ENGINE_KEY) === "classic" ? "classic" : "hq";
+  } catch {
+    return "hq";
+  }
+}
+
+export function setStretchEngine(engine: StretchEngine) {
+  try {
+    localStorage.setItem(ENGINE_KEY, engine);
+  } catch {
+    // Private mode: remembered for this visit only.
+  }
+}
+
+/** Set once the high-quality engine has failed in this browser: everything after uses Classic. */
+let hqBroken = false;
+
 export async function renderPitchTempo(
   audioCtx: BaseAudioContext,
   sourceBuffer: AudioBuffer,
-  { tempo, pitchSemitones }: { tempo: number; pitchSemitones: number }
+  { tempo, pitchSemitones, voice = false }: { tempo: number; pitchSemitones: number; voice?: boolean }
 ): Promise<AudioBuffer> {
   if (Math.abs(tempo - 1) < 0.001 && Math.abs(pitchSemitones) < 0.001) {
     return sourceBuffer;
+  }
+  if (!hqBroken && stretchEngine() === "hq") {
+    try {
+      return await renderHq(sourceBuffer, tempo, pitchSemitones, voice);
+    } catch {
+      hqBroken = true;
+    }
   }
   let rendered: { left: Float32Array; right: Float32Array };
   try {
@@ -30,6 +67,66 @@ export async function renderPitchTempo(
   outBuffer.copyToChannel(rendered.left as Float32Array<ArrayBuffer>, 0);
   outBuffer.copyToChannel(rendered.right as Float32Array<ArrayBuffer>, 1);
   return outBuffer;
+}
+
+const STRETCH_MODULE = process.env.NEXT_PUBLIC_STRETCH_MODULE_URL || "/stretch/SignalsmithStretch.mjs";
+
+/** Rendered past the end by this much, so the stretcher's last block comes out before the cut. */
+const HQ_TAIL = 0.3;
+
+/**
+ * Signalsmith Stretch in an offline context: the stem goes in as the
+ * node's input buffer and comes out at `tempo`× speed, `semitones` higher —
+ * as fast as the CPU allows, on the audio thread, not the page's. Its
+ * latency is compensated by the node itself (checked: output = input /
+ * rate to within 2 ms), so the result lines up with the original exactly.
+ */
+async function renderHq(source: AudioBuffer, tempo: number, semitones: number, voice: boolean): Promise<AudioBuffer> {
+  const { default: SignalsmithStretch } = await import("signalsmith-stretch");
+  // Every render loads the same worklet module (copied to public/stretch by
+  // scripts/copy-ort.mjs), instead of the library making a new blob URL
+  // of itself each time.
+  (SignalsmithStretch as typeof SignalsmithStretch & { moduleUrl?: string }).moduleUrl ??= new URL(
+    STRETCH_MODULE,
+    window.location.href
+  ).href;
+  const rate = source.sampleRate;
+  const frames = Math.max(1, Math.round(source.length / tempo));
+  const ctx = new OfflineAudioContext(2, frames + Math.ceil(HQ_TAIL * rate), rate);
+  const node = await Promise.race([
+    SignalsmithStretch(ctx),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("The high-quality stretcher didn't start")), 8000)),
+  ]);
+  node.connect(ctx.destination);
+  const left = source.getChannelData(0).slice();
+  const right = (source.numberOfChannels > 1 ? source.getChannelData(1) : source.getChannelData(0)).slice();
+  await node.addBuffers([left, right]);
+  await node.schedule({
+    output: 0,
+    input: 0,
+    rate: tempo,
+    semitones,
+    active: true,
+    // A voice keeps its own character when its pitch moves.
+    ...(voice && Math.abs(semitones) > 0.001 ? { formantCompensation: true, formantBaseHz: 0 } : {}),
+  });
+  const out = await ctx.startRendering();
+  const result = new AudioBuffer({ numberOfChannels: 2, length: frames, sampleRate: rate });
+  let heard = false;
+  for (let c = 0; c < 2; c++) {
+    const data = out.getChannelData(c).subarray(0, frames);
+    if (!heard) for (let i = 0; i < data.length; i += 997) if (data[i] !== 0) { heard = true; break; }
+    result.copyToChannel(data, c);
+  }
+  // A silent render from a stem with sound in it means the engine didn't run.
+  if (!heard && hasSound(source)) throw new Error("The high-quality stretcher gave silence");
+  return result;
+}
+
+function hasSound(buffer: AudioBuffer) {
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i += 997) if (Math.abs(data[i]) > 1e-4) return true;
+  return false;
 }
 
 /**

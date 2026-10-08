@@ -23,7 +23,7 @@ import {
   startSharedSession,
 } from "@/lib/client/collab";
 import { audioEngine } from "@/lib/client/audioEngine";
-import { detectMissingKeys } from "@/lib/client/autoMatch";
+import { detectMissingKeys, listenForBeats } from "@/lib/client/autoMatch";
 import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/remixLanes";
 import { useStudioStore } from "@/lib/client/studioStore";
 import { useStudioView } from "@/lib/client/studioView";
@@ -257,7 +257,7 @@ export default function Studio({ user }: { user: User | null }) {
   // Lanes load in the background as they're added; once they have, work
   // out each one's key so it can be shown and matched without a click.
   useEffect(() => {
-    if (lanes.length > 0) void detectMissingKeys();
+    if (lanes.length > 0) void detectMissingKeys().then(listenForBeats);
   }, [lanes]);
 
   // Leaving the Studio shouldn't leave the mix playing behind you.

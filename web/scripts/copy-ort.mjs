@@ -1,6 +1,8 @@
-// Copies the ONNX Runtime Web files the song splitter loads at runtime into
-// public/ort/, so they're served from this app rather than a CDN. Runs
-// before `dev` and `build` (see package.json); public/ort is gitignored.
+// Copies the ONNX Runtime Web files the song splitter and the beat model
+// load at runtime into public/ort/, so they're served from this app rather
+// than a CDN, and the high-quality stretcher's AudioWorklet module into
+// public/stretch/ (one URL every render reuses). Runs before `dev` and
+// `build` (see package.json); both folders are gitignored.
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -23,3 +25,9 @@ for (const file of files) {
   fs.copyFileSync(path.join(from, file), path.join(to, file));
 }
 console.log(`copied ${files.length} ONNX Runtime files to public/ort`);
+
+const stretchFrom = path.join(root, "node_modules", "signalsmith-stretch", "SignalsmithStretch.mjs");
+const stretchTo = path.join(root, "public", "stretch");
+fs.mkdirSync(stretchTo, { recursive: true });
+fs.copyFileSync(stretchFrom, path.join(stretchTo, "SignalsmithStretch.mjs"));
+console.log("copied the stretcher's worklet to public/stretch");
