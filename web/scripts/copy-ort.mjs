@@ -6,6 +6,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import { fixStretchWorklet } from "./stretchFix.mjs";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const from = path.join(root, "node_modules", "onnxruntime-web", "dist");
@@ -29,5 +30,6 @@ console.log(`copied ${files.length} ONNX Runtime files to public/ort`);
 const stretchFrom = path.join(root, "node_modules", "signalsmith-stretch", "SignalsmithStretch.mjs");
 const stretchTo = path.join(root, "public", "stretch");
 fs.mkdirSync(stretchTo, { recursive: true });
-fs.copyFileSync(stretchFrom, path.join(stretchTo, "SignalsmithStretch.mjs"));
+const stretch = fixStretchWorklet(fs.readFileSync(stretchFrom, "utf8"));
+fs.writeFileSync(path.join(stretchTo, "SignalsmithStretch.mjs"), stretch);
 console.log("copied the stretcher's worklet to public/stretch");

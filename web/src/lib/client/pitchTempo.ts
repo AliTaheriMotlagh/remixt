@@ -71,8 +71,10 @@ export async function renderPitchTempo(
 
 const STRETCH_MODULE = process.env.NEXT_PUBLIC_STRETCH_MODULE_URL || "/stretch/SignalsmithStretch.mjs";
 
-/** Rendered past the end by this much, so the stretcher's last block comes out before the cut. */
-const HQ_TAIL = 0.3;
+/** How often the render stops to feed the stretcher more of the stem, in seconds of output. */
+const FEED_EVERY = 4;
+/** Stem kept on either side of where the stretcher reads (its window and look-ahead reach a little way), in seconds. */
+const FEED_MARGIN = 2;
 
 /**
  * Signalsmith Stretch in an offline context: the stem goes in as the
@@ -80,6 +82,14 @@ const HQ_TAIL = 0.3;
  * as fast as the CPU allows, on the audio thread, not the page's. Its
  * latency is compensated by the node itself (checked: output = input /
  * rate to within 2 ms), so the result lines up with the original exactly.
+ *
+ * Memory: a phone reloads the page when it holds too much (see device.ts),
+ * so this never adds a whole copy of the stem. The stem goes in a few
+ * seconds at a time, just ahead of where the stretcher reads, and what
+ * it's past is dropped; and the context renders exactly the length
+ * wanted, so what it renders is the result as it is, with no copy to trim
+ * it. (A render never depends on what comes after it: this is sample for
+ * sample the start of a longer one.)
  */
 async function renderHq(source: AudioBuffer, tempo: number, semitones: number, voice: boolean): Promise<AudioBuffer> {
   const { default: SignalsmithStretch } = await import("signalsmith-stretch");
@@ -92,18 +102,14 @@ async function renderHq(source: AudioBuffer, tempo: number, semitones: number, v
   ).href;
   const rate = source.sampleRate;
   const frames = Math.max(1, Math.round(source.length / tempo));
-  const ctx = new OfflineAudioContext(2, frames + Math.ceil(HQ_TAIL * rate), rate);
+  const ctx = new OfflineAudioContext(2, frames, rate);
   const node = await Promise.race([
     SignalsmithStretch(ctx),
     new Promise<never>((_, reject) => setTimeout(() => reject(new Error("The high-quality stretcher didn't start")), 8000)),
   ]);
   node.connect(ctx.destination);
-  const left = source.getChannelData(0).slice();
-  const right = (source.numberOfChannels > 1 ? source.getChannelData(1) : source.getChannelData(0)).slice();
-  // Handed over, not copied: a phone holds one less copy of the stem while it renders.
-  // (Its types leave out the transfer list the node takes after the buffers.)
-  const addBuffers = node.addBuffers as (buffers: Float32Array[], transfer?: Transferable[]) => Promise<number>;
-  await addBuffers.call(node, [left, right], [left.buffer, right.buffer]);
+
+  const feeding = await feedAsRendered(ctx, node, source, tempo);
   await node.schedule({
     output: 0,
     input: 0,
@@ -114,16 +120,65 @@ async function renderHq(source: AudioBuffer, tempo: number, semitones: number, v
     ...(voice && Math.abs(semitones) > 0.001 ? { formantCompensation: true, formantBaseHz: 0 } : {}),
   });
   const out = await ctx.startRendering();
-  const result = new AudioBuffer({ numberOfChannels: 2, length: frames, sampleRate: rate });
-  let heard = false;
-  for (let c = 0; c < 2; c++) {
-    const data = out.getChannelData(c).subarray(0, frames);
-    if (!heard) for (let i = 0; i < data.length; i += 997) if (data[i] !== 0) { heard = true; break; }
-    result.copyToChannel(data, c);
-  }
+  feeding.check();
   // A silent render from a stem with sound in it means the engine didn't run.
-  if (!heard && hasSound(source)) throw new Error("The high-quality stretcher gave silence");
-  return result;
+  if (!hasSound(out) && hasSound(source)) throw new Error("The high-quality stretcher gave silence");
+  return out;
+}
+
+/** What feedAsRendered needs of the stretcher node. */
+export type StretchInput = {
+  addBuffers: (buffers: Float32Array[]) => Promise<number>;
+  dropBuffers: (toSeconds: number) => Promise<unknown>;
+};
+
+/**
+ * Hands `source` to the stretcher a piece at a time while `ctx` renders:
+ * enough to start with now, then at every pause (every FEED_EVERY seconds
+ * of output) the stem up to where it'll read by the next one, letting go
+ * of what it's past. Call it before rendering; after, `check()` throws if
+ * any of it failed — the render can't be stopped, so it's thrown away.
+ */
+export async function feedAsRendered(
+  ctx: Pick<OfflineAudioContext, "length" | "sampleRate" | "suspend" | "resume">,
+  node: StretchInput,
+  source: AudioBuffer,
+  tempo: number
+) {
+  const rate = source.sampleRate;
+  const channels = [source.getChannelData(0), source.numberOfChannels > 1 ? source.getChannelData(1) : source.getChannelData(0)];
+  // (Its types leave out the transfer list the node takes after the buffers.)
+  const addBuffers = node.addBuffers as (buffers: Float32Array[], transfer?: Transferable[]) => Promise<number>;
+  let fed = 0;
+  /** The stem up to where the stretcher reads by output second `t` + FEED_EVERY, and nothing it's past. */
+  const feedUntil = async (t: number) => {
+    const end = Math.min(source.length, Math.ceil(((t + FEED_EVERY) * tempo + FEED_MARGIN) * rate));
+    if (end > fed) {
+      const piece = channels.map((data) => data.slice(fed, end));
+      fed = end;
+      await addBuffers.call(node, piece, piece.map((p) => p.buffer));
+    }
+    if (t > 0) await node.dropBuffers(Math.max(0, t * tempo - FEED_MARGIN));
+  };
+  await feedUntil(0);
+
+  let fault: unknown = null;
+  const quantum = 128;
+  const every = Math.max(quantum, Math.round((FEED_EVERY * ctx.sampleRate) / quantum) * quantum);
+  for (let frame = every; frame < ctx.length; frame += every) {
+    const t = frame / ctx.sampleRate;
+    ctx
+      .suspend(t)
+      .then(() => feedUntil(t))
+      .catch((err) => (fault ??= err))
+      .then(() => ctx.resume())
+      .catch(() => {});
+  }
+  return {
+    check() {
+      if (fault) throw fault;
+    },
+  };
 }
 
 function hasSound(buffer: AudioBuffer) {
