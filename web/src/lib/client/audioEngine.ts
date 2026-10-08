@@ -13,6 +13,7 @@ import { scheduleModulation } from "./modulation";
 import { renderPitchTempo, stretchEngine } from "./pitchTempo";
 import { previewPlayer } from "./previewPlayer";
 import { keepScreenOn } from "./wakeLock";
+import { deviceGb, isConstrainedDevice } from "./device";
 import { getPlayingRemix, setNowPlaying } from "./mediaSession";
 import {
   disableNowPlayingAnchor,
@@ -59,28 +60,32 @@ type LoadedLane = {
   clipBuffers: Map<string, AudioBuffer>;
 };
 
-/** The device's memory in GB, as the browser reports it (Chrome rounds it, others don't say). */
-function deviceGb() {
-  const gb = typeof navigator === "undefined" ? undefined : (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
-  return gb && gb > 0 ? gb : 4;
-}
+/**
+ * Phones get far tighter limits: they reload the page, with no warning,
+ * once it holds more than they allow (see device.ts) — and the lanes
+ * playing already take a few hundred MB there.
+ */
+const PHONE = isConstrainedDevice();
 
 /**
  * Memory for audio kept in case it's wanted again — renders and clips no
  * lane plays right now (the other side of Before/After, the idea before),
  * and stems no lane plays (a beat swapped for its parts). Past this, the
- * least recently used goes. A four-minute stem rendered once is ~90 MB.
+ * least recently used goes. A four-minute stem rendered once is ~90 MB:
+ * on a phone that's about one, so flipping Before/After on the last
+ * change stays instant without piling up every idea tried.
  */
-const SPARE_BYTES = Math.min(384, Math.max(96, deviceGb() * 48)) * 2 ** 20;
+const SPARE_BYTES = (PHONE ? 96 : Math.min(384, Math.max(128, deviceGb() * 48))) * 2 ** 20;
 /** Decoded stems kept for lanes that are gone, in case they come back (a beat swapped for its three parts and back). */
-const PARKED_STEMS = 3;
+const PARKED_STEMS = PHONE ? 1 : 3;
 /**
  * Stretch renders running at once, and how many seconds of audio between
  * them: while one runs it holds several copies of what it stretches, so a
- * few full-length ones side by side can take a phone's memory.
+ * few full-length ones side by side can take a phone's memory. (One
+ * always runs, however long — on a phone, a whole stem runs alone.)
  */
-const MAX_RENDERS = 4;
-const MAX_RENDER_SECONDS = Math.min(480, Math.max(180, deviceGb() * 75));
+const MAX_RENDERS = PHONE ? 2 : 4;
+const MAX_RENDER_SECONDS = PHONE ? 150 : Math.min(480, Math.max(180, deviceGb() * 75));
 
 /** Identifies a whole-stem render. */
 function renderKey(tempo: number, pitch: number) {
@@ -996,6 +1001,8 @@ class AudioEngine {
     }
     let pending = this.stemBuffers.get(stemId);
     if (!pending) {
+      // A whole stem is ~85 MB and a pad only keeps its slice: just the latest stem stays, for the next pad cut from it.
+      this.stemBuffers.clear();
       pending = fetchStem(stemId).then((bytes) => this.getContext().decodeAudioData(bytes));
       pending.catch(() => this.stemBuffers.delete(stemId));
       this.stemBuffers.set(stemId, pending);

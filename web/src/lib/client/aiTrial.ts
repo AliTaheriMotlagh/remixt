@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 import { ALL_ASPECTS, type Aspect } from "./aiControl";
-import { compatible, leadOf, rebaseSession, recompileIdea, timingSignature, type HandEdit, type Idea, type Session } from "./aiIdeas";
+import { compatible, fixesOf, leadOf, mixFix, rebaseSession, recompileIdea, timingSignature, type FixId, type HandEdit, type Idea, type Session } from "./aiIdeas";
 import { speedChange } from "./quickAdjust";
 import { interceptHistory, recordStep, useStudioHistory, withoutRecording } from "./studioHistory";
 import { asOneChange, useStudioStore, type LanePatch, type StudioLane } from "./studioStore";
@@ -69,6 +69,9 @@ export type Trial = {
   /** A/B: which one is in the mix right now. */
   showing: "idea" | "original";
 };
+
+/** Ideas switched off that stay listed, to switch back on. */
+const MAX_OFF = 12;
 
 export const useAiTrial = create<{ trial: Trial | null }>(() => ({ trial: null }));
 
@@ -228,7 +231,8 @@ function build(session: Session, baseline: Mix, ideas: Idea[], without: Record<s
 function settle(session: Session, baseline: Mix, wanted: Idea[], from: Pick<Trial, "off" | "without"> | null): Idea[] {
   const without = from?.without ?? {};
   const { result, on } = build(session, baseline, wanted, without);
-  const off = (from?.off ?? []).filter((i) => !on.some((o) => o.id === i.id));
+  // Each one keeps its whole patch (every clip it cut): only the latest few stay listed.
+  const off = (from?.off ?? []).filter((i) => !on.some((o) => o.id === i.id)).slice(0, MAX_OFF);
   if (!on.length && !off.length) {
     setMix(baseline);
     useAiTrial.setState({ trial: null });
@@ -285,6 +289,43 @@ export function removeFromTrial(session: Session, ideaId: string) {
   if (!idea) return;
   const rest = trial.ideas.filter((i) => i.id !== ideaId);
   settle(session, trial.baseline, rest, { ...trial, off: [idea, ...trial.off.filter((i) => i.id !== ideaId)] });
+}
+
+/** The idea on that makes `fix`: the Mix check's fixes (one idea for all of them), or Make it sound good. */
+export function fixHolder(fix: FixId): Idea | null {
+  return useAiTrial.getState().trial?.ideas.find((i) => fixesOf(i).includes(fix)) ?? null;
+}
+
+/**
+ * Puts one of the Mix check's fixes on, with the fixes already on — all
+ * worked out together as one idea, so none undoes another. `available`:
+ * the fixes this mix has anything to do for (the rest are left out of
+ * the idea). Returns the other ideas it took the place of (a style that
+ * placed the vocal another way, say), or null if it couldn't go on.
+ */
+export function addFix(session: Session, fix: FixId, available?: Set<FixId>): Idea[] | null {
+  const on = useAiTrial.getState().trial?.ideas ?? [];
+  const wants = [...new Set([...on.flatMap(fixesOf), fix])].filter((f) => f === fix || !available || available.has(f));
+  const idea = mixFix(session, wants);
+  if (!idea) return null;
+  const replaced = on.filter((i) => !fixesOf(i).length && !compatible(i, idea));
+  return tryIdea(session, idea, { add: true }) ? replaced : null;
+}
+
+/**
+ * Takes just `fix` off; the other fixes stay on, worked out again without
+ * it. With Make it sound good on, its other fixes stay on in its place.
+ * With no other fix left, the fixes are switched off (listed, to switch
+ * back on). False if `fix` wasn't on.
+ */
+export function removeFix(session: Session, fix: FixId, available?: Set<FixId>): boolean {
+  const holder = fixHolder(fix);
+  if (!holder) return false;
+  const rest = fixesOf(holder).filter((f) => f !== fix && (!available || available.has(f)));
+  const idea = rest.length ? mixFix(session, rest) : null;
+  if (idea && tryIdea(session, idea, { add: true, replace: holder.id })) return true;
+  removeFromTrial(session, holder.id);
+  return true;
 }
 
 /** Forgets an idea that was switched off (it's no longer listed). */

@@ -3,6 +3,7 @@
 import { useSyncExternalStore } from "react";
 import { upload, type UploadTarget } from "./directUpload";
 import { fetchInSlices } from "./stemFetch";
+import { isConstrainedDevice } from "./device";
 import {
   STEM_BITRATES,
   type SplitOutput,
@@ -56,14 +57,7 @@ const MAX_SECONDS_MOBILE = 10 * 60;
  * needed, and let it go again afterwards. iPadOS reports itself as a Mac,
  * so it's recognised by its touchscreen.
  */
-export function isConstrainedDevice(): boolean {
-  if (typeof navigator === "undefined") return false;
-  const ua = navigator.userAgent;
-  const iPadOS = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
-  if (iPadOS || /iPhone|iPad|iPod|Android|Mobi/i.test(ua)) return true;
-  const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
-  return memory !== undefined && memory <= 2;
-}
+export { isConstrainedDevice };
 
 export type SplitterState = {
   status: "idle" | "downloading" | "starting" | "ready" | "error";

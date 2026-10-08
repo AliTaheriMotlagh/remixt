@@ -100,7 +100,10 @@ async function renderHq(source: AudioBuffer, tempo: number, semitones: number, v
   node.connect(ctx.destination);
   const left = source.getChannelData(0).slice();
   const right = (source.numberOfChannels > 1 ? source.getChannelData(1) : source.getChannelData(0)).slice();
-  await node.addBuffers([left, right]);
+  // Handed over, not copied: a phone holds one less copy of the stem while it renders.
+  // (Its types leave out the transfer list the node takes after the buffers.)
+  const addBuffers = node.addBuffers as (buffers: Float32Array[], transfer?: Transferable[]) => Promise<number>;
+  await addBuffers.call(node, [left, right], [left.buffer, right.buffer]);
   await node.schedule({
     output: 0,
     input: 0,

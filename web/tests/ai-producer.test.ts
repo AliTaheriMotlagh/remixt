@@ -11,6 +11,7 @@ import {
   compatible,
   findDrop,
   fixesOf,
+  fixGroups,
   ideaFits,
   masterFor,
   mixFix,
@@ -22,11 +23,13 @@ import {
   type Session,
 } from "../src/lib/client/aiIdeas.ts";
 import {
+  addFix,
   aspectsOfEdits,
   compare,
   dismissOff,
   keepTrial,
   partsOf,
+  removeFix,
   removeFromTrial,
   revertTrial,
   switchPart,
@@ -199,6 +202,86 @@ describe("the mix check", () => {
     assert.deepEqual(useAiTrial.getState().trial!.ideas.map((i) => i.id), ["fix:length+balance"]);
     assert.equal(status("volume"), "good");
     assert.equal(status("length"), "good");
+    revertTrial();
+  });
+});
+
+describe("the mix check, fix by fix", () => {
+  const beat = lane("beat", "beat");
+  const vocal = lane("vocal", "vocals", { offsetSeconds: 8, originalDuration: 36 });
+  const fresh = () => {
+    useAiTrial.setState({ trial: null });
+    useStudioStore.setState({ lanes: [beat, vocal], projectBpm: BPM, duration: 120 });
+    return session([beat, vocal], { beat: 1, vocal: 0.3 });
+  };
+  const on = () => useAiTrial.getState().trial?.ideas.map((i) => i.id) ?? [];
+
+  test("checks one fix sorts out are one row, with that fix's name and worst status", () => {
+    const groups = fixGroups([
+      { id: "speed", icon: "timer", label: "Speed", status: "warn", text: "", fix: "sync" },
+      { id: "timing", icon: "puzzle", label: "On the beat", status: "bad", text: "", fix: "sync" },
+      { id: "natural", icon: "mic", label: "Natural sound", status: "warn", text: "" },
+      { id: "lanes", icon: "link", label: "Every lane", status: "good", text: "", fix: "sync" },
+      { id: "volume", icon: "volume-2", label: "Volume", status: "good", text: "", fix: "balance" },
+    ]);
+    assert.deepEqual(
+      groups.map((g) => [g.id, g.label, g.status, g.checks.length]),
+      [
+        ["sync", "Speed & timing", "bad", 3],
+        ["natural", "Natural sound", "warn", 1],
+        ["balance", "Volume", "good", 1],
+      ]
+    );
+  });
+
+  test("each fix comes off on its own — Undo on one leaves the others on", () => {
+    const s = fresh();
+    assert.deepEqual(addFix(s, "balance"), []);
+    assert.deepEqual(addFix(s, "length"), []);
+    assert.deepEqual(on(), ["fix:length+balance"]);
+
+    assert.ok(removeFix(s, "balance"));
+    assert.deepEqual(on(), ["fix:length"], "the ending stays fixed");
+    const status = (id: string) => checkMix(s, useStudioStore.getState().lanes).find((c) => c.id === id)!.status;
+    assert.equal(status("length"), "good");
+    assert.equal(status("volume"), "bad", "the volume is back as it was");
+
+    assert.ok(removeFix(s, "length"));
+    assert.deepEqual(on(), []);
+    assert.equal(useStudioStore.getState().lanes.find((l) => l.laneId === "vocal")!.volume, 1, "the mix is back as it was");
+    assert.equal(removeFix(s, "length"), false, "nothing to undo");
+    revertTrial();
+  });
+
+  test("Undo on one of Make it sound good's fixes keeps the rest on", () => {
+    const s = fresh();
+    const auto = studioIdeas(s).find((i) => i.id === "auto-good")!;
+    assert.ok(tryIdea(s, auto, { add: true }));
+    assert.ok(removeFix(s, "balance", new Set(["balance", "length"])));
+    assert.deepEqual(on(), ["fix:length"]);
+    revertTrial();
+  });
+
+  test("Make it sound good and single fixes take each other's place, never stack", () => {
+    const s = fresh();
+    addFix(s, "balance");
+    const auto = studioIdeas(s).find((i) => i.id === "auto-good")!;
+    assert.ok(tryIdea(s, auto, { add: true }));
+    assert.deepEqual(on(), ["auto-good"]);
+    revertTrial();
+  });
+
+  test("only the latest few switched-off ideas stay listed", () => {
+    const s = fresh();
+    const lofi = studioIdeas(s).find((i) => i.id === "sound-lofi")!;
+    assert.ok(tryIdea(s, lofi));
+    const trial = useAiTrial.getState().trial!;
+    const old = Array.from({ length: 20 }, (_, n) => ({ ...lofi, id: `old-${n}` }));
+    useAiTrial.setState({ trial: { ...trial, off: old } });
+    removeFromTrial(s, "sound-lofi");
+    const off = useAiTrial.getState().trial!.off.map((i) => i.id);
+    assert.equal(off.length, 12);
+    assert.equal(off[0], "sound-lofi", "the one just switched off is listed first");
     revertTrial();
   });
 });

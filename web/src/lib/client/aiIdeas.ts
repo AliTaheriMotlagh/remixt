@@ -2288,11 +2288,13 @@ export function ideaFits(idea: Idea, lanes: StudioLane[]) {
 /** Whether two ideas can be on at once: they touch different things. */
 /**
  * What slot an idea fills, when only one of its kind can be on: a sound
- * (mix recipe), or the Mix check's fixes (merged into one idea). Null for
+ * (mix recipe), or the Mix check's fixes (merged into one idea, or all of
+ * them as Make it sound good). Null for
  * ideas that stack freely (moments, layers…).
  */
 function slotOf(idea: Idea): string | null {
-  if (idea.id.startsWith("fix:")) return "fix";
+  // Make it sound good is every fix at once: it and the Mix check's fixes take each other's place.
+  if (idea.id.startsWith("fix:") || idea.id === AUTO_ID) return "fix";
   if (idea.id.startsWith("sound-")) return "sound";
   return null;
 }
@@ -2329,6 +2331,40 @@ export type Check = {
   /** What fixes it (see mixFix). */
   fix?: FixId;
 };
+
+/** What each fix is called in the Mix check — one name for all the checks it fixes. */
+export const FIX_LABEL: Record<FixId, string> = {
+  sync: "Speed & timing",
+  key: "Key",
+  length: "Ending",
+  balance: "Volume",
+};
+
+/**
+ * The Mix check's checks gathered by the fix that sorts them out: speed,
+ * timing and the other lanes all come right with one fix ("sync"), so
+ * they're one row with one Fix — never three buttons where pressing one
+ * makes the other two vanish. Checks no fix can sort out (how natural it
+ * sounds) are rows of their own. Its status is its worst check's; in the
+ * order first found.
+ */
+export type FixGroup = { id: string; fix: FixId | null; label: string; status: CheckStatus; checks: Check[] };
+
+const SEVERITY: Record<CheckStatus, number> = { good: 0, warn: 1, bad: 2 };
+
+export function fixGroups(checks: Check[]): FixGroup[] {
+  const groups: FixGroup[] = [];
+  for (const check of checks) {
+    const group = check.fix && groups.find((g) => g.fix === check.fix);
+    if (group) {
+      group.checks.push(check);
+      if (SEVERITY[check.status] > SEVERITY[group.status]) group.status = check.status;
+    } else {
+      groups.push({ id: check.fix ?? check.id, fix: check.fix ?? null, label: check.fix ? FIX_LABEL[check.fix] : check.label, status: check.status, checks: [check] });
+    }
+  }
+  return groups;
+}
 
 /**
  * What's wrong with the mix right now, in plain words, each with the idea

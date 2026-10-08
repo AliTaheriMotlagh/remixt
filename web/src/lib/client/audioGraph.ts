@@ -458,9 +458,14 @@ export function scheduleLane({
       g.linearRampToValueAtTime(0, startsAt + remaining);
       source.connect(gain);
       gain.connect(chain.input);
-      source.onended = () => gain.disconnect();
+      source.onended = () => {
+        source.disconnect();
+        gain.disconnect();
+      };
     } else {
       source.connect(chain.input);
+      // Safari holds on to a finished source (and the buffer it played) while it's still connected.
+      source.onended = () => source.disconnect();
     }
     source.start(startsAt, segment.from + offset, remaining);
     if (until !== undefined) source.stop(until);
