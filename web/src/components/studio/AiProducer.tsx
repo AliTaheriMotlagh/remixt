@@ -987,7 +987,7 @@ export default function AiProducer() {
         ref={sheetRef}
         aria-label="AI producer"
         data-sheet={sheet}
-        className={`touch-targets fixed z-[56] flex flex-col border-border bg-background shadow-2xl transition-[height] duration-200 max-lg:inset-x-0 max-lg:bottom-0 max-lg:mx-auto max-lg:max-w-2xl max-lg:rounded-t-2xl max-lg:border max-lg:border-b-0 max-lg:pb-[env(safe-area-inset-bottom)] lg:top-[var(--header-h)] lg:right-0 lg:bottom-0 lg:w-[27rem] lg:border-l ${
+        className={`touch-targets fixed z-[56] flex flex-col border-border bg-background shadow-2xl transition-[height] duration-200 max-lg:inset-x-0 max-lg:bottom-0 max-lg:mx-auto max-lg:max-w-2xl max-lg:rounded-t-2xl max-lg:border max-lg:border-b-0 max-lg:pb-[env(safe-area-inset-bottom)] lg:top-[var(--header-h)] lg:right-0 lg:bottom-0 lg:w-[23rem] lg:border-l xl:w-[27rem] ${
           sheet === "full" ? "max-lg:h-[92dvh]" : sheet === "half" ? "max-lg:h-[52dvh] landscape:max-lg:h-[70dvh]" : "max-lg:h-auto"
         }`}
         style={{ animation: "sheet-in 0.2s ease-out" }}

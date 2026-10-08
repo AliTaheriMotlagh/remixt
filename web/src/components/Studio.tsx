@@ -147,6 +147,25 @@ export default function Studio({ user }: { user: User | null }) {
   const remixTitle = sourceRemix?.title ?? null;
   const aiOpen = useStudioView((s) => s.aiOpen);
 
+  // With the AI producer docked on a desktop narrower than ~1600px, the
+  // timeline, the library and the panel don't all fit: the library folds
+  // away while the panel is open (Show library brings it back), and comes
+  // back when the panel closes — unless the person had hidden it themselves.
+  const foldedForAi = useRef(false);
+  useEffect(() => {
+    const squeezed = window.matchMedia("(min-width: 64rem) and (max-width: 99.999rem)").matches;
+    if (aiOpen && squeezed && !libraryHidden) {
+      foldedForAi.current = true;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- following the AI panel opening
+      setLibraryHidden(true);
+    } else if (!aiOpen && foldedForAi.current) {
+      foldedForAi.current = false;
+      setLibraryHidden(false);
+    }
+    // Only when the panel opens or closes, not when the person toggles the library.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiOpen]);
+
   // Unsaved work from a previous visit (a reload, or the phone dropping
   // the tab): offer it back, but only to an empty Studio.
   useEffect(() => {
@@ -286,7 +305,7 @@ export default function Studio({ user }: { user: User | null }) {
     // With the AI producer docked on the right, the Studio makes room for it.
     <div
       className={`touch-targets mx-auto w-full max-w-[110rem] px-3 py-4 max-lg:pb-[calc(6rem+var(--ai-sheet-h,0px))] sm:px-5 sm:py-5 ${
-        aiOpen ? "lg:max-w-none lg:pr-[28.25rem]" : ""
+        aiOpen ? "lg:max-w-none lg:pr-[24.25rem] xl:pr-[28.25rem]" : ""
       }`}
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -323,7 +342,11 @@ export default function Studio({ user }: { user: User | null }) {
             </button>
           )}
           <button
-            onClick={() => setLibraryHidden((v) => !v)}
+            onClick={() => {
+              // The person's own choice now: closing the AI panel leaves it be.
+              foldedForAi.current = false;
+              setLibraryHidden((v) => !v);
+            }}
             aria-pressed={!libraryHidden}
             className="hidden rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted transition-colors hover:text-foreground lg:block"
             title={libraryHidden ? "Show the stem library" : "Hide the stem library for a wider timeline"}

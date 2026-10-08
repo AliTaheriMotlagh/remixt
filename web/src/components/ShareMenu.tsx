@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useOnScreen } from "@/lib/client/useOnScreen";
 import { X } from "lucide-react";
 import { embedCode, shortPath } from "@/lib/shareLinks";
 
 /** Short link, QR code and embed snippet for a remix. */
 export default function ShareMenu({ remixId, title, onClose }: { remixId: string; title: string; onClose: () => void }) {
   const [origin, setOrigin] = useState("");
+  const [onScreen, onScreenStyle] = useOnScreen<HTMLDivElement>(true);
   const [qr, setQr] = useState<{ svg: string; png: string } | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
@@ -45,7 +47,7 @@ export default function ShareMenu({ remixId, title, onClose }: { remixId: string
   return (
     <>
       <div className="sheet-backdrop" onClick={onClose} />
-      <div className="popover-sheet absolute left-0 top-full z-[45] mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-xl border border-border bg-surface p-4 text-sm shadow-xl">
+      <div ref={onScreen} style={onScreenStyle} className="popover-sheet absolute left-0 top-full z-[45] mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-xl border border-border bg-surface p-4 text-sm shadow-xl">
         <div className="flex items-center justify-between">
           <p className="font-semibold">Share “{title}”</p>
           <button onClick={onClose} className="-m-2 p-2 text-muted hover:text-foreground" aria-label="Close">

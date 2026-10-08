@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useOnScreen } from "@/lib/client/useOnScreen";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Eye, Link2, MessageCircle, PartyPopper, Radio, Square, X } from "lucide-react";
@@ -29,6 +30,7 @@ async function api(path: string, method: string, body?: unknown) {
 export function GoLiveStudioButton({ signedIn }: { signedIn: boolean }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const [onScreen, onScreenStyle] = useOnScreen<HTMLFormElement>(open);
   const [title, setTitle] = useState("");
   const [chatMode, setChatMode] = useState<ChatMode>("open");
   const [busy, setBusy] = useState(false);
@@ -85,6 +87,8 @@ export function GoLiveStudioButton({ signedIn }: { signedIn: boolean }) {
         <>
           <div className="sheet-backdrop" onClick={() => setOpen(false)} />
           <form
+            ref={onScreen}
+            style={onScreenStyle}
             onSubmit={start}
             className="popover-sheet absolute right-0 top-full z-[45] mt-2 flex w-[min(22rem,calc(100vw-2rem))] flex-col gap-3 rounded-xl border border-border bg-surface p-4 text-sm shadow-xl"
           >

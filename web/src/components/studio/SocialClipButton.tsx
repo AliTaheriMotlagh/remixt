@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useOnScreen } from "@/lib/client/useOnScreen";
 import { Clapperboard, X } from "lucide-react";
 import { downloadBlob, safeFilename } from "@/lib/client/mixdown";
 import { canMakeClips, makeSocialClip, MAX_CLIP_SECONDS, type SocialClip } from "@/lib/client/socialClip";
@@ -34,6 +35,7 @@ export default function SocialClipButton({ title, artist, remixId }: { title: st
   const supported = useSyncExternalStore(noSubscription, canMakeClips, () => false);
   const duration = useStudioStore((s) => s.duration);
   const [open, setOpen] = useState(false);
+  const [onScreen, onScreenStyle] = useOnScreen<HTMLDivElement>(open);
   const [stage, setStage] = useState<{ label: string; fraction: number } | null>(null);
   const [clip, setClip] = useState<{ clip: SocialClip; url: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -122,7 +124,7 @@ export default function SocialClipButton({ title, artist, remixId }: { title: st
         />
       )}
       {open && (
-        <div className="popover-sheet absolute right-0 top-full z-40 mt-2 w-[min(20rem,calc(100vw-2rem))] rounded-xl border border-border bg-surface p-4 text-sm shadow-xl">
+        <div ref={onScreen} style={onScreenStyle} className="popover-sheet absolute right-0 top-full z-[57] mt-2 w-[min(20rem,calc(100vw-2rem))] rounded-xl border border-border bg-surface p-4 text-sm shadow-xl">
           <div className="flex items-center justify-between">
             <p className="font-semibold">Clip for socials</p>
             <button

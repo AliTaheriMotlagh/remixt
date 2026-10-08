@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useOnScreen } from "@/lib/client/useOnScreen";
 import Link from "next/link";
 import { Flag } from "lucide-react";
 
@@ -25,6 +26,7 @@ export default function ReportButton({
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [onScreen, onScreenStyle] = useOnScreen<HTMLDivElement>(open);
   const [reason, setReason] = useState("spam");
   const [details, setDetails] = useState("");
   const [state, setState] = useState<"idle" | "sending" | "sent">("idle");
@@ -65,7 +67,7 @@ export default function ReportButton({
       </button>
       {open && <div className="sheet-backdrop" onClick={() => setOpen(false)} />}
       {open && (
-        <div className="popover-sheet absolute right-0 top-full z-[45] mt-1 w-72 rounded-xl border border-border bg-surface p-3 text-left shadow-xl">
+        <div ref={onScreen} style={onScreenStyle} className="popover-sheet absolute right-0 top-full z-[45] mt-1 w-72 rounded-xl border border-border bg-surface p-3 text-left shadow-xl">
           {!signedIn ? (
             <p className="text-xs text-muted">
               <Link href="/login" className="text-brand-strong hover:underline">

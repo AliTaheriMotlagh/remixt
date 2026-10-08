@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useOnScreen } from "@/lib/client/useOnScreen";
 import { useRouter } from "next/navigation";
 import {
   ChevronDown,
@@ -86,6 +87,7 @@ function Popover({
       window.removeEventListener("keydown", onKey, { capture: true });
     };
   }, [open]);
+  const [onScreen, onScreenStyle] = useOnScreen<HTMLDivElement>(open);
   return (
     <div ref={ref} className="relative">
       <button
@@ -106,7 +108,9 @@ function Popover({
         <>
           <div className="sheet-backdrop" onClick={() => setOpen(false)} />
           <div
-            className={`popover-sheet absolute top-full z-50 mt-2 w-72 rounded-xl border border-border bg-surface-raised p-3 shadow-2xl shadow-black/40 ${
+            ref={onScreen}
+            style={onScreenStyle}
+            className={`popover-sheet absolute top-full z-[57] mt-2 w-72 max-w-[calc(100vw-1rem)] rounded-xl border border-border bg-surface-raised p-3 shadow-2xl shadow-black/40 ${
               align === "right" ? "right-0" : "left-0"
             }`}
           >
@@ -482,9 +486,11 @@ export default function StudioTransport({
   return (
     // On phones the backdrop blur is left off: it would trap the social-clip
     // sheet (position: fixed) inside this bar. While the save form is open
-    // it scrolls away rather than covering the screen.
+    // it scrolls away rather than covering the screen. While one of its
+    // popovers is open it rises above the AI producer's sheet (z-[56]):
+    // this bar is a stacking context, so a popover's own z-index can't.
     <div
-      className={`sticky top-[var(--header-h)] z-40 rounded-xl border border-border bg-surface shadow-lg shadow-black/20 sm:bg-surface/95 sm:backdrop-blur-md ${
+      className={`sticky top-[var(--header-h)] z-40 has-[.popover-sheet]:z-[70] rounded-xl border border-border bg-surface shadow-lg shadow-black/20 sm:bg-surface/95 sm:backdrop-blur-md ${
         showSave ? "max-sm:static" : ""
       }`}
     >
@@ -533,8 +539,8 @@ export default function StudioTransport({
           </button>
         </div>
 
-        {/* The display */}
-        <div className="flex h-12 shrink-0 items-stretch overflow-hidden rounded-xl border border-white/10 bg-black/40 shadow-inner">
+        {/* The display. Not overflow-hidden (for its corners): that clipped the tempo and key popovers away. */}
+        <div className="flex h-12 shrink-0 items-stretch rounded-xl border border-white/10 bg-black/40 shadow-inner">
           <TransportClock />
           {!empty && (
             <div className="flex items-stretch border-l border-white/10 max-sm:hidden">
@@ -553,7 +559,7 @@ export default function StudioTransport({
         {/* Toggles, level, export — inline from sm up; a row of their own on phones (⋯). */}
         <div className={`${showTools ? "flex" : "hidden"} w-full flex-wrap items-center gap-1.5 border-t border-border pt-2 max-sm:order-last sm:contents`}>
           {!empty && (
-            <div className="flex h-12 items-stretch overflow-hidden rounded-xl border border-white/10 bg-black/40 sm:hidden">
+            <div className="flex h-12 items-stretch rounded-xl border border-white/10 bg-black/40 sm:hidden">
               <TempoControl />
               <div className="border-l border-white/10">
                 <KeyControl />
