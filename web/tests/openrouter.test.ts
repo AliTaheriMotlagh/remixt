@@ -113,6 +113,7 @@ describe("talking to OpenRouter", () => {
           data: [
             { id: "b/with-tools", name: "B", context_length: 1000, pricing: { prompt: "0.000003", completion: "0.000015" }, supported_parameters: ["tools", "temperature"] },
             { id: "a/no-tools", name: "A", pricing: { prompt: "0", completion: "0" }, supported_parameters: ["temperature"] },
+            { id: "b/with-tools:batch", name: "B batch", pricing: { prompt: "0", completion: "0" }, supported_parameters: ["tools"] },
           ],
         })
       )) as typeof fetch;

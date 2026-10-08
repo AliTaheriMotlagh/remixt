@@ -27,9 +27,9 @@ export function isAiModel(value: unknown): value is AiModel {
   return AI_MODELS.some((m) => m.id === value);
 }
 
-/** An OpenRouter model id: "vendor/model", maybe with a variant ("…:free"). */
+/** An OpenRouter model id: "vendor/model", maybe with a variant ("…:free"), or an alias ("~vendor/…-latest"). */
 export function isOpenRouterModel(value: unknown): value is string {
-  return typeof value === "string" && /^[\w.-]{1,60}\/[\w.:~-]{1,100}$/.test(value);
+  return typeof value === "string" && /^~?[\w.-]{1,60}\/[\w.:~-]{1,100}$/.test(value);
 }
 
 export function isModelFor(provider: AiProvider, value: unknown): value is string {

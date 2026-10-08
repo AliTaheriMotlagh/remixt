@@ -340,7 +340,7 @@ export default function CoProducer({ ctx, question }: { ctx: CoproducerContext; 
   function chooseModel(id: string) {
     setModels((m) => ({ ...m, [provider]: id }));
     saveModelChoice(provider, id);
-    const valid = provider === "anthropic" || /^[\w.-]+\/[\w.:~-]+$/.test(id);
+    const valid = provider === "anthropic" || /^~?[\w.-]+\/[\w.:~-]+$/.test(id);
     if (mode === "account" && valid) {
       void fetch("/api/ai/key", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, model: id }) }).catch(() => {});
     }

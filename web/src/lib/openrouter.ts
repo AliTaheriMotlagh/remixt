@@ -151,7 +151,8 @@ export async function openRouterModels(): Promise<OpenRouterModel[]> {
   };
   const perMillion = (price?: string) => (price !== undefined && Number.isFinite(Number(price)) ? Math.round(Number(price) * 1e6 * 100) / 100 : null);
   const list = data.data
-    .filter((m) => m.supported_parameters?.includes("tools"))
+    // Batch-only variants can't hold a conversation.
+    .filter((m) => m.supported_parameters?.includes("tools") && !m.id.endsWith(":batch"))
     .map((m) => ({ id: m.id, name: m.name ?? m.id, context: m.context_length ?? 0, promptPerMillion: perMillion(m.pricing?.prompt), completionPerMillion: perMillion(m.pricing?.completion) }))
     .sort((a, b) => a.id.localeCompare(b.id));
   models = { at: Date.now(), list };
