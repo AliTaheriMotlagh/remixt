@@ -24,7 +24,7 @@ import KeyHelper from "./KeyHelper";
 import TapTempo from "./TapTempo";
 import * as commands from "@/lib/client/clipCommands";
 import { liveRefs } from "@/lib/client/clipEdit";
-import { exportLane } from "@/lib/client/mixdown";
+import { startLaneExport, useExportJob } from "@/lib/client/exportJob";
 import { ALL_KEYS, camelotCode, keyId, keyLabel, parseKeyId } from "@/lib/client/musicKey";
 import { previewPlayer } from "@/lib/client/previewPlayer";
 import { startNewStep } from "@/lib/client/studioHistory";
@@ -76,7 +76,7 @@ function MixTab({ lane }: { lane: StudioLane }) {
   const store = useStudioStore.getState();
   const beat = beatLength(projectBpm);
   const bar = beat * 4;
-  const [exporting, setExporting] = useState(false);
+  const exporting = useExportJob((j) => j.progress !== null);
 
   function nudge(delta: number) {
     startNewStep();
@@ -228,26 +228,12 @@ function MixTab({ lane }: { lane: StudioLane }) {
             <CopyPlus /> Duplicate lane
           </button>
           <button
-            onClick={async () => {
-              setExporting(true);
-              try {
-                await exportLane(lane, laneName(lane));
-              } catch {
-                useStudioView.getState().notify("Couldn't export this lane", "error");
-              } finally {
-                setExporting(false);
-              }
-            }}
+            onClick={() => startLaneExport(lane, `${kindLabel(lane.kind)} lane`)}
             disabled={exporting}
             className={pill}
+            title="Just this lane, with its effects — in the format picked under Export"
           >
-            {exporting ? (
-              "Rendering…"
-            ) : (
-              <>
-                <Download /> Export WAV
-              </>
-            )}
+            <Download /> {exporting ? "Exporting…" : "Export lane"}
           </button>
           <button
             onClick={() => {

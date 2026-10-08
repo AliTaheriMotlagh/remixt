@@ -34,7 +34,8 @@ import {
 import * as clips from "@/lib/client/clipCommands";
 import { WHOLE, clipId, clipsOf, liveRefs, sameRef, type ClipRef } from "@/lib/client/clipEdit";
 import { audioEngine } from "@/lib/client/audioEngine";
-import { exportLane } from "@/lib/client/mixdown";
+import { startLaneExport } from "@/lib/client/exportJob";
+import { kindLabel } from "@/lib/stemKinds";
 import { previewPlayer } from "@/lib/client/previewPlayer";
 import { startNewStep } from "@/lib/client/studioHistory";
 import { beatLength, laneName, snapTime as snapToGrid, useStudioStore, type StudioLane } from "@/lib/client/studioStore";
@@ -316,12 +317,9 @@ export function laneMenu(lane: StudioLane): MenuItem[] {
       },
     },
     {
-      label: "Export this lane (WAV)",
+      label: "Export this lane",
       icon: Download,
-      onSelect: () => {
-        useStudioView.getState().notify("Rendering the lane…");
-        exportLane(lane, laneName(lane)).catch(() => useStudioView.getState().notify("Couldn't export this lane", "error"));
-      },
+      onSelect: () => startLaneExport(lane, `${kindLabel(lane.kind)} lane`),
     },
     { type: "separator" },
     {

@@ -13,7 +13,7 @@ function channels(buffer: AudioBuffer) {
  * Encodes an AudioBuffer as MP3 bytes, in a worker where possible.
  * `workerOnly`: fail rather than fall back to encoding on the page's own
  * thread, which freezes it for as long as that takes. `signal` stops the
- * worker.
+ * worker. `onProgress` gets 0–1 as it goes.
  */
 export async function encodeMp3Bytes(
   buffer: AudioBuffer,
@@ -22,7 +22,14 @@ export async function encodeMp3Bytes(
     trimDelay = false,
     workerOnly = false,
     signal,
-  }: { bitrate?: Mp3Bitrate; trimDelay?: boolean; workerOnly?: boolean; signal?: AbortSignal } = {}
+    onProgress,
+  }: {
+    bitrate?: Mp3Bitrate;
+    trimDelay?: boolean;
+    workerOnly?: boolean;
+    signal?: AbortSignal;
+    onProgress?: (fraction: number) => void;
+  } = {}
 ): Promise<Uint8Array> {
   const options = { sampleRate: buffer.sampleRate, bitrate, trimDelay };
   try {
@@ -39,6 +46,10 @@ export async function encodeMp3Bytes(
         signal?.removeEventListener("abort", stop);
       };
       worker.onmessage = (event: MessageEvent<Mp3Response>) => {
+        if (event.data.ok === null) {
+          onProgress?.(event.data.progress);
+          return;
+        }
         finish();
         if (event.data.ok) resolve(event.data.bytes);
         else reject(new Error(event.data.message));
@@ -53,11 +64,14 @@ export async function encodeMp3Bytes(
   } catch (err) {
     if (workerOnly || signal?.aborted) throw err;
     // No worker (or it failed to start) — slower, but still works.
-    return encodePcmToMp3({ ...options, ...channels(buffer) });
+    return encodePcmToMp3({ ...options, ...channels(buffer) }, onProgress);
   }
 }
 
-export async function encodeMp3(buffer: AudioBuffer, options?: { bitrate?: Mp3Bitrate }): Promise<Blob> {
+export async function encodeMp3(
+  buffer: AudioBuffer,
+  options?: { bitrate?: Mp3Bitrate; signal?: AbortSignal; onProgress?: (fraction: number) => void }
+): Promise<Blob> {
   const bytes = await encodeMp3Bytes(buffer, options);
   return new Blob([bytes as BlobPart], { type: "audio/mpeg" });
 }

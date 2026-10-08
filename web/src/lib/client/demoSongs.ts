@@ -5,6 +5,7 @@
 // DJ simulator can show what stem splitting is for — with no copyrighted
 // audio anywhere. Rendering is deterministic and cached per session.
 
+import { saveFile } from "./saveFile";
 import {
   DEMO_SONG_DEFS,
   DEMO_SONGS,
@@ -198,16 +199,9 @@ export function audioBufferToWav(buffer: AudioBuffer): Blob {
   return new Blob([view], { type: "audio/wav" });
 }
 
-/** Saves a blob as a file through a temporary link. */
+/** Saves a blob as a file: the share sheet on phones, a download elsewhere. Call it from a tap. */
 export function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  return saveFile(new File([blob], filename, { type: blob.type }));
 }
 
 export function demoFileName(meta: DemoSongMeta, part?: string) {

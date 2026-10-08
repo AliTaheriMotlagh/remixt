@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { audioEngine, PlaybackBlockedError } from "@/lib/client/audioEngine";
 import { exportMixdown, getExportFormat, setExportFormat, type ExportFormat } from "@/lib/client/mixdown";
+import { useExportJob } from "@/lib/client/exportJob";
 import { camelotCode, keyLabel } from "@/lib/client/musicKey";
 import { lanesToPayload, projectToPayload } from "@/lib/client/remixLanes";
 import { GRID_CHOICES, beatLength, effectiveKey, referenceLane, useStudioStore } from "@/lib/client/studioStore";
@@ -33,7 +34,7 @@ import { useStudioView } from "@/lib/client/studioView";
 import type { User } from "@/lib/auth";
 import TagInput from "./TagInput";
 import SocialClipButton from "./studio/SocialClipButton";
-import { useKeepScreenOn } from "@/lib/client/wakeLock";
+import ExportSheet from "./studio/ExportSheet";
 
 function formatTime(seconds: number) {
   const m = Math.floor(seconds / 60);
@@ -332,14 +333,17 @@ export default function StudioTransport({
   defaultTitle,
   viewing = false,
   artistName,
+  cover,
 }: {
   user: User | null;
   remixId: string | null;
   defaultTitle?: string;
   /** On a remix's own page (rather than the Studio): `remixId` is the remix being played. */
   viewing?: boolean;
-  /** Who made the remix being played, for the social clip (default: you). */
+  /** Who made the remix being played, for the social clip and exports (default: you). */
   artistName?: string;
+  /** The remix's cover, for exported files' artwork. */
+  cover?: string | null;
 }) {
   const isPlaying = useStudioStore((s) => s.isPlaying);
   const duration = useStudioStore((s) => s.duration);
@@ -379,9 +383,8 @@ export default function StudioTransport({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedId, setSavedId] = useState<string | null>(null);
-  const [exportStage, setExportStage] = useState<string | null>(null);
-  const [exportError, setExportError] = useState<string | null>(null);
-  useKeepScreenOn("export", exportStage !== null);
+  const exporting = useExportJob((j) => j.progress !== null);
+  const runExport = useExportJob((j) => j.run);
   // Read after mount: the server has no idea what this browser picked.
   const [exportFormat, setFormat] = useState<ExportFormat | null>(null);
   const format = exportFormat ?? "mp3";
@@ -422,20 +425,21 @@ export default function StudioTransport({
     }
   }
 
-  async function handleExport(range: "full" | "loop") {
-    setExportError(null);
-    setExportStage("Preparing…");
-    try {
-      await exportMixdown(title.trim() || defaultTitle || "remixt-mix", {
-        range,
-        format,
-        onProgress: setExportStage,
-      });
-    } catch (error) {
-      setExportError(error instanceof Error ? error.message : "Export failed");
-    } finally {
-      setExportStage(null);
-    }
+  // What exported files are tagged with — lane exports read it from the store too.
+  const exportTitle = title.trim() || defaultTitle || "Untitled remix";
+  const exportArtist = artistName ?? user?.artist_name ?? "Remixt";
+  const exportRemixId = savedId ?? remixId;
+  const exportCover = viewing ? (cover ?? null) : null;
+  const setExportInfo = useExportJob((j) => j.setInfo);
+  useEffect(() => {
+    setExportInfo({ title: exportTitle, artist: exportArtist, remixId: exportRemixId, cover: exportCover, tags });
+  }, [setExportInfo, exportTitle, exportArtist, exportRemixId, exportCover, tags]);
+
+  function handleExport(range: "full" | "loop") {
+    const info = useExportJob.getState().info;
+    void runExport(range === "loop" ? "The loop" : "The whole mix", (onProgress, signal) =>
+      exportMixdown(info, { range, format, onProgress, signal })
+    );
   }
 
   async function handleSave() {
@@ -649,14 +653,12 @@ export default function StudioTransport({
             align="right"
             title="Export the mix as an audio file"
             label={
-              exportStage ?? (
-                <>
-                  <Download />
-                  <span className="hidden 2xl:inline">Export</span>
-                </>
-              )
+              <>
+                <Download className={exporting ? "animate-pulse" : undefined} />
+                <span className="hidden 2xl:inline">{exporting ? "Exporting…" : "Export"}</span>
+              </>
             }
-            active={exportStage !== null}
+            active={exporting}
           >
             {(close) => (
               <div className="flex flex-col gap-2 text-xs">
@@ -674,12 +676,16 @@ export default function StudioTransport({
                     </button>
                   ))}
                 </div>
+                <p className="text-[11px] leading-snug text-muted">
+                  {format === "mp3" ? "256 kbps — plays everywhere, ~2 MB a minute." : "CD quality for DAWs and DJ software, ~10 MB a minute."}{" "}
+                  Tagged with the title, artist, credits and cover.
+                </p>
                 <button
                   onClick={() => {
                     close();
                     void handleExport("full");
                   }}
-                  disabled={empty || exportStage !== null}
+                  disabled={empty || exporting}
                   className="rounded-lg bg-brand px-3 py-2 font-semibold text-white hover:bg-brand-strong disabled:opacity-40"
                 >
                   Export the whole mix
@@ -689,7 +695,7 @@ export default function StudioTransport({
                     close();
                     void handleExport("loop");
                   }}
-                  disabled={empty || !hasLoop || exportStage !== null}
+                  disabled={empty || !hasLoop || exporting}
                   className="rounded-lg border border-border px-3 py-1.5 text-muted hover:text-foreground disabled:opacity-40"
                   title={hasLoop ? undefined : "Set a loop on the ruler first"}
                 >
@@ -790,7 +796,7 @@ export default function StudioTransport({
       </div>
 
       {playError && <p className="border-t border-border px-4 py-2 text-sm text-danger">{playError}</p>}
-      {exportError && <p className="border-t border-border px-4 py-2 text-sm text-danger">{exportError}</p>}
+      <ExportSheet />
 
       {showSave && (
         <div className="border-t border-border p-4">

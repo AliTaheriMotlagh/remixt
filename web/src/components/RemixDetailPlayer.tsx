@@ -82,7 +82,7 @@ export default function RemixDetailPlayer({
 
   return (
     <div className="touch-targets mt-6 flex flex-col gap-4">
-      <StudioTransport user={user} remixId={remixId} defaultTitle={title} viewing artistName={artistName} />
+      <StudioTransport user={user} remixId={remixId} defaultTitle={title} viewing artistName={artistName} cover={cover} />
       <StudioShortcuts mode="remix" className="-my-2 self-end" />
       <div className="rounded-xl border border-border bg-surface p-3">
         <MixWaveform />

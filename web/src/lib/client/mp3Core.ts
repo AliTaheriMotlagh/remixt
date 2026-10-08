@@ -19,8 +19,11 @@ export type Mp3Request = {
 const MP3_DELAY = 576 + 529;
 const CHUNK = 1152 * 64;
 
-/** Encodes stereo PCM to an MP3 file. Runs in a worker or on the page. */
-export async function encodePcmToMp3({ left, right, sampleRate, bitrate, trimDelay }: Mp3Request) {
+/** Encodes stereo PCM to an MP3 file. Runs in a worker or on the page. `onProgress` gets 0–1. */
+export async function encodePcmToMp3(
+  { left, right, sampleRate, bitrate, trimDelay }: Mp3Request,
+  onProgress?: (fraction: number) => void
+) {
   const encoder = await createMp3Encoder();
   encoder.configure({ sampleRate, channels: 2, bitrate });
   const skip = trimDelay ? Math.min(MP3_DELAY, left.length) : 0;
@@ -29,6 +32,7 @@ export async function encodePcmToMp3({ left, right, sampleRate, bitrate, trimDel
     const end = Math.min(left.length, start + CHUNK);
     // The encoder owns the returned buffer, hence the copy.
     parts.push(encoder.encode([left.subarray(start, end), right.subarray(start, end)]).slice());
+    onProgress?.(end / left.length);
   }
   parts.push(encoder.finalize().slice());
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));

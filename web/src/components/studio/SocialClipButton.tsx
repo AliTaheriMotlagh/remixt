@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useOnScreen } from "@/lib/client/useOnScreen";
 import { Clapperboard, X } from "lucide-react";
-import { downloadBlob, safeFilename } from "@/lib/client/mixdown";
+import { fileSafeName } from "@/lib/client/audioTags";
+import { saveFile } from "@/lib/client/saveFile";
 import { canMakeClips, makeSocialClip, MAX_CLIP_SECONDS, type SocialClip } from "@/lib/client/socialClip";
 import { useStudioStore } from "@/lib/client/studioStore";
 import { shortPath } from "@/lib/shareLinks";
@@ -86,18 +87,11 @@ export default function SocialClipButton({ title, artist, remixId }: { title: st
 
   async function share() {
     if (!clip) return;
-    const file = new File([clip.clip.blob], `${safeFilename(title)}.${clip.clip.extension}`, {
+    const file = new File([clip.clip.blob], `${fileSafeName(`${artist} - ${title}`)}.${clip.clip.extension}`, {
       type: clip.clip.blob.type,
     });
-    if (navigator.canShare?.({ files: [file] })) {
-      try {
-        await navigator.share({ files: [file], title });
-        return;
-      } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-      }
-    }
-    downloadBlob(clip.clip.blob, file.name);
+    // A clip is made to be posted: the share sheet wherever there is one, phone or not.
+    await saveFile(file, { share: true, title });
   }
 
   const range = open ? clipRange() : null;
