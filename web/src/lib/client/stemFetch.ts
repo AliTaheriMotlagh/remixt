@@ -6,6 +6,8 @@
 // and stitch them together. With any other storage the first request
 // usually returns the whole file (a 200) and this is a single fetch.
 
+import { cacheGet, cachePut } from "./localCache";
+
 const SLICE = 4 * 1024 * 1024;
 /** Slices in flight at once: plenty to fill the connection, without flooding the server. */
 const PARALLEL = 6;
@@ -48,8 +50,24 @@ async function fetchWhole(url: string, onProgress?: (loaded: number, total: numb
   }
 }
 
-export function fetchStem(stemId: string): Promise<ArrayBuffer> {
-  return fetchInSlices(`/api/audio/stem/${stemId}`);
+/**
+ * A stem's MP3. Kept on disk (localCache.ts) once downloaded — a stem's
+ * file never changes under its id — so a song opened again, a draft
+ * reopened, or a vocal's original beat listened to again costs no download.
+ */
+export async function fetchStem(stemId: string): Promise<ArrayBuffer> {
+  const kept = await cacheGet<Blob>("stem", stemId);
+  if (kept) {
+    try {
+      return await kept.arrayBuffer();
+    } catch {
+      // The browser lost the file behind it: download it again.
+    }
+  }
+  const bytes = await fetchInSlices(`/api/audio/stem/${stemId}`);
+  // Copied as it's put, so the caller can decode (and detach) `bytes` at once.
+  void cachePut("stem", stemId, bytes, bytes.byteLength);
+  return bytes;
 }
 
 /**

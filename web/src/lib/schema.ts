@@ -15,6 +15,19 @@ export function ensureSchema(): Promise<void> {
     // Featured example songs (the /examples page shows them first, with their credit).
     await sql`ALTER TABLE tracks ADD COLUMN IF NOT EXISTS featured_example BOOLEAN NOT NULL DEFAULT false`;
     await sql`ALTER TABLE tracks ADD COLUMN IF NOT EXISTS example_credit TEXT`;
+    // What one browser worked out from a stem, for every other browser (see lib/stemResults.ts).
+    await sql`
+      CREATE TABLE IF NOT EXISTS stem_results (
+        stem_id TEXT NOT NULL REFERENCES stems(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        storage_key TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (stem_id, kind, version)
+      )
+    `;
     // Already set up (the usual case): one quick look instead of twenty
     // statements on every cold start. project_members is created last.
     const [ready] = await sql<{ ok: boolean }[]>`SELECT to_regclass('project_members') IS NOT NULL AS ok`;

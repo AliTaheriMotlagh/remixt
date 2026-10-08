@@ -5,16 +5,21 @@ import type { StemAnalysis } from "./analysis";
 import { BEAT_NET, type NeuralBeats } from "./beatNet";
 import { isConstrainedDevice } from "./device";
 import type { BeatNetRequest, BeatNetResponse } from "./beatNet.worker";
+import { RESULT_VERSIONS, SAME_AUDIO_SECONDS, encodeBeats, parseBeats, type SharedBeats } from "@/lib/stemResults";
+import { cacheGet, cachePut } from "./localCache";
+import { fetchShared, shareResult } from "./sharedResults";
 
 // The beat model as the Studio sees it: one worker for the session, its
 // download state for the UI, and `neuralBeats`, which hears a stem's beats
-// and downbeats once — kept in Cache Storage, so a stem is only ever
-// listened to once per browser. Off (or failing) just means the Studio's
-// own tracker in analysis.ts is used, as before.
+// and downbeats once — kept on disk (localCache.ts) and sent to the server
+// (sharedResults.ts), so a stem is only ever listened to once, by whoever
+// opens it first. Phones never run the model, but get what a computer
+// heard. Off (or failing, or nobody has listened yet) just means the
+// Studio's own tracker in analysis.ts is used, as before.
 
 const ORT_BASE = process.env.NEXT_PUBLIC_ORT_BASE_URL || "/ort/";
-// Bump with the model (see beatNet.worker.ts), so old results are dropped.
-const RESULTS_CACHE = "remixt-beat-results-v1";
+/** Where results were kept before they moved to IndexedDB: still read, so nothing is listened to twice. */
+export const LEGACY_RESULTS_CACHE = "remixt-beat-results-v1";
 const SETTING_KEY = "remixt.neuralBeats";
 
 export type BeatModelState = {
@@ -133,43 +138,64 @@ async function toModelRate(buffer: AudioBuffer): Promise<Float32Array> {
   return (await ctx.startRendering()).getChannelData(0);
 }
 
-const resultKey = (stemId: string) => `/beat-results/${stemId}`;
+const diskKey = (stemId: string) => `${stemId}:v${RESULT_VERSIONS.beats}`;
 
-async function storedResult(stemId: string): Promise<NeuralBeats | null> {
+async function legacyResult(stemId: string): Promise<NeuralBeats | null> {
   try {
     if (typeof caches === "undefined") return null;
-    const hit = await (await caches.open(RESULTS_CACHE)).match(resultKey(stemId));
+    const hit = await (await caches.open(LEGACY_RESULTS_CACHE)).match(`/beat-results/${stemId}`);
     return hit ? ((await hit.json()) as NeuralBeats) : null;
   } catch {
     return null;
   }
 }
 
-async function storeResult(stemId: string, beats: NeuralBeats) {
-  try {
-    if (typeof caches === "undefined") return;
-    await (await caches.open(RESULTS_CACHE)).put(resultKey(stemId), new Response(JSON.stringify(beats), { headers: { "Content-Type": "application/json" } }));
-  } catch {
-    // Only a cache.
+function keep(stemId: string, beats: SharedBeats, bytes: number) {
+  void cachePut("beats", diskKey(stemId), beats, bytes);
+}
+
+/**
+ * Beats already heard: on this browser's disk, or by whoever listened
+ * first. Someone else's are only taken for the same audio (see
+ * SAME_AUDIO_SECONDS) — unless `anyAudio`, on a phone, where the model
+ * can't listen again and close beats beat none.
+ */
+async function keptBeats(stemId: string, seconds: number, anyAudio: boolean): Promise<NeuralBeats | null> {
+  const onDisk = await cacheGet<SharedBeats>("beats", diskKey(stemId));
+  if (onDisk) return { beats: onDisk.beats, downbeats: onDisk.downbeats };
+  const legacy = await legacyResult(stemId);
+  if (legacy) {
+    const beats = { seconds, ...legacy };
+    keep(stemId, beats, encodeBeats(beats).length);
+    shareResult("beats", stemId, encodeBeats(beats));
+    return legacy;
   }
+  const bytes = await fetchShared("beats", stemId);
+  const shared = bytes && parseBeats(bytes);
+  if (!shared || (!anyAudio && Math.abs(shared.seconds - seconds) > SAME_AUDIO_SECONDS)) return null;
+  keep(stemId, shared, bytes!.length);
+  return { beats: shared.beats, downbeats: shared.downbeats };
 }
 
 const results = new Map<string, Promise<NeuralBeats | null>>();
 
 /**
  * A stem's beats and downbeats as the model hears them (null when it's
- * turned off or couldn't run). Listened to once per stem, then remembered.
+ * turned off, couldn't run, or — on a phone — no computer has listened to
+ * the stem yet). Listened to once per stem, then remembered.
  */
 export function neuralBeats(stemId: string, buffer: AudioBuffer): Promise<NeuralBeats | null> {
-  if (!beatModelEnabled()) {
+  const runsHere = beatModelEnabled();
+  if (!runsHere && beatModelSupported()) {
+    // Turned off by the person: the Studio's own tracker, as they asked.
     useBeatModel.setState({ status: "off" });
     return Promise.resolve(null);
   }
   const known = results.get(stemId);
   if (known) return known;
   const promise = (async () => {
-    const stored = await storedResult(stemId);
-    if (stored) return stored;
+    const kept = await keptBeats(stemId, buffer.duration, !runsHere);
+    if (kept || !runsHere) return kept;
     const w = await startWorker();
     const mono = await toModelRate(buffer);
     useBeatModel.setState((s) => ({ working: s.working + 1 }));
@@ -179,7 +205,10 @@ export function neuralBeats(stemId: string, buffer: AudioBuffer): Promise<Neural
         pending.set(id, { resolve, reject });
         w.postMessage({ type: "track", id, mono } satisfies BeatNetRequest, [mono.buffer]);
       });
-      void storeResult(stemId, found);
+      const shared = { seconds: buffer.duration, ...found };
+      const bytes = encodeBeats(shared);
+      keep(stemId, shared, bytes.length);
+      shareResult("beats", stemId, bytes);
       return found;
     } finally {
       useBeatModel.setState((s) => ({ working: Math.max(0, s.working - 1) }));

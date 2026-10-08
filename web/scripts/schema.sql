@@ -302,3 +302,17 @@ DO $$ BEGIN
     ALTER TABLE user_ai_keys ADD PRIMARY KEY (user_id, provider);
   END IF;
 END $$;
+
+-- What one browser worked out from a stem — the beat model's beats, the
+-- Studio's analysis — kept for every other browser, phones above all (see
+-- src/lib/stemResults.ts). The result itself is a file in stem storage.
+CREATE TABLE IF NOT EXISTS stem_results (
+  stem_id TEXT NOT NULL REFERENCES stems(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  storage_key TEXT NOT NULL,
+  bytes INTEGER NOT NULL,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (stem_id, kind, version)
+);

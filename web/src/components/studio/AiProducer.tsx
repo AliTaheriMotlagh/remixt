@@ -699,7 +699,7 @@ function Engines() {
     setHq(stretchEngine() === "hq");
   }, []);
   const status = !beatsHere
-    ? "not on phones — it needs more memory than a phone gives a web page. Bars come from the Studio's own tracker."
+    ? "doesn't run on phones (it needs more memory than a phone gives a web page) — beats a computer already heard are used, otherwise bars come from the Studio's own tracker."
     : !beatsOn || model.status === "off"
       ? "off — bars come from the Studio's own tracker"
       : model.status === "loading"

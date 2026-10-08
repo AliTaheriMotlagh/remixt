@@ -5,14 +5,15 @@
 // several seconds of number-crunching, which would stall the Studio.
 
 import { BEAT_NET, aggregate, logMelSpectrogram, pickBeats, splitPiece } from "./beatNet";
-import { cachedDownload } from "./modelCache";
+import { MODEL_CACHES, cachedDownload } from "./modelCache";
 
 declare const self: DedicatedWorkerGlobalScope;
 
-// Bump when the model changes, so browsers drop the old copy. The runtime
-// is shared with the splitter's cache (same file, no second download).
-const MODEL_CACHE = "remixt-beats-v1";
-const RUNTIME_CACHE = "remixt-splitter-v1";
+// Bump (in modelCache.ts) when the model changes, so browsers drop the old
+// copy. The runtime is shared with the splitter's cache (same file, no
+// second download).
+const MODEL_CACHE = MODEL_CACHES.beats;
+const RUNTIME_CACHE = MODEL_CACHES.splitter;
 
 export type BeatNetRequest =
   | { type: "init"; modelUrl: string; wasmUrl: string; ortUrl: string; ortBase: string }

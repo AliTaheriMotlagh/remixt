@@ -4,7 +4,9 @@ import { useEffect, useState } from "react";
 import { Pause, Play } from "lucide-react";
 import Waveform from "./Waveform";
 import { previewPlayer, usePreviewState } from "@/lib/client/previewPlayer";
-import { useStudioStore } from "@/lib/client/studioStore";
+import { useStudioStore, type LoadableStem } from "@/lib/client/studioStore";
+import { startNewStep, undo, useStudioHistory } from "@/lib/client/studioHistory";
+import { useStudioView } from "@/lib/client/studioView";
 import { KIND_INFO, STEM_KINDS, type StemKind } from "@/lib/stemKinds";
 
 type StemWithTrack = {
@@ -34,11 +36,36 @@ async function fetchAll(): Promise<ListedStem[]> {
   return data.stems.map((stem) => ({ ...stem, peaks: JSON.parse(stem.peaks_json || "[]") }));
 }
 
+// The last stem added from this panel, and how long the undo history was
+// right after: while nothing else has been done since, taking it back out
+// is a plain undo (so redo puts it back).
+let lastAdd: { stemId: string; steps: number } | null = null;
+
+function add(stem: LoadableStem) {
+  startNewStep();
+  useStudioStore.getState().addStem(stem);
+  lastAdd = { stemId: stem.id, steps: useStudioHistory.getState().past.length };
+}
+
+/** "added" tapped: the stem comes back out — its add undone, or its lanes removed if more happened since. */
+function takeOut(stemId: string, title: string) {
+  if (lastAdd?.stemId === stemId && useStudioHistory.getState().past.length === lastAdd.steps) {
+    lastAdd = null;
+    undo();
+    // Undo may have gone to something else (an AI idea being auditioned).
+    if (!useStudioStore.getState().lanes.some((l) => l.stemId === stemId)) return;
+  }
+  lastAdd = null;
+  startNewStep();
+  const { lanes, removeLane } = useStudioStore.getState();
+  for (const lane of lanes) if (lane.stemId === stemId) removeLane(lane.laneId);
+  useStudioView.getState().notify(`Removed “${title}” — ⌘Z to undo`);
+}
+
 export default function StudioLibraryPanel() {
   const [tab, setTab] = useState<Kind>("vocals");
   const [all, setAll] = useState<ListedStem[] | null>(() => listCache);
   const [query, setQuery] = useState("");
-  const addStem = useStudioStore((s) => s.addStem);
   const lanes = useStudioStore((s) => s.lanes);
   const preview = usePreviewState();
 
@@ -146,21 +173,35 @@ export default function StudioLibraryPanel() {
                     {stem.track_title}
                   </span>
                   <button
-                    disabled={added}
                     onClick={() =>
-                      addStem({
-                        id: stem.id,
-                        kind: stem.kind,
-                        track_title: stem.track_title,
-                        artist_name: stem.artist_name,
-                        peaks_json: stem.peaks_json,
-                        track_duration: stem.track_duration,
-                        track_bpm: stem.track_bpm,
-                      })
+                      added
+                        ? takeOut(stem.id, stem.track_title)
+                        : add({
+                            id: stem.id,
+                            kind: stem.kind,
+                            track_title: stem.track_title,
+                            artist_name: stem.artist_name,
+                            peaks_json: stem.peaks_json,
+                            track_duration: stem.track_duration,
+                            track_bpm: stem.track_bpm,
+                          })
                     }
-                    className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted transition-colors hover:border-brand/60 hover:text-foreground disabled:border-transparent disabled:text-success pointer-coarse:rounded-lg pointer-coarse:px-3 pointer-coarse:py-2 pointer-coarse:text-xs"
+                    title={added ? "Take it back out of the mix" : undefined}
+                    aria-label={added ? `Remove ${stem.track_title} from the mix` : `Add ${stem.track_title} to the mix`}
+                    className={`group shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium transition-colors pointer-coarse:rounded-lg pointer-coarse:px-3 pointer-coarse:py-2 pointer-coarse:text-xs ${
+                      added
+                        ? "border-transparent text-success hover:border-danger/60 hover:text-danger"
+                        : "border-border text-muted hover:border-brand/60 hover:text-foreground"
+                    }`}
                   >
-                    {added ? "added" : "+ add"}
+                    {added ? (
+                      <>
+                        <span className="group-hover:hidden">added ✓</span>
+                        <span className="hidden group-hover:inline">undo</span>
+                      </>
+                    ) : (
+                      "+ add"
+                    )}
                   </button>
                 </div>
                 <p className="mt-0.5 truncate pl-8 text-[11px] text-muted pointer-coarse:pl-11">

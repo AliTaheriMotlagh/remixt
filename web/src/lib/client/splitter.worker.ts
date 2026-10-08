@@ -11,13 +11,13 @@ import { CONSTANTS } from "demucs-web/constants";
 import { prepareModelInput, standaloneIspec, standaloneMask } from "demucs-web/processor";
 import { createMp3Encoder } from "wasm-media-encoders";
 import { estimateTempoDecimated, tempoDecimation } from "./analysis";
-import { cachedDownload } from "./modelCache";
+import { MODEL_CACHES, cachedDownload } from "./modelCache";
 import type { SplitOutput, SplitResult, SplitterRequest, SplitterResponse, StemBitrate } from "./splitterProtocol";
 
 declare const self: DedicatedWorkerGlobalScope;
 
-// Bump when the model or runtime changes, so browsers drop the old copy.
-const CACHE_NAME = "remixt-splitter-v1";
+// Bump (in modelCache.ts) when the model or runtime changes, so browsers drop the old copy.
+const CACHE_NAME = MODEL_CACHES.splitter;
 
 let processor: DemucsProcessor | null = null;
 /** Splits asked to stop (checked between segments). */

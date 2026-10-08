@@ -6,6 +6,7 @@ import {
   Disc3,
   Flag,
   FlaskConical,
+  HardDrive,
   House,
   Library,
   LogOut,
@@ -33,6 +34,7 @@ export type NavIconName =
   | "more"
   | "admin"
   | "profile"
+  | "storage"
   | "logout";
 
 export type NavLink = {
@@ -70,6 +72,7 @@ export const MORE_LINKS: NavLink[] = [
   { href: "/examples", label: "Splitting & matching examples", icon: "examples" },
   { href: "/challenges", label: "Challenges", icon: "challenges" },
   { href: "/leaderboard", label: "Top artists & remixes", icon: "top" },
+  { href: "/storage", label: "Saved on this device", icon: "storage" },
 ];
 
 export function isActive(pathname: string | null, href: string) {
@@ -92,6 +95,7 @@ const ICONS: Record<NavIconName, LucideIcon> = {
   more: Menu,
   admin: Shield,
   profile: UserRound,
+  storage: HardDrive,
   logout: LogOut,
 };
 

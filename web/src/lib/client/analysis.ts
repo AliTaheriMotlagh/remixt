@@ -3,11 +3,18 @@
 import type { NeuralBeats } from "./beatNet";
 import { melodyKeyScores, noteProfile, sungSeconds, trackMelody, type Melody } from "./melody";
 import type { MusicalKey } from "./musicKey";
+import { RESULT_VERSIONS, SAME_AUDIO_SECONDS, pack, unpack } from "@/lib/stemResults";
+import { cacheGet, cachePut } from "./localCache";
+import { fetchShared, shareResult } from "./sharedResults";
 
 // Client-side audio analysis for the Studio's key detection and auto-match.
 // Everything runs on the decoded stem the audio engine already holds, so
 // it works for every track in the library without re-processing uploads.
-// Results are cached per stem: they only depend on the audio itself.
+// Results are cached per stem: they only depend on the audio itself — in
+// memory for the visit, on disk (localCache.ts) for later visits, and on
+// the server for everyone else (sharedResults.ts), so a stem is analysed
+// once, by whoever opens it first. Bump RESULT_VERSIONS.analysis in
+// lib/stemResults.ts when what this works out changes.
 
 /** Analysis rate: plenty for key and rhythm, and a quarter of the work. */
 export const ANALYSIS_RATE = 11025;
@@ -63,10 +70,90 @@ const cache = new Map<string, Promise<StemAnalysis>>();
 export function analyzeStem(stemId: string, buffer: AudioBuffer, kind?: string): Promise<StemAnalysis> {
   const cached = cache.get(stemId);
   if (cached) return cached;
-  const promise = runAnalysis(buffer, kind === "vocals");
+  const vocal = kind === "vocals";
+  const promise = keptAnalysis(stemId, buffer.duration, vocal).then(
+    (kept) => kept ?? analyzeAndKeep(stemId, buffer, vocal)
+  );
   cache.set(stemId, promise);
   promise.catch(() => cache.delete(stemId));
   return promise;
+}
+
+const diskKey = (stemId: string, vocal: boolean) => `${stemId}:v${RESULT_VERSIONS.analysis}:${vocal ? "vocal" : "plain"}`;
+
+/** The analysis from this browser's disk, or else from whoever did it first — if it's of the same audio. */
+async function keptAnalysis(stemId: string, seconds: number, vocal: boolean): Promise<StemAnalysis | null> {
+  const onDisk = await cacheGet<Uint8Array>("analysis", diskKey(stemId, vocal));
+  const fromDisk = onDisk && unpackAnalysis(onDisk, seconds, vocal);
+  if (fromDisk) return fromDisk;
+  const shared = await fetchShared("analysis", stemId);
+  const fromShared = shared && unpackAnalysis(shared, seconds, vocal);
+  if (fromShared) void cachePut("analysis", diskKey(stemId, vocal), shared, shared.length);
+  return fromShared || null;
+}
+
+async function analyzeAndKeep(stemId: string, buffer: AudioBuffer, vocal: boolean): Promise<StemAnalysis> {
+  const analysis = await runAnalysis(buffer, vocal);
+  const packed = packAnalysis(analysis, buffer.duration, vocal);
+  void cachePut("analysis", diskKey(stemId, vocal), packed, packed.length);
+  shareResult("analysis", stemId, packed);
+  return analysis;
+}
+
+/** An analysis as bytes (lib/stemResults.ts), with the length of the audio it's of. `neural` isn't in it. */
+export function packAnalysis(a: StemAnalysis, seconds: number, vocal: boolean): Uint8Array {
+  return pack({
+    header: {
+      seconds,
+      vocal,
+      tonic: a.key.tonic,
+      mode: a.key.mode,
+      keyConfidence: a.keyConfidence,
+      onsetRate: a.onsetRate,
+      entry: a.entry,
+      loudness: a.loudness,
+      bpmEstimate: a.bpmEstimate,
+      chromaRate: a.chromaRate,
+      melody: a.melody ? { rate: a.melody.rate, offset: a.melody.offset, tuning: a.melody.tuning } : null,
+    },
+    arrays: {
+      onsets: a.onsets,
+      lowOnsets: a.lowOnsets,
+      energy: a.energy,
+      chroma: a.chroma,
+      ...(a.melody ? { midi: a.melody.midi, confidence: a.melody.confidence } : {}),
+    },
+  });
+}
+
+/**
+ * The analysis back out of `packAnalysis`'s bytes — null if they're of
+ * other audio, or analysed the other way (a vocal's key also comes from
+ * its melody, so the two can differ).
+ */
+export function unpackAnalysis(bytes: Uint8Array, seconds: number, vocal: boolean): StemAnalysis | null {
+  const packed = unpack(bytes);
+  if (!packed) return null;
+  const { header: h, arrays } = packed;
+  if (typeof h.seconds !== "number" || Math.abs(h.seconds - seconds) > SAME_AUDIO_SECONDS) return null;
+  if (h.vocal !== vocal) return null;
+  const melody = h.melody as { rate: number; offset: number; tuning: number } | null;
+  if (vocal && !(melody && arrays.midi && arrays.confidence)) return null;
+  if (!arrays.onsets || !arrays.lowOnsets || !arrays.energy || !arrays.chroma) return null;
+  return {
+    key: { tonic: h.tonic as number, mode: h.mode as MusicalKey["mode"] },
+    keyConfidence: h.keyConfidence as number,
+    onsets: arrays.onsets,
+    lowOnsets: arrays.lowOnsets,
+    energy: arrays.energy,
+    onsetRate: h.onsetRate as number,
+    entry: h.entry as number,
+    loudness: h.loudness as number,
+    bpmEstimate: (h.bpmEstimate as number | null) ?? null,
+    chroma: arrays.chroma,
+    chromaRate: h.chromaRate as number,
+    ...(vocal && melody ? { melody: { ...melody, midi: arrays.midi, confidence: arrays.confidence } } : {}),
+  };
 }
 
 const yieldToUI = () => new Promise((resolve) => setTimeout(resolve, 0));

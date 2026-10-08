@@ -144,6 +144,10 @@ function AccountMenu({ user, isAdmin }: { user: User; isAdmin: boolean }) {
             <NavIcon name="profile" className="h-4 w-4 text-muted" />
             Your artist page
           </Link>
+          <Link href="/storage" role="menuitem" className={item}>
+            <NavIcon name="storage" className="h-4 w-4 text-muted" />
+            Saved on this device
+          </Link>
           {isAdmin && (
             <Link href="/admin" role="menuitem" className={item}>
               <NavIcon name="admin" className="h-4 w-4 text-muted" />

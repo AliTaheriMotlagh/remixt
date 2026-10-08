@@ -1,6 +1,6 @@
 import { getCurrentUser, type User } from "./auth";
 import sql from "./db";
-import { deleteStemFile } from "./storage";
+import { deleteObject, deleteStemFile } from "./storage";
 
 // Admins are the accounts whose email is listed in ADMIN_EMAILS
 // (comma-separated). Set it in the host's environment variables and
@@ -36,6 +36,12 @@ export async function deleteTracks(trackIds: string[]): Promise<number> {
     SELECT file_url FROM stems WHERE track_id IN ${sql(trackIds)}
   `;
   await Promise.all(stems.map((s) => deleteStemFile(s.file_url).catch(() => {})));
+  // Results shared from the stems (lib/stemResults.ts) — their rows go with the stems.
+  const results = await sql<{ storage_key: string }[]>`
+    SELECT storage_key FROM stem_results
+    WHERE stem_id IN (SELECT id FROM stems WHERE track_id IN ${sql(trackIds)})
+  `.catch(() => []);
+  await Promise.all(results.map((r) => deleteObject(r.storage_key).catch(() => {})));
   const deleted = await sql`DELETE FROM tracks WHERE id IN ${sql(trackIds)} RETURNING id`;
   return deleted.length;
 }

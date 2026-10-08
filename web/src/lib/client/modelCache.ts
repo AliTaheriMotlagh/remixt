@@ -3,6 +3,15 @@
 // once, and keeping them in Cache Storage, so every visit after the first
 // loads them from disk. Shared by the workers that run the models.
 
+/** On each cached file: its size in bytes. */
+export const SIZE_HEADER = "X-Remixt-Bytes";
+
+/** Cache Storage caches the models are kept in (see the workers), for the storage page. */
+export const MODEL_CACHES = {
+  splitter: "remixt-splitter-v1",
+  beats: "remixt-beats-v1",
+} as const;
+
 /**
  * Fetches a large file once and keeps it in Cache Storage (`cacheName` —
  * bump it when the model changes, so browsers drop the old copy), so every
@@ -28,7 +37,11 @@ export async function cachedDownload(
 
   const bytes = await resumableDownload(url, (loaded, total) => onBytes(loaded, total, false));
   try {
-    await cache?.put(url, new Response(bytes, { headers: { "Content-Type": "application/octet-stream" } }));
+    // The size alongside, so the storage page can say how big it is without reading it.
+    await cache?.put(
+      url,
+      new Response(bytes, { headers: { "Content-Type": "application/octet-stream", [SIZE_HEADER]: String(bytes.byteLength) } })
+    );
   } catch {
     // Over quota — fine, it's only a cache.
   }
