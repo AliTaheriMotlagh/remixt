@@ -495,31 +495,18 @@ function MasterIt({ vibes }: { vibes: Vibe[] }) {
   );
 }
 
+/** What "Find the best version" found, and the ideas it scored (see BestVersions). */
+type Best = { ideas: Idea[]; now: MixScore; versions: Version[] };
+
 /**
  * The AI auditioning its own ideas: every whole-mix idea scored as it
  * would sound (mixScore.ts), best first, each one tap to hear. The scores
  * belong to the ideas they were worked out from: when those change (the
- * mix moved, Cutting or the sync was switched) they're cleared, so a tap
- * never puts on an idea worked out the old way.
+ * mix moved, Cutting or the sync was switched by hand) they're cleared, so
+ * a tap never puts on an idea worked out the old way. Scoring takes its
+ * turn with the panel's other controls (it waits while one is worked out).
  */
-function BestVersions({ ideas, session, trying, onTry, onIds }: { ideas: Idea[]; session: Session; trying: boolean; onTry: (ideaId: string) => void; onIds: Set<string> }) {
-  const [found, setFound] = useState<{ ideas: Idea[]; now: MixScore; versions: Version[] } | null>(null);
-  const [working, setWorking] = useState(false);
-  const result = found?.ideas === ideas ? found : null;
-  function find() {
-    setWorking(true);
-    // Scoring every idea takes a moment: show it's working first.
-    afterPaint(() => {
-      try {
-        const scored = bestVersions(session, ideas, 4);
-        setFound({ ideas, ...scored });
-        const best = scored.versions[0];
-        if (best && best.score.total > scored.now.total && !onNow().some((i) => i.id === best.idea.id)) onTry(best.idea.id);
-      } finally {
-        setWorking(false);
-      }
-    });
-  }
+function BestVersions({ result, session, trying, working, blocked, onFind, onTry, onIds }: { result: Best | null; session: Session; trying: boolean; working: boolean; blocked: boolean; onFind: () => void; onTry: (ideaId: string) => void; onIds: Set<string> }) {
   return (
     <div className="rounded-2xl border border-border bg-surface p-3">
       <div className="flex items-center justify-between gap-2">
@@ -532,7 +519,7 @@ function BestVersions({ ideas, session, trying, onTry, onIds }: { ideas: Idea[];
             The AI scores every way it could sync and style this mix{session.options.keepWhole ? " (tracks kept whole)" : ""}, and plays you the best one
           </p>
         </div>
-        <button onClick={find} disabled={working} aria-busy={working} className="flex min-w-[4.5rem] shrink-0 items-center justify-center rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-strong disabled:opacity-60">
+        <button onClick={onFind} disabled={working || blocked} aria-busy={working} className="flex min-w-[4.5rem] shrink-0 items-center justify-center rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-strong disabled:opacity-60">
           {working ? <Loader2 className="animate-spin" aria-label="Scoring…" /> : result ? "Again" : "Find it"}
         </button>
       </div>
@@ -547,7 +534,7 @@ function BestVersions({ ideas, session, trying, onTry, onIds }: { ideas: Idea[];
           </li>
           {result.versions.map((v) => (
             <li key={v.idea.id}>
-              <button onClick={() => onTry(v.idea.id)} aria-pressed={onIds.has(v.idea.id)} className={`flex w-full items-center gap-2 rounded-lg px-0 py-0.5 text-left text-[11px] hover:bg-surface-hover ${onIds.has(v.idea.id) ? "font-semibold text-foreground" : ""}`} title={v.score.parts.map((p) => `${p.label}: ${Math.round(p.score * 100)} — ${p.text}`).join("\n")}>
+              <button onClick={() => onTry(v.idea.id)} disabled={blocked} aria-pressed={onIds.has(v.idea.id)} className={`flex w-full items-center gap-2 rounded-lg px-0 py-0.5 text-left text-[11px] hover:bg-surface-hover disabled:opacity-60 ${onIds.has(v.idea.id) ? "font-semibold text-foreground" : ""}`} title={v.score.parts.map((p) => `${p.label}: ${Math.round(p.score * 100)} — ${p.text}`).join("\n")}>
                 <span className="w-8 shrink-0 text-right font-bold tabular-nums">{v.score.total}</span>
                 <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-raised">
                   <span className={`block h-full rounded-full ${v.score.total >= 85 ? "bg-success" : v.score.total >= 70 ? "bg-brand" : "bg-amber-400"}`} style={{ width: `${v.score.total}%` }} />
@@ -966,7 +953,7 @@ export default function AiProducer() {
    * it. With a style (or another timing idea) on, that's worked out again
    * with the new sync; with none, the template itself is tried.
    */
-  function chooseSync(idea: Idea) {
+  function chooseSync(idea: Idea, onDone?: (ideas: Idea[]) => void) {
     if (!session) return;
     if (onNow().some((i) => i.id === idea.id)) return toggle(idea);
     if (workingRef.current) return;
@@ -980,17 +967,39 @@ export default function AiProducer() {
       // With a style (or another timing idea) on, it's worked out again with this sync; with none, the template itself goes on.
       const done = applyOptions({ sync: id }, { except: on.filter((t) => t.kind === "sync").map((t) => t.id), add: otherTiming ? [] : [idea.id] });
       if (!done) return;
+      onDone?.(done.ideas);
       if (otherTiming) setSwapNote({ icon: "link", text: `${idea.title}: “${otherTiming.title}” is now synced this way` });
       playOn();
     });
   }
 
-  /** "Find the best version" picked or tapped one: a sync template is the sync setting; the rest are tried like any idea. */
+  /** What "Find the best version" found last (see BestVersions) — shown while the ideas it scored are the ones listed. */
+  const [best, setBest] = useState<Best | null>(null);
+  const bestFound = best && best.ideas === ideas ? best : null;
+
+  /** Scores every whole-mix idea, then plays the best one if it beats the mix as it is. */
+  function findBest() {
+    if (!session) return;
+    soon("best", () => {
+      const scored = bestVersions(session, ideas, 4);
+      setBest({ ideas, ...scored });
+      const top = scored.versions[0];
+      // After this run, so it gets its own turn (and spinner).
+      if (top && top.score.total > scored.now.total && !onNow().some((i) => i.id === top.idea.id)) setTimeout(() => latest.current.tryBest(top.idea.id), 0);
+    });
+  }
+
+  /**
+   * "Find the best version" picked or tapped one: a sync template is the
+   * sync setting; the rest are tried like any idea. Picking a sync works
+   * every idea out again — the scores stay listed, as they were scored.
+   */
   function tryBest(ideaId: string) {
     const idea = ideas.find((i) => i.id === ideaId);
     if (!idea || onNow().some((i) => i.id === ideaId)) return;
-    if (idea.kind === "sync") chooseSync(idea);
-    else toggle(idea);
+    if (idea.kind !== "sync") return toggle(idea);
+    const scored = ideas;
+    chooseSync(idea, (reworked) => setBest((b) => (b && b.ideas === scored ? { ...b, ideas: reworked } : b)));
   }
 
   function surprise() {
@@ -1468,7 +1477,18 @@ export default function AiProducer() {
                 />
               )}
 
-              {session.pair && <BestVersions session={session} ideas={ideas} trying={!!trial} onIds={onIds} onTry={act.tryBest} />}
+              {session.pair && (
+                <BestVersions
+                  result={bestFound}
+                  session={session}
+                  trying={!!trial}
+                  working={working === "best"}
+                  blocked={working !== null && working !== "best"}
+                  onFind={findBest}
+                  onIds={onIds}
+                  onTry={act.tryBest}
+                />
+              )}
 
               {auto && (
                 <div>
