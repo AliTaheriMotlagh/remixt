@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import type { StemAnalysis } from "./analysis";
 import { BEAT_NET, type NeuralBeats } from "./beatNet";
+import { isConstrainedDevice } from "./device";
 import type { BeatNetRequest, BeatNetResponse } from "./beatNet.worker";
 
 // The beat model as the Studio sees it: one worker for the session, its
@@ -36,7 +37,18 @@ export const useBeatModel = create<BeatModelState>(() => ({
   error: null,
 }));
 
+/**
+ * Phones don't run the model: it and its runtime listen to a whole song
+ * at once, on top of the lanes the Studio already holds — past what a
+ * phone lets a page use, and a phone reloads the page when that happens
+ * (see device.ts). The Studio's own tracker does the job there.
+ */
+export function beatModelSupported(): boolean {
+  return !isConstrainedDevice();
+}
+
 export function beatModelEnabled(): boolean {
+  if (!beatModelSupported()) return false;
   try {
     return localStorage.getItem(SETTING_KEY) !== "off";
   } catch {

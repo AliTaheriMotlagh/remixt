@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { Check, Download, LoaderCircle, Share, X } from "lucide-react";
 import { creditLine } from "@/lib/client/audioTags";
 import { secondsLeft, useExportJob } from "@/lib/client/exportJob";
-import { canShareFile, isInstalledApp, prefersShareSheet, saveFile, type SaveOutcome } from "@/lib/client/saveFile";
+import { canShareFile, isInstalledApp, linksLeaveApp, prefersShareSheet, saveFile, type SaveOutcome } from "@/lib/client/saveFile";
 
 const noSubscription = () => () => {};
 
@@ -44,6 +44,7 @@ export default function ExportSheet() {
   const phone = useSyncExternalStore(noSubscription, prefersShareSheet, () => false);
   const platform = useSyncExternalStore(noSubscription, phoneKind, () => null);
   const installed = useSyncExternalStore(noSubscription, isInstalledApp, () => false);
+  const linksLeave = useSyncExternalStore(noSubscription, linksLeaveApp, () => false);
   const mounted = useSyncExternalStore(noSubscription, () => true, () => false);
   const [now, setNow] = useState(0);
   const [saved, setSaved] = useState<SaveOutcome | null>(null);
@@ -172,7 +173,7 @@ export default function ExportSheet() {
                   </button>
                 )}
               </>
-            ) : (
+            ) : linksLeave ? null : (
               <>
                 <button
                   onClick={() => void save(false)}
@@ -203,7 +204,14 @@ export default function ExportSheet() {
             </p>
           )}
           {phone && !shareable && (
-            <p className="mt-2 text-[11px] text-muted">If nothing happens, open Remixt in your browser (not the home-screen app) to download.</p>
+            <p className="mt-2 text-[11px] text-muted">
+              {linksLeave
+                ? "This phone can't save files from the home-screen app. Open Remixt in Safari and export there."
+                : "If nothing happens, open Remixt in your browser (not the home-screen app) to download."}
+            </p>
+          )}
+          {saved === "unavailable" && (
+            <p className="mt-2 text-[11px] text-danger">The share sheet didn&apos;t open. Tap “Save or share” again.</p>
           )}
           {!result.tags.url && (
             <p className="mt-2 rounded-lg bg-brand/10 px-2.5 py-2 text-[11px] text-muted">

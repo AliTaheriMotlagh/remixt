@@ -1,7 +1,7 @@
 "use client";
 
-import type { Mp3Response } from "./mp3.worker";
-import { encodePcmToMp3, type Mp3Bitrate } from "./mp3Core";
+import type { Mp3Response, Mp3StreamMessage, Mp3StreamReply } from "./mp3.worker";
+import { createMp3Stream, encodePcmToMp3, type Mp3Bitrate } from "./mp3Core";
 
 function channels(buffer: AudioBuffer) {
   const left = buffer.getChannelData(0).slice();
@@ -74,4 +74,93 @@ export async function encodeMp3(
 ): Promise<Blob> {
   const bytes = await encodeMp3Bytes(buffer, options);
   return new Blob([bytes as BlobPart], { type: "audio/mpeg" });
+}
+
+/** Somewhere stereo audio goes a piece at a time, turned into a file at the end. */
+export type PcmSink = {
+  /** Takes the pieces in order; the arrays may be handed off (don't reuse them). */
+  write: (left: Float32Array, right: Float32Array) => Promise<void>;
+  finish: () => Promise<Blob>;
+  /** Lets go of it (stops the worker) — harmless once finished. */
+  cancel: () => void;
+};
+
+/**
+ * An MP3 encoder fed a piece at a time, in a worker where possible (on
+ * the page's own thread otherwise, a piece's worth of freeze at a time).
+ * `write` waits while a piece is still being encoded, so only one is ever
+ * queued behind it. `signal` stops it.
+ */
+export async function openMp3Stream({
+  sampleRate,
+  bitrate = 256,
+  signal,
+}: {
+  sampleRate: number;
+  bitrate?: Mp3Bitrate;
+  signal?: AbortSignal;
+}): Promise<PcmSink> {
+  try {
+    return await workerMp3Stream(sampleRate, bitrate, signal);
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    const stream = await createMp3Stream({ sampleRate, bitrate });
+    return {
+      write: async (left, right) => {
+        signal?.throwIfAborted();
+        stream.encode(left, right);
+      },
+      finish: async () => new Blob([stream.finish() as BlobPart], { type: "audio/mpeg" }),
+      cancel: () => {},
+    };
+  }
+}
+
+function workerMp3Stream(sampleRate: number, bitrate: Mp3Bitrate, signal?: AbortSignal): Promise<PcmSink> {
+  signal?.throwIfAborted();
+  const worker = new Worker(new URL("./mp3.worker.ts", import.meta.url), { type: "module" });
+  // The worker replies to each message in turn.
+  const waiting: { resolve: (reply: Mp3StreamReply) => void; reject: (err: unknown) => void }[] = [];
+  let failure: unknown = null;
+  const fail = (err: unknown) => {
+    failure ??= err;
+    worker.terminate();
+    signal?.removeEventListener("abort", onAbort);
+    for (const w of waiting.splice(0)) w.reject(failure);
+  };
+  const onAbort = () => fail(signal?.reason ?? new DOMException("Cancelled", "AbortError"));
+  signal?.addEventListener("abort", onAbort, { once: true });
+  worker.onmessage = (event: MessageEvent<Mp3StreamReply>) => {
+    if ("error" in event.data) fail(new Error(event.data.error));
+    else waiting.shift()?.resolve(event.data);
+  };
+  worker.onerror = (event) => fail(new Error(event.message || "MP3 worker failed"));
+
+  const send = (message: Mp3StreamMessage, transfer: Transferable[] = []) =>
+    failure
+      ? Promise.reject(failure)
+      : new Promise<Mp3StreamReply>((resolve, reject) => {
+          waiting.push({ resolve, reject });
+          worker.postMessage(message, transfer);
+        });
+
+  let encoding: Promise<unknown> = Promise.resolve();
+  const sink: PcmSink = {
+    write: async (left, right) => {
+      await encoding;
+      encoding = send({ stream: "chunk", left, right }, [left.buffer, right.buffer]);
+      // Seen by the next write or finish; not left unhandled meanwhile.
+      encoding.catch(() => {});
+    },
+    finish: async () => {
+      await encoding;
+      const reply = await send({ stream: "close" });
+      worker.terminate();
+      signal?.removeEventListener("abort", onAbort);
+      if (!("bytes" in reply)) throw new Error("MP3 worker failed");
+      return new Blob([reply.bytes as BlobPart], { type: "audio/mpeg" });
+    },
+    cancel: () => fail(new DOMException("Cancelled", "AbortError")),
+  };
+  return send({ stream: "open", sampleRate, bitrate }).then(() => sink);
 }

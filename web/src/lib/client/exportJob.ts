@@ -38,9 +38,14 @@ type ExportJobState = {
 
 let controller: AbortController | null = null;
 
-/** Rendering is roughly 60% of the wait, encoding the rest (MP3; WAV is near instant). */
-function overall(stage: string, fraction: number | undefined): number | null {
+/**
+ * Rendering is roughly 60% of the wait, encoding the rest (MP3; WAV is
+ * near instant). A phone does both at once, a piece at a time (see
+ * mixdown.ts): that's the whole wait.
+ */
+export function overall(stage: string, fraction: number | undefined): number | null {
   if (fraction === undefined) return null;
+  if (/and encoding/.test(stage)) return fraction * 0.98;
   if (/^Rendering/.test(stage)) return fraction * 0.6;
   if (/^Encoding/.test(stage)) return 0.62 + fraction * 0.38;
   return null;

@@ -35,6 +35,33 @@ export async function encodePcmToMp3(
     onProgress?.(end / left.length);
   }
   parts.push(encoder.finalize().slice());
+  return join(parts);
+}
+
+/**
+ * An MP3 encoder fed a piece of the audio at a time — for audio rendered
+ * in pieces, so the whole of it is never in memory at once (see
+ * mixdown.ts). `finish` returns the file.
+ */
+export async function createMp3Stream({ sampleRate, bitrate }: { sampleRate: number; bitrate: Mp3Bitrate }) {
+  const encoder = await createMp3Encoder();
+  encoder.configure({ sampleRate, channels: 2, bitrate });
+  const parts: Uint8Array[] = [];
+  return {
+    encode(left: Float32Array, right: Float32Array) {
+      for (let start = 0; start < left.length; start += CHUNK) {
+        const end = Math.min(left.length, start + CHUNK);
+        parts.push(encoder.encode([left.subarray(start, end), right.subarray(start, end)]).slice());
+      }
+    },
+    finish() {
+      parts.push(encoder.finalize().slice());
+      return join(parts);
+    },
+  };
+}
+
+function join(parts: Uint8Array[]) {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
   let offset = 0;
   for (const part of parts) {

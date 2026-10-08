@@ -87,7 +87,7 @@ import {
 } from "@/lib/client/aiTrial";
 import type { CoproducerContext } from "@/lib/client/coproducerTools";
 import { bestVersions, scoreMix, scoreWord, type MixScore, type Version } from "@/lib/client/mixScore";
-import { beatModelEnabled, setBeatModelEnabled, useBeatModel } from "@/lib/client/neuralBeats";
+import { beatModelEnabled, beatModelSupported, setBeatModelEnabled, useBeatModel } from "@/lib/client/neuralBeats";
 import { setStretchEngine, stretchEngine } from "@/lib/client/pitchTempo";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { changeSpeed, gain, nudge, setSpace, spaceOf, transpose, type Space } from "@/lib/client/quickAdjust";
@@ -689,15 +689,18 @@ function MasterIt({ vibes }: { vibes: Vibe[] }) {
 function Engines() {
   const model = useBeatModel();
   const [beatsOn, setBeatsOn] = useState(true);
+  const [beatsHere, setBeatsHere] = useState(true);
   const [hq, setHq] = useState(true);
   const [rerendering, setRerendering] = useState(false);
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage only exists after mount
     setBeatsOn(beatModelEnabled());
+    setBeatsHere(beatModelSupported());
     setHq(stretchEngine() === "hq");
   }, []);
-  const status =
-    !beatsOn || model.status === "off"
+  const status = !beatsHere
+    ? "not on phones — it needs more memory than a phone gives a web page. Bars come from the Studio's own tracker."
+    : !beatsOn || model.status === "off"
       ? "off — bars come from the Studio's own tracker"
       : model.status === "loading"
         ? model.fromCache
@@ -723,6 +726,7 @@ function Engines() {
           <input
             type="checkbox"
             checked={beatsOn}
+            disabled={!beatsHere}
             onChange={(e) => {
               setBeatsOn(e.target.checked);
               setBeatModelEnabled(e.target.checked);

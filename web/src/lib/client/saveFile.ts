@@ -16,7 +16,8 @@
 
 import { isConstrainedDevice } from "./device";
 
-export type SaveOutcome = "shared" | "downloaded" | "cancelled";
+/** "unavailable": nothing could save it here — the share sheet didn't open, and a link would lose the page (see linksLeaveApp). */
+export type SaveOutcome = "shared" | "downloaded" | "cancelled" | "unavailable";
 
 /** A phone or tablet: its share sheet is how files are kept and passed on. */
 export function prefersShareSheet(): boolean {
@@ -33,6 +34,18 @@ export function isInstalledApp(): boolean {
     window.matchMedia?.("(display-mode: standalone)").matches ||
     (navigator as Navigator & { standalone?: boolean }).standalone === true
   );
+}
+
+/**
+ * The installed iPhone/iPad app, where a download link opens the file
+ * over the app with no way back — leaving the Studio (and the export)
+ * behind. Only the share sheet saves files there.
+ */
+export function linksLeaveApp(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  const iOS = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  return iOS && isInstalledApp();
 }
 
 export function canShareFile(file: File): boolean {
@@ -62,7 +75,8 @@ export function downloadFile(blob: Blob, filename: string) {
 /**
  * Hands the file to the share sheet on a phone (falling back to a
  * download where sharing files isn't possible), or downloads it.
- * Call it from a tap. `share: false` forces a plain download.
+ * Call it from a tap. `share: false` forces a plain download — except in
+ * the installed iPhone app, where nothing but the share sheet can save.
  */
 export async function saveFile(file: File, { share = prefersShareSheet(), title }: { share?: boolean; title?: string } = {}): Promise<SaveOutcome> {
   if (share && canShareFile(file)) {
@@ -76,6 +90,7 @@ export async function saveFile(file: File, { share = prefersShareSheet(), title 
       // NotAllowedError (the tap's activation ran out) and the rest: download instead.
     }
   }
+  if (linksLeaveApp()) return "unavailable";
   downloadFile(file, file.name);
   return "downloaded";
 }

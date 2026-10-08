@@ -433,7 +433,7 @@ class AudioEngine {
    * plays) the least recently used goes first, past SPARE_BYTES. Every
    * stem shares the one budget, so trying idea after idea never piles up.
    */
-  private trimCaches() {
+  private trimCaches(budget = SPARE_BYTES) {
     const { lanes } = useStudioStore.getState();
     const needed = new Set<AudioBuffer>();
     const stemsInUse = new Set<string>();
@@ -474,13 +474,22 @@ class AudioEngine {
       }
     }
     let total = spare.reduce((sum, s) => sum + s.bytes, 0);
-    if (total <= SPARE_BYTES) return;
+    if (total <= budget) return;
     spare.sort((a, b) => a.at - b.at);
     for (const s of spare) {
-      if (total <= SPARE_BYTES) break;
+      if (total <= budget) break;
       s.drop();
       total -= s.bytes;
     }
+  }
+
+  /**
+   * Lets go of everything kept just in case (renders for Before/After,
+   * the idea before, stems no lane plays) — before an export on a phone,
+   * which needs the room. Anything wanted again is rendered again.
+   */
+  dropSpare() {
+    this.trimCaches(0);
   }
 
   /** Loads every lane in the project — used before an export bounce. */
