@@ -97,6 +97,8 @@ export default function StudioLibraryPanel() {
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search…"
           type="search"
+          name="stem-search"
+          autoComplete="off"
           enterKeyHint="search"
           aria-label="Search stems"
           className="input mt-2 !py-1.5 text-xs"

@@ -129,6 +129,8 @@ export default function LibraryBrowser({
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search by song, artist or tag…"
           type="search"
+          name="library-search"
+          autoComplete="off"
           enterKeyHint="search"
           aria-label="Search the library"
           className="input sm:max-w-xs sm:flex-1"

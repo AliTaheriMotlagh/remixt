@@ -67,9 +67,16 @@ function KeySetup({ state, onReady }: { state: KeyState; onReady: (mode: "accoun
         </a>
       </p>
       <input
-        type="password"
+        // Not type="password": a password field makes the browser's password
+        // manager fill a saved login email into the nearest text box (the
+        // Studio's stem search). Masked with CSS instead.
+        type="text"
+        name="anthropic-api-key"
         autoComplete="off"
+        data-1p-ignore
+        data-lpignore="true"
         spellCheck={false}
+        style={{ WebkitTextSecurity: "disc" } as React.CSSProperties}
         value={key}
         onChange={(e) => setKey(e.target.value)}
         placeholder="sk-ant-…"
