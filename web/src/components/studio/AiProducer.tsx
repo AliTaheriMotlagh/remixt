@@ -52,12 +52,14 @@ import {
   fixesOf,
   mixFix,
   ideaFits,
+  keyStretch,
   leadOf,
   masterFor,
   mixSignature,
   prepareSession,
   rebaseSession,
   reworkIdeas,
+  stretchKeyIdea,
   studioIdeas,
   syncEverythingIdea,
   timingSignature,
@@ -72,12 +74,15 @@ import {
   compare,
   dismissOff,
   fixHolder,
+  forgetTrial,
   keepTrial,
   PARTS,
   partsOf,
   removeFix,
+  refusedByScope,
   removeFromTrial,
   revertTrial,
+  setScope,
   switchPart,
   tryIdea,
   tryIdeas,
@@ -86,6 +91,7 @@ import {
   type Trial,
 } from "@/lib/client/aiTrial";
 import type { CoproducerContext } from "@/lib/client/coproducerTools";
+import { clock, isWhole, useAiScope, type Scope } from "@/lib/client/aiScope";
 import { bestVersions, scoreMix, scoreWord, type MixScore, type Version } from "@/lib/client/mixScore";
 import { beatModelEnabled, beatModelSupported, setBeatModelEnabled, useBeatModel } from "@/lib/client/neuralBeats";
 import { setStretchEngine, stretchEngine } from "@/lib/client/pitchTempo";
@@ -95,6 +101,7 @@ import { startNewStep } from "@/lib/client/studioHistory";
 import { MASTER_PRESETS, laneName, useStudioStore, type StudioLane } from "@/lib/client/studioStore";
 import { loadKeepWhole, loadSync, saveKeepWhole, saveSync, type Vibe } from "@/lib/client/aiControl";
 import { masterPresetOf } from "./MasterPanel";
+import AiScopeBar from "./AiScopeBar";
 import CoProducer from "./CoProducer";
 import MatchFinder from "./MatchFinder";
 import { useStudioView } from "@/lib/client/studioView";
@@ -158,12 +165,12 @@ const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
 
 /** Which tab each idea is listed on (for the count of ideas on, on each tab). */
 const IN_TAB: Record<Tab, (i: Idea) => boolean> = {
-  sync: (i) => i.kind === "auto" || i.kind === "sync" || i.id.startsWith("fix:"),
+  sync: (i) => i.kind === "auto" || i.kind === "sync" || i.id.startsWith("fix:") || i.id === "key-part",
   styles: (i) => i.kind === "full" || (i.kind === "idea" && i.role !== "engineer"),
   moments: (i) => i.kind === "moment" || (i.kind === "fix" && !i.id.startsWith("fix:")),
   mix: (i) => i.kind === "idea" && i.role === "engineer" && !i.edits,
   // The co-producer's own hands-on changes.
-  ask: (i) => !!i.edits,
+  ask: (i) => !!i.edits && i.id !== "key-part",
 };
 
 /** Ideas that place the vocal or change the speed — only one of those is on at a time (hands-on changes go on top). */
@@ -810,6 +817,7 @@ export default function AiProducer() {
   const lanes = useDeferredValue(useStudioStore((s) => s.lanes));
   const projectBpm = useStudioStore((s) => s.projectBpm);
   const trial = useAiTrial((s) => s.trial);
+  const scope = useAiScope((s) => s.scope);
   const [vocalId, setVocalId] = useState("");
   const [beatId, setBeatId] = useState("");
   const [session, setSession] = useState<Session | null>(null);
@@ -906,10 +914,13 @@ export default function AiProducer() {
 
   const vocals = lanes.filter((l) => l.kind === "vocals");
   const backings = lanes.filter((l) => l.kind !== "vocals");
+  // A pick of a lane that's gone (cleared, undone, swapped) is no pick: back to Auto.
+  const vocalPick = lanes.some((l) => l.laneId === vocalId) ? vocalId : "";
+  const beatPick = lanes.some((l) => l.laneId === beatId) ? beatId : "";
   const signature = mixSignature(lanes);
   const timing = timingSignature(lanes, projectBpm);
   const stale = !!session && session.signature !== signature;
-  const repicked = !!session && ((!!vocalId && session.vocal?.laneId !== vocalId) || (!!beatId && session.beat?.laneId !== beatId));
+  const repicked = !!session && ((!!vocalPick && session.vocal?.laneId !== vocalPick) || (!!beatPick && session.beat?.laneId !== beatPick));
   const trying = useMemo(() => trial?.ideas ?? [], [trial]);
   const onIds = useMemo(() => new Set(trying.map((i) => i.id)), [trying]);
   const groups = useMemo(() => (session ? fixGroups(checkMix(session, lanes)) : []), [session, lanes]);
@@ -917,6 +928,9 @@ export default function AiProducer() {
   const baselineLanes = trial?.showing === "idea" ? trial.baseline.lanes : null;
   const before = useMemo(() => (session && baselineLanes ? fixGroups(checkMix(session, baselineLanes)) : null), [session, baselineLanes]);
   const total = useMemo(() => (session && session.pair ? scoreMix(session, lanes) : null), [session, lanes]);
+  /** Where the vocal sounds most out of tune, if one stretch stands out — measured on the mix every try starts from. */
+  const baseLanes = trial?.baseline.lanes ?? lanes;
+  const outOfTune = useMemo(() => (session ? keyStretch(session, baseLanes) : null), [session, baseLanes]);
 
   /** Listens to the lanes and works out the ideas. */
   async function analyse({ reapply = false } = {}) {
@@ -928,8 +942,12 @@ export default function AiProducer() {
     const wasOn = was?.ideas.map((i) => i.id) ?? [];
     setError(null);
     try {
-      const heardNow = await prepareSession(vocalId || null, beatId || null, { vibe: "any", ...options.current }, (s) => id === run.current && setStep(s));
+      const heardNow = await prepareSession(vocalPick || null, beatPick || null, { vibe: "any", ...options.current }, (s) => id === run.current && setStep(s));
       if (id !== run.current) return;
+      // The mix was cleared or swapped for another while it listened: what
+      // was heard is of a mix that's gone. It listens again, to this one.
+      const nowLanes = useAiTrial.getState().trial?.baseline.lanes ?? useStudioStore.getState().lanes;
+      if (mixSignature(nowLanes) !== heardNow.signature) return;
       // Let the steps paint before the (synchronous) arranging.
       await new Promise((r) => setTimeout(r, 30));
       if (id !== run.current) return;
@@ -954,6 +972,37 @@ export default function AiProducer() {
   useEffect(() => {
     analyseRef.current = analyse;
   });
+
+  // Cleared, or another mix opened: nothing heard, tried or picked for the
+  // old one carries over — a listen still running is dropped, and the new
+  // mix is listened to afresh as soon as it has lanes.
+  const emptyMix = useStudioStore((s) => s.lanes.length === 0);
+  const unrelated = !!session && lanes.length > 0 && !lanes.some((l) => session.lanes.some((h) => h.laneId === l.laneId));
+  useEffect(() => {
+    if (!emptyMix && !unrelated) return;
+    run.current++;
+    forgetTrial();
+    heard.session = null;
+    heard.ideas = [];
+    /* eslint-disable react-hooks/set-state-in-effect -- following the store: the mix was cleared or replaced */
+    setSession(null);
+    setIdeas([]);
+    setStep(null);
+    setError(null);
+    setSwapNote(null);
+    setKeptVibes([]);
+    setDetails(false);
+    setVocalId("");
+    setBeatId("");
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [emptyMix, unrelated]);
+
+  // Different lanes (one added, one taken out): a listen that failed for
+  // the old ones is tried again for these.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- following the store: the lanes changed
+    setError(null);
+  }, [signature]);
 
   // The co-producer reads the latest session and ideas (see `heard`), and can ask for a listen.
   useEffect(() => {
@@ -1044,7 +1093,11 @@ export default function AiProducer() {
     }
     const replaced = on.filter((t) => !compatible(t, idea));
     if (!tryIdea(session, idea, { add: true })) {
-      setError(`“${idea.title}” doesn't fit the mix as it is now — it's being worked out again.`);
+      setError(
+        refusedByScope(idea.id)
+          ? `“${idea.title}” changes the whole song's speed, so it can only go on the whole song — switch “AI works on” to Whole song.`
+          : `“${idea.title}” doesn't fit the mix as it is now — it's being worked out again.`
+      );
       return;
     }
     // A style taking over from a sync template keeps that sync (it's a setting): say so, not "replaced".
@@ -1236,6 +1289,33 @@ export default function AiProducer() {
       const bpm = bpmNow();
       switchPart(session, idea.id, part, on);
       keepPlace(bpm);
+    });
+  }
+
+  /** Whole song or a section, every lane or some: what's on is worked out again for it at once. */
+  function changeScope(next: Scope) {
+    if (!session) return void setScope(null, next);
+    soon("scope", () => {
+      setError(null);
+      inPlace(() => setScope(session, next));
+    });
+  }
+
+  /** Re-keys just the stretch that rubs: the vocal moves there only. */
+  function fixStretch() {
+    if (!session || !outOfTune) return;
+    const stretch = outOfTune;
+    soon("key-part", () => {
+      setError(null);
+      // The idea carries its own section: whatever else is on stays on for the whole song.
+      const idea = stretchKeyIdea(session, stretch, startLanes());
+      if (!idea || !tryIdea(session, idea, { add: true })) {
+        setError("That part couldn't be re-keyed on its own — try Fix on the Key row.");
+        return;
+      }
+      setSwapNote({ icon: "music", text: `${idea.title}: only ${clock(stretch.start)}–${clock(stretch.end)} changes` });
+      audioEngine.seek(idea.listenAt ?? stretch.start);
+      playOn();
     });
   }
 
@@ -1438,7 +1518,8 @@ export default function AiProducer() {
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-bold">AI producer</h2>
             <p className="truncate text-[11px] text-muted">
-              {trying.length ? `${trying.length} idea${trying.length > 1 ? "s" : ""} on · ` : ""}Tap to hear it<span className="max-sm:hidden"> · options stack · nothing&apos;s final until you keep it</span>
+              {trying.length ? `${trying.length} idea${trying.length > 1 ? "s" : ""} on · ` : ""}
+              {isWhole(scope) ? "" : `${scope.range ? scope.range.label : "Some lanes"} only · `}Tap to hear it<span className="max-sm:hidden"> · options stack · nothing&apos;s final until you keep it</span>
             </p>
           </div>
           <button
@@ -1505,6 +1586,11 @@ export default function AiProducer() {
                   <p.icon /> {p.label}
                 </button>
               ))}
+            </div>
+          )}
+          {ready && tab !== "ask" && (
+            <div className="mb-3">
+              <AiScopeBar lanes={startLanes()} onChange={changeScope} disabled={working !== null} />
             </div>
           )}
           {(lanes.length === 0 || missing) && tab !== "ask" ? (
@@ -1606,7 +1692,7 @@ export default function AiProducer() {
                 <div className="grid grid-cols-1 gap-2 text-[11px] text-muted min-[380px]:grid-cols-2">
                   <label className="flex min-w-0 flex-col gap-1">
                     Vocal to work on
-                    <select value={vocalId} onChange={(e) => setVocalId(e.target.value)} className="input !py-1 text-xs">
+                    <select value={vocalPick} onChange={(e) => setVocalId(e.target.value)} className="input !py-1 text-xs">
                       <option value="">{session.vocal ? laneName(session.vocal) : "Auto"}</option>
                       {vocals.filter((l) => !leadOf(l.laneId)).map((l) => (
                         <option key={l.laneId} value={l.laneId}>
@@ -1617,7 +1703,7 @@ export default function AiProducer() {
                   </label>
                   <label className="flex min-w-0 flex-col gap-1">
                     Beat to work on
-                    <select value={beatId} onChange={(e) => setBeatId(e.target.value)} className="input !py-1 text-xs">
+                    <select value={beatPick} onChange={(e) => setBeatId(e.target.value)} className="input !py-1 text-xs">
                       <option value="">{session.beat ? laneName(session.beat) : "Auto"}</option>
                       {backings.map((l) => (
                         <option key={l.laneId} value={l.laneId}>
@@ -1647,6 +1733,27 @@ export default function AiProducer() {
                   onIds={onIds}
                   act={act}
                 />
+              )}
+
+              {outOfTune && !onIds.has("key-part") && (
+                <div className="flex items-center gap-3 rounded-xl border border-amber-400/50 bg-amber-400/10 p-3 text-xs">
+                  <Info className="shrink-0 text-amber-400" />
+                  <p className="min-w-0 flex-1">
+                    <span className="font-semibold">Out of tune at {clock(outOfTune.start)}–{clock(outOfTune.end)}</span>
+                    <span className="block text-[11px] text-muted">
+                      Only {Math.round(outOfTune.now.inChord * 100)}% of the notes sit in the beat&apos;s chords there; {outOfTune.shift > 0 ? "+" : ""}
+                      {outOfTune.shift} st on just that part gets {Math.round(outOfTune.best.inChord * 100)}%.
+                    </span>
+                  </p>
+                  <button
+                    onClick={fixStretch}
+                    disabled={working !== null}
+                    aria-busy={working === "key-part"}
+                    className="shrink-0 rounded-lg bg-brand px-2.5 py-1.5 font-semibold text-white hover:bg-brand-strong disabled:opacity-40"
+                  >
+                    {working === "key-part" ? <Loader2 className="animate-spin" /> : "Fix just this part"}
+                  </button>
+                </div>
               )}
 
               <Section icon={Scissors} title="Cutting" hint="How the AI may edit your tracks — everything on is worked out again when you switch">

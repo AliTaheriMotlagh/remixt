@@ -15,7 +15,7 @@ import { useStudioStore } from "./studioStore";
 const GROUP_MS = 600;
 const LIMIT = 100;
 
-type Snapshot = Pick<
+export type Snapshot = Pick<
   ReturnType<typeof useStudioStore.getState>,
   | "lanes"
   | "duration"
@@ -51,7 +51,7 @@ function changed(a: Snapshot, b: Snapshot) {
   );
 }
 
-type History = { past: Snapshot[]; future: Snapshot[] };
+export type History = { past: Snapshot[]; future: Snapshot[] };
 
 export const useStudioHistory = create<History>(() => ({ past: [], future: [] }));
 
@@ -153,6 +153,60 @@ export function recordStep(before: Partial<Snapshot>, { beforeLast = false } = {
  */
 export function startNewStep() {
   lastEditAt = 0;
+}
+
+/** The undo and redo steps as they are, to keep on the device (see studioDraft). */
+export function exportHistory(): History {
+  return useStudioHistory.getState();
+}
+
+/** Puts back undo and redo steps kept on the device (after the mix they belong to is loaded). */
+export function importHistory(history: History) {
+  useStudioHistory.setState({ past: history.past.slice(-LIMIT), future: history.future.slice(-LIMIT) });
+  lastEditAt = 0;
+}
+
+type Lane = Snapshot["lanes"][number];
+
+/**
+ * Undo steps packed small to keep on the device. Steps share most of
+ * their lanes (an edit replaces only the lane it changed), so each lane
+ * is kept once and the steps point at it; a stem's waveform is kept once
+ * for every lane that plays it. `keep` caps how many steps each way.
+ */
+export type PackedHistory = {
+  lanes: Omit<Lane, "peaks">[];
+  peaks: Record<string, number[]>;
+  past: PackedStep[];
+  future: PackedStep[];
+};
+type PackedStep = Omit<Snapshot, "lanes"> & { lanes: number[] };
+
+export function packHistory(history: History, keep = 60): PackedHistory {
+  const index = new Map<Lane, number>();
+  const lanes: Omit<Lane, "peaks">[] = [];
+  const peaks: Record<string, number[]> = {};
+  const packStep = (step: Snapshot): PackedStep => ({
+    ...step,
+    lanes: step.lanes.map((lane) => {
+      let at = index.get(lane);
+      if (at === undefined) {
+        const { peaks: lanePeaks, ...rest } = lane;
+        if (lanePeaks?.length && !peaks[lane.stemId]) peaks[lane.stemId] = lanePeaks;
+        // Soloing is for listening, not part of the mix.
+        at = lanes.push({ ...rest, solo: false }) - 1;
+        index.set(lane, at);
+      }
+      return at;
+    }),
+  });
+  return { lanes, peaks, past: history.past.slice(-keep).map(packStep), future: history.future.slice(-keep).map(packStep) };
+}
+
+export function unpackHistory(packed: PackedHistory): History {
+  const lanes: Lane[] = packed.lanes.map((lane) => ({ ...lane, peaks: packed.peaks[lane.stemId] ?? [] }) as Lane);
+  const unpackStep = (step: PackedStep): Snapshot => ({ ...step, lanes: step.lanes.map((i) => lanes[i]).filter(Boolean) });
+  return { past: packed.past.map(unpackStep), future: packed.future.map(unpackStep) };
 }
 
 /** Forgets all history — when a different project is loaded. */

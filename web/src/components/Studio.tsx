@@ -27,9 +27,10 @@ import { detectMissingKeys, listenForBeats } from "@/lib/client/autoMatch";
 import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/remixLanes";
 import { useStudioStore } from "@/lib/client/studioStore";
 import { useStudioView } from "@/lib/client/studioView";
-import { resetHistory } from "@/lib/client/studioHistory";
+import { importHistory, resetHistory, undo } from "@/lib/client/studioHistory";
 import {
   clearDraft,
+  draftLaneCount,
   markDraftClean,
   markDraftDirty,
   readDraft,
@@ -178,9 +179,14 @@ export default function Studio({ user }: { user: User | null }) {
   // the tab): offer it back, but only to an empty Studio.
   useEffect(() => {
     if (remixId || challengeId || projectId || joinCode || stemsParam || useStudioStore.getState().lanes.length > 0) return;
-    const saved = readDraft();
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage only exists after mount
-    if (saved) setDraft(saved);
+    let cancelled = false;
+    void readDraft().then((saved) => {
+      // Offered only while the Studio is still empty (nothing was opened meanwhile).
+      if (!cancelled && saved && useStudioStore.getState().lanes.length === 0) setDraft(saved);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [remixId, challengeId, projectId, joinCode, stemsParam]);
 
   // A shared session is kept on the server; this browser's draft is for solo work.
@@ -249,6 +255,10 @@ export default function Studio({ user }: { user: User | null }) {
     loadRemix(draft.lanes, draft.project, draft.sourceRemix);
     useStudioStore.getState().setChallenge(draft.challenge ?? null);
     resetHistory();
+    // Its undo steps come back with it: ⌘Z carries on from before the reload.
+    if (draft.history) importHistory(draft.history);
+    // A mix that was cleared: the step before the clear is the mix to bring back (redo clears it again).
+    if (draft.lanes.length === 0) undo();
     markDraftDirty();
     setDraft(null);
   }
@@ -374,15 +384,16 @@ export default function Studio({ user }: { user: User | null }) {
           {draft && lanes.length === 0 && (
             <div className="flex flex-wrap items-center gap-3 rounded-xl border border-brand/50 bg-brand/10 px-4 py-3 text-sm">
               <span className="flex-1">
-                You have an unsaved mix from {formatAgo(draft.savedAt)} ({draft.lanes.length} lane
-                {draft.lanes.length === 1 ? "" : "s"}
-                {draft.sourceRemix ? `, from “${draft.sourceRemix.title}”` : ""}).
+                {draft.lanes.length ? "You have an unsaved mix" : "You cleared a mix"} from {formatAgo(draft.savedAt)} ({draftLaneCount(draft)} lane
+                {draftLaneCount(draft) === 1 ? "" : "s"}
+                {draft.sourceRemix ? `, from “${draft.sourceRemix.title}”` : ""}
+                {draft.history?.past.length ? " — undo history included" : ""}).
               </span>
               <button
                 onClick={restoreDraft}
                 className="rounded-lg bg-brand px-3 py-1.5 text-sm font-semibold text-white hover:bg-brand-strong"
               >
-                Restore it
+                {draft.lanes.length ? "Restore it" : "Bring it back"}
               </button>
               <button
                 onClick={() => {

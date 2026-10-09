@@ -635,7 +635,7 @@ export function shiftMarkers(markers: Marker[], start: number, end: number, delt
 }
 
 /** A lane's clips cut at each of `times` (timeline seconds) that falls inside one. */
-function cutLaneAt(lane: StudioLane, times: number[]): LaneClip[] {
+export function cutLaneAt(lane: StudioLane, times: number[]): LaneClip[] {
   let clips = concrete(lane);
   for (const t of times) {
     const at = (t - lane.offsetSeconds) * lane.tempoRatio;

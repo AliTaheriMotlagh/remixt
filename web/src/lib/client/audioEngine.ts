@@ -23,6 +23,7 @@ import {
   stopNowPlayingAnchor,
 } from "./nowPlayingAnchor";
 import { fetchStem } from "./stemFetch";
+import { useStudioView } from "./studioView";
 import {
   beatLength,
   getAudibleLaneIds,
@@ -147,7 +148,8 @@ class RenderQueue {
     });
   }
 
-  private next() {
+  /** Starts what's next — and first drops every queued render nobody wants any more. */
+  next() {
     const gone = this.queued.filter((job) => !job.wanted());
     this.queued = this.queued.filter((job) => !gone.includes(job));
     for (const job of gone) job.skip();
@@ -412,8 +414,21 @@ class AudioEngine {
     // A vocal and its layers play the same stem: one download for all of them.
     let pending = this.decoding.get(stemId);
     if (!pending) {
-      pending = fetchStem(stemId)
-        .then((bytes) => this.getContext().decodeAudioData(bytes))
+      const decode = async () => {
+        const ctx = this.getContext();
+        const bytes = await fetchStem(stemId);
+        try {
+          return await ctx.decodeAudioData(bytes);
+        } catch (error) {
+          // The context was replaced while it decoded (iOS after a call or
+          // another app's audio) and the old one closed under it: once more
+          // on the new one. (Decoding took the bytes, so they're fetched
+          // again — from this device's cache.)
+          if (this.ctx === ctx) throw error;
+          return this.getContext().decodeAudioData(await fetchStem(stemId));
+        }
+      };
+      pending = decode()
         .then((raw) => {
           const stem: DecodedStem = { raw, renders: new Map(), clipBuffers: new Map() };
           used(stem);
@@ -788,6 +803,31 @@ class AudioEngine {
     const stem = entry && this.decoded.get(entry.stemId);
     if (stem) used(stem);
     this.trimCaches();
+    // Renders waiting for their turn that only it wanted don't run.
+    renderQueue.next();
+  }
+
+  /**
+   * The mix was cleared: whatever was being got ready for it stops — the
+   * look-ahead renders for its AI ideas, a play still loading, the pads.
+   * What was downloaded and decoded stays kept (within the memory budget),
+   * so stems added back play at once.
+   */
+  forgetMix() {
+    this.prepareRun++;
+    this.playRequest++;
+    for (const voice of this.padVoices.values()) {
+      try {
+        voice.stop();
+      } catch {
+        // already stopped
+      }
+    }
+    this.padVoices.clear();
+    this.padBuffers.clear();
+    this.stemBuffers.clear();
+    renderQueue.next();
+    this.trimCaches();
   }
 
   /** Pushes volume/mute/solo, per-lane FX and master volume into the graph. */
@@ -864,8 +904,20 @@ class AudioEngine {
       for (const lane of lanes) if (!this.lanes.has(lane.laneId)) void this.prefetchLane(lane.laneId, lane.stemId);
       for (const lane of lanes) if (this.lanes.has(lane.laneId)) void this.ensureTransform(lane.laneId).catch(() => {});
     } else {
-      await Promise.all(lanes.map((l) => this.ensureLane(l.laneId, l.stemId)));
-      await Promise.all(lanes.map((l) => this.ensureTransform(l.laneId)));
+      // A stem that won't download (taken down, a dropped connection) doesn't
+      // keep the rest of the mix from playing: it's left out, and said so.
+      const loads = await Promise.allSettled(lanes.map((l) => this.ensureLane(l.laneId, l.stemId)));
+      if (request !== this.playRequest) return;
+      const failed = loads.filter((r) => r.status === "rejected");
+      if (failed.length === lanes.length && failed.length) throw (failed[0] as PromiseRejectedResult).reason;
+      const renders = await Promise.allSettled(lanes.map((l) => this.ensureTransform(l.laneId)));
+      // Left out: it didn't download, or couldn't be brought to its speed and pitch — not a lane deleted meanwhile.
+      const now = useStudioStore.getState().lanes;
+      const missing = lanes.filter((l, i) => (loads[i].status === "rejected" || renders[i].status === "rejected") && now.some((n) => n.laneId === l.laneId));
+      if (missing.length && request === this.playRequest) {
+        const names = missing.map((l) => l.name?.trim() || l.trackTitle).slice(0, 2).join(", ");
+        useStudioView.getState().notify(`Couldn't get ${names}${missing.length > 2 ? ` and ${missing.length - 2} more` : ""} ready — playing the rest. Tap play again to retry.`, "error");
+      }
     }
     // Paused, stopped or a preview started while the stems loaded.
     if (request !== this.playRequest || this.ctx !== ctx) return;
@@ -1284,6 +1336,7 @@ if (typeof window !== "undefined") {
     }
 
     if (state.lanes !== prevState.lanes) {
+      if (!state.lanes.length && prevState.lanes.length) audioEngine.forgetMix();
       const currentIds = new Set(state.lanes.map((l) => l.laneId));
       for (const laneId of audioEngine.getLoadedLaneIds()) {
         if (!currentIds.has(laneId)) audioEngine.removeLane(laneId);

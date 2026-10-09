@@ -725,6 +725,8 @@ export default function StudioTransport({
                         audioEngine.stop();
                         startNewStep();
                         clearLanes();
+                        // Nothing left to inspect, split or draw automation on.
+                        useStudioView.setState({ automationLanes: [], splitLaneId: null, inspectorOpen: false });
                       }}
                       disabled={empty}
                       className="flex-1 rounded-lg bg-danger px-3 py-1.5 font-semibold text-white disabled:opacity-40"

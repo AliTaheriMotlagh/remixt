@@ -9,7 +9,8 @@ import { findParts } from "./beatParts";
 import { asWholeTake, clipEnd, clipId, clipStart, clipsOf, moveClips, normaliseLane, playsInOrder, stutterLane } from "./clipEdit";
 import { DEFAULT_OPTIONS, findChorus, planFromOptions, type Entry, type MatchOptions, type Structure } from "./matchOptions";
 import { tempoFit } from "./matchFinder";
-import { adviseShift, harmonyStatus, pickShift, scanHarmony, type HarmonyScan } from "./harmony";
+import { clock, originOf, type Scope } from "./aiScope";
+import { adviseShift, harmonyStatus, pickShift, scanHarmony, worstStretch, type HarmonyScan, type HarmonyStretch } from "./harmony";
 import { bestKeyShift, keyFit, keyLabel, transposeKey } from "./musicKey";
 import { pairPlanPatches, preparePair, type PairContext, type TempoChoice } from "./pairMatch";
 import {
@@ -90,6 +91,12 @@ export type Idea = {
    * lanes are then, so it can be switched on and off like any idea.
    */
   edits?: HandEdit[];
+  /**
+   * Where a hands-on change is heard, when only in part of the song (a
+   * line re-keyed where it rubs): the mix with everything else on stays as
+   * it is outside it (see aiScope.ts).
+   */
+  scope?: Scope;
 };
 
 export type LaneChange = { add: StudioLane[]; remove: string[] };
@@ -671,6 +678,53 @@ export function harmonyOf(session: Session, lanes: { vocal: StudioLane; beat: St
   return scanHarmony({ analysis: pair.vocalAnalysis, lane: lanes.vocal }, { analysis: pair.beatAnalysis, lane: lanes.beat });
 }
 
+/**
+ * Where in the mix as it is now (`lanes`, an idea being tried included)
+ * the vocal sounds most out of tune with the beat — clearly worse than the
+ * rest, and better with a shift there — on whole bars of the beat. Null
+ * when no stretch stands out.
+ */
+export function keyStretch(session: Session, lanes: StudioLane[]): (HarmonyStretch & { laneId: string }) | null {
+  const vocal = session.vocal && lanes.find((l) => l.laneId === session.vocal!.laneId);
+  const beat = session.beat && lanes.find((l) => l.laneId === session.beat!.laneId);
+  if (!vocal || !beat) return null;
+  const scan = harmonyOf(session, { vocal, beat });
+  const stretch = scan && worstStretch(scan);
+  if (!stretch) return null;
+  const bar = beatLength(session.projectBpm) * 4;
+  const start = Math.max(0, Math.floor(stretch.start / bar + 1e-6) * bar);
+  const end = Math.max(start + bar, Math.ceil(stretch.end / bar - 1e-6) * bar);
+  return { ...stretch, start, end, laneId: vocal.laneId };
+}
+
+/**
+ * Re-keys the vocal by the stretch's shift — meant to be heard only in
+ * that stretch (tried with the AI working on just that section, see
+ * aiScope.ts), so the rest of the song stays as sung.
+ */
+export function stretchKeyIdea(session: Session, stretch: HarmonyStretch & { laneId: string }, lanes: StudioLane[]): Idea | null {
+  const vocal = lanes.find((l) => l.laneId === stretch.laneId);
+  if (!vocal) return null;
+  const pitch = vocal.pitchSemitones + stretch.shift;
+  return {
+    id: "key-part",
+    role: "engineer",
+    kind: "fix",
+    icon: "music",
+    title: `Key fixed in one part (${st(stretch.shift)})`,
+    short: `${share(stretch.now.inChord)} → ${share(stretch.best.inChord)} in the chords there`,
+    why: "The vocal sounds out of tune over the beat in this stretch only — the beat may change key there, or the line was sung in another. Moving just this part keeps the rest as sung.",
+    lines: [`${laneName(vocal)}: pitch ${st(pitch)} in this part only`, `Measured there: ${share(stretch.now.inChord)} → ${share(stretch.best.inChord)} of the sung notes sit in the beat's chords`],
+    patches: {},
+    aspects: ["key"],
+    vibes: [],
+    stems: { [vocal.laneId]: vocal.stemId },
+    listenAt: Math.max(0, stretch.start - 2),
+    edits: [{ laneId: vocal.laneId, pitchSemitones: pitch }],
+    scope: { range: { start: stretch.start, end: stretch.end, label: `Re-keyed ${clock(stretch.start)}–${clock(stretch.end)}` }, lanes: [vocal.laneId] },
+  };
+}
+
 /** Below this share of held notes in the beat's chords, a pair the labels call fine is still worth moving. */
 const CLEARLY_OFF = 0.4;
 /** …and only for a big measured improvement. */
@@ -997,16 +1051,105 @@ const MIXES: MixRecipe[] = [
 
 const mix = (id: MixId) => MIXES.find((m) => m.id === id)!;
 
+/** Reverb lengths that ring out on the beat, in beats. */
+const DECAY_BEATS = [1, 1.5, 2, 3, 4, 6, 8];
+
+/**
+ * A reverb's length moved to the nearest that rings out on a beat at
+ * `bpm` (so its tail breathes with the song instead of smearing across
+ * the next hit), staying within a third of what was asked for.
+ */
+export function musicalDecay(seconds: number, bpm: number) {
+  const beat = beatLength(bpm);
+  let best = seconds;
+  let off = Infinity;
+  for (const beats of DECAY_BEATS) {
+    const length = beats * beat;
+    const d = Math.abs(Math.log(length / seconds));
+    if (d < off && d <= Math.log(1.34)) {
+      off = d;
+      best = length;
+    }
+  }
+  return Math.round(Math.min(6, Math.max(0.5, best)) * 100) / 100;
+}
+
+/** Share of the stem's span (from where it comes in) that's actually sounding. */
+function activeShare(analysis: StemAnalysis | undefined) {
+  const energy = analysis?.energy;
+  if (!energy?.length) return 0.5;
+  const from = Math.min(energy.length - 1, Math.floor(analysis!.entry * analysis!.onsetRate));
+  const span = energy.subarray(from);
+  const sorted = Float32Array.from(span).sort();
+  const loud = sorted[Math.floor(sorted.length * 0.95)] ?? 0;
+  if (!(loud > 0)) return 0.5;
+  let on = 0;
+  for (const e of span) if (e > loud * 0.08) on++;
+  return on / span.length;
+}
+
+/**
+ * A mix worked out from what was heard rather than a preset: the vocal's
+ * high-pass just under its lowest notes (a deep voice keeps its body, a
+ * high one loses the rumble), echo and reverb timed to the tempo, and the
+ * beat making room in proportion to how much of the song the vocal fills
+ * (a rap that never stops would make a beat that dips every time pump).
+ */
+function fittedRecipe(session: Session): MixRecipe {
+  const bpm = session.projectBpm;
+  const vocal = session.vocal ? session.analyses.get(session.vocal.laneId) : undefined;
+  const beat = session.beat ? session.analyses.get(session.beat.laneId) : undefined;
+  let highpass = 110;
+  const midi = vocal?.melody?.midi;
+  if (midi) {
+    const sung = Float32Array.from(midi.filter((m) => m > 0)).sort();
+    if (sung.length > 50) {
+      const low = sung[Math.floor(sung.length * 0.05)];
+      highpass = Math.round(Math.min(170, Math.max(70, 0.6 * 440 * 2 ** ((low - 69) / 12))));
+    }
+  }
+  const density = activeShare(vocal);
+  const duck = density > 0.6 ? 0.15 : density < 0.3 ? 0.32 : 0.22;
+  const quietVocal = !!vocal && !!beat && beat.loudness > 0 && vocal.loudness / beat.loudness < 0.5;
+  const delayDivision = bpm >= 130 ? "1/4" : bpm >= 95 ? "1/8." : "1/8";
+  return {
+    id: "balanced",
+    icon: "target",
+    title: "Fitted to this song",
+    short: "Worked out from this vocal and beat",
+    why: `Set from what was heard, not a preset: the vocal's low cut at ${highpass} Hz (just under its lowest notes), a ${delayDivision} echo and a reverb that rings out on the beat at ${Math.round(bpm)} BPM, and the beat dipping ${Math.round(duck * 100)}% under the voice — ${density > 0.6 ? "gently, since the vocal hardly stops" : density < 0.3 ? "more, since the vocal comes and goes" : "a little"}.`,
+    vibes: ["any", "radio"],
+    vocalDb: 0.5,
+    vocal: {
+      highpass,
+      compress: true,
+      eqMid: 1,
+      eqHigh: 2.5,
+      reverb: density > 0.6 ? 0.11 : 0.16,
+      reverbSize: musicalDecay(2 * beatLength(bpm), bpm),
+      delay: density > 0.6 ? 0.1 : 0.14,
+      delayDivision,
+      delayFeedback: 0.28,
+    },
+    backing: { eqMid: quietVocal ? -3.5 : -2, duck, fadeOut: 4 },
+  };
+}
+
 function applyMix(draft: Draft, levels: Map<string, number>, recipe: Pick<MixRecipe, "vocalDb" | "vocal" | "backing">) {
-  let vocalIndex = 0;
+  // Vocals by the lane they came from: a part of a vocal the AI worked on in
+  // one section (see aiScope.ts) is still that vocal, and sits where it does.
+  const singers: string[] = [];
   for (const lane of draft.lanes.values()) {
     // A layer keeps its own sound and follows its lead's level (see Draft.followLeads).
     if (leadOf(lane.laneId)) continue;
     const vocal = lane.kind === "vocals";
     const fx: LaneFx = { ...DEFAULT_FX, ...(vocal ? recipe.vocal : recipe.backing) };
+    if (fx.reverb > 0) fx.reverbSize = musicalDecay(fx.reverbSize, draft.bpm);
+    const singer = originOf(lane.laneId);
+    if (vocal && !singers.includes(singer)) singers.push(singer);
+    const vocalIndex = singers.indexOf(singer);
     // A second or third vocal (a harmony, a double) sits either side of the lead.
     if (vocal && vocalIndex > 0) fx.pan = vocalIndex % 2 ? 0.25 : -0.25;
-    if (vocal) vocalIndex++;
     // Nothing to duck under without a vocal.
     if (!vocal && !draft.session.vocal) fx.duck = 0;
     const base = levels.get(lane.laneId) ?? lane.volume;
@@ -1778,11 +1921,21 @@ function fixIdeas(session: Session): Idea[] {
 function soundIdeas(session: Session): Idea[] {
   const levels = balancedLevels(session);
   const hasVocal = session.lanes.some((l) => l.kind === "vocals");
-  return MIXES.filter((r) => r.id !== "balanced" && (hasVocal || (r.id !== "upfront" && r.id !== "echo"))).map((recipe) => {
+  const recipes = MIXES.filter((r) => r.id !== "balanced" && (hasVocal || (r.id !== "upfront" && r.id !== "echo")));
+  const listenAt = session.vocal ? Math.max(0, entryOf(session.vocal)) : 0;
+  const ideas = recipes.map((recipe) => {
     const draft = new Draft(session);
     applyMix(draft, levels, recipe);
-    return draft.idea({ id: `sound-${recipe.id}`, role: "engineer", icon: recipe.icon, title: recipe.title, short: recipe.short, why: recipe.why, vibes: recipe.vibes, listenAt: session.vocal ? Math.max(0, entryOf(session.vocal)) : 0 });
+    return draft.idea({ id: `sound-${recipe.id}`, role: "engineer", icon: recipe.icon, title: recipe.title, short: recipe.short, why: recipe.why, vibes: recipe.vibes, listenAt });
   });
+  // Worked out from the vocal and beat themselves: first, when there's a vocal to fit.
+  if (hasVocal && session.vocal) {
+    const recipe = fittedRecipe(session);
+    const draft = new Draft(session);
+    applyMix(draft, levels, recipe);
+    ideas.unshift(draft.idea({ id: "sound-fitted", role: "engineer", icon: recipe.icon, title: recipe.title, short: recipe.short, why: recipe.why, vibes: recipe.vibes, listenAt }));
+  }
+  return ideas;
 }
 
 // --- Vocal layers -------------------------------------------------------------------------
@@ -2423,6 +2576,8 @@ export function checkMix(session: Session, lanes: StudioLane[]): Check[] {
     if (scan) {
       const status = harmonyStatus(scan.now);
       const advice = adviseShift(scan);
+      const part = keyStretch(session, lanes);
+      const partNote = part ? ` · rubs most at ${clock(part.start)}–${clock(part.end)} (${st(part.shift)} there fixes it)` : "";
       checks.push({
         id: "key",
         icon: "music",
@@ -2430,10 +2585,10 @@ export function checkMix(session: Session, lanes: StudioLane[]): Check[] {
         status,
         text:
           status === "good"
-            ? `In tune — ${share(scan.now.inChord)} of the sung notes sit in the beat's chords (${keyLabel(vocalKey)} over ${keyLabel(beatKey)})`
+            ? `In tune — ${share(scan.now.inChord)} of the sung notes sit in the beat's chords (${keyLabel(vocalKey)} over ${keyLabel(beatKey)})${partNote}`
             : `Only ${share(scan.now.inChord)} of the sung notes sit in the beat's chords — ${status === "bad" ? "notes sound wrong together" : "some lines rub"}${
                 advice.shift ? ` (${st(advice.shift)} on the vocal gets ${share(advice.best.inChord)})` : ""
-              }`,
+              }${partNote}`,
         fix: "key",
       });
     } else {

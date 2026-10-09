@@ -2,7 +2,8 @@
 
 import { create } from "zustand";
 import { ALL_ASPECTS, type Aspect } from "./aiControl";
-import { compatible, fixesOf, leadOf, mixFix, rebaseSession, recompileIdea, timingSignature, type FixId, type HandEdit, type Idea, type Session } from "./aiIdeas";
+import { compatible, fixesOf, ideaFits, leadOf, mixFix, rebaseSession, recompileIdea, timingSignature, type FixId, type HandEdit, type Idea, type Session } from "./aiIdeas";
+import { applyScope, isWhole, originOf, useAiScope, WHOLE_SONG, type Scope } from "./aiScope";
 import { speedChange } from "./quickAdjust";
 import { interceptHistory, recordStep, useStudioHistory, withoutRecording } from "./studioHistory";
 import { asOneChange, useStudioStore, type LanePatch, type StudioLane } from "./studioStore";
@@ -75,6 +76,20 @@ const MAX_OFF = 12;
 
 export const useAiTrial = create<{ trial: Trial | null }>(() => ({ trial: null }));
 
+/**
+ * Ideas the last build left off because of the scope: they change the
+ * whole song's speed, which a section or some of the lanes can't have on
+ * their own.
+ */
+const refusedForScope = new Set<string>();
+
+/** Whether `ideaId` couldn't go on because the AI is working on just a section or some lanes. */
+export function refusedByScope(ideaId: string) {
+  return refusedForScope.has(ideaId);
+}
+
+/** Tempo changes smaller than this are the same tempo. */
+const SAME_BPM = 0.05;
 let applying = false;
 
 function currentMix(): Mix {
@@ -199,20 +214,39 @@ function applyEdits(edits: HandEdit[], off: Part[]) {
  */
 function build(session: Session, baseline: Mix, ideas: Idea[], without: Record<string, Part[]>): { result: Mix; on: Idea[] } {
   const on: Idea[] = [];
+  const { scope } = useAiScope.getState();
+  const whole = isWhole(scope);
+  refusedForScope.clear();
   asOneChange(() => {
     setMix(baseline);
     const inSync = session.timing === timingSignature(baseline.lanes, baseline.projectBpm);
     for (const idea of ordered(ideas)) {
       const off = without[idea.id] ?? [];
       if (idea.edits) {
+        // The whole song faster or slower can't be had in just a section.
+        const edits = whole ? idea.edits : idea.edits.filter((e) => !("speed" in e));
         let applied = false;
-        quietly(() => (applied = applyEdits(idea.edits!, off)));
+        const before = useStudioStore.getState().lanes;
+        quietly(() => (applied = applyEdits(edits, off)));
+        // Heard only in its own part of the song: everything else on stays as it is around it.
+        if (applied && idea.scope) setLanes(applyScope(before, useStudioStore.getState().lanes, idea.scope));
         if (applied || off.length) on.push(idea);
+        else if (edits.length < idea.edits.length) refusedForScope.add(idea.id);
         continue;
       }
-      const compiled = on.length === 0 && inSync ? idea : recompileIdea(idea, rebaseSession(session));
+      let compiled = on.length === 0 && inSync ? idea : recompileIdea(idea, rebaseSession(session));
+      if (compiled && !whole && changesTempo(compiled, baseline.projectBpm)) {
+        // Just a section, or some lanes: the beat keeps the song's speed, and the rest is fitted to it.
+        const steady = recompileIdea(idea, rebaseSession(session, { ...session.options, sync: "beat-leads" }));
+        compiled = steady && !changesTempo(steady, baseline.projectBpm) ? steady : null;
+        if (!compiled) refusedForScope.add(idea.id);
+      }
       if (!compiled) continue;
       const kept = withoutParts(compiled, off);
+      // Made for lanes that aren't here any more (the mix was cleared or replaced since) —
+      // nor may it bring back a layer or a part whose vocal or beat is gone.
+      const lanesNow = useStudioStore.getState().lanes;
+      if (!ideaFits(kept, lanesNow) || kept.lanes?.add.some((l) => !lanesNow.some((n) => n.laneId === originOf(l.laneId)))) continue;
       quietly(() => {
         if (kept.lanes) swapLanes(kept.lanes);
         // Also works the duration out again for any lanes swapped in.
@@ -220,8 +254,22 @@ function build(session: Session, baseline: Mix, ideas: Idea[], without: Record<s
       });
       on.push(idea);
     }
+    if (!whole && on.length) {
+      // Heard only where the scope says: the original everywhere else, at the song's own speed.
+      setLanes(applyScope(baseline.lanes, useStudioStore.getState().lanes, scope), baseline.projectBpm);
+    }
   });
   return { result: currentMix(), on };
+}
+
+/** Puts `lanes` in the mix as part of trying (the duration follows; `projectBpm` too, when given). */
+function setLanes(lanes: StudioLane[], projectBpm?: number) {
+  const duration = lanes.reduce((max, l) => Math.max(max, l.offsetSeconds + l.duration), 0);
+  quietly(() => useStudioStore.setState(projectBpm === undefined ? { lanes, duration } : { lanes, duration, projectBpm }));
+}
+
+function changesTempo(idea: Idea, bpm: number) {
+  return idea.projectBpm !== undefined && Math.abs(idea.projectBpm - bpm) > SAME_BPM;
 }
 
 /**
@@ -384,6 +432,28 @@ export function revertTrial(): Trial | null {
   return trial;
 }
 
+/**
+ * What the AI may change: the whole song, a section, some lanes. With
+ * ideas on, they're worked out again for it at once.
+ */
+export function setScope(session: Session | null, scope: Scope) {
+  useAiScope.setState({ scope });
+  const { trial } = useAiTrial.getState();
+  if (session && trial) settle(session, trial.baseline, trial.ideas, trial);
+}
+
+/**
+ * Forgets what was being tried without touching the mix — it's a
+ * different mix now (cleared, or another one opened), and the old
+ * original must never come back over it. The scope goes back to the
+ * whole song: a section of the old mix means nothing in the new one.
+ */
+export function forgetTrial() {
+  refusedForScope.clear();
+  useAiTrial.setState({ trial: null });
+  useAiScope.setState({ scope: WHOLE_SONG });
+}
+
 // Undo while trying means "not this": back to the original. Redo has
 // nothing to redo until it's kept.
 interceptHistory((action) => {
@@ -394,9 +464,14 @@ interceptHistory((action) => {
 
 if (typeof window !== "undefined") {
   useStudioStore.subscribe((state, prev) => {
+    if (applying || (state.lanes === prev.lanes && state.projectBpm === prev.projectBpm)) return;
+    // Cleared: a section of the old mix means nothing in the next one.
+    const cleared = !state.lanes.length && prev.lanes.length > 0;
     const { trial } = useAiTrial.getState();
-    if (!trial || applying) return;
-    if (state.lanes === prev.lanes && state.projectBpm === prev.projectBpm) return;
+    if (!trial) {
+      if (cleared) forgetTrial();
+      return;
+    }
     // The person edited the mix with the idea on: it's theirs now. (The
     // history has already recorded their edit; the idea goes in before it.)
     // A different project, or editing the original while comparing, lets it go.
@@ -405,6 +480,7 @@ if (typeof window !== "undefined") {
     if (trial.showing === "idea" && prev.lanes === trial.result.lanes && justRecorded) {
       recordStep(trial.baseline, { beforeLast: true });
     }
-    useAiTrial.setState({ trial: null });
+    if (cleared) forgetTrial();
+    else useAiTrial.setState({ trial: null });
   });
 }

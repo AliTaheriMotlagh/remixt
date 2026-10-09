@@ -27,6 +27,7 @@ import {
 import { kindColor, kindLabel } from "@/lib/stemKinds";
 import Waveform from "../Waveform";
 import AutomationLane from "./AutomationLane";
+import { useAiScope } from "@/lib/client/aiScope";
 import { openMenu, useLongPress } from "./ContextMenu";
 import { clipMenu, laneMenu, rulerMenu, selectForMenu, trackMenu, trackModeItems } from "./studioMenus";
 import * as commands from "@/lib/client/clipCommands";
@@ -353,6 +354,22 @@ function LaneHeader({ lane, focused }: { lane: StudioLane; focused: boolean }) {
       >
         <Ellipsis />
       </button>
+    </div>
+  );
+}
+
+/** The stretch the AI producer is working on, when it's working on just a section (see aiScope.ts). */
+function AiSection({ span }: { span: number }) {
+  const range = useAiScope((s) => s.scope.range);
+  const aiOpen = useStudioView((s) => s.aiOpen);
+  if (!range || !aiOpen) return null;
+  return (
+    <div
+      className="pointer-events-none absolute inset-y-0 z-10 border-x-2 border-dashed border-vocals/70 bg-vocals/[0.07]"
+      style={{ left: `${(range.start / span) * 100}%`, width: `${((range.end - range.start) / span) * 100}%` }}
+      aria-hidden
+    >
+      <span className="absolute top-0.5 left-1 rounded bg-vocals/80 px-1 text-[9px] font-bold whitespace-nowrap text-white">AI</span>
     </div>
   );
 }
@@ -1065,6 +1082,7 @@ export default function Arrangement() {
                 style={{ left: `${(loopStart / span) * 100}%`, width: `${((loopEnd - loopStart) / span) * 100}%` }}
               />
             )}
+            <AiSection span={span} />
             <Playhead span={span} scrollerRef={scrollerRef} />
             {marquee && (
               <div

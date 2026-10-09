@@ -5,6 +5,7 @@ import { melodyKeyScores, noteProfile, sungSeconds, trackMelody, type Melody } f
 import type { MusicalKey } from "./musicKey";
 import { RESULT_VERSIONS, SAME_AUDIO_SECONDS, pack, unpack } from "@/lib/stemResults";
 import { cacheGet, cachePut } from "./localCache";
+import { isConstrainedDevice } from "./device";
 import { fetchShared, shareResult } from "./sharedResults";
 
 // Client-side audio analysis for the Studio's key detection and auto-match.
@@ -65,17 +66,30 @@ export type StemAnalysis = {
 };
 
 const cache = new Map<string, Promise<StemAnalysis>>();
+/**
+ * Analyses held in memory: a few hundred kB each, and a long session tries
+ * stem after stem. The least recently used go past this; they're kept on
+ * the device too (see keptAnalysis), so one wanted again is read back, not
+ * worked out again.
+ */
+const MAX_IN_MEMORY = isConstrainedDevice() ? 12 : 32;
 
 /** `kind` "vocals" also follows the voice's pitch (see StemAnalysis.melody). */
 export function analyzeStem(stemId: string, buffer: AudioBuffer, kind?: string): Promise<StemAnalysis> {
   const cached = cache.get(stemId);
-  if (cached) return cached;
+  if (cached) {
+    // The most recently used last, so the oldest goes first.
+    cache.delete(stemId);
+    cache.set(stemId, cached);
+    return cached;
+  }
   const vocal = kind === "vocals";
   const promise = keptAnalysis(stemId, buffer.duration, vocal).then(
     (kept) => kept ?? analyzeAndKeep(stemId, buffer, vocal)
   );
   cache.set(stemId, promise);
   promise.catch(() => cache.delete(stemId));
+  while (cache.size > MAX_IN_MEMORY) cache.delete(cache.keys().next().value!);
   return promise;
 }
 
