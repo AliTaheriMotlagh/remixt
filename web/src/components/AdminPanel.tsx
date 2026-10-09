@@ -68,7 +68,20 @@ type AdminReport = {
   target_href: string | null;
 };
 
-type Tab = "reports" | "users" | "songs" | "remixes" | "challenges" | "cleanup";
+type AdminResult = {
+  stem_id: string;
+  kind: string;
+  version: number;
+  bytes: number;
+  created_at: string;
+  stem_kind: string;
+  track_title: string;
+  sender_id: string | null;
+  sender_name: string | null;
+  sender_email: string | null;
+};
+
+type Tab = "reports" | "users" | "songs" | "remixes" | "challenges" | "results" | "cleanup";
 
 function formatDate(value: string) {
   return new Date(value).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
@@ -123,6 +136,7 @@ export default function AdminPanel({ adminId }: { adminId: string }) {
     { id: "songs", label: "Songs" },
     { id: "remixes", label: "Remixes" },
     { id: "challenges", label: "Challenges" },
+    { id: "results", label: "Shared results" },
     { id: "cleanup", label: "Clean up" },
   ];
 
@@ -163,6 +177,7 @@ export default function AdminPanel({ adminId }: { adminId: string }) {
         {tab === "songs" && <SongsTab onChange={refreshOverview} />}
         {tab === "remixes" && <RemixesTab onChange={refreshOverview} />}
         {tab === "challenges" && <ChallengesTab />}
+        {tab === "results" && <ResultsTab />}
         {tab === "cleanup" && <CleanupTab onChange={refreshOverview} />}
       </div>
     </div>
@@ -669,10 +684,95 @@ function ChallengesTab() {
   );
 }
 
-function CleanupTab({ onChange }: { onChange: () => void }) {
-  const [preview, setPreview] = useState<{ failedSongs: number; stuckSongs: number; emptyRemixes: number } | null>(
-    null
+/** What browsers shared about stems (lib/stemResults.ts): delete one that's wrong, or all of a sender's. */
+function ResultsTab() {
+  const [q, setQ] = useState("");
+  const { items, reload } = useList<AdminResult>("/api/admin/results", "results", q);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function remove(body: { stemId: string; kind: string } | { userId: string }, busyKey: string, question: string) {
+    if (!confirm(question)) return;
+    setBusy(busyKey);
+    setError(
+      await send("/api/admin/results", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+    );
+    setBusy(null);
+    reload();
+  }
+
+  return (
+    <div>
+      <p className="mb-3 text-sm text-muted">
+        Beats and analysis one browser worked out from a stem and every other browser — phones above all — now uses.
+        Delete one that sounds wrong (the next computer to open the stem works it out again), or everything from
+        someone sending junk.
+      </p>
+      <Search value={q} onChange={setQ} placeholder="Search by song, sender or email…" />
+      {error && <p className="mb-2 text-sm text-danger">{error}</p>}
+      <Empty items={items} />
+      <div className="flex flex-col gap-2">
+        {items?.map((r) => {
+          const key = `${r.stem_id}:${r.kind}`;
+          return (
+            <Row key={`${key}:${r.version}`}>
+              <div className="min-w-0">
+                <p className="truncate font-medium">
+                  {r.track_title}
+                  <span className="ml-2 rounded-full bg-surface-raised px-2 py-0.5 text-[10px] font-medium text-muted">
+                    {r.stem_kind} · {r.kind} v{r.version}
+                  </span>
+                </p>
+                <p className="truncate text-xs text-muted">
+                  {r.sender_name ? `${r.sender_name} (${r.sender_email})` : "a deleted account"} · {formatDate(r.created_at)} ·{" "}
+                  {Math.max(1, Math.round(r.bytes / 1024))} KB
+                </p>
+              </div>
+              <div className="flex gap-2">
+                {r.sender_id && (
+                  <button
+                    onClick={() =>
+                      remove(
+                        { userId: r.sender_id! },
+                        `user:${r.sender_id}`,
+                        `Delete every result ${r.sender_name} has shared?`
+                      )
+                    }
+                    disabled={busy !== null}
+                    className={plainButton}
+                  >
+                    All from sender
+                  </button>
+                )}
+                <button
+                  onClick={() =>
+                    remove({ stemId: r.stem_id, kind: r.kind }, key, `Delete the shared ${r.kind} of “${r.track_title}”?`)
+                  }
+                  disabled={busy !== null}
+                  className={dangerButton}
+                >
+                  Delete
+                </button>
+              </div>
+            </Row>
+          );
+        })}
+      </div>
+    </div>
   );
+}
+
+function CleanupTab({ onChange }: { onChange: () => void }) {
+  const [preview, setPreview] = useState<{
+    failedSongs: number;
+    stuckSongs: number;
+    emptyRemixes: number;
+    outdatedResults: number;
+  } | null>(null);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
@@ -696,14 +796,14 @@ function CleanupTab({ onChange }: { onChange: () => void }) {
     setRunning(false);
     setResult(
       res?.ok
-        ? `Removed ${data.songs} song(s) and ${data.remixes} empty remix(es), and cleared leftover link downloads.`
+        ? `Removed ${data.songs} song(s), ${data.remixes} empty remix(es) and ${data.results} outdated shared result(s), and cleared leftover link downloads.`
         : (data?.error ?? "Clean-up failed")
     );
     setVersion((v) => v + 1);
     onChange();
   }
 
-  const total = preview ? preview.failedSongs + preview.stuckSongs + preview.emptyRemixes : 0;
+  const total = preview ? preview.failedSongs + preview.stuckSongs + preview.emptyRemixes + preview.outdatedResults : 0;
 
   return (
     <div className="rounded-xl border border-border bg-surface p-5">
@@ -720,6 +820,10 @@ function CleanupTab({ onChange }: { onChange: () => void }) {
         <li>
           <span className="tabular-nums text-foreground">{preview?.emptyRemixes ?? "…"}</span> remixes with no lanes
           left (every song they used was deleted)
+        </li>
+        <li>
+          <span className="tabular-nums text-foreground">{preview?.outdatedResults ?? "…"}</span> shared beats and
+          analysis made by an older version of the code
         </li>
         <li>Songs fetched from links more than an hour ago that were never used</li>
       </ul>

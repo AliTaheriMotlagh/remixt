@@ -65,7 +65,7 @@ export default function ExportSheet() {
 
   async function save(share: boolean) {
     if (!result) return;
-    const outcome = await saveFile(result.file, { share, title: result.tags.title });
+    const outcome = await saveFile(result.file, { share });
     if (outcome !== "cancelled") setSaved(outcome);
   }
 

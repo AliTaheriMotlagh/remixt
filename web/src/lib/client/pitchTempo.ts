@@ -39,6 +39,11 @@ export function setStretchEngine(engine: StretchEngine) {
 /** Set once the high-quality engine has failed in this browser: everything after uses Classic. */
 let hqBroken = false;
 
+/** The engine renders really come out of: Classic stands in once the high-quality one has failed. */
+export function renderedWith(): StretchEngine {
+  return hqBroken ? "classic" : stretchEngine();
+}
+
 export async function renderPitchTempo(
   audioCtx: BaseAudioContext,
   sourceBuffer: AudioBuffer,

@@ -91,7 +91,7 @@ export default function SocialClipButton({ title, artist, remixId }: { title: st
       type: clip.clip.blob.type,
     });
     // A clip is made to be posted: the share sheet wherever there is one, phone or not.
-    await saveFile(file, { share: true, title });
+    await saveFile(file, { share: true });
   }
 
   const range = open ? clipRange() : null;

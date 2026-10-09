@@ -11,6 +11,7 @@ import {
 } from "./audioGraph";
 import { scheduleModulation } from "./modulation";
 import { renderPitchTempo, stretchEngine } from "./pitchTempo";
+import { keepRender, keptRender, renderId } from "./renderCache";
 import { previewPlayer } from "./previewPlayer";
 import { keepScreenOn } from "./wakeLock";
 import { deviceGb, isConstrainedDevice } from "./device";
@@ -525,15 +526,21 @@ class AudioEngine {
    * RenderQueue); rejects with RenderSkipped if `ask` stops wanting it first.
    */
   private async renderClip(entry: LoadedLane, lane: StudioLane, key: string, clip: LaneClip, ask: RenderAsk) {
-    const rendered = await renderQueue.run(Math.max(0, clip.to - clip.from), { urgent: () => ask.urgent, wanted: ask.wanted }, async () => {
-      const slice = sliceBuffer(this.getContext(), entry.rawBuffer, clip.from, clip.to, clip.reverse);
-      if (!slice) return null;
-      return renderPitchTempo(this.getContext(), slice, {
-        tempo: lane.tempoRatio * (clip.stretch ?? 1),
-        pitchSemitones: lane.pitchSemitones,
-        voice: lane.kind === "vocals",
-      });
-    });
+    const voice = lane.kind === "vocals";
+    const disk = renderId(entry.stemId, `clip|${key}`, entry.rawBuffer.sampleRate, voice);
+    const rendered =
+      (await keptRender(this.getContext(), disk)) ??
+      (await renderQueue.run(Math.max(0, clip.to - clip.from), { urgent: () => ask.urgent, wanted: ask.wanted }, async () => {
+        const slice = sliceBuffer(this.getContext(), entry.rawBuffer, clip.from, clip.to, clip.reverse);
+        if (!slice) return null;
+        const out = await renderPitchTempo(this.getContext(), slice, {
+          tempo: lane.tempoRatio * (clip.stretch ?? 1),
+          pitchSemitones: lane.pitchSemitones,
+          voice,
+        });
+        if (out !== slice) keepRender(disk, out);
+        return out;
+      }));
     if (rendered) {
       entry.clipBuffers.set(key, rendered);
       used(rendered);
@@ -638,11 +645,22 @@ class AudioEngine {
     }
     const asks = [ask];
     const { renders, rawBuffer } = entry;
-    const promise = renderQueue
-      .run(
-        rawBuffer.duration,
-        { urgent: () => asks.some((a) => a.urgent), wanted: () => asks.some((a) => a.wanted()) },
-        () => renderPitchTempo(this.getContext(), rawBuffer, { tempo, pitchSemitones: pitch, voice })
+    // Rendered on an earlier visit: read from disk (renderCache.ts), no turn needed.
+    const disk = renderId(entry.stemId, key, rawBuffer.sampleRate, voice);
+    const promise = keptRender(this.getContext(), disk)
+      .then(
+        (kept) =>
+          kept ??
+          renderQueue
+            .run(
+              rawBuffer.duration,
+              { urgent: () => asks.some((a) => a.urgent), wanted: () => asks.some((a) => a.wanted()) },
+              () => renderPitchTempo(this.getContext(), rawBuffer, { tempo, pitchSemitones: pitch, voice })
+            )
+            .then((rendered) => {
+              if (rendered !== rawBuffer) keepRender(disk, rendered);
+              return rendered;
+            })
       )
       .then((rendered) => {
         if (rendered !== rawBuffer) {

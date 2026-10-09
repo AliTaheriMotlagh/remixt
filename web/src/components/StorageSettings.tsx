@@ -16,6 +16,10 @@ const KIND_TEXT: Record<CacheKind, { title: string; body: string }> = {
     title: "Song audio",
     body: "Stems you've played, so opening a song or a draft again doesn't download it again. Kept up to 30 days.",
   },
+  render: {
+    title: "Tempo and key changes",
+    body: "Stems already stretched to a new speed or key, so a draft or an idea plays at once instead of being worked out again. Kept up to 30 days.",
+  },
   analysis: {
     title: "Analysis",
     body: "The key, rhythm and melody worked out from each stem, so the Studio and AI Match don't listen again.",
@@ -23,6 +27,10 @@ const KIND_TEXT: Record<CacheKind, { title: string; body: string }> = {
   beats: {
     title: "Beats",
     body: "Where the beat model heard each beat and bar start — on a phone, beats a computer already heard.",
+  },
+  list: {
+    title: "Library list",
+    body: "The list of songs in the library, shown at once (or offline) while a fresh one loads.",
   },
 };
 

@@ -146,6 +146,14 @@ export default function Studio({ user }: { user: User | null }) {
   }, [libraryFlash]);
   const remixTitle = sourceRemix?.title ?? null;
   const aiOpen = useStudioView((s) => s.aiOpen);
+  const aiSheet = useStudioView((s) => s.aiSheet);
+
+  // Asked for from elsewhere (the AI producer's "Pick from the library").
+  const libraryAsk = useStudioView((s) => s.libraryAsk);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- following the store: the library asked for elsewhere
+    if (libraryAsk) revealLibrary();
+  }, [libraryAsk]);
 
   // With the AI producer docked on a desktop narrower than ~1600px, the
   // timeline, the library and the panel don't all fit: the library folds
@@ -460,7 +468,8 @@ export default function Studio({ user }: { user: User | null }) {
         </aside>
       </div>
 
-      {!libraryOpen && !aiOpen && (
+      {/* With the AI producer open it floats above its sheet (see .bottom-float) — hidden only when the sheet covers the mix. */}
+      {!libraryOpen && !(aiOpen && aiSheet === "full") && (
         <button
           onClick={() => setLibraryOpen(true)}
           className="bottom-float fixed right-4 z-40 flex h-12 items-center gap-2 rounded-full bg-brand px-5 text-sm font-semibold text-white shadow-lg shadow-brand/30 hover:bg-brand-strong lg:hidden"

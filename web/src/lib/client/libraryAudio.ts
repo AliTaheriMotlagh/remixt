@@ -2,6 +2,7 @@
 
 import { analyzeStem, beatPhase, refineTempo, type StemAnalysis } from "./analysis";
 import { fetchStem } from "./stemFetch";
+import { fetchStemRows, keptStemRows } from "./stemList";
 import type { MusicalKey } from "./musicKey";
 import type { StemKind } from "@/lib/stemKinds";
 
@@ -49,9 +50,12 @@ let listing: Promise<LibrarySong[]> | null = null;
 export function listLibrarySongs(fresh = false): Promise<LibrarySong[]> {
   if (listing && !fresh) return listing;
   listing = (async () => {
-    const res = await fetch("/api/stems");
-    if (!res.ok) throw new Error("Couldn't load the library");
-    const { stems } = (await res.json()) as { stems: StemRow[] };
+    // Offline (or the server's down): the list as it was last seen here.
+    const stems = await fetchStemRows<StemRow>().catch(async () => {
+      const kept = await keptStemRows<StemRow>();
+      if (!kept) throw new Error("Couldn't load the library");
+      return kept;
+    });
     const songs = new Map<string, LibrarySong>();
     for (const row of stems) {
       let song = songs.get(row.track_id);

@@ -29,6 +29,16 @@ async function signUp(name: string) {
   return { id: id as string, cookie: res.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ") };
 }
 
+/** The admin the test server is started with (scripts/test.mjs): signed up the first time, signed in after. */
+async function signInAdmin() {
+  const body = JSON.stringify({ email: "test-admin@test.local", password: "password123", artistName: "testAdmin" });
+  const init = { method: "POST", headers: { "Content-Type": "application/json" }, body };
+  let res = await fetch(`${BASE_URL}/api/auth/signup`, init);
+  if (!res.ok) res = await fetch(`${BASE_URL}/api/auth/login`, init);
+  assert.equal(res.status, 200, `admin sign-in failed: ${await res.clone().text()}`);
+  return res.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+}
+
 const url = (stemId: string, kind: string, v: number = RESULT_VERSIONS.beats) => `${BASE_URL}/api/stems/${stemId}/results/${kind}?v=${v}`;
 
 function put(stemId: string, body: Uint8Array, cookie: string, kind = "beats", v?: number) {
@@ -80,5 +90,39 @@ describe("shared results", () => {
     assert.deepEqual(await got.json(), first);
     const [row] = await sql`SELECT created_by FROM stem_results WHERE stem_id = ${stemId}`;
     assert.equal(row.created_by, maker.id);
+  });
+
+  test("an admin sees who sent each, and can delete one, or all of a sender's", async () => {
+    const admin = await signInAdmin();
+    const deleteResults = (cookie: string, body: unknown) =>
+      fetch(`${BASE_URL}/api/admin/results`, { method: "DELETE", headers: { cookie, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+    assert.equal((await fetch(`${BASE_URL}/api/admin/results`, { headers: { cookie: maker.cookie } })).status, 404);
+    assert.equal((await deleteResults(maker.cookie, { userId: maker.id })).status, 404);
+
+    const listed = await (await fetch(`${BASE_URL}/api/admin/results?q=Shared`, { headers: { cookie: admin } })).json();
+    const mine = listed.results.find((r: { stem_id: string }) => r.stem_id === stemId);
+    assert.equal(mine?.sender_id, maker.id);
+
+    assert.deepEqual(await (await deleteResults(admin, { stemId, kind: "beats" })).json(), { deleted: 1 });
+    assert.equal((await fetch(url(stemId, "beats"))).status, 404);
+
+    // Gone, it can be worked out and sent again; then everything from that sender goes.
+    assert.deepEqual(await (await put(stemId, encodeBeats(first), other.cookie)).json(), { stored: true });
+    assert.deepEqual(await (await deleteResults(admin, { userId: other.id })).json(), { deleted: 1 });
+    assert.equal((await fetch(url(stemId, "beats"))).status, 404);
+    assert.equal((await deleteResults(admin, { kind: "beats" })).status, 400);
+  });
+
+  test("a stem's audio may be kept by the browser, privately", async () => {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const dir = process.env.STORAGE_DIR;
+    if (!dir) return; // Only when the test runner says where the server keeps files.
+    await fs.mkdir(path.join(dir, "stems", trackId), { recursive: true });
+    await fs.writeFile(path.join(dir, "stems", trackId, "beat.mp3"), Buffer.alloc(1000, 1));
+    const res = await fetch(`${BASE_URL}/api/audio/stem/${stemId}`);
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("cache-control") ?? "", /^private, max-age=\d+, immutable$/);
   });
 });

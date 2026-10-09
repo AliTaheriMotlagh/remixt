@@ -87,7 +87,14 @@ const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 // Local-disk storage, whatever the environment says: no Blob or R2.
-const serverEnv = { ...process.env, DATABASE_URL: databaseUrl, STORAGE_DIR: storage, SESSION_SECRET: "test-secret" };
+// One admin account the tests can sign in as (see tests/shared-results.test.ts).
+const serverEnv = {
+  ...process.env,
+  DATABASE_URL: databaseUrl,
+  STORAGE_DIR: storage,
+  SESSION_SECRET: "test-secret",
+  ADMIN_EMAILS: "test-admin@test.local",
+};
 for (const name of Object.keys(serverEnv)) {
   if (name.endsWith("READ_WRITE_TOKEN") || name.startsWith("R2_")) serverEnv[name] = "";
 }
@@ -130,7 +137,7 @@ try {
     .map((f) => path.join("tests", f));
   const tests = spawn(process.execPath, ["--import", "./tests/support/register.mjs", "--test", "--test-concurrency=1", ...files, ...process.argv.slice(2)], {
     cwd: root,
-    env: { ...process.env, BASE_URL: baseUrl, DATABASE_URL: databaseUrl },
+    env: { ...process.env, BASE_URL: baseUrl, DATABASE_URL: databaseUrl, STORAGE_DIR: storage },
     stdio: "inherit",
   });
   code = await new Promise((resolve) => tests.on("exit", (c) => resolve(c ?? 1)));

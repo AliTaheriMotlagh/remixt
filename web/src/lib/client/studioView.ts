@@ -29,6 +29,12 @@ type ViewState = {
   setInspectorTab: (tab: InspectorTab) => void;
   aiOpen: boolean;
   setAiOpen: (open: boolean) => void;
+  /** Below desktop width, how far the AI producer's sheet is pulled up. */
+  aiSheet: "mini" | "half" | "full";
+  setAiSheet: (sheet: "mini" | "half" | "full") => void;
+  /** Bumped to bring up the stem library from anywhere (the Studio shows it: a sheet on phones). */
+  libraryAsk: number;
+  showLibrary: () => void;
   /** A question waiting for the AI co-producer (opens it on its chat, filled in, unsent). */
   aiQuestion: { id: number; text: string } | null;
   askAi: (text: string) => void;
@@ -60,6 +66,10 @@ export const useStudioView = create<ViewState>((set) => ({
   setInspectorTab: (inspectorTab) => set({ inspectorTab }),
   aiOpen: false,
   setAiOpen: (aiOpen) => set({ aiOpen }),
+  aiSheet: "half",
+  setAiSheet: (aiSheet) => set({ aiSheet }),
+  libraryAsk: 0,
+  showLibrary: () => set((s) => ({ libraryAsk: s.libraryAsk + 1 })),
   aiQuestion: null,
   askAi: (text) => set({ aiOpen: true, aiQuestion: { id: Date.now(), text } }),
   splitLaneId: null,

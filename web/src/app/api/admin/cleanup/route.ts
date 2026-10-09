@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
-import { currentAdmin, deleteTracks } from "@/lib/admin";
+import { currentAdmin, deleteStemResults, deleteTracks } from "@/lib/admin";
+import { ensureSchema } from "@/lib/schema";
+import { RESULT_VERSIONS } from "@/lib/stemResults";
 import sql from "@/lib/db";
 import { sweepOld } from "@/lib/storage";
 
@@ -9,8 +11,10 @@ export const maxDuration = 120;
 // - songs whose split failed,
 // - songs stuck uploading for over an hour (the tab was closed mid-way),
 // - remixes left with no lanes (every song they used was deleted),
-// - songs fetched from links that the browser never came back for.
+// - songs fetched from links that the browser never came back for,
+// - shared stem results made by code that's since changed (lib/stemResults.ts).
 async function findJunk() {
+  await ensureSchema();
   const tracks = await sql<{ id: string; status: string }[]>`
     SELECT id, status FROM tracks
     WHERE status = 'failed'
@@ -20,14 +24,19 @@ async function findJunk() {
     SELECT remixes.id FROM remixes
     WHERE NOT EXISTS (SELECT 1 FROM remix_lanes WHERE remix_lanes.remix_id = remixes.id)
   `;
-  return { tracks, emptyRemixes };
+  const [outdated] = await sql<{ count: number }[]>`
+    SELECT COUNT(*)::int AS count FROM stem_results
+    WHERE version < COALESCE((${JSON.stringify(RESULT_VERSIONS)}::jsonb ->> kind)::int, 2147483647)
+  `;
+  return { tracks, emptyRemixes, outdatedResults: outdated?.count ?? 0 };
 }
 
 /** A dry run: how much would go. */
 export async function GET() {
   if (!(await currentAdmin())) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  const { tracks, emptyRemixes } = await findJunk();
+  const { tracks, emptyRemixes, outdatedResults } = await findJunk();
   return NextResponse.json({
+    outdatedResults,
     failedSongs: tracks.filter((t) => t.status === "failed").length,
     stuckSongs: tracks.filter((t) => t.status === "processing").length,
     emptyRemixes: emptyRemixes.length,
@@ -45,5 +54,6 @@ export async function POST() {
     RETURNING id
   `;
   await sweepOld("imports/", 60 * 60 * 1000).catch(() => {});
-  return NextResponse.json({ songs, remixes: emptied.length });
+  const results = await deleteStemResults({ outdated: RESULT_VERSIONS });
+  return NextResponse.json({ songs, remixes: emptied.length, results });
 }

@@ -1,6 +1,8 @@
 // What this browser keeps on disk between visits, in IndexedDB: stems as
-// downloaded (so opening a song again doesn't download it again), the
-// Studio's analysis of each stem, and the beat model's beats. Everything
+// downloaded (so opening a song again doesn't download it again), stems
+// with their pitch and tempo changed (see pitchTempo.ts), the Studio's
+// analysis of each stem, the beat model's beats, and the library's list
+// (shown at once next visit, while a fresh one loads). Everything
 // in it can be made again, so it's only ever a cache: when IndexedDB isn't
 // there (private windows, some in-app browsers) or the disk is full, it
 // quietly does nothing and the work is just redone.
@@ -11,22 +13,30 @@
 
 import { isConstrainedDevice } from "./device";
 
-export type CacheKind = "stem" | "analysis" | "beats";
-export const CACHE_KINDS: CacheKind[] = ["stem", "analysis", "beats"];
+export type CacheKind = "stem" | "render" | "analysis" | "beats" | "list";
+export const CACHE_KINDS: CacheKind[] = ["stem", "render", "analysis", "beats", "list"];
 
 const DB_NAME = "remixt-cache";
 const DB_VERSION = 1;
 
 const MB = 1024 * 1024;
 /** Budgets: phones get less, and never more than a share of what the browser allows the site. */
+const BUDGETS: Record<CacheKind, { phone: number; computer: number; share: number }> = {
+  stem: { phone: 150 * MB, computer: 600 * MB, share: 0.3 },
+  render: { phone: 150 * MB, computer: 800 * MB, share: 0.3 },
+  analysis: { phone: 40 * MB, computer: 120 * MB, share: 0.05 },
+  beats: { phone: 8 * MB, computer: 8 * MB, share: 0.05 },
+  list: { phone: 20 * MB, computer: 20 * MB, share: 0.05 },
+};
+
 function budget(kind: CacheKind, quota: number | null): number {
-  const phone = isConstrainedDevice();
-  const base = kind === "stem" ? (phone ? 150 : 600) * MB : kind === "analysis" ? (phone ? 40 : 120) * MB : 8 * MB;
-  return quota ? Math.min(base, quota * (kind === "stem" ? 0.3 : 0.05)) : base;
+  const { phone, computer, share } = BUDGETS[kind];
+  const base = isConstrainedDevice() ? phone : computer;
+  return quota ? Math.min(base, quota * share) : base;
 }
 
-/** Stems are dropped after a while even with room to spare, so one taken down doesn't live on here. */
-const MAX_AGE: Partial<Record<CacheKind, number>> = { stem: 30 * 24 * 3600 * 1000 };
+/** Audio is dropped after a while even with room to spare, so a stem taken down doesn't live on here. */
+const MAX_AGE: Partial<Record<CacheKind, number>> = { stem: 30 * 24 * 3600 * 1000, render: 30 * 24 * 3600 * 1000 };
 /** A read only moves an entry to the front of the queue this often, not on every read. */
 const TOUCH_MS = 60_000;
 

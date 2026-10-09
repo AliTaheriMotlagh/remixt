@@ -78,12 +78,13 @@ export function downloadFile(blob: Blob, filename: string) {
  * Call it from a tap. `share: false` forces a plain download — except in
  * the installed iPhone app, where nothing but the share sheet can save.
  */
-export async function saveFile(file: File, { share = prefersShareSheet(), title }: { share?: boolean; title?: string } = {}): Promise<SaveOutcome> {
+export async function saveFile(file: File, { share = prefersShareSheet() }: { share?: boolean } = {}): Promise<SaveOutcome> {
   if (share && canShareFile(file)) {
     try {
-      // Only the file: with text or a URL alongside it, iOS saves those as
-      // extra files in "Save to Files".
-      await navigator.share({ files: [file], title: title ?? file.name });
+      // Only the file — no title either: with a title, text or URL
+      // alongside it, iOS (and some Android apps) save that as an extra
+      // .txt file next to the song. The file's name says what it is.
+      await navigator.share({ files: [file] });
       return "shared";
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return "cancelled";

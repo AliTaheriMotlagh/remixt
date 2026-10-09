@@ -45,3 +45,30 @@ export async function deleteTracks(trackIds: string[]): Promise<number> {
   const deleted = await sql`DELETE FROM tracks WHERE id IN ${sql(trackIds)} RETURNING id`;
   return deleted.length;
 }
+
+/**
+ * Deletes shared stem results (lib/stemResults.ts) and their files: one
+ * (a stem's result of a kind), everything a person sent (a bad actor), or
+ * every result made by code that's since changed (an older version). The
+ * next browser to open the stem works it out again and sends a new one.
+ */
+export async function deleteStemResults(
+  which: { stemId: string; kind: string } | { userId: string } | { outdated: Record<string, number> }
+): Promise<number> {
+  const rows =
+    "stemId" in which
+      ? await sql<{ storage_key: string }[]>`
+          DELETE FROM stem_results WHERE stem_id = ${which.stemId} AND kind = ${which.kind} RETURNING storage_key
+        `
+      : "userId" in which
+        ? await sql<{ storage_key: string }[]>`
+            DELETE FROM stem_results WHERE created_by = ${which.userId} RETURNING storage_key
+          `
+        : await sql<{ storage_key: string }[]>`
+            DELETE FROM stem_results
+            WHERE version < COALESCE((${JSON.stringify(which.outdated)}::jsonb ->> kind)::int, 2147483647)
+            RETURNING storage_key
+          `;
+  await Promise.all(rows.map((r) => deleteObject(r.storage_key).catch(() => {})));
+  return rows.length;
+}

@@ -871,6 +871,8 @@ export default function AiProducer() {
   }, [question]);
   /** Below desktop width it's a sheet: mini (just the controls), half (the mix stays in view) or full. */
   const [sheet, setSheet] = useState<Sheet>("half");
+  // The Studio's "+ Add stems" button stays above the sheet, except when it's pulled up full.
+  useEffect(() => useStudioView.getState().setAiSheet(sheet), [sheet]);
   const sheetRef = useRef<HTMLElement>(null);
   const drag = useRef<{ y: number; at: Sheet; moved: boolean } | null>(null);
   const swipe = useRef<{ x: number; done: boolean } | null>(null);
@@ -1527,6 +1529,12 @@ export default function AiProducer() {
                   </span>
                 </div>
               ))}
+              <button
+                onClick={() => useStudioView.getState().showLibrary()}
+                className="flex h-11 items-center justify-center gap-2 rounded-xl bg-brand px-5 text-sm font-semibold text-white hover:bg-brand-strong"
+              >
+                + Pick from the library
+              </button>
               <p className="text-xs text-muted">As soon as both are in, this panel listens to them and shows you how to make them sound good together.</p>
               {missing === "beat" && leadVocal?.bpm && (
                 <MatchFinder

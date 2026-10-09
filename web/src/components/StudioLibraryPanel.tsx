@@ -7,6 +7,7 @@ import { previewPlayer, usePreviewState } from "@/lib/client/previewPlayer";
 import { useStudioStore, type LoadableStem } from "@/lib/client/studioStore";
 import { startNewStep, undo, useStudioHistory } from "@/lib/client/studioHistory";
 import { useStudioView } from "@/lib/client/studioView";
+import { fetchStemRows, keptStemRows } from "@/lib/client/stemList";
 import { KIND_INFO, STEM_KINDS, type StemKind } from "@/lib/stemKinds";
 
 type StemWithTrack = {
@@ -24,17 +25,14 @@ type Kind = StemKind;
 type ListedStem = StemWithTrack & { peaks: number[] };
 
 // The whole list, kept for the visit: coming back to the Studio shows it
-// at once, while a fresh copy loads behind.
+// at once, while a fresh copy loads behind. On a new visit, the copy kept
+// on disk (stemList.ts) stands in until then.
 let listCache: ListedStem[] | null = null;
 
-async function fetchAll(): Promise<ListedStem[]> {
-  const res = await fetch(`/api/stems`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data: { stems: StemWithTrack[] } = await res.json();
-  // Parsed once here: a fresh array each render would make every
-  // waveform in the list redraw on every render.
-  return data.stems.map((stem) => ({ ...stem, peaks: JSON.parse(stem.peaks_json || "[]") }));
-}
+// Parsed once here: a fresh array each render would make every waveform
+// in the list redraw on every render.
+const withPeaks = (stems: StemWithTrack[]): ListedStem[] =>
+  stems.map((stem) => ({ ...stem, peaks: JSON.parse(stem.peaks_json || "[]") }));
 
 // The last stem added from this panel, and how long the undo history was
 // right after: while nothing else has been done since, taking it back out
@@ -71,8 +69,16 @@ export default function StudioLibraryPanel() {
 
   useEffect(() => {
     let cancelled = false;
-    fetchAll()
-      .then((stems) => {
+    let fresh = false;
+    if (!listCache) {
+      void keptStemRows<StemWithTrack>().then((kept) => {
+        if (kept && !cancelled && !fresh) setAll((current) => current ?? withPeaks(kept));
+      });
+    }
+    fetchStemRows<StemWithTrack>()
+      .then((rows) => {
+        fresh = true;
+        const stems = withPeaks(rows);
         listCache = stems;
         if (!cancelled) setAll(stems);
       })
