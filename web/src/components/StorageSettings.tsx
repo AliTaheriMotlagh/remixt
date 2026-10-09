@@ -68,6 +68,34 @@ async function modelUsage(): Promise<ModelUsage> {
   return usage;
 }
 
+/**
+ * How to take back "keep it when space runs low" in this browser. There's
+ * no call a page can make to undo it (the storage API can only ask for it),
+ * so it's the browser's own site settings — for the browser in use.
+ */
+function unpersistSteps(): { browser: string; steps: string[] } {
+  const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
+  const host = typeof location === "undefined" ? "this site" : location.host;
+  if (/Firefox\//.test(ua)) {
+    return {
+      browser: "Firefox",
+      steps: [`Click the lock icon in the address bar on ${host}.`, "Choose “Clear cookies and site data…” — or under Permissions, remove “Store data in persistent storage”."],
+    };
+  }
+  if (/Safari\//.test(ua) && !/Chrome\/|Chromium\/|Edg\//.test(ua)) {
+    return {
+      browser: "Safari",
+      steps: /iPhone|iPad/.test(ua)
+        ? ["Open the Settings app → Apps → Safari → Advanced → Website Data.", `Find ${host} and swipe to delete it.`]
+        : ["Safari → Settings → Privacy → Manage Website Data…", `Find ${host} and click Remove.`],
+    };
+  }
+  return {
+    browser: /Edg\//.test(ua) ? "Edge" : "Chrome",
+    steps: [`Click the icon left of the address on ${host} → Site settings.`, "Click “Delete data” (or “Reset permissions”). The site's storage goes back to normal: the browser may clear it again when space runs low."],
+  };
+}
+
 function formatBytes(bytes: number | null) {
   if (bytes === null) return "size unknown";
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -82,6 +110,7 @@ export default function StorageSettings() {
   const [persisted, setPersisted] = useState<boolean | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [showUnpersist, setShowUnpersist] = useState(false);
 
   const refresh = useCallback(async () => {
     const [u, m] = await Promise.all([cacheUsage(), modelUsage()]);
@@ -173,7 +202,35 @@ export default function StorageSettings() {
               Ask the browser not to clear it when space runs low
             </button>
           )}
-          {persisted && <p className="mt-3 text-xs text-success">Your browser keeps this even when space runs low.</p>}
+          {persisted && (
+            <div className="mt-3 text-xs">
+              <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="text-success">Your browser keeps this even when space runs low.</span>
+                <button onClick={() => setShowUnpersist((v) => !v)} aria-expanded={showUnpersist} className="font-medium text-brand-strong hover:underline">
+                  {showUnpersist ? "Hide" : "Turn this off"}
+                </button>
+              </p>
+              {showUnpersist && (
+                <div className="mt-2 rounded-lg border border-border bg-background p-3 text-muted">
+                  <p>
+                    Browsers don&apos;t let a site take this back itself — it&apos;s undone in {unpersistSteps().browser}&apos;s own settings:
+                  </p>
+                  <ol className="mt-1.5 list-decimal space-y-0.5 pl-4 text-foreground">
+                    {unpersistSteps().steps.map((step) => (
+                      <li key={step}>{step}</li>
+                    ))}
+                  </ol>
+                  <p className="mt-1.5">
+                    That also clears what&apos;s saved here — including an unsaved Studio mix and its undo history, so save it first. Your published
+                    remixes and account are on the server and aren&apos;t affected. To just free space, use the Clear buttons below instead.
+                  </p>
+                  <button onClick={() => void refresh()} className="mt-2 font-medium text-brand-strong hover:underline">
+                    I&apos;ve done it — check again
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 

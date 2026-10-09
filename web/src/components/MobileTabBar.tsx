@@ -41,7 +41,8 @@ export default function MobileTabBar({ user, isAdmin = false }: { user: User | n
   return (
     <>
       {moreOpen && (
-        <div className="fixed inset-0 z-[55] md:hidden" onClick={() => setMoreOpen(false)}>
+        // Above the Studio's sheets and panels (the AI producer, the library), so it never opens behind them.
+        <div className="fixed inset-0 z-[76] md:hidden" onClick={() => setMoreOpen(false)}>
           <div className="absolute inset-0 bg-black/55" />
           <div
             id="more-sheet"

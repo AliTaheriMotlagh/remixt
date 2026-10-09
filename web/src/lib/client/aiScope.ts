@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { clipEnd, clipStart, clipsOf, cutLaneAt, normaliseLane, selectionBounds, type ClipRef } from "./clipEdit";
+import { clipEnd, clipStart, clipsOf, cutLaneAt, normaliseLane, selectionBounds, withEffectiveDuration, type ClipRef } from "./clipEdit";
 import { beatLength, laneName, type Marker, type StudioLane } from "./studioStore";
 
 // Where the AI producer may change things: the whole song or just a
@@ -24,8 +24,12 @@ export type Scope = {
 
 export const WHOLE_SONG: Scope = { range: null, lanes: null };
 
-/** What the AI producer works on now (see aiTrial.setScope, which also works what's on out again). */
-export const useAiScope = create<{ scope: Scope }>(() => ({ scope: WHOLE_SONG }));
+/**
+ * What the AI producer works on now (see aiTrial.setScope, which also
+ * works what's on out again) — and `preview`, a section being dragged out
+ * that isn't picked yet, shown on the timeline as it moves.
+ */
+export const useAiScope = create<{ scope: Scope; preview: ScopeRange | null }>(() => ({ scope: WHOLE_SONG, preview: null }));
 
 /** Shortest section worth working on, in seconds. */
 export const MIN_SECTION = 0.5;
@@ -142,6 +146,23 @@ export function applyScope(baseline: StudioLane[], result: StudioLane[], scope: 
     if (inLanes(scope, r.laneId)) putIdea(r, undefined);
   }
   return out;
+}
+
+/**
+ * Every lane played `k` times as fast, all together — the whole mix sped
+ * up or slowed down as one, everything staying where it is against
+ * everything else. An idea that settled the vocal and beat on a new tempo
+ * is put back on the song's own this way before it's heard in a section,
+ * so the section and the song around it run at one speed.
+ */
+export function retime(lanes: StudioLane[], k: number): StudioLane[] {
+  if (!(k > 0) || Math.abs(k - 1) < 1e-6) return lanes;
+  return lanes.map((lane) => {
+    const automation = Object.fromEntries(
+      Object.entries(lane.automation).map(([param, points]) => [param, points?.map((p) => ({ ...p, t: p.t / k }))])
+    );
+    return withEffectiveDuration({ ...lane, tempoRatio: lane.tempoRatio * k, offsetSeconds: lane.offsetSeconds / k, automation });
+  });
 }
 
 /** "1:05" */

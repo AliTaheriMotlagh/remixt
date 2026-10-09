@@ -15,7 +15,11 @@ export default function NavBar({ user, isAdmin = false }: { user: User | null; i
   if (pathname?.startsWith("/embed/")) return null;
 
   return (
-    <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md">
+    // The blur makes the header a stacking context of its own, so its menus
+    // can't rise above it by themselves: while one is open (its button
+    // expanded) the whole header comes above the Studio's docked panels and
+    // sheets (the AI producer, the library), or the menu would open behind them.
+    <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md has-[[aria-expanded=true]]:z-[75]">
       <div className="mx-auto flex h-[var(--header-h)] max-w-7xl items-center justify-between gap-3 px-4 sm:px-6">
         <div className="flex min-w-0 items-center gap-4 lg:gap-8">
           <Link href="/" className="flex shrink-0 items-center gap-2" aria-label="Remixt home">

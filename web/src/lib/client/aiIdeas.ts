@@ -697,6 +697,71 @@ export function keyStretch(session: Session, lanes: StudioLane[]): (HarmonyStret
   return { ...stretch, start, end, laneId: vocal.laneId };
 }
 
+/** A part of the song worth working on by itself, found from what was heard. */
+export type SectionPick = {
+  id: string;
+  /** What it is, in a word or two ("The drop", "Chorus"). */
+  name: string;
+  kind: "part" | "drop" | "vocal" | "intro" | "ending" | "tune";
+  start: number;
+  end: number;
+};
+
+/**
+ * Parts of the song to point the AI at, found rather than drawn: the parts
+ * the vocal's clips are labelled with (an AI arrangement names its
+ * choruses and verses), the beat's drop, where the vocal comes in, the
+ * intro before it, the ending, and the stretch where the vocal rubs. In
+ * timeline seconds, at most `duration`.
+ */
+export function suggestedSections(session: Session, lanes: StudioLane[], duration: number): SectionPick[] {
+  const bar = beatLength(session.projectBpm) * 4;
+  const picks: SectionPick[] = [];
+  const add = (id: string, name: string, kind: SectionPick["kind"], start: number, end: number) => {
+    const s = Math.max(0, start);
+    const e = Math.min(duration, end);
+    if (e - s < bar * 0.9 || picks.some((p) => Math.abs(p.start - s) < 0.5 && Math.abs(p.end - e) < 0.5)) return;
+    picks.push({ id, name, kind, start: s, end: e });
+  };
+  const vocal = session.vocal ? lanes.find((l) => l.laneId === session.vocal!.laneId) : undefined;
+
+  // The parts an arrangement labelled, in the order they play; a part that comes back is numbered.
+  if (vocal?.clips?.length) {
+    const runs: { name: string; start: number; end: number }[] = [];
+    for (const clip of [...vocal.clips].sort((a, b) => a.at - b.at)) {
+      const name = clip.label?.trim();
+      if (!name || clip.muted) continue;
+      const start = clipStart(vocal, clip);
+      const end = clipEnd(vocal, clip);
+      const last = runs[runs.length - 1];
+      if (last && last.name === name && start - last.end < bar * 1.5) last.end = Math.max(last.end, end);
+      else runs.push({ name, start, end });
+    }
+    const seen = new Map<string, number>();
+    for (const run of runs.slice(0, 12)) {
+      const n = (seen.get(run.name) ?? 0) + 1;
+      seen.set(run.name, n);
+      add(`part:${run.name}:${n}`, n > 1 && !/\d/.test(run.name) ? `${run.name} ${n}` : run.name, "part", run.start, run.end);
+    }
+  }
+
+  const { pair, drop } = session;
+  const beat = pair && (lanes.find((l) => l.laneId === pair.beatLaneId) ?? (session.beat && lanes.find((l) => l.laneId === session.beat!.laneId)));
+  if (pair && drop && beat) {
+    const at = beat.offsetSeconds + pair.structure.grid.time(pair.structure.downbeat + 4 * drop.bar) / beat.tempoRatio;
+    add("drop", drop.kind === "drop" ? "The drop" : "Biggest part", "drop", at, at + 8 * bar);
+  }
+  if (vocal) {
+    const entry = entryOf(vocal);
+    if (entry >= 2 * bar) add("intro", "Intro", "intro", 0, entry);
+    add("vocal-in", "Vocal comes in", "vocal", entry, entry + 8 * bar);
+  }
+  const tune = keyStretch(session, lanes);
+  if (tune) add("tune", "Out of tune", "tune", tune.start, tune.end);
+  if (duration > 16 * bar) add("ending", "Ending", "ending", Math.floor((duration - 8 * bar) / bar) * bar, duration);
+  return picks;
+}
+
 /**
  * Re-keys the vocal by the stretch's shift — meant to be heard only in
  * that stretch (tried with the AI working on just that section, see

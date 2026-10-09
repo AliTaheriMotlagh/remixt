@@ -360,7 +360,8 @@ function LaneHeader({ lane, focused }: { lane: StudioLane; focused: boolean }) {
 
 /** The stretch the AI producer is working on, when it's working on just a section (see aiScope.ts). */
 function AiSection({ span }: { span: number }) {
-  const range = useAiScope((s) => s.scope.range);
+  // A section being dragged out in the AI producer shows here as it moves.
+  const range = useAiScope((s) => s.preview ?? s.scope.range);
   const aiOpen = useStudioView((s) => s.aiOpen);
   if (!range || !aiOpen) return null;
   return (

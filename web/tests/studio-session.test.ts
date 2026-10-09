@@ -7,8 +7,8 @@
 
 import assert from "node:assert/strict";
 import { beforeEach, describe, test } from "node:test";
-import { mixSignature, musicalDecay, studioIdeas, timingSignature, type Idea, type Session } from "../src/lib/client/aiIdeas.ts";
-import { applyScope, lanePart, sectionChoices, useAiScope, WHOLE_SONG } from "../src/lib/client/aiScope.ts";
+import { mixSignature, musicalDecay, studioIdeas, suggestedSections, timingSignature, type Idea, type Session } from "../src/lib/client/aiIdeas.ts";
+import { applyScope, lanePart, retime, sectionChoices, useAiScope, WHOLE_SONG } from "../src/lib/client/aiScope.ts";
 import { forgetTrial, keepTrial, refusedByScope, revertTrial, setScope, tryIdea, useAiTrial } from "../src/lib/client/aiTrial.ts";
 import type { StemAnalysis } from "../src/lib/client/analysis.ts";
 import { clipEnd, clipStart, clipsOf, normaliseLane } from "../src/lib/client/clipEdit.ts";
@@ -186,6 +186,56 @@ describe("the AI on just a section, or just some lanes", () => {
     assert.deepEqual(outside.fx, punched, "the sound idea is still on outside the part");
     assert.deepEqual(inside.fx, punched, "…and inside it");
     assert.deepEqual(useAiScope.getState().scope, WHOLE_SONG, "the AI still works on the whole song");
+  });
+
+  test("an idea that meets the vocal and beat on a new tempo still goes on a section — at the song's own speed", () => {
+    start([beat, vocal]);
+    const s = session([beat, vocal]);
+    // Like Make it sound good: both lanes 5% faster (126 BPM), the vocal louder.
+    const met: Idea = {
+      id: "met", role: "engineer", kind: "auto", icon: "sparkles", title: "Make it sound good", short: "", why: "", lines: [],
+      patches: { beat: { tempoRatio: 1.05 }, vocal: { tempoRatio: 1.05, volume: 1.3 } }, projectBpm: 126,
+      aspects: ["tempo", "levels"], vibes: [], stems: { beat: "stem-beat", vocal: "stem-vocal" },
+    };
+    setScope(s, { range: { start: 10, end: 20, label: "S" }, lanes: null });
+    assert.ok(tryIdea(s, met), "not refused");
+    const { lanes, projectBpm } = useStudioStore.getState();
+    assert.equal(projectBpm, BPM, "the song keeps its tempo");
+    assert.deepEqual(lanes.find((l) => l.laneId === "beat"), beat, "played back at the song's speed, the beat is as it was");
+    const inside = lanes.find((l) => l.laneId.startsWith("vocal~"))!;
+    assert.ok(Math.abs(inside.tempoRatio - 1) < 1e-9);
+    assert.equal(inside.volume, 1.3);
+    assert.deepEqual(spans(inside), [[10, 20]]);
+  });
+
+  test("the whole mix sped up together stays lined up", () => {
+    const moved = retime([lane("a", "beat", { offsetSeconds: 10, automation: { volume: [{ t: 20, v: 1 }] } })], 2)[0];
+    assert.equal(moved.tempoRatio, 2);
+    assert.equal(moved.offsetSeconds, 5);
+    assert.equal(moved.automation.volume![0].t, 10);
+    assert.equal(moved.duration, 30);
+  });
+
+  test("parts to pick, found from the song: labelled parts, the vocal's entry, the intro and the ending", () => {
+    const arranged = lane("vocal", "vocals", {
+      offsetSeconds: 8,
+      clips: [
+        { from: 0, to: 4, at: 0, label: "Verse" },
+        { from: 4, to: 8, at: 4, label: "Verse" },
+        { from: 8, to: 16, at: 8, label: "Chorus" },
+        { from: 30, to: 38, at: 24, label: "Chorus" },
+      ],
+    });
+    const picks = suggestedSections(session([beat, arranged]), [beat, arranged], 60);
+    const found = picks.map((p) => [p.name, p.start, p.end]);
+    assert.deepEqual(found.slice(0, 3), [
+      ["Verse", 8, 16],
+      ["Chorus", 16, 24],
+      ["Chorus 2", 32, 40],
+    ]);
+    assert.ok(found.some(([name, start, end]) => name === "Intro" && start === 0 && end === 8));
+    assert.ok(found.some(([name]) => name === "Vocal comes in"));
+    assert.ok(found.some(([name, , end]) => name === "Ending" && end === 60));
   });
 
   test("speeding up the whole song can't go on just a section — and says why", () => {

@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import { ALL_ASPECTS, type Aspect } from "./aiControl";
 import { compatible, fixesOf, ideaFits, leadOf, mixFix, rebaseSession, recompileIdea, timingSignature, type FixId, type HandEdit, type Idea, type Session } from "./aiIdeas";
-import { applyScope, isWhole, originOf, useAiScope, WHOLE_SONG, type Scope } from "./aiScope";
+import { applyScope, isWhole, originOf, retime, useAiScope, WHOLE_SONG, type Scope } from "./aiScope";
 import { speedChange } from "./quickAdjust";
 import { interceptHistory, recordStep, useStudioHistory, withoutRecording } from "./studioHistory";
 import { asOneChange, useStudioStore, type LanePatch, type StudioLane } from "./studioStore";
@@ -77,8 +77,8 @@ const MAX_OFF = 12;
 export const useAiTrial = create<{ trial: Trial | null }>(() => ({ trial: null }));
 
 /**
- * Ideas the last build left off because of the scope: they change the
- * whole song's speed, which a section or some of the lanes can't have on
+ * Ideas the last build left off because of the scope: a hands-on change
+ * of the whole song's speed, which a section or some lanes can't have on
  * their own.
  */
 const refusedForScope = new Set<string>();
@@ -234,13 +234,7 @@ function build(session: Session, baseline: Mix, ideas: Idea[], without: Record<s
         else if (edits.length < idea.edits.length) refusedForScope.add(idea.id);
         continue;
       }
-      let compiled = on.length === 0 && inSync ? idea : recompileIdea(idea, rebaseSession(session));
-      if (compiled && !whole && changesTempo(compiled, baseline.projectBpm)) {
-        // Just a section, or some lanes: the beat keeps the song's speed, and the rest is fitted to it.
-        const steady = recompileIdea(idea, rebaseSession(session, { ...session.options, sync: "beat-leads" }));
-        compiled = steady && !changesTempo(steady, baseline.projectBpm) ? steady : null;
-        if (!compiled) refusedForScope.add(idea.id);
-      }
+      const compiled = on.length === 0 && inSync ? idea : recompileIdea(idea, rebaseSession(session));
       if (!compiled) continue;
       const kept = withoutParts(compiled, off);
       // Made for lanes that aren't here any more (the mix was cleared or replaced since) —
@@ -255,8 +249,12 @@ function build(session: Session, baseline: Mix, ideas: Idea[], without: Record<s
       on.push(idea);
     }
     if (!whole && on.length) {
-      // Heard only where the scope says: the original everywhere else, at the song's own speed.
-      setLanes(applyScope(baseline.lanes, useStudioStore.getState().lanes, scope), baseline.projectBpm);
+      // Ideas that met the vocal and beat on a new tempo are played back at
+      // the song's own, everything together (so it all still lines up), then
+      // heard only where the scope says: the original everywhere else.
+      const now = useStudioStore.getState();
+      const lanes = Math.abs(now.projectBpm - baseline.projectBpm) > SAME_BPM ? retime(now.lanes, baseline.projectBpm / now.projectBpm) : now.lanes;
+      setLanes(applyScope(baseline.lanes, lanes, scope), baseline.projectBpm);
     }
   });
   return { result: currentMix(), on };
@@ -268,9 +266,6 @@ function setLanes(lanes: StudioLane[], projectBpm?: number) {
   quietly(() => useStudioStore.setState(projectBpm === undefined ? { lanes, duration } : { lanes, duration, projectBpm }));
 }
 
-function changesTempo(idea: Idea, bpm: number) {
-  return idea.projectBpm !== undefined && Math.abs(idea.projectBpm - bpm) > SAME_BPM;
-}
 
 /**
  * Puts what's wanted on and records it as the trial. Ideas that were
@@ -437,7 +432,7 @@ export function revertTrial(): Trial | null {
  * ideas on, they're worked out again for it at once.
  */
 export function setScope(session: Session | null, scope: Scope) {
-  useAiScope.setState({ scope });
+  useAiScope.setState({ scope, preview: null });
   const { trial } = useAiTrial.getState();
   if (session && trial) settle(session, trial.baseline, trial.ideas, trial);
 }
@@ -451,7 +446,7 @@ export function setScope(session: Session | null, scope: Scope) {
 export function forgetTrial() {
   refusedForScope.clear();
   useAiTrial.setState({ trial: null });
-  useAiScope.setState({ scope: WHOLE_SONG });
+  useAiScope.setState({ scope: WHOLE_SONG, preview: null });
 }
 
 // Undo while trying means "not this": back to the original. Redo has

@@ -61,6 +61,7 @@ import {
   reworkIdeas,
   stretchKeyIdea,
   studioIdeas,
+  suggestedSections,
   syncEverythingIdea,
   timingSignature,
   type FixGroup,
@@ -931,6 +932,9 @@ export default function AiProducer() {
   /** Where the vocal sounds most out of tune, if one stretch stands out — measured on the mix every try starts from. */
   const baseLanes = trial?.baseline.lanes ?? lanes;
   const outOfTune = useMemo(() => (session ? keyStretch(session, baseLanes) : null), [session, baseLanes]);
+  const songLength = useStudioStore((s) => s.duration);
+  /** Parts of the song found from what was heard, to point the AI at in one tap. */
+  const sections = useMemo(() => (session ? suggestedSections(session, baseLanes, songLength) : []), [session, baseLanes, songLength]);
 
   /** Listens to the lanes and works out the ideas. */
   async function analyse({ reapply = false } = {}) {
@@ -1095,7 +1099,7 @@ export default function AiProducer() {
     if (!tryIdea(session, idea, { add: true })) {
       setError(
         refusedByScope(idea.id)
-          ? `“${idea.title}” changes the whole song's speed, so it can only go on the whole song — switch “AI works on” to Whole song.`
+          ? `“${idea.title}” makes the whole song faster or slower — that only works on the whole song.`
           : `“${idea.title}” doesn't fit the mix as it is now — it's being worked out again.`
       );
       return;
@@ -1490,14 +1494,21 @@ export default function AiProducer() {
   return (
     <>
       {/* Only the full sheet covers the mix; at half or mini the lanes stay playable behind it. */}
-      {sheet === "full" && <div className="fixed inset-0 z-[55] bg-black/40 lg:hidden" onClick={() => setSheet("half")} />}
+      {/* Never over the header or the tab bar: their menus stay in reach with the panel open. */}
+      {sheet === "full" && <div className="fixed inset-x-0 top-[var(--header-h)] bottom-[var(--bottom-chrome)] z-[55] bg-black/40 lg:hidden" onClick={() => setSheet("half")} />}
       <aside
         ref={sheetRef}
         aria-label="AI producer"
         data-sheet={sheet}
-        className={`touch-targets fixed z-[56] flex flex-col border-border bg-background shadow-2xl transition-[height] duration-200 max-lg:inset-x-0 max-lg:bottom-0 max-lg:mx-auto max-lg:max-w-2xl max-lg:rounded-t-2xl max-lg:border max-lg:border-b-0 lg:top-[var(--header-h)] lg:right-0 lg:bottom-0 lg:w-[23rem] lg:border-l xl:w-[27rem] ${
-          trial ? "" : "max-lg:pb-[env(safe-area-inset-bottom)]"
-        } ${sheet === "full" ? "max-lg:h-[92dvh]" : sheet === "half" ? "max-lg:h-[58dvh] landscape:max-lg:h-[85dvh]" : "max-lg:h-auto"}`}
+        className={`touch-targets fixed z-[56] flex flex-col border-border bg-background shadow-2xl transition-[height] duration-200 max-lg:inset-x-0 max-lg:bottom-[var(--bottom-chrome)] max-lg:mx-auto max-lg:max-w-2xl max-lg:rounded-t-2xl max-lg:border max-lg:border-b-0 lg:top-[var(--header-h)] lg:right-0 lg:bottom-0 lg:w-[23rem] lg:border-l xl:w-[27rem] ${
+          trial ? "" : "max-lg:pb-[max(0px,calc(env(safe-area-inset-bottom)-var(--bottom-chrome)))]"
+        } ${
+          sheet === "full"
+            ? "max-lg:h-[calc(100dvh-var(--header-h)-var(--bottom-chrome)-0.5rem)]"
+            : sheet === "half"
+              ? "max-lg:h-[min(58dvh,calc(100dvh-var(--header-h)-var(--bottom-chrome)-0.5rem))] landscape:max-lg:h-[calc(100dvh-var(--header-h)-var(--bottom-chrome)-0.5rem)]"
+              : "max-lg:h-auto"
+        }`}
         style={{ animation: "sheet-in 0.2s ease-out" }}
       >
         <button
@@ -1590,7 +1601,7 @@ export default function AiProducer() {
           )}
           {ready && tab !== "ask" && (
             <div className="mb-3">
-              <AiScopeBar lanes={startLanes()} onChange={changeScope} disabled={working !== null} />
+              <AiScopeBar lanes={baseLanes} suggestions={sections} onChange={changeScope} disabled={working !== null} />
             </div>
           )}
           {(lanes.length === 0 || missing) && tab !== "ask" ? (
