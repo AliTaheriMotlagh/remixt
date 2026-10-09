@@ -2,7 +2,7 @@
 
 import { clipEnd, clipsOf, normaliseLane } from "./clipEdit";
 import { adviseShift, sourceAt, timelinesOf } from "./harmony";
-import { harmonyOf, ideaFits, keysNow, type Idea, type Session } from "./aiIdeas";
+import { harmonyOf, ideaFits, keysNow, playedLoudness, recordingOf, type Idea, type Session } from "./aiIdeas";
 import { keyFit } from "./musicKey";
 import { beatLength, type StudioLane } from "./studioStore";
 import { isBacking } from "@/lib/stemKinds";
@@ -192,9 +192,10 @@ export function scoreMix(session: Session, lanes: StudioLane[]): MixScore {
   // Balance: the vocal a touch over the beat.
   if (vocal && beat) {
     const vl = session.analyses.get(vocal.laneId)?.loudness ?? 0;
-    const bl = session.analyses.get(beat.laneId)?.loudness ?? 0;
+    // The beat as it plays: every line of its recording together.
+    const bl = playedLoudness(session, recordingOf(lanes, beat));
     if (vl > 0 && bl > 0) {
-      const ratio = (vl * vocal.volume) / (bl * beat.volume) / 1.12;
+      const ratio = (vl * vocal.volume) / bl / 1.12;
       const off = Math.abs(Math.log(ratio));
       parts.push({
         id: "balance",

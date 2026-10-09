@@ -12,13 +12,20 @@ import BarGrid from "./BarGrid";
 import { demoLabSong, libraryLabSong, type LabSong } from "./labSongs";
 import { useLibraryTrack, useSongSummaries, type LibraryState } from "./libraryTracks";
 import MatchExtras from "./MatchExtras";
+import MatchSteps, { type Steps } from "./MatchSteps";
 import { PRESET_PAIRS } from "./recipes";
 import { SongBadges } from "./SongPicker";
 
+/** The pair as heard with some of the matching steps on: tempo, key — both ("11") or neither ("00", raw). */
+type Variant = { layers: LabLayer[]; beatLength: number };
+type VariantId = "00" | "10" | "01" | "11";
+const variantOf = (steps: Steps): VariantId => `${steps.tempo ? 1 : 0}${steps.key ? 1 : 0}` as VariantId;
+
 type Prepared = {
   key: string;
-  raw: { layers: LabLayer[]; beatLength: number } | null;
-  matched: { layers: LabLayer[]; beatLength: number } | null;
+  /** Both excerpts as they are, cut on their bar lines — what every variant is rendered from. */
+  sources: { vocal: AudioBuffer; beat: AudioBuffer } | null;
+  variants: Partial<Record<VariantId, Variant>>;
   error?: string;
 };
 
@@ -57,7 +64,40 @@ function useSide(id: string, role: "vocal" | "beat", library: LibraryState): Sid
   };
 }
 
-/** Slices both excerpts on their bar lines and renders the matched pair with the Studio's pitch/tempo engine. */
+/**
+ * The pair with some of the matching steps on, rendered with the Studio's
+ * own pitch/tempo engine: the tempo step stretches both to the speed they
+ * meet at (and loops them on the same bars); the key step shifts the vocal.
+ * Neither: the excerpts as they are, each looping at its own length.
+ */
+async function renderVariant(sources: NonNullable<Prepared["sources"]>, a: PairAnalysis, id: VariantId): Promise<Variant> {
+  const tempo = id[0] === "1";
+  const key = id[1] === "1" && a.semitones !== 0;
+  const scratch = new OfflineAudioContext(2, 1, 44100);
+  const [vocal, beat] = await Promise.all([
+    tempo || key ? renderPitchTempo(scratch, sources.vocal, { tempo: tempo ? a.vocalRatio : 1, pitchSemitones: key ? a.semitones : 0 }) : Promise.resolve(sources.vocal),
+    tempo ? renderPitchTempo(scratch, sources.beat, { tempo: a.beatRatio, pitchSemitones: 0 }) : Promise.resolve(sources.beat),
+  ]);
+  if (!tempo) {
+    return {
+      layers: [
+        { id: "vocal", buffer: vocal, gain: 1, loop: true, loopEnd: vocal.duration },
+        { id: "beat", buffer: beat, gain: 0.85, loop: true, loopEnd: beat.duration },
+      ],
+      beatLength: beat.duration,
+    };
+  }
+  const loop = Math.min((a.loopBars * 240) / a.targetBpm, vocal.duration, beat.duration);
+  return {
+    layers: [
+      { id: "vocal", buffer: vocal, gain: 1, loop: true, loopEnd: loop },
+      { id: "beat", buffer: beat, gain: 0.85, loop: true, loopEnd: loop },
+    ],
+    beatLength: loop,
+  };
+}
+
+/** Slices both excerpts on their bar lines and renders the raw and matched pair (the other variants follow when asked for). */
 async function prepare(vocal: ReadySide, beat: ReadySide, a: PairAnalysis, key: string): Promise<Prepared> {
   try {
     const [vs, bs] = await Promise.all([vocal.audio(), beat.audio()]);
@@ -66,34 +106,14 @@ async function prepare(vocal: ReadySide, beat: ReadySide, a: PairAnalysis, key: 
     const startV = vocal.song.excerptStart;
     const startB = beat.song.excerptStart;
     // Only the excerpt is rendered: seconds of audio, not the whole song.
-    const vocalRaw = sliceBuffer(vs, startV, startV + a.vocalSourceBars * barV);
-    const beatRaw = sliceBuffer(bs, startB, startB + a.beatSourceBars * barB);
-    // Only the real thing: the same SoundTouch pitch/tempo renderer the Studio uses.
-    const scratch = new OfflineAudioContext(2, 1, 44100);
-    const [vocalM, beatM] = await Promise.all([
-      renderPitchTempo(scratch, vocalRaw, { tempo: a.vocalRatio, pitchSemitones: a.semitones }),
-      renderPitchTempo(scratch, beatRaw, { tempo: a.beatRatio, pitchSemitones: 0 }),
-    ]);
-    const loop = Math.min((a.loopBars * 240) / a.targetBpm, vocalM.duration, beatM.duration);
-    return {
-      key,
-      raw: {
-        layers: [
-          { id: "vocal", buffer: vocalRaw, gain: 1, loop: true, loopEnd: vocalRaw.duration },
-          { id: "beat", buffer: beatRaw, gain: 0.85, loop: true, loopEnd: beatRaw.duration },
-        ],
-        beatLength: beatRaw.duration,
-      },
-      matched: {
-        layers: [
-          { id: "vocal", buffer: vocalM, gain: 1, loop: true, loopEnd: loop },
-          { id: "beat", buffer: beatM, gain: 0.85, loop: true, loopEnd: loop },
-        ],
-        beatLength: loop,
-      },
+    const sources = {
+      vocal: sliceBuffer(vs, startV, startV + a.vocalSourceBars * barV),
+      beat: sliceBuffer(bs, startB, startB + a.beatSourceBars * barB),
     };
+    const [raw, matched] = await Promise.all([renderVariant(sources, a, "00"), renderVariant(sources, a, "11")]);
+    return { key, sources, variants: { "00": raw, "11": matched } };
   } catch (e) {
-    return { key, raw: null, matched: null, error: e instanceof Error ? e.message : "Couldn't prepare the audio" };
+    return { key, sources: null, variants: {}, error: e instanceof Error ? e.message : "Couldn't prepare the audio" };
   }
 }
 
@@ -191,7 +211,9 @@ export default function MatchStep({
   const key = vocal && beat ? `${settingsKey(settings)}|${vocal.song.bpm}@${vocal.song.excerptStart}|${beat.song.bpm}@${beat.song.excerptStart}` : null;
 
   const [prepared, setPrepared] = useState<Prepared | null>(null);
-  const [view, setView] = useState<"raw" | "matched">("matched");
+  /** Which matching steps are on — both by default (matched); none is the raw pair. */
+  const [steps, setSteps] = useState<Steps>({ tempo: true, key: true });
+  const view = variantOf(steps);
   const [playing, setPlaying] = useState(false);
   const playback = useRef<LabPlayback | null>(null);
 
@@ -207,7 +229,19 @@ export default function MatchStep({
 
   const ready = prepared && prepared.key === key && !prepared.error ? prepared : null;
   const failed = prepared && prepared.key === key ? prepared.error : undefined;
-  const current = ready ? ready[view] : null;
+  const current = ready?.variants[view] ?? null;
+  // A mix of steps not heard yet (tempo without key, say): rendered when it's asked for.
+  const renderingStep = !!ready && !current;
+  useEffect(() => {
+    if (!ready || ready.variants[view] || !ready.sources || !analysis) return;
+    let alive = true;
+    void renderVariant(ready.sources, analysis, view)
+      .then((variant) => alive && setPrepared((p) => (p && p.key === ready.key ? { ...p, variants: { ...p.variants, [view]: variant } } : p)))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [ready, view, analysis]);
 
   // Sound: (re)start when playing, the A/B choice or the audio changes.
   useEffect(() => {
@@ -316,7 +350,10 @@ export default function MatchStep({
       <MatchExtras vocal={vocal?.song ?? null} beat={beat?.song ?? null} settings={settings} library={library} onUseBeat={(beatId) => set({ beatId })} />
 
       {vocal && beat && analysis ? (
-        <AnalysisCard vocal={vocal.song} beat={beat.song} settings={settings} analysis={analysis} />
+        <>
+          <AnalysisCard vocal={vocal.song} beat={beat.song} settings={settings} analysis={analysis} />
+          <MatchSteps vocal={vocal.song} beat={beat.song} settings={settings} analysis={analysis} steps={steps} onSteps={setSteps} rendering={renderingStep} />
+        </>
       ) : (
         <div className="flex items-center gap-2 rounded-2xl border border-border bg-surface p-4 text-sm text-muted" role="status">
           <Loader2 className="animate-spin" /> Measuring tempo, key and bars with the Studio&apos;s analysis…
@@ -337,36 +374,43 @@ export default function MatchStep({
           <div role="group" aria-label="Raw or matched" className="flex flex-1 overflow-hidden rounded-xl border border-border text-sm sm:max-w-md">
             {(
               [
-                ["raw", "Raw (unmatched)"],
-                ["matched", "Matched"],
+                ["00", "Raw (unmatched)"],
+                ["11", "Matched"],
               ] as const
             ).map(([id, label]) => (
               <button
                 key={id}
                 type="button"
                 aria-pressed={view === id}
-                onClick={() => setView(id)}
+                onClick={() => setSteps({ tempo: id === "11", key: id === "11" })}
                 className={`min-h-14 flex-1 px-3 font-semibold ${
-                  view === id ? (id === "raw" ? "bg-danger/25 text-foreground" : "bg-success/25 text-foreground") : "text-muted hover:bg-surface-hover"
+                  view === id ? (id === "00" ? "bg-danger/25 text-foreground" : "bg-success/25 text-foreground") : "text-muted hover:bg-surface-hover"
                 }`}
               >
                 {label}
               </button>
             ))}
           </div>
+          {(view === "10" || view === "01") && (
+            <span className="rounded-full bg-amber-400/15 px-3 py-1 text-xs font-semibold text-amber-400">{view === "10" ? "Tempo only" : "Key only"}</span>
+          )}
         </div>
         <p className="text-xs text-muted" role="status">
           {failed
             ? `Couldn't prepare the audio: ${failed}`
             : !current || !analysis || !vocal || !beat
               ? loadingText
-              : view === "raw"
+              : view === "00"
                 ? `Raw: both loops start together at their own tempo (${bpmLabel(vocal.song.bpm)} and ${bpmLabel(beat.song.bpm)} BPM) and drift apart.`
-                : `Matched: the vocal is stretched ${((analysis.vocalRatio - 1) * 100).toFixed(1)}% and pitched ${analysis.semitones > 0 ? "+" : ""}${analysis.semitones} semitones, the beat stretched ${((analysis.beatRatio - 1) * 100).toFixed(1)}%. The loop is ${analysis.loopBars} bars on the beat's bar lines.`}
+                : view === "01"
+                  ? `Key only: the vocal is pitched ${analysis.semitones > 0 ? "+" : ""}${analysis.semitones} semitones, but each still plays at its own tempo — so they drift.`
+                  : view === "10"
+                    ? `Tempo only: the vocal is stretched ${((analysis.vocalRatio - 1) * 100).toFixed(1)}% and the beat ${((analysis.beatRatio - 1) * 100).toFixed(1)}% — in time, but the vocal keeps its own key.`
+                    : `Matched: the vocal is stretched ${((analysis.vocalRatio - 1) * 100).toFixed(1)}% and pitched ${analysis.semitones > 0 ? "+" : ""}${analysis.semitones} semitones, the beat stretched ${((analysis.beatRatio - 1) * 100).toFixed(1)}%. The loop is ${analysis.loopBars} bars on the beat's bar lines.`}
         </p>
         {vocal && beat && analysis && (
           <>
-            <BarGrid vocal={vocal.song} beat={beat.song} analysis={analysis} matched={view === "matched"} fraction={playing && current ? fraction : null} />
+            <BarGrid vocal={vocal.song} beat={beat.song} analysis={analysis} matched={steps.tempo} fraction={playing && current ? fraction : null} />
             {(vocal.song.source === "library" || beat.song.source === "library") && (
               <p className="text-[11px] text-muted">
                 {vocal.song.source === "library"

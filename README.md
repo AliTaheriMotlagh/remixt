@@ -99,6 +99,36 @@ cd web && node scripts/migrate.mjs
 
 ## The Studio
 
+**Two Studios in one.** The first visit asks how you want to work, and the
+choice can be switched any time from the Studio's header
+(`components/studio/ModePicker.tsx`):
+
+- **Easy** — for someone who's never made music. Four steps along the top
+  say what to do next (add a vocal, add a beat, make them fit, save &
+  share), a map of the song shows where every line plays and what the AI
+  named its parts, and each line is a big card: on/off, "only this",
+  volume, a row of sounds (Bright, Big hall, Echo, Radio… for a vocal;
+  Punchy, Lo-fi… for the rest), earlier/later and higher/lower for a
+  vocal, and **Separate drums · bass · melody** for a beat. Each card says
+  whether the line is in step with the song (its tempo, half and double
+  time counted) and in key. (`components/studio/easy/`)
+- **Producer** — the whole DAW below, plus a **Mixer** view beside the
+  **Arrange** view: a channel strip per lane with switchable inserts
+  (low cut, EQ, drive, compressor, high cut, width, ducking, reverb, delay
+  — a click bypasses one and brings it back as it was), pan, mute and
+  solo, a fader (double-click for 0 dB, Shift-drag for fine moves) and a
+  live level meter, and a master strip. (`components/studio/MixerConsole.tsx`)
+
+**Every line of a song.** Songs are split into vocals, drums, bass and
+melody, and the library's **Songs** tab lists them by song: add one line,
+or **All lines** to put a song's vocal, drums, bass and melody in as lanes
+of their own (its vocal and beat, for songs split before the 4-stem
+update). A beat already in the mix can be taken apart into its lines the
+same way, at once when the library has them (`lib/client/songLines.ts`).
+A song's lines move together: the AI keeps their balance with each
+other, reads the key from the melody (never the drums), and syncs them
+with whatever they're played against.
+
 Everything below the transport is a project on one timeline, measured
 against a project tempo you set (type it, or tap it in). It's laid out like
 a DAW: slim lane headers (name, mute, solo, level) beside one zoomable
@@ -151,7 +181,7 @@ tempo & key, effects, edit tools and matching (a sheet on phones).
   lands, so the panel opens, listens to both (speed, key, bars, the
   vocal's chorus, the beat's drop) and shows:
   - a **Mix check** in plain words — speed, on the beat, key, volume, the
-    ending — each green, amber or red with a **Fix**. Fixes change timing,
+    ending — each green, amber or red with a switch to fix it. Fixes change timing,
     key and volumes only, never effects (how the vocal sounds is yours).
     Fixes build on each other: pressing a second one adds it to the first,
     all worked out together, so fixing the ending never undoes the timing;
@@ -209,25 +239,62 @@ tempo & key, effects, edit tools and matching (a sheet on phones).
   the result is saved to your library. (`lib/client/laneSplit.ts`,
   `lib/client/beatParts.ts`, `components/studio/SplitLaneDialog.tsx`)
 
-  At the top of the panel, **✂ Cut into lines / ▬ Keep tracks whole**
-  decides how the AI may edit: cut the vocal at its silences and lock
-  every line to the beat (the tightest fit), or never cut anything — then
-  tracks are only moved, stretched, re-keyed and levelled, ideas that
-  only work by chopping (stutters, swells, chorus loops) aren't offered,
-  and the vocal plays as sung from where its first line lands on the
-  beat. The choice is remembered.
+  **Every option is a switch.** On, it plays in the mix at once; off, it
+  comes out again — and each idea opens to say why it helps, exactly what
+  it changes, and where in the song to hear it, with a switch for each of
+  its parts (timing, key, volume, sound, moves, layers). The panel has six
+  tabs, each showing how many of its switches are on:
 
-  The panel has four tabs — **Sync** (Mix check, Make it sound good,
-  cutting, sync templates, find a beat), **Styles**, **Moments** (drops,
-  vocal layers, other fixes) and **Mix** (mastering, sounds, fine-tune) —
-  each showing how many of its ideas are on. **Options stack**: choosing
-  one never throws the others away; only the same kind of choice makes
-  way (one timing — a style or song shape; one sound; the Mix check's
-  fixes merge into one), and the bottom bar says when that happens. The
-  sync template you pick is a setting every idea uses, so a style picked
-  afterwards is synced your way, and changing the sync or the cutting
-  mode works whatever is on out again instead of taking it off. ◀ ▶ step
-  through ideas of the same kind as the last one tried.
+  - **Sync** — the mix score, **Make it sound good**, the Mix check,
+    **Line sync** (every line's speed and key against the song's, each
+    with a switch for whether the AI may touch it), **Who leads** (perfect
+    sync, beat leads, vocal leads, meet halfway), and every other lane
+    locked to one tempo;
+  - **Timing** — when the vocal comes in (after the intro, right away,
+    after 4 or 8 bars), **Lock every line to the beat** (cut the vocal at
+    its silences and lay each line on the bars — off keeps tracks whole:
+    only moved, stretched, re-keyed and levelled), **Close long gaps**,
+    song shapes, whose speed, timing fixes, and nudges;
+  - **Drop** — a picture of the beat's energy bar by bar with its drop
+    marked and the vocal's chorus underneath, then the moments: on the
+    drop (chorus on the drop, the big drop, build-ups, a gated build, a
+    drum drop), intro and entrance, and energy (chorus lift, breakdown,
+    pumping beat, beat switch);
+  - **Harmony** — is it in tune, measured note by note: the share of sung
+    notes in the beat's chords now, and a chart of it at every pitch from
+    −6 to +5 (tap one to hear the vocal there); key matching, fixing just
+    the part that rubs, and vocal harmonies — a double, octaves, a fifth
+    above, a choir stack — that follow the vocal wherever it goes;
+  - **Style** — whole styles, sounds, clean-up, one-tap mastering and
+    fine-tuning;
+  - **Ask AI** — see below.
+
+  Timing choices go with whoever leads, so every style and fix comes in
+  where you said. **Options stack**: choosing one never throws the others
+  away; only the same kind of choice makes way (one timing — a style or
+  song shape; one sound; the Mix check's fixes merge into one), and the
+  bottom bar says when that happens. ◀ ▶ step through ideas of the same
+  kind as the last one tried.
+
+  **What happened** (in the panel's header, or tap the bottom bar) says
+  exactly what the changes did — worked out from the mix itself, not from
+  what an idea claims: the score before and after, a sentence per line
+  ("“vocal”: 4.7% faster (76 → 79 BPM, half time); 1 semitone lower
+  (E♭ min → D min); comes in 4 bars later; cut at its silences into 8
+  pieces…"), and line by line a picture of where it plays before and
+  after with each change and its numbers. Changes kept earlier stay
+  listed, marked as still in the mix, undone or changed since.
+  (`lib/client/aiExplain.ts`, `components/studio/ai/WhatHappened.tsx`)
+
+  **Ask AI** works for everyone. With no key, **Quick help** understands
+  the common requests in English and Persian — "make it sound good", "why
+  does it sound off?", "chorus on the drop and add a harmony", "make it a
+  club remix", "vocal louder", "بهترش کن" — and does them with the same
+  tools, each change with its own switch (`lib/client/quickHelp.ts`; no
+  AI model, nothing leaves the browser). For a real conversation, the
+  co-producer (Claude, or any tool-using model through OpenRouter) runs on
+  the person's own key — or on the site's, when it offers one, for a few
+  questions a day (see DEPLOY.md).
 
   Tapping anything plays it straight away from where the playhead is —
   an idea never moves it (one that makes the whole song faster or

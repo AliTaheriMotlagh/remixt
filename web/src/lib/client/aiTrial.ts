@@ -26,7 +26,7 @@ import { asOneChange, useStudioStore, type LanePatch, type StudioLane } from "./
 // mix while an idea is on, the idea is kept (undo takes back their edit,
 // then the idea); undo while trying just reverts.
 
-type Mix = { lanes: StudioLane[]; duration: number; projectBpm: number };
+export type Mix = { lanes: StudioLane[]; duration: number; projectBpm: number };
 
 /** A part of an idea that can be switched off on its own. */
 export type Part = "timing" | "key" | "levels" | "effects" | "automation" | "layers";
@@ -75,6 +75,19 @@ export type Trial = {
 const MAX_OFF = 12;
 
 export const useAiTrial = create<{ trial: Trial | null }>(() => ({ trial: null }));
+
+/**
+ * One keep: the ideas kept, and the mix just before and just after — so
+ * "What happened" can still say exactly what changed once they're kept.
+ */
+export type Kept = { id: number; at: number; ideas: Pick<Idea, "id" | "title" | "icon" | "why" | "lines">[]; before: Mix; after: Mix };
+
+/** What the AI producer changed and the person kept, latest first — this mix only. */
+export const useAiLog = create<{ kept: Kept[] }>(() => ({ kept: [] }));
+
+/** Keeps listed in "What happened". */
+const MAX_KEPT = 12;
+let keptCount = 0;
 
 /**
  * Ideas the last build left off because of the scope: a hands-on change
@@ -415,6 +428,14 @@ export function keepTrial(): Idea[] {
   if (trial.showing === "original") setMix(trial.result);
   recordStep(trial.baseline);
   useAiTrial.setState({ trial: null });
+  const kept: Kept = {
+    id: ++keptCount,
+    at: Date.now(),
+    ideas: trial.ideas.map(({ id, title, icon, why, lines }) => ({ id, title, icon, why, lines })),
+    before: trial.baseline,
+    after: trial.result,
+  };
+  useAiLog.setState((log) => ({ kept: [kept, ...log.kept].slice(0, MAX_KEPT) }));
   return trial.ideas;
 }
 
@@ -446,6 +467,7 @@ export function setScope(session: Session | null, scope: Scope) {
 export function forgetTrial() {
   refusedForScope.clear();
   useAiTrial.setState({ trial: null });
+  useAiLog.setState({ kept: [] });
   useAiScope.setState({ scope: WHOLE_SONG, preview: null });
 }
 

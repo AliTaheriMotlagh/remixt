@@ -316,3 +316,14 @@ CREATE TABLE IF NOT EXISTS stem_results (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (stem_id, kind, version)
 );
+
+-- Questions asked of the AI co-producer on the site's own key (when it
+-- offers one — AI_SHARED_ANTHROPIC_KEY), per person per day, for the daily
+-- limit (see src/lib/aiShared.ts).
+CREATE TABLE IF NOT EXISTS ai_shared_usage (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day DATE NOT NULL DEFAULT CURRENT_DATE,
+  questions INTEGER NOT NULL DEFAULT 0,
+  requests INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, day)
+);

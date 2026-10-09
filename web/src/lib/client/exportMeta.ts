@@ -12,7 +12,7 @@ import { shortPath } from "@/lib/shareLinks";
 import { SITE_NAME } from "@/lib/site";
 import { kindLabel } from "@/lib/stemKinds";
 import { creditLine, id3Key, type AudioTags, type TrackCredit } from "./audioTags";
-import { effectiveKey, referenceLane, type StudioLane } from "./studioStore";
+import { effectiveKey, keyReference, type StudioLane } from "./studioStore";
 
 /** What the person exporting knows about the remix. */
 export type ExportInfo = {
@@ -173,7 +173,7 @@ export async function exportTags(
   { lanes, lengthSeconds, bpm, part }: { lanes: StudioLane[]; lengthSeconds: number; bpm?: number; part?: string }
 ): Promise<AudioTags> {
   const credits = laneCredits(lanes);
-  const reference = referenceLane(lanes, (l) => !!l.musicalKey);
+  const reference = keyReference(lanes);
   const key = reference ? effectiveKey(reference) : null;
   const title = part ? `${info.title} (${part})` : info.title;
   const url = info.remixId ? new URL(shortPath(info.remixId), location.origin).href : undefined;

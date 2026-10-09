@@ -18,7 +18,7 @@ export type ChatEvent =
   | { type: "user"; text: string }
   | { type: "assistant"; text: string }
   | { type: "tool"; name: string; summary: string; isError?: boolean }
-  | { type: "error"; text: string; needsKey?: boolean };
+  | { type: "error"; text: string; needsKey?: boolean; quota?: boolean };
 
 export type Provider = "anthropic" | "openrouter";
 
@@ -77,6 +77,8 @@ type TurnResponse = {
   stop_details: { category?: string | null; explanation?: string | null } | null;
   error?: string;
   needsKey?: boolean;
+  /** Today's free questions on the site's shared key are used up. */
+  quota?: boolean;
 };
 
 async function sendTurn(messages: Message[], provider: Provider, model: string, key: string | null): Promise<TurnResponse> {
@@ -86,7 +88,7 @@ async function sendTurn(messages: Message[], provider: Provider, model: string, 
     body: JSON.stringify({ messages, provider, model }),
   });
   const data = (await res.json().catch(() => ({ error: "The server sent something unreadable" }))) as TurnResponse;
-  if (!res.ok) throw Object.assign(new Error(data.error ?? `HTTP ${res.status}`), { needsKey: !!data.needsKey });
+  if (!res.ok) throw Object.assign(new Error(data.error ?? `HTTP ${res.status}`), { needsKey: !!data.needsKey, quota: !!data.quota });
   return data;
 }
 
@@ -145,7 +147,8 @@ export async function converse(
     try {
       response = await sendTurn(messages, provider, model, key);
     } catch (error) {
-      onEvent({ type: "error", text: error instanceof Error ? error.message : "Couldn't reach the co-producer", needsKey: !!(error as { needsKey?: boolean }).needsKey });
+      const flags = error as { needsKey?: boolean; quota?: boolean };
+      onEvent({ type: "error", text: error instanceof Error ? error.message : "Couldn't reach the co-producer", needsKey: !!flags.needsKey, quota: !!flags.quota });
       // The unanswered message is dropped, so the history stays valid to send again.
       return history;
     }

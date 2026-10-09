@@ -387,6 +387,25 @@ see `web/src/lib/aiKeys.ts`) or in their browser only. OpenRouter is called
 from the server (`web/src/lib/openrouter.ts`), never from the browser. The
 table for saved keys is created on first use (and by `node scripts/migrate.mjs`).
 
+Without a key, the tab is **Quick help**: it understands common requests
+(in English and Persian) and carries them out with the Studio's own tools,
+in the browser — free, nothing to set up.
+
+**Optional: a free AI for everyone.** Set `AI_SHARED_ANTHROPIC_KEY` and
+signed-in people with no key of their own can talk to Claude on the site's
+key, a number of questions a day each. The site pays for every one of those
+calls, so it's off unless set:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `AI_SHARED_ANTHROPIC_KEY` | *(unset: off)* | The site's Anthropic key for the free questions. Never sent to browsers. |
+| `AI_SHARED_MODEL` | `claude-opus-5-5` | The model the free questions use: `claude-opus-5-5`, `claude-sonnet-5-5` or `claude-haiku-5-5` (cheaper per question). |
+| `AI_SHARED_DAILY_QUESTIONS` | `20` | Questions per person per day. A question can take several requests while the co-producer uses its tools; those are capped too (13 a day for every question allowed), so no one can run up a bill. |
+
+Usage is counted per person per day in `ai_shared_usage` (created on first
+use, and in `scripts/schema.sql`); a call that fails on Anthropic's side
+doesn't use a question up (`web/src/lib/aiShared.ts`).
+
 ### Updating and backups
 
 ```bash

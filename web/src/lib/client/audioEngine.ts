@@ -255,6 +255,28 @@ class AudioEngine {
     return this.analyser;
   }
 
+  /** Taps on each lane's output, for the mixer's meters (one per chain: a chain rebuilt gets a new one). */
+  private meters = new WeakMap<LaneChain, AnalyserNode>();
+
+  /**
+   * One lane's level, for a meter: taken after its fader (and mute, solo
+   * and crossfader), before its reverb and delay. Null until the lane's
+   * audio is loaded.
+   */
+  getLaneMeter(laneId: string): AnalyserNode | null {
+    const entry = this.lanes.get(laneId);
+    if (!this.ctx || !entry) return null;
+    let meter = this.meters.get(entry.chain);
+    if (!meter || meter.context !== this.ctx) {
+      meter = this.ctx.createAnalyser();
+      meter.fftSize = 1024;
+      meter.smoothingTimeConstant = 0;
+      entry.chain.volumeGain.connect(meter);
+      this.meters.set(entry.chain, meter);
+    }
+    return meter;
+  }
+
   /**
    * Recording keeps the phone's audio session in play-and-record mode —
    * in "playback" mode iOS hands the page a silent microphone.

@@ -1,7 +1,8 @@
 "use client";
 
-import { Fragment, memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Activity,
   ArrowRight,
   ArrowUpToLine,
   Bandage,
@@ -13,30 +14,27 @@ import {
   ChevronUp,
   Dices,
   Disc3,
+  DoorOpen,
   Drum,
-  Info,
   Link,
+  ListChecks,
   Loader2,
   Maximize2,
   MessageCircle,
-  Minimize2,
   Mic,
-  Minus,
+  Minimize2,
+  Music,
   Palette,
   Pause,
   Play,
-  Plus,
   Puzzle,
   Radio,
-  RectangleHorizontal,
-  Scissors,
   Search,
   SlidersHorizontal,
   SlidersVertical,
   Sparkles,
-  Stethoscope,
-  Trophy,
-  Undo2,
+  Timer,
+  Users,
   WandSparkles,
   X,
   Zap,
@@ -53,8 +51,8 @@ import {
   mixFix,
   ideaFits,
   keyStretch,
+  LEAD_SYNCS,
   leadOf,
-  masterFor,
   mixSignature,
   prepareSession,
   rebaseSession,
@@ -62,9 +60,9 @@ import {
   stretchKeyIdea,
   studioIdeas,
   suggestedSections,
+  SYNC_TEMPLATES,
   syncEverythingIdea,
   timingSignature,
-  type FixGroup,
   type FixId,
   type Idea,
   type Session,
@@ -77,8 +75,6 @@ import {
   fixHolder,
   forgetTrial,
   keepTrial,
-  PARTS,
-  partsOf,
   removeFix,
   refusedByScope,
   removeFromTrial,
@@ -87,56 +83,53 @@ import {
   switchPart,
   tryIdea,
   tryIdeas,
+  useAiLog,
   useAiTrial,
   type Part,
   type Trial,
 } from "@/lib/client/aiTrial";
 import type { CoproducerContext } from "@/lib/client/coproducerTools";
 import { clock, isWhole, useAiScope, type Scope } from "@/lib/client/aiScope";
-import { bestVersions, scoreMix, scoreWord, type MixScore, type Version } from "@/lib/client/mixScore";
-import { beatModelEnabled, beatModelSupported, setBeatModelEnabled, useBeatModel } from "@/lib/client/neuralBeats";
-import { setStretchEngine, stretchEngine } from "@/lib/client/pitchTempo";
+import { bestVersions, scoreMix, scoreWord } from "@/lib/client/mixScore";
 import { audioEngine } from "@/lib/client/audioEngine";
-import { changeSpeed, gain, nudge, setSpace, spaceOf, transpose, type Space } from "@/lib/client/quickAdjust";
-import { startNewStep } from "@/lib/client/studioHistory";
-import { MASTER_PRESETS, laneName, useStudioStore, type StudioLane } from "@/lib/client/studioStore";
-import { loadKeepWhole, loadSync, saveKeepWhole, saveSync, type Vibe } from "@/lib/client/aiControl";
-import { masterPresetOf } from "./MasterPanel";
+import { laneName, useStudioStore, type StudioLane } from "@/lib/client/studioStore";
+import { DEFAULT_TIMING, loadKeepWhole, loadSync, loadTiming, saveKeepWhole, saveSync, saveTiming, type Timing, type Vibe } from "@/lib/client/aiControl";
 import AiScopeBar from "./AiScopeBar";
 import CoProducer from "./CoProducer";
 import MatchFinder from "./MatchFinder";
-import { useStudioView } from "@/lib/client/studioView";
+import { useStudioView, type AiTab } from "@/lib/client/studioView";
 import { useKeepScreenOn } from "@/lib/client/wakeLock";
+import DropMap from "./ai/DropMap";
+import { Engines, FineTune, MasterIt } from "./ai/extras";
+import HarmonyCard from "./ai/HarmonyCard";
+import LineSync from "./ai/LineSync";
+import MixCheck, { type Best, type FixState } from "./ai/MixCheck";
+import { ChoiceCards, IdeaSwitch, PartChips, ScoreRing, Section, Switch, SwitchRow, type Choice } from "./ai/ui";
+import WhatHappened from "./ai/WhatHappened";
 
 // The AI producer panel, for people who've never used a music app. It
-// opens and starts listening by itself, then shows, top to bottom:
+// opens and starts listening by itself. Every option is a switch — on, it
+// plays in the mix at once; off, it comes out again — and they stack: a
+// sync, a style, a drop and a harmony can all be on together, only the
+// same kind of choice making way. Its tabs:
 //
-//   Mix health         — the score; Fix everything (one tap) or Let AI choose
-//                        (scores every version, plays the best); and what's
-//                        wrong, in plain words, each with its own Fix and Undo
-//   Styles             — whole remixes to try (radio, club, TikTok…)
-//   Drops & moments    — the chorus on the drop, build-ups, stutters… (with
-//                        the beat's own drums and bass from the library)
-//   Vocal layers       — doubles and octaves that follow the vocal
-//   Master it          — one-tap mastering, the preset that suits the style picked
-//   Find a match       — library beats (or vocals) that fit with the least stretching
-//   More options       — single arrangement, speed and sound ideas
+//   Sync     — Make it sound good, the Mix check (a switch per fix), every
+//              line's speed and key, and who leads
+//   Timing   — when the vocal comes in, cutting into lines, gaps, song shape
+//   Drop     — the beat's energy and drop, and the moments made around it
+//   Harmony  — is it in tune (measured, note by note), key fixes, harmonies
+//   Style    — whole styles, sounds, mastering, fine-tuning
+//   Ask AI   — a co-producer to talk to
 //
-// Tapping anything plays it at once, from the original mix; a moment
-// tapped while a style is on joins it. The bar at the bottom says what's
-// playing, flips Before/After, and keeps it (one undo takes it back).
+// "What happened" says exactly what's changed — in a sentence per line, a
+// before/after picture of each line, with the numbers — and what was kept
+// before. The bar at the bottom flips Before / After and keeps it (one undo).
 
 const STEPS: { id: Step; label: string }[] = [
-  { id: "listen", label: "Listening to the vocal and the beat" },
+  { id: "listen", label: "Listening to every line" },
   { id: "match", label: "Finding speed, key, chorus and drop" },
   { id: "ideas", label: "Building ideas" },
 ];
-
-const STATUS = {
-  good: { dot: "bg-success", text: "text-success", label: "Good" },
-  warn: { dot: "bg-amber-400", text: "text-amber-400", label: "Could be better" },
-  bad: { dot: "bg-danger", text: "text-danger", label: "Needs fixing" },
-} as const;
 
 const bpmNow = () => useStudioStore.getState().projectBpm;
 
@@ -154,28 +147,51 @@ function playOn() {
   if (!useStudioStore.getState().isPlaying) void audioEngine.play({ join: true }).catch(() => {});
 }
 
-type Tab = "sync" | "styles" | "moments" | "mix" | "ask";
-
-const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
+const TABS: { id: AiTab; label: string; icon: LucideIcon }[] = [
   { id: "sync", label: "Sync", icon: Link },
-  { id: "styles", label: "Styles", icon: Palette },
-  { id: "moments", label: "Moments", icon: Zap },
-  { id: "mix", label: "Mix", icon: SlidersVertical },
+  { id: "timing", label: "Timing", icon: Timer },
+  { id: "drop", label: "Drop", icon: Zap },
+  { id: "harmony", label: "Harmony", icon: Music },
+  { id: "style", label: "Style", icon: Palette },
   { id: "ask", label: "Ask AI", icon: MessageCircle },
 ];
 
+const isLayer = (i: Idea) => i.id.startsWith("layer-");
+const isShape = (i: Idea) => i.id.startsWith("remixer-");
+const isTempoChoice = (i: Idea) => i.id.startsWith("beatmaker-tempo-");
+const TIMING_FIXES = ["fix-start", "fix-late-entry", "fix-intro", "fix-gap"];
+const LOCK_ALL = "beatmaker-sync";
+
+/** The Drop tab's groups of moments; any other moment is listed after them. */
+const DROP_GROUPS: { title: string; hint: string; icon: LucideIcon; ids: string[] }[] = [
+  { title: "On the drop", hint: "The moment a remix is remembered for", icon: Zap, ids: ["moment-chorus-drop", "moment-big-drop", "moment-build", "moment-gate", "parts-drop"] },
+  { title: "Intro & entrance", hint: "How the song and the voice come in", icon: DoorOpen, ids: ["parts-intro", "moment-filter", "moment-acapella", "moment-stutter", "moment-swell"] },
+  { title: "Energy", hint: "Lifts, breaks and movement", icon: Activity, ids: ["moment-dynamics", "parts-breakdown", "moment-pump", "moment-beat-switch"] },
+];
+const GROUPED = new Set(DROP_GROUPS.flatMap((g) => g.ids));
+
 /** Which tab each idea is listed on (for the count of ideas on, on each tab). */
-const IN_TAB: Record<Tab, (i: Idea) => boolean> = {
-  sync: (i) => i.kind === "auto" || i.kind === "sync" || i.id.startsWith("fix:") || i.id === "key-part",
-  styles: (i) => i.kind === "full" || (i.kind === "idea" && i.role !== "engineer"),
-  moments: (i) => i.kind === "moment" || (i.kind === "fix" && !i.id.startsWith("fix:")),
-  mix: (i) => i.kind === "idea" && i.role === "engineer" && !i.edits,
+const IN_TAB: Record<AiTab, (i: Idea) => boolean> = {
+  sync: (i) => i.kind === "auto" || i.kind === "sync" || i.id.startsWith("fix:") || i.id === LOCK_ALL,
+  timing: (i) => isShape(i) || isTempoChoice(i) || TIMING_FIXES.includes(i.id),
+  drop: (i) => i.kind === "moment" && !isLayer(i),
+  harmony: (i) => i.id === "key-part" || isLayer(i) || i.id.startsWith("tune:"),
+  style: (i) => i.kind === "full" || i.id.startsWith("sound-") || i.id === "fix-vocal-clash",
   // The co-producer's own hands-on changes.
-  ask: (i) => !!i.edits && i.id !== "key-part",
+  ask: (i) => !!i.edits && i.id !== "key-part" && !i.id.startsWith("tune:"),
 };
 
 /** Ideas that place the vocal or change the speed — only one of those is on at a time (hands-on changes go on top). */
 const isTiming = (i: Idea) => !i.edits && (i.aspects.includes("arrangement") || i.aspects.includes("tempo"));
+
+const LEADERS: Choice<string>[] = SYNC_TEMPLATES.filter((t) => LEAD_SYNCS.includes(t.id)).map((t) => ({ id: t.id, icon: t.icon, title: t.title, short: t.short }));
+
+const ENTRIES: Choice<Timing["entry"]>[] = [
+  { id: "auto", icon: "sparkles", title: "After the intro", short: "Where the beat's intro ends" },
+  { id: 0, icon: "fast-forward", title: "Right away", short: "On bar 1, no intro" },
+  { id: 4, icon: "door-open", title: "After 4 bars", short: "A short intro" },
+  { id: 8, icon: "headphones" as IconName, title: "After 8 bars", short: "DJ-friendly intro" },
+];
 
 /**
  * Puts back on, worked out for `session`, the ideas that were on (by id) —
@@ -230,26 +246,6 @@ function lookAhead(ideas: Idea[], lanes: StudioLane[], first: string[]) {
   return { speeds: [...best.values()].map((v) => v.lane), clips };
 }
 
-/** An on/off switch. */
-function Switch({ on, onChange, label, busy = false }: { on: boolean; onChange: (on: boolean) => void; label: string; busy?: boolean }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={on}
-      aria-label={label}
-      aria-busy={busy}
-      title={label}
-      onClick={() => onChange(!on)}
-      className={`relative inline-flex h-6 w-10 shrink-0 items-center rounded-full transition-colors ${on ? "bg-brand" : "bg-border"}`}
-    >
-      <span className={`flex h-5 w-5 items-center justify-center rounded-full bg-white text-[10px] text-brand-strong shadow transition-transform ${on ? "translate-x-[18px]" : "translate-x-0.5"}`}>
-        {busy && <Loader2 className="animate-spin" />}
-      </span>
-    </button>
-  );
-}
-
 /** The ids of the ideas on right now (read from the store, so a handler never acts on an old render's). */
 const onNow = () => useAiTrial.getState().trial?.ideas ?? [];
 
@@ -268,510 +264,29 @@ function inPlace(change: () => void) {
   keepPlace(bpm);
 }
 
-function Section({ icon: SectionIcon, title, hint, action, children }: { icon: LucideIcon; title: string; hint?: string; action?: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <section className="flex flex-col gap-2">
-      <div className="flex items-end justify-between gap-2">
-        <div className="min-w-0">
-          <h3 className="flex items-center gap-1.5 text-sm font-bold">
-            <SectionIcon className="text-brand-strong" />
-            {title}
-          </h3>
-          {hint && <p className="text-[11px] text-muted">{hint}</p>}
-        </div>
-        {action}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-/** A tap-to-try idea: big icon, name, a few words. `selected` marks a setting that's chosen (a sync); `working` while it's being put on. */
-const Tile = memo(function Tile({ idea, on, disabled, onPick, selected = false, badge, working = false }: { idea: Idea; on: boolean; disabled: boolean; onPick: (idea: Idea) => void; selected?: boolean; badge?: string; working?: boolean }) {
-  return (
-    <button
-      onClick={() => onPick(idea)}
-      disabled={disabled}
-      aria-pressed={on || selected}
-      aria-busy={working}
-      title={idea.why}
-      className={`relative flex h-full min-h-[4.75rem] w-full flex-col items-start gap-0.5 rounded-xl border p-2.5 text-left transition-all active:scale-[0.98] disabled:opacity-40 ${
-        on ? "border-brand bg-brand/15 ring-2 ring-brand/50" : selected ? "border-brand/70 bg-brand/[0.07]" : "border-border bg-surface hover:border-brand/60 hover:bg-surface-hover"
-      }`}
-    >
-      <span className="text-xl leading-none text-brand-strong" aria-hidden>
-        <Icon name={idea.icon} />
-      </span>
-      <span className="pr-8 text-[13px] font-semibold leading-tight">{idea.title}</span>
-      <span className="text-[11px] leading-snug text-muted">{idea.short}</span>
-      {working ? (
-        <Loader2 className="absolute right-2 top-2 animate-spin text-brand-strong" aria-label="Working…" />
-      ) : on ? (
-        <span className="absolute right-2 top-2 flex items-center gap-0.5 rounded-full bg-brand px-1.5 py-px text-[9px] font-bold text-white">
-          <Play className="fill-current" /> ON
-        </span>
-      ) : badge ? (
-        <span className={`absolute right-1.5 top-1.5 rounded-full px-1.5 py-px text-[9px] font-bold text-white ${selected ? "bg-brand" : "bg-vocals"}`}>{badge}</span>
-      ) : null}
-    </button>
-  );
-});
-
-/** A plain list row, for the longer lists. */
-const Row = memo(function Row({ idea, on, disabled, onPick, working = false }: { idea: Idea; on: boolean; disabled: boolean; onPick: (idea: Idea) => void; working?: boolean }) {
-  return (
-    <button
-      onClick={() => onPick(idea)}
-      disabled={disabled}
-      aria-pressed={on}
-      aria-busy={working}
-      title={idea.why}
-      className={`flex items-center gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-colors disabled:opacity-40 ${
-        on ? "border-brand bg-brand/15" : "border-transparent hover:bg-surface-hover"
-      }`}
-    >
-      <span className="w-6 shrink-0 text-center text-base text-brand-strong" aria-hidden>
-        <Icon name={idea.icon} />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-xs font-semibold">{idea.title}</span>
-        <span className="block truncate text-[11px] text-muted">{idea.short}</span>
-      </span>
-      <span className={`shrink-0 text-[11px] font-semibold ${on ? "text-brand-strong" : "text-muted"}`}>
-        {working ? (
-          <Loader2 className="animate-spin" aria-label="Working…" />
-        ) : on ? (
-          <>
-            <Play className="fill-current" /> On
-          </>
-        ) : (
-          "Try"
-        )}
-      </span>
-    </button>
-  );
-});
-
-/** What a row of the Mix check can do: its fix is on (Undo), can go on (Fix), or there's nothing to press. */
-type FixState = "fixed" | "fixable" | "none";
-
-/** What "Let AI choose" found, and the ideas it scored. */
-type Best = { ideas: Idea[]; now: MixScore; versions: Version[] };
-
-/** The panel's handlers the Mix health card calls (stable: see `act`). */
-type DoctorActions = {
-  fixCheck: (fix: FixId) => void;
-  unfixCheck: (fix: FixId) => void;
-  fixAll: () => void;
-  findBest: () => void;
-  tryBest: (ideaId: string) => void;
-};
-
-const scoreColor = (total: number) => (total >= 85 ? "text-success" : total >= 60 ? "text-amber-400" : "text-danger");
-const barColor = (total: number) => (total >= 85 ? "bg-success" : total >= 60 ? "bg-amber-400" : "bg-danger");
-
-/**
- * Mix health: how the mix sounds now, the two ways to let the AI sort it
- * out, and what it checked — one row per fix, each with its own Fix and
- * Undo.
- *
- *   Fix everything — every fix below at once (Make it sound good); tapped
- *                    again, it comes off.
- *   Let AI choose  — scores every sync, style and fix as it would sound,
- *                    plays the best and lists the runners-up to tap.
- *
- * Checks that one fix sorts out together (speed, timing, the other lanes)
- * are one row, so pressing Fix never makes other rows' buttons vanish
- * unexplained; a row another idea put right says so.
- */
-const MixDoctor = memo(function MixDoctor({
-  groups,
-  helped,
-  total,
-  showing,
-  fixState,
-  working,
-  auto,
-  autoOn,
-  autoFits,
-  canChoose,
-  best,
-  bestBlocked,
-  keepWhole,
-  onIds,
-  act,
-}: {
-  groups: FixGroup[];
-  helped: Set<string>;
-  total: MixScore | null;
-  showing: "idea" | "original" | null;
-  fixState: (fix: FixId | null) => FixState;
-  working: string | null;
-  auto: Idea | undefined;
-  autoOn: boolean;
-  autoFits: boolean;
-  /** Whether there's a vocal and a beat to score versions of. */
-  canChoose: boolean;
-  best: Best | null;
-  bestBlocked: boolean;
-  keepWhole: boolean;
-  onIds: Set<string>;
-  act: DoctorActions;
-}) {
-  const good = groups.filter((g) => g.status === "good").length;
-  const score = total?.total ?? Math.round((100 * good) / Math.max(1, groups.length));
-  const busy = working !== null;
-  const fixingAll = !!auto && working === auto.id;
-  const choosing = working === "best";
-  const top = best?.versions[0];
-  return (
-    <div className="rounded-2xl border border-border bg-surface p-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="flex items-center gap-1.5 text-sm font-bold">
-            <Stethoscope className="text-brand-strong" />
-            Mix health
-          </h3>
-          <p className="text-[11px] text-muted">
-            {showing === "idea" ? "With the ideas on · " : showing === "original" ? "Before the ideas · " : ""}
-            {good} of {groups.length} sound right
-          </p>
-        </div>
-        <div className="shrink-0 text-right leading-none">
-          <span className={`text-2xl font-extrabold tabular-nums ${scoreColor(score)}`}>{score}</span>
-          <span className="text-[11px] text-muted">/100</span>
-          <span className={`mt-1 block text-[10px] font-semibold ${scoreColor(score)}`}>{scoreWord(score)}</span>
-        </div>
-      </div>
-      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-raised" role="meter" aria-label="Mix score" aria-valuemin={0} aria-valuemax={100} aria-valuenow={score}>
-        <div className={`h-full rounded-full transition-all duration-500 ${barColor(score)}`} style={{ width: `${Math.max(4, score)}%` }} />
-      </div>
-
-      <div className={`mt-3 grid gap-2 ${canChoose ? "grid-cols-2" : "grid-cols-1"}`}>
-        <button
-          onClick={act.fixAll}
-          disabled={!auto || !autoFits || (busy && !fixingAll)}
-          aria-pressed={autoOn}
-          aria-busy={fixingAll}
-          title={auto?.short}
-          className={`flex min-h-[4.25rem] flex-col items-start justify-center gap-0.5 rounded-xl px-3 py-2 text-left text-white transition-all active:scale-[0.98] disabled:opacity-50 ${
-            autoOn ? "bg-brand ring-2 ring-brand-strong" : "bg-gradient-to-r from-brand to-vocals shadow-[0_0_24px_-10px_var(--vocals)] hover:brightness-110"
-          }`}
-        >
-          <span className="flex items-center gap-1.5 text-[13px] font-bold">
-            {fixingAll ? <Loader2 className="animate-spin" /> : autoOn ? <CheckIcon /> : <WandSparkles />}
-            {fixingAll ? "Fixing…" : autoOn ? "All fixed" : "Fix everything"}
-          </span>
-          <span className="text-[10px] leading-snug text-white/85">{autoOn ? "Tap again to take it off" : "Every fix below, in one tap"}</span>
-        </button>
-        {canChoose && (
-          <button
-            onClick={act.findBest}
-            disabled={busy && !choosing}
-            aria-busy={choosing}
-            className="flex min-h-[4.25rem] flex-col items-start justify-center gap-0.5 rounded-xl border border-border bg-background px-3 py-2 text-left transition-all hover:border-brand/60 active:scale-[0.98] disabled:opacity-50"
-          >
-            <span className="flex items-center gap-1.5 text-[13px] font-bold">
-              {choosing ? <Loader2 className="animate-spin text-brand-strong" /> : <Trophy className="text-brand-strong" />}
-              {choosing ? "Comparing…" : best ? "Compare again" : "Let AI choose"}
-            </span>
-            <span className="line-clamp-2 text-[10px] leading-snug text-muted">
-              {top ? `Best: ${top.idea.title} (${top.score.total})` : `Hears every sync & style${keepWhole ? ", kept whole" : ""}, plays the best`}
-            </span>
-          </button>
-        )}
-      </div>
-
-      {best && (
-        <div className="mt-2.5 rounded-xl bg-background p-2.5">
-          <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">AI compared {best.versions.length} versions · tap one to hear it</p>
-          <ul className="flex flex-col gap-0.5">
-            <li className="flex items-center gap-2 px-1 py-1 text-[11px] text-muted">
-              <span className="w-7 shrink-0 text-right font-bold tabular-nums">{best.now.total}</span>
-              <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-raised">
-                <span className="block h-full rounded-full bg-muted/60" style={{ width: `${best.now.total}%` }} />
-              </span>
-              <span className="w-[42%] shrink-0 truncate">{showing ? "Before the ideas" : "Your mix now"}</span>
-            </li>
-            {best.versions.map((v, n) => {
-              const on = onIds.has(v.idea.id);
-              return (
-                <li key={v.idea.id}>
-                  <button
-                    onClick={() => act.tryBest(v.idea.id)}
-                    disabled={bestBlocked}
-                    aria-pressed={on}
-                    title={v.score.parts.map((p) => `${p.label}: ${Math.round(p.score * 100)} — ${p.text}`).join("\n")}
-                    className={`flex min-h-8 w-full items-center gap-2 rounded-lg px-1 text-left text-[11px] transition-colors hover:bg-surface-hover disabled:opacity-60 ${on ? "bg-brand/15 font-semibold text-foreground" : ""}`}
-                  >
-                    <span className="w-7 shrink-0 text-right font-bold tabular-nums">{v.score.total}</span>
-                    <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-raised">
-                      <span className={`block h-full rounded-full ${v.score.total >= 85 ? "bg-success" : v.score.total >= 70 ? "bg-brand" : "bg-amber-400"}`} style={{ width: `${v.score.total}%` }} />
-                    </span>
-                    <span className="flex w-[42%] shrink-0 items-center gap-1 truncate">
-                      {on ? <Play className="shrink-0 fill-current text-brand-strong" /> : n === 0 ? <Trophy className="shrink-0 text-amber-400" /> : null}
-                      <span className="truncate">{v.idea.title}</span>
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      )}
-
-      <ul className="mt-3 flex flex-col divide-y divide-border border-t border-border">
-        {groups.map((g) => {
-          const state = fixState(g.fix);
-          const fixed = state === "fixed";
-          const pending = !!g.fix && working === `fix:${g.fix}`;
-          const status = fixed && g.status === "good" ? null : STATUS[g.status];
-          return (
-            <li key={g.id} className="flex items-start gap-2.5 py-2.5">
-              {fixed ? (
-                <span className="mt-px flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-success text-[10px] text-white" aria-label="Fixed">
-                  <CheckIcon />
-                </span>
-              ) : (
-                <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${STATUS[g.status].dot}`} aria-label={STATUS[g.status].label} />
-              )}
-              <div className="min-w-0 flex-1 text-xs">
-                <p className="flex flex-wrap items-baseline gap-x-1.5">
-                  <span className="font-semibold">{g.label}</span>
-                  <span className={`text-[10px] font-semibold ${fixed ? "text-success" : status?.text}`}>{fixed ? "Fixed" : status?.label}</span>
-                </p>
-                {g.checks.map((c) => (
-                  <p key={c.id} className="mt-0.5 text-[11px] leading-snug text-muted">
-                    {g.checks.length > 1 && <span className="font-medium text-foreground/80">{c.label}: </span>}
-                    {c.text}
-                  </p>
-                ))}
-                {helped.has(g.id) && <p className="mt-0.5 text-[10px] text-success">Good now — an idea that&apos;s on sorted it out</p>}
-              </div>
-              {pending ? (
-                <Loader2 className="mt-1 shrink-0 animate-spin text-brand-strong" aria-label="Working…" />
-              ) : fixed ? (
-                <button
-                  onClick={() => act.unfixCheck(g.fix!)}
-                  disabled={busy}
-                  className="flex min-h-8 shrink-0 items-center gap-1 rounded-lg border border-border px-2.5 text-[11px] font-semibold text-muted hover:border-danger/60 hover:text-danger disabled:opacity-50"
-                  title={`Undo just this fix — the others stay on`}
-                >
-                  <Undo2 /> Undo
-                </button>
-              ) : state === "fixable" && g.status !== "good" ? (
-                <button
-                  onClick={() => act.fixCheck(g.fix!)}
-                  disabled={busy}
-                  className="min-h-8 shrink-0 rounded-lg bg-brand px-3 text-[11px] font-semibold text-white hover:bg-brand-strong disabled:opacity-50"
-                >
-                  Fix
-                </button>
-              ) : null}
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
-});
-
-/** One row of the Fine-tune section: a name and a few buttons. */
-function TuneRow({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-2">
-      <div className="min-w-0 flex-1">
-        <p className="text-xs font-semibold">{label}</p>
-        {hint && <p className="truncate text-[10px] text-muted">{hint}</p>}
-      </div>
-      <div className="flex shrink-0 overflow-hidden rounded-lg border border-border">{children}</div>
-    </div>
-  );
-}
-
-function TuneButton({ onClick, children, active, title }: { onClick: () => void; children: React.ReactNode; active?: boolean; title?: string }) {
-  return (
-    <button
-      onClick={onClick}
-      title={title}
-      aria-pressed={active}
-      className={`min-w-[2.75rem] border-l border-border px-2.5 py-1.5 text-[11px] font-semibold first:border-l-0 ${
-        active ? "bg-brand text-white" : "hover:bg-surface-hover"
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
-/**
- * Hands-on fixes for what's left after an idea: the vocal early or late,
- * louder or softer, higher or lower; the beat's level; the whole song's
- * speed; and how much space around the voice.
- */
-function FineTune({ vocal, beat }: { vocal: StudioLane; beat: StudioLane | null }) {
-  const projectBpm = useStudioStore((s) => s.projectBpm);
-  const before = () => keepWhatsPlaying();
-  const space = spaceOf(vocal.fx);
-  return (
-    <div className="flex flex-col gap-2.5 rounded-2xl border border-border bg-surface p-3">
-      <TuneRow label="Vocal timing" hint="Early or late? Move it (in beats)">
-        <TuneButton onClick={() => (before(), nudge(vocal.laneId, -0.5))} title="Half a beat earlier">−½</TuneButton>
-        <TuneButton onClick={() => (before(), nudge(vocal.laneId, -0.125))} title="An eighth of a beat earlier">−⅛</TuneButton>
-        <TuneButton onClick={() => (before(), nudge(vocal.laneId, 0.125))} title="An eighth of a beat later">+⅛</TuneButton>
-        <TuneButton onClick={() => (before(), nudge(vocal.laneId, 0.5))} title="Half a beat later">+½</TuneButton>
-      </TuneRow>
-      <TuneRow label="Vocal volume" hint={`${Math.round(vocal.volume * 100)}%`}>
-        <TuneButton onClick={() => (before(), gain(vocal.laneId, -1.5))} title="Vocal quieter">
-          <Minus className="text-sm" />
-        </TuneButton>
-        <TuneButton onClick={() => (before(), gain(vocal.laneId, 1.5))} title="Vocal louder">
-          <Plus className="text-sm" />
-        </TuneButton>
-      </TuneRow>
-      {beat && (
-        <TuneRow label="Beat volume" hint={`${Math.round(beat.volume * 100)}%`}>
-          <TuneButton onClick={() => (before(), gain(beat.laneId, -1.5))} title="Beat quieter">
-            <Minus className="text-sm" />
-          </TuneButton>
-          <TuneButton onClick={() => (before(), gain(beat.laneId, 1.5))} title="Beat louder">
-            <Plus className="text-sm" />
-          </TuneButton>
-        </TuneRow>
-      )}
-      <TuneRow label="Vocal pitch" hint={vocal.pitchSemitones ? `${vocal.pitchSemitones > 0 ? "+" : ""}${vocal.pitchSemitones} semitones` : "as sung"}>
-        <TuneButton onClick={() => (before(), transpose(vocal.laneId, -1))} title="A semitone lower">Lower</TuneButton>
-        <TuneButton onClick={() => (before(), transpose(vocal.laneId, 1))} title="A semitone higher">Higher</TuneButton>
-      </TuneRow>
-      <TuneRow label="Whole song speed" hint={`${projectBpm.toFixed(0)} BPM`}>
-        <TuneButton onClick={() => (before(), changeSpeed(0.97))}>Slower</TuneButton>
-        <TuneButton onClick={() => (before(), changeSpeed(1.03))}>Faster</TuneButton>
-      </TuneRow>
-      <TuneRow label="Space around the voice">
-        {(["dry", "room", "hall"] as Space[]).map((s) => (
-          <TuneButton key={s} active={space === s} onClick={() => (before(), setSpace(vocal.laneId, s))}>
-            {s === "dry" ? "Dry" : s === "room" ? "Room" : "Hall"}
-          </TuneButton>
-        ))}
-      </TuneRow>
-    </div>
-  );
-}
-
-/**
- * One-tap mastering: the master bus presets, with the one that suits the
- * style being tried (or last kept) marked as the AI's pick.
- */
-function MasterIt({ vibes }: { vibes: Vibe[] }) {
-  const master = useStudioStore((s) => s.master);
-  const current = masterPresetOf(master);
-  const pick = masterFor(vibes);
-  return (
-    <div className="grid grid-cols-2 gap-1.5 min-[480px]:grid-cols-3 lg:grid-cols-2">
-      {MASTER_PRESETS.filter((p) => p.id !== "off").map((p) => {
-        const on = current?.id === p.id;
-        return (
-          <button
-            key={p.id}
-            onClick={() => {
-              keepWhatsPlaying();
-              startNewStep();
-              useStudioStore.getState().setMaster(on ? MASTER_PRESETS[0].master : p.master);
-              useStudioView.getState().notify(on ? "Master off" : `Mastered: ${p.label} — ⌘Z to undo`);
-            }}
-            aria-pressed={on}
-            title={p.hint}
-            className={`relative h-full rounded-xl border px-2.5 py-2 text-left text-xs transition-colors ${on ? "border-brand bg-brand/15" : "border-border bg-surface hover:border-brand/60"}`}
-          >
-            <span className="block font-semibold">{p.label}</span>
-            <span className="line-clamp-2 block text-[10px] leading-snug text-muted">{p.hint}</span>
-            {p.id === pick && !on && <span className="absolute -top-1.5 right-1.5 rounded-full bg-vocals px-1.5 text-[9px] font-bold text-white">AI pick</span>}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-/** How the Studio listens and stretches: the beat model and the high-quality stretcher, each with a switch. */
-function Engines() {
-  const model = useBeatModel();
-  const [beatsOn, setBeatsOn] = useState(true);
-  const [beatsHere, setBeatsHere] = useState(true);
-  const [hq, setHq] = useState(true);
-  const [rerendering, setRerendering] = useState(false);
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage only exists after mount
-    setBeatsOn(beatModelEnabled());
-    setBeatsHere(beatModelSupported());
-    setHq(stretchEngine() === "hq");
-  }, []);
-  const status = !beatsHere
-    ? "doesn't run on phones (it needs more memory than a phone gives a web page) — beats a computer already heard are used, otherwise bars come from the Studio's own tracker."
-    : !beatsOn || model.status === "off"
-      ? "off — bars come from the Studio's own tracker"
-      : model.status === "loading"
-        ? model.fromCache
-          ? "starting…"
-          : `downloading ${Math.round((100 * model.loaded) / Math.max(1, model.total))}% of ${(model.total / 1e6).toFixed(0)} MB (first time only)`
-        : model.status === "failed"
-          ? `couldn't load (${model.error ?? "error"}) — using the Studio's own tracker`
-          : model.working
-            ? "listening to the beat…"
-            : model.status === "ready"
-              ? "on — hears every beat and where each bar starts"
-              : "on — loads when the AI first listens";
-  return (
-    <details className="group rounded-xl border border-border text-[11px]">
-      <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2 font-semibold">
-        <span>
-          <Sparkles /> Listening & sound engines
-        </span>
-        <ChevronDown className="text-muted group-open:rotate-180" />
-      </summary>
-      <div className="flex flex-col gap-2.5 px-3 pb-3">
-        <label className="flex items-start gap-2">
-          <input
-            type="checkbox"
-            checked={beatsOn}
-            disabled={!beatsHere}
-            onChange={(e) => {
-              setBeatsOn(e.target.checked);
-              setBeatModelEnabled(e.target.checked);
-            }}
-            className="mt-0.5"
-          />
-          <span>
-            <span className="font-semibold">AI beat tracking</span> (Beat This! model, ~10 MB, runs on this device)
-            <span className="block text-muted">{status}</span>
-          </span>
-        </label>
-        <label className="flex items-start gap-2">
-          <input
-            type="checkbox"
-            checked={hq}
-            disabled={rerendering}
-            onChange={(e) => {
-              setHq(e.target.checked);
-              setStretchEngine(e.target.checked ? "hq" : "classic");
-              setRerendering(true);
-              void audioEngine.rerenderAll().finally(() => setRerendering(false));
-            }}
-            className="mt-0.5"
-          />
-          <span>
-            <span className="font-semibold">High-quality stretch</span> — cleaner speed and key changes, voices keep their natural tone
-            <span className="block text-muted">{rerendering ? "re-rendering the lanes…" : hq ? "on (Signalsmith Stretch)" : "off (classic SoundTouch)"}</span>
-          </span>
-        </label>
-      </div>
-    </details>
-  );
-}
-
-/** Fine-tuning works on the mix as it is: an idea being tried is kept first. */
-function keepWhatsPlaying() {
-  if (useAiTrial.getState().trial) keepTrial();
+/** The vocal moved `shift` semitones from where it is now — a hands-on change (from the harmony chart), with its layers. */
+function tuneIdea(lanes: StudioLane[], vocal: StudioLane, shift: number): Idea {
+  const target = Math.max(-12, Math.min(12, vocal.pitchSemitones + shift));
+  const moved = target - vocal.pitchSemitones;
+  const layers = lanes.filter((l) => leadOf(l.laneId) === vocal.laneId);
+  return {
+    id: `tune:${vocal.laneId}`,
+    role: "engineer",
+    kind: "idea",
+    icon: "music",
+    title: `Vocal ${moved > 0 ? "+" : ""}${moved} semitone${Math.abs(moved) === 1 ? "" : "s"}`,
+    short: "Picked on the harmony chart",
+    why: "Every note of the vocal moved by the same step, so the melody stays the same but sits on different notes of the beat's chords.",
+    lines: [
+      `“${laneName(vocal)}”: pitch ${vocal.pitchSemitones > 0 ? "+" : ""}${vocal.pitchSemitones} → ${target > 0 ? "+" : ""}${target} semitones`,
+      ...(layers.length ? [`Its ${layers.length} harmony layer${layers.length === 1 ? "" : "s"} move with it`] : []),
+    ],
+    patches: {},
+    aspects: ["key"],
+    vibes: [],
+    stems: {},
+    edits: [vocal, ...layers].map((l) => ({ laneId: l.laneId, pitchSemitones: Math.max(-24, Math.min(24, l.pitchSemitones + moved)) })),
+  };
 }
 
 /** Who's producing: ranks the ideas that suit that producer's taste first (nothing is hidden). */
@@ -818,6 +333,7 @@ export default function AiProducer() {
   const lanes = useDeferredValue(useStudioStore((s) => s.lanes));
   const projectBpm = useStudioStore((s) => s.projectBpm);
   const trial = useAiTrial((s) => s.trial);
+  const keptCount = useAiLog((s) => s.kept.length);
   const scope = useAiScope((s) => s.scope);
   const [vocalId, setVocalId] = useState("");
   const [beatId, setBeatId] = useState("");
@@ -825,18 +341,23 @@ export default function AiProducer() {
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [step, setStep] = useState<Step | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [details, setDetails] = useState(false);
+  /** "What happened" is showing in place of the ideas. */
+  const [explaining, setExplaining] = useState(false);
+  /** The idea row opened to say why and what it changes. */
+  const [expanded, setExpanded] = useState<string | null>(null);
   /** The vibes of what was last kept, for the mastering pick. */
   const [keptVibes, setKeptVibes] = useState<Vibe[]>([]);
   /** Keep tracks whole: the AI never cuts them into clips. Read after mount (it's remembered per browser). */
   const [keepWhole, setKeepWhole] = useState(false);
-  /** The sync template every idea uses (see IdeaOptions.sync). */
+  /** Who leads (a LEAD_SYNCS template every idea uses, see IdeaOptions.sync). */
   const [syncId, setSyncId] = useState("perfect");
+  /** When the vocal comes in, and whether long gaps are closed. */
+  const [timing, setTiming] = useState<Timing>(DEFAULT_TIMING);
   /** What the ideas are worked out with right now — read by a listen that started before a switch. */
-  const options = useRef({ keepWhole, sync: syncId });
+  const options = useRef({ keepWhole, sync: syncId, ...timing });
   useEffect(() => {
-    options.current = { keepWhole, sync: syncId };
-  }, [keepWhole, syncId]);
+    options.current = { keepWhole, sync: syncId, ...timing };
+  }, [keepWhole, syncId, timing]);
   /** The control being worked on (an idea's id, "whole", "surprise"…), for its spinner; one at a time. */
   const [working, setWorking] = useState<string | null>(null);
   const workingRef = useRef(false);
@@ -859,10 +380,20 @@ export default function AiProducer() {
   }
   const [personaId, setPersonaId] = useState("any");
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage only exists after mount
+    /* eslint-disable react-hooks/set-state-in-effect -- localStorage only exists after mount */
     setKeepWhole(loadKeepWhole());
-    setSyncId(loadSync());
+    // The ready-made timing syncs are a "who leads" sync with timing of their own now.
+    const saved = loadSync();
+    const template = SYNC_TEMPLATES.find((t) => t.id === saved);
+    if (template && !LEAD_SYNCS.includes(template.id)) {
+      setSyncId("perfect");
+      setTiming({ entry: template.entry === 0 || template.entry === 4 || template.entry === 8 ? template.entry : "auto", tight: template.structure === "tight" });
+    } else {
+      setSyncId(template ? template.id : "perfect");
+      setTiming(loadTiming());
+    }
     setPersonaId(loadPersona());
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
   const persona = PERSONAS.find((p) => p.id === personaId) ?? PERSONAS[0];
   function choosePersona(id: string) {
@@ -871,13 +402,17 @@ export default function AiProducer() {
       localStorage.setItem(PERSONA_KEY, id);
     } catch {}
   }
-  const [tab, setTab] = useState<Tab>("sync");
-  // A lane's "Ask AI" (in the lane inspector) opens the chat with its question.
-  const question = useStudioView((s) => s.aiQuestion);
+  const [tab, setTab] = useState<AiTab>("sync");
+  // Asked for a tab from elsewhere (a lane's "Ask AI", the Easy studio's "Make them fit"): show it.
+  const askedTab = useStudioView((s) => s.aiTab);
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- following the store: a question asked elsewhere
-    if (question) setTab("ask");
-  }, [question]);
+    if (!askedTab) return;
+    /* eslint-disable react-hooks/set-state-in-effect -- following the store: a tab asked for elsewhere */
+    setTab(askedTab.tab);
+    setExplaining(false);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [askedTab]);
+  const question = useStudioView((s) => s.aiQuestion);
   /** Below desktop width it's a sheet: mini (just the controls), half (the mix stays in view) or full. */
   const [sheet, setSheet] = useState<Sheet>("half");
   // The Studio's "+ Add stems" button stays above the sheet, except when it's pulled up full.
@@ -919,7 +454,7 @@ export default function AiProducer() {
   const vocalPick = lanes.some((l) => l.laneId === vocalId) ? vocalId : "";
   const beatPick = lanes.some((l) => l.laneId === beatId) ? beatId : "";
   const signature = mixSignature(lanes);
-  const timing = timingSignature(lanes, projectBpm);
+  const timingNow = timingSignature(lanes, projectBpm);
   const stale = !!session && session.signature !== signature;
   const repicked = !!session && ((!!vocalPick && session.vocal?.laneId !== vocalPick) || (!!beatPick && session.beat?.laneId !== beatPick));
   const trying = useMemo(() => trial?.ideas ?? [], [trial]);
@@ -929,6 +464,11 @@ export default function AiProducer() {
   const baselineLanes = trial?.showing === "idea" ? trial.baseline.lanes : null;
   const before = useMemo(() => (session && baselineLanes ? fixGroups(checkMix(session, baselineLanes)) : null), [session, baselineLanes]);
   const total = useMemo(() => (session && session.pair ? scoreMix(session, lanes) : null), [session, lanes]);
+  /** The score before the changes being tried, and with them — for "What happened". */
+  const scores = useMemo(() => {
+    if (!session?.pair || !trial) return null;
+    return { before: scoreMix({ ...session, projectBpm: trial.baseline.projectBpm }, trial.baseline.lanes).total, after: scoreMix({ ...session, projectBpm: trial.result.projectBpm }, trial.result.lanes).total };
+  }, [session, trial]);
   /** Where the vocal sounds most out of tune, if one stretch stands out — measured on the mix every try starts from. */
   const baseLanes = trial?.baseline.lanes ?? lanes;
   const outOfTune = useMemo(() => (session ? keyStretch(session, baseLanes) : null), [session, baseLanes]);
@@ -955,7 +495,7 @@ export default function AiProducer() {
       // Let the steps paint before the (synchronous) arranging.
       await new Promise((r) => setTimeout(r, 30));
       if (id !== run.current) return;
-      // Cutting or the sync may have been switched while it listened: the ideas follow the latest choice.
+      // Cutting, the sync or the timing may have been switched while it listened: the ideas follow the latest choice.
       const fresh: Session = { ...heardNow, options: { vibe: "any", ...options.current } };
       const found = studioIdeas(fresh);
       const sync = await syncEverythingIdea(fresh).catch(() => null);
@@ -995,7 +535,8 @@ export default function AiProducer() {
     setError(null);
     setSwapNote(null);
     setKeptVibes([]);
-    setDetails(false);
+    setExplaining(false);
+    setExpanded(null);
     setVocalId("");
     setBeatId("");
     /* eslint-enable react-hooks/set-state-in-effect */
@@ -1063,22 +604,22 @@ export default function AiProducer() {
   // The person moved things themselves (or kept an idea): work the ideas
   // out again for where things are now, from what was already heard.
   useEffect(() => {
-    if (!session || trial || stale || busy || session.timing === timing) return;
+    if (!session || trial || stale || busy || session.timing === timingNow) return;
     const timer = setTimeout(() => {
       const rebased = rebaseSession(session);
       setSession(rebased);
       setIdeas((current) => reworkIdeas(rebased, current));
     }, 350);
     return () => clearTimeout(timer);
-  }, [session, trial, stale, busy, timing]);
+  }, [session, trial, stale, busy, timingNow]);
 
   /** The mix every try starts from: the original while an idea is on. */
   const startLanes = () => useAiTrial.getState().trial?.baseline.lanes ?? useStudioStore.getState().lanes;
 
   /**
-   * Plays an idea on top of what's on — the others stay; only one of the
-   * same kind (another timing, another sound) makes way. Tapping one
-   * that's on takes just it off.
+   * Switches an idea on, on top of what's on — the others stay; only one
+   * of the same kind (another timing, another sound) makes way. One that's
+   * on is switched off, just it.
    */
   function toggle(idea: Idea) {
     if (!session) return;
@@ -1113,10 +654,28 @@ export default function AiProducer() {
     playOn();
   }
 
+  /** Plays an idea from its best moment — switching it on first when it's off. */
+  function hear(idea: Idea) {
+    if (!session) return;
+    const at = idea.listenAt ?? 0;
+    if (onNow().some((i) => i.id === idea.id)) {
+      audioEngine.seek(at);
+      playOn();
+      return;
+    }
+    soon(idea.id, () => {
+      toggleNow(idea);
+      if (onNow().some((i) => i.id === idea.id)) {
+        audioEngine.seek(idea.listenAt ?? at);
+        playOn();
+      }
+    });
+  }
+
   /**
    * Works every idea out again with different options (whole tracks, the
-   * sync), without listening again — and puts back on what was on, worked
-   * out the new way. Returns the new session and ideas.
+   * sync, the timing), without listening again — and puts back on what
+   * was on, worked out the new way. Returns the new session and ideas.
    */
   function applyOptions(next: Partial<Session["options"]>, { except = [] as string[], add = [] as string[] } = {}) {
     if (!session) return null;
@@ -1148,32 +707,58 @@ export default function AiProducer() {
   }
 
   /**
-   * A sync template is a setting: every idea that places the vocal uses
-   * it. With a style (or another timing idea) on, that's worked out again
-   * with the new sync; with none, the template itself is tried.
+   * Who leads is a setting: every idea that places the vocal uses it. With
+   * a style (or another timing idea) on, that's worked out again with the
+   * new sync; with none, the sync itself goes on, so it's heard. A
+   * ready-made timing sync (bar 1, an 8-bar intro, no gaps) is the
+   * "Perfect sync" lead with that timing.
    */
   function chooseSync(idea: Idea, onDone?: (ideas: Idea[]) => void) {
     if (!session) return;
     if (onNow().some((i) => i.id === idea.id)) return toggle(idea);
     if (workingRef.current) return;
-    const id = idea.id.slice("sync-".length);
-    setSyncId(id);
-    saveSync(id);
-    options.current = { ...options.current, sync: id };
-    soon(idea.id, () => {
+    const template = SYNC_TEMPLATES.find((t) => `sync-${t.id}` === idea.id);
+    if (!template) return;
+    const lead = LEAD_SYNCS.includes(template.id) ? template.id : "perfect";
+    const nextTiming: Timing = LEAD_SYNCS.includes(template.id)
+      ? timing
+      : { entry: template.entry === 0 || template.entry === 4 || template.entry === 8 ? template.entry : "auto", tight: template.structure === "tight" };
+    setSyncId(lead);
+    saveSync(lead);
+    setTiming(nextTiming);
+    saveTiming(nextTiming);
+    options.current = { ...options.current, sync: lead, ...nextTiming };
+    soon(`sync-${lead}`, () => {
       const on = onNow();
       const otherTiming = on.find((t) => t.kind !== "sync" && isTiming(t));
-      // With a style (or another timing idea) on, it's worked out again with this sync; with none, the template itself goes on.
-      const done = applyOptions({ sync: id }, { except: on.filter((t) => t.kind === "sync").map((t) => t.id), add: otherTiming ? [] : [idea.id] });
+      const done = applyOptions({ sync: lead, ...nextTiming }, { except: on.filter((t) => t.kind === "sync").map((t) => t.id), add: otherTiming ? [] : [`sync-${lead}`] });
       if (!done) return;
       onDone?.(done.ideas);
-      if (otherTiming) setSwapNote({ icon: "link", text: `${idea.title}: “${otherTiming.title}” is now synced this way` });
+      if (otherTiming) setSwapNote({ icon: "link", text: `“${otherTiming.title}” is now synced this way` });
       playOn();
     });
   }
 
-  /** What "Let AI choose" found last (see MixDoctor) — shown while the ideas it scored are the ones listed. */
-  const [best, setBest] = useState<Best | null>(null);
+  /** When the vocal comes in, or closing gaps: everything on is worked out again with it — or the sync goes on, to hear it. */
+  function chooseTiming(change: Partial<Timing>) {
+    if (!session || workingRef.current) return;
+    const next = { ...timing, ...change };
+    if (next.entry === timing.entry && next.tight === timing.tight) return;
+    setTiming(next);
+    saveTiming(next);
+    options.current = { ...options.current, ...next };
+    soon("timing", () => {
+      const on = onNow();
+      const anyTiming = on.some((t) => isTiming(t));
+      const done = applyOptions(next, { add: anyTiming ? [] : [`sync-${syncId}`] });
+      if (!done) return;
+      setSwapNote({ icon: "timer", text: anyTiming ? "Worked out again with your timing" : `${SYNC_TEMPLATES.find((t) => t.id === syncId)?.title ?? "Sync"} on, with your timing` });
+      playOn();
+    });
+  }
+
+  /** What "Let AI choose" found last (see MixCheck) — shown while the ideas it scored are the ones listed. */
+  const [best, setBest] = useState<(Best & { ideas: Idea[] }) | null>(null);
   const bestFound = best && best.ideas === ideas ? best : null;
 
   /** Scores every whole-mix idea, then plays the best one if it beats the mix as it is. */
@@ -1273,7 +858,7 @@ export default function AiProducer() {
     return ideas.find((i) => i.id === idea.id) ?? null;
   }
 
-  /** The switch next to a change: on puts it back (as worked out now), off takes just it off. */
+  /** The switch next to a change in "What happened": on puts it back (as worked out now), off takes just it off. */
   function switchIdea(idea: Idea, on: boolean) {
     if (!session) return;
     if (!on) return toggle(idea);
@@ -1314,12 +899,31 @@ export default function AiProducer() {
       // The idea carries its own section: whatever else is on stays on for the whole song.
       const idea = stretchKeyIdea(session, stretch, startLanes());
       if (!idea || !tryIdea(session, idea, { add: true })) {
-        setError("That part couldn't be re-keyed on its own — try Fix on the Key row.");
+        setError("That part couldn't be re-keyed on its own — try the key switch instead.");
         return;
       }
       setSwapNote({ icon: "music", text: `${idea.title}: only ${clock(stretch.start)}–${clock(stretch.end)} changes` });
       audioEngine.seek(idea.listenAt ?? stretch.start);
       playOn();
+    });
+  }
+
+  /** The vocal moved on the harmony chart: tried like any idea (with a switch), in place of the last such move. */
+  function tryShift(shift: number) {
+    if (!session) return;
+    const vocal = session.vocal && useStudioStore.getState().lanes.find((l) => l.laneId === session.vocal!.laneId);
+    if (!vocal || !shift) return;
+    soon("tune", () => {
+      const bpm = bpmNow();
+      const idea = tuneIdea(useStudioStore.getState().lanes, vocal, shift);
+      const previous = onNow().find((i) => i.id.startsWith("tune:"));
+      if (!tryIdea(session, idea, { add: true, replace: previous?.id })) {
+        setError("The vocal couldn't be moved there");
+        return;
+      }
+      keepPlace(bpm);
+      playOn();
+      setSwapNote({ icon: "music", text: `${idea.title} — switch it off on the Harmony tab to go back` });
     });
   }
 
@@ -1337,9 +941,9 @@ export default function AiProducer() {
     setOpen(false);
   }
 
-  // The Mix check's fixes build on each other: pressing one adds it to the
-  // fixes already on, all worked out together, so none undoes another; and
-  // each comes off on its own (Undo), the others staying on.
+  // The Mix check's fixes build on each other: switching one on adds it to
+  // the fixes already on, all worked out together, so none undoes another;
+  // and each comes off on its own, the others staying on.
   const fixable = useMemo(() => (session ? availableFixes(session) : new Set<FixId>()), [session]);
   const fixesOn = useMemo(() => new Set(trying.flatMap(fixesOf).filter((f) => fixable.has(f))), [trying, fixable]);
   function fixCheck(fix: FixId) {
@@ -1349,7 +953,7 @@ export default function AiProducer() {
       const bpm = bpmNow();
       const replaced = addFix(session, fix, fixable);
       if (!replaced) {
-        setError("That can't be fixed automatically for this mix — try Fine-tune on the Mix tab.");
+        setError("That can't be fixed automatically for this mix — try Fine-tune on the Style tab.");
         return;
       }
       if (replaced.length) setSwapNote({ icon: "stethoscope", text: `${FIX_LABEL[fix]} fixed — it took the place of ${replaced.map((i) => i.title).join(", ")}` });
@@ -1357,7 +961,7 @@ export default function AiProducer() {
       playOn();
     });
   }
-  /** Undo on a row: just that fix comes off. */
+  /** A fix switched off: just that one comes off. */
   function unfixCheck(fix: FixId) {
     if (!session) return;
     soon(`fix:${fix}`, () => {
@@ -1369,7 +973,7 @@ export default function AiProducer() {
       keepPlace(bpm);
     });
   }
-  /** Fix everything: Make it sound good on (in place of single fixes), or off again. */
+  /** Make it sound good: on (in place of single fixes), or off again. */
   function fixAll() {
     const all = ideas.find((i) => i.kind === "auto");
     if (all) toggle(all);
@@ -1390,11 +994,11 @@ export default function AiProducer() {
 
   // Keys: , and . flip through ideas, B before/after, Enter keeps, Esc closes.
   // The handlers as they are this render, behind callbacks that never
-  // change — so the memoised tiles and the Mix check don't all redraw
+  // change — so the memoised rows and the Mix check don't all redraw
   // every time anything in the panel does.
-  const latest = useRef({ stepThrough, keep, close, toggle, chooseSync, fixCheck, unfixCheck, fixAll, findBest, tryBest });
+  const latest = useRef({ stepThrough, keep, close, toggle, chooseSync, fixCheck, unfixCheck, fixAll, findBest, tryBest, hear, setPart });
   useEffect(() => {
-    latest.current = { stepThrough, keep, close, toggle, chooseSync, fixCheck, unfixCheck, fixAll, findBest, tryBest };
+    latest.current = { stepThrough, keep, close, toggle, chooseSync, fixCheck, unfixCheck, fixAll, findBest, tryBest, hear, setPart };
   });
   const act = useMemo(
     () => ({
@@ -1405,6 +1009,8 @@ export default function AiProducer() {
       fixAll: () => latest.current.fixAll(),
       findBest: () => latest.current.findBest(),
       tryBest: (ideaId: string) => latest.current.tryBest(ideaId),
+      hear: (idea: Idea) => latest.current.hear(idea),
+      setPart: (idea: Idea, part: Part, on: boolean) => latest.current.setPart(idea, part, on),
     }),
     []
   );
@@ -1431,20 +1037,22 @@ export default function AiProducer() {
   const lists = useMemo(() => {
     const taste = PERSONAS.find((p) => p.id === personaId) ?? PERSONAS[0];
     const ranked = (list: Idea[]) => (taste.vibes.length ? [...list].sort((a, b) => suits(b, taste) - suits(a, taste)) : list);
-    const isLayer = (i: Idea) => i.id.startsWith("layer-");
+    const byId = new Map(ideas.map((i) => [i.id, i]));
     return {
-      auto: ideas.find((i) => i.id === "auto-good"),
-      styles: ranked(ideas.filter((i) => i.kind === "full")),
-      syncs: ideas.filter((i) => i.kind === "sync"),
-      moments: ranked(ideas.filter((i) => i.kind === "moment" && !isLayer(i))),
+      auto: ideas.find((i) => i.kind === "auto"),
+      byId,
+      lockAll: byId.get(LOCK_ALL),
+      shapes: ideas.filter(isShape),
+      tempos: ideas.filter(isTempoChoice),
+      timingFixes: TIMING_FIXES.flatMap((id) => byId.get(id) ?? []),
+      dropGroups: DROP_GROUPS.map((g) => ({ ...g, ideas: g.ids.flatMap((id) => byId.get(id) ?? []) })).filter((g) => g.ideas.length),
+      moreMoments: ideas.filter((i) => i.kind === "moment" && !isLayer(i) && !GROUPED.has(i.id)),
       layers: ideas.filter(isLayer),
-      // The Mix check's own fixes aren't in the list; these are the rest.
-      otherFixes: ideas.filter((i) => i.kind === "fix"),
-      arrangement: ideas.filter((i) => i.kind === "idea" && i.role !== "engineer"),
-      sounds: ideas.filter((i) => i.kind === "idea" && i.role === "engineer"),
+      styles: ranked(ideas.filter((i) => i.kind === "full")),
+      sounds: ideas.filter((i) => i.id.startsWith("sound-")),
+      cleanUp: ideas.filter((i) => i.id === "fix-vocal-clash"),
     };
   }, [ideas, personaId]);
-  const { auto, styles, syncs, moments, layers, otherFixes, arrangement, sounds } = lists;
   /** Which ideas fit the mix every try starts from. */
   const fitting = useMemo(() => {
     const from = trial?.baseline.lanes ?? lanes;
@@ -1459,12 +1067,35 @@ export default function AiProducer() {
   const partsNote = hasPartLanes || session?.beatParts.length ? " · drops use the beat's own drums & bass" : "";
   const vocalLane = lanes.find((l) => l.laneId === session?.vocal?.laneId) ?? null;
   const beatLane = lanes.find((l) => l.laneId === session?.beat?.laneId) ?? null;
-  const onIn = (t: Tab) => trying.filter(IN_TAB[t]).length;
-  const tile = (idea: Idea, badge?: string) => (
-    <Tile key={idea.id} idea={idea} on={onIds.has(idea.id)} disabled={!fits(idea)} onPick={act.toggle} badge={badge} working={working === idea.id} />
-  );
-  const row = (idea: Idea) => <Row key={idea.id} idea={idea} on={onIds.has(idea.id)} disabled={!fits(idea)} onPick={act.toggle} working={working === idea.id} />;
+  const onIn = (t: AiTab) => trying.filter(IN_TAB[t]).length;
+  const sw = (idea: Idea, badge?: string) => {
+    const on = onIds.has(idea.id);
+    return (
+      <IdeaSwitch
+        key={idea.id}
+        idea={idea}
+        on={on}
+        disabled={!fits(idea)}
+        working={working === idea.id}
+        expanded={expanded === idea.id}
+        songLength={songLength}
+        onToggle={act.toggle}
+        onExpand={setExpanded}
+        onHear={act.hear}
+        badge={badge}
+      >
+        {on && trial && <PartChips idea={idea} off={trial.without[idea.id] ?? []} working={working} onPart={act.setPart} />}
+      </IdeaSwitch>
+    );
+  };
   const ready = !!session && !busy && !missing;
+  const score = total?.total ?? null;
+  const autoOn = !!lists.auto && onIds.has(lists.auto.id);
+  const keyFix = fixState("key");
+  const keyPart = trial?.ideas.find((i) => i.id === "key-part");
+  const tune = trial?.ideas.find((i) => i.id.startsWith("tune:"));
+  const syncOn = trying.find((i) => i.kind === "sync");
+  const leaderIdea = lists.byId.get(`sync-${syncId}`);
 
   if (!open) return null;
 
@@ -1490,6 +1121,12 @@ export default function AiProducer() {
     drag.current = null;
     if (d && !d.moved) setSheet((s) => (s === "full" ? "mini" : SHEETS[SHEETS.indexOf(s) + 1]));
   };
+  const scopeBar = (hideLanes = false) =>
+    ready ? (
+      <div className="mb-3">
+        <AiScopeBar lanes={baseLanes} suggestions={sections} onChange={changeScope} disabled={working !== null} hideLanes={hideLanes} />
+      </div>
+    ) : null;
 
   return (
     <>
@@ -1523,16 +1160,40 @@ export default function AiProducer() {
           <span className="h-1 w-10 rounded-full bg-border" aria-hidden />
         </button>
         <header className="flex shrink-0 items-center gap-2 px-3 pb-1.5 sm:gap-2.5 sm:px-4 sm:pt-2.5 sm:pb-2">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand to-vocals text-base text-white sm:h-9 sm:w-9 sm:text-lg">
-            {busy || working ? <Loader2 className="animate-spin" aria-label="Working…" /> : <Sparkles />}
-          </span>
+          {score !== null && !busy ? (
+            <ScoreRing score={score} size={40} label={`Mix score ${score} of 100`} />
+          ) : (
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand to-vocals text-base text-white sm:text-lg">
+              {busy || working ? <Loader2 className="animate-spin" aria-label="Working…" /> : <Sparkles />}
+            </span>
+          )}
           <div className="min-w-0 flex-1">
-            <h2 className="text-sm font-bold">AI producer</h2>
+            <h2 className="flex items-center gap-1.5 text-sm font-bold">
+              AI producer
+              {working && score !== null && <Loader2 className="animate-spin text-brand-strong" aria-label="Working…" />}
+            </h2>
             <p className="truncate text-[11px] text-muted">
-              {trying.length ? `${trying.length} idea${trying.length > 1 ? "s" : ""} on · ` : ""}
-              {isWhole(scope) ? "" : `${scope.range ? scope.range.label : "Some lanes"} only · `}Tap to hear it<span className="max-sm:hidden"> · options stack · nothing&apos;s final until you keep it</span>
+              {score !== null ? `${scoreWord(score)} · ` : ""}
+              {trying.length ? `${trying.length} on · ` : ""}
+              {isWhole(scope) ? "" : `${scope.range ? scope.range.label : "Some lines"} only · `}Switch ideas on and off
             </p>
           </div>
+          {ready && (
+            <button
+              onClick={() => setExplaining((v) => !v)}
+              aria-pressed={explaining}
+              className={`relative flex h-9 shrink-0 items-center gap-1 rounded-lg border px-2 text-[11px] font-semibold transition-colors ${explaining ? "border-brand bg-brand/15" : "border-border text-muted hover:text-foreground"}`}
+              title="What happened — exactly what the AI changed, line by line"
+            >
+              <ListChecks className="text-brand-strong" />
+              <span className="max-[420px]:hidden">What happened</span>
+              {trying.length + keptCount > 0 && (
+                <span className="rounded-full bg-brand px-1.5 text-[10px] leading-4 text-white" aria-label={`${trying.length} on`}>
+                  {trying.length || keptCount}
+                </span>
+              )}
+            </button>
+          )}
           <button
             onClick={() => setSheet((s) => (s === "full" ? "half" : "full"))}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-surface hover:text-foreground lg:hidden"
@@ -1553,23 +1214,27 @@ export default function AiProducer() {
         </header>
 
         {(ready || (!busy && lanes.length > 0)) && (
-          <nav className={`flex shrink-0 gap-1 overflow-x-auto border-b ${sheet === "mini" ? "max-lg:hidden" : ""} border-border px-2 pb-1.5 sm:px-3 sm:pb-2`} aria-label="AI producer sections">
+          <nav className={`flex shrink-0 gap-0.5 overflow-x-auto border-b ${sheet === "mini" ? "max-lg:hidden" : ""} border-border px-1.5 pb-1.5 sm:px-2 sm:pb-2`} aria-label="AI producer sections">
             {TABS.map((t) => {
               const count = onIn(t.id);
+              const here = tab === t.id && !explaining;
               return (
                 <button
                   key={t.id}
-                  onClick={() => setTab(t.id)}
-                  aria-current={tab === t.id}
-                  className={`relative flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1 text-[10px] font-semibold whitespace-nowrap transition-colors sm:flex-row sm:gap-1 sm:px-1.5 sm:py-1.5 sm:text-xs ${
-                    tab === t.id ? "bg-brand text-white" : "text-muted hover:bg-surface hover:text-foreground"
+                  onClick={() => {
+                    setTab(t.id);
+                    setExplaining(false);
+                  }}
+                  aria-current={here}
+                  className={`relative flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1 text-[10px] font-semibold whitespace-nowrap transition-colors ${
+                    here ? "bg-brand text-white" : "text-muted hover:bg-surface hover:text-foreground"
                   }`}
                 >
-                  <t.icon className="text-sm sm:text-xs" />
+                  <t.icon className="text-sm" />
                   {t.label}
                   {count > 0 && (
                     <span
-                      className={`rounded-full px-1.5 text-[10px] leading-4 max-sm:absolute max-sm:top-0 max-sm:right-0.5 sm:ml-0.5 ${tab === t.id ? "bg-white/25" : "bg-brand text-white"}`}
+                      className={`absolute top-0 right-0.5 rounded-full px-1 text-[9px] leading-[0.875rem] ${here ? "bg-white/25" : "bg-brand text-white"}`}
                       aria-label={`${count} on`}
                     >
                       {count}
@@ -1582,35 +1247,13 @@ export default function AiProducer() {
         )}
 
         <div className={`min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3 sm:px-4 ${sheet === "mini" ? "max-lg:hidden" : ""}`}>
-          {ready && (tab === "styles" || tab === "moments") && (
-            <div className="-mx-4 mb-3 flex gap-1.5 overflow-x-auto px-4 pb-0.5" role="radiogroup" aria-label="Producer style — ideas that suit it come first">
-              {PERSONAS.map((p) => (
-                <button
-                  key={p.id}
-                  role="radio"
-                  aria-checked={persona.id === p.id}
-                  onClick={() => choosePersona(p.id)}
-                  className={`shrink-0 rounded-full border px-3 py-1 text-[11px] font-semibold whitespace-nowrap transition-colors ${
-                    persona.id === p.id ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted hover:text-foreground"
-                  }`}
-                >
-                  <p.icon /> {p.label}
-                </button>
-              ))}
-            </div>
-          )}
-          {ready && tab !== "ask" && (
-            <div className="mb-3">
-              <AiScopeBar lanes={baseLanes} suggestions={sections} onChange={changeScope} disabled={working !== null} />
-            </div>
-          )}
           {(lanes.length === 0 || missing) && tab !== "ask" ? (
             <div className="flex flex-col gap-3 py-2 text-sm">
               <p className="text-base font-bold">Let&apos;s make a remix</p>
-              <p className="text-muted">The AI needs a vocal and a beat to work with. Pick them from the library — any vocal over any song.</p>
+              <p className="text-muted">The AI needs a vocal and a beat to work with. Pick them from the library — any vocal over any song, or every line of a song.</p>
               {[
                 { done: vocals.length > 0, icon: Mic, text: "A vocal (someone singing or rapping)" },
-                { done: backings.length > 0, icon: Drum, text: "A beat (the music of another song)" },
+                { done: backings.length > 0, icon: Drum, text: "A beat — or a song's drums, bass and melody" },
               ].map((s) => (
                 <div key={s.text} className={`flex items-center gap-3 rounded-xl border p-3 ${s.done ? "border-success/50 bg-success/10" : "border-dashed border-border"}`}>
                   <s.icon className="h-6 w-6 text-brand-strong" />
@@ -1627,7 +1270,7 @@ export default function AiProducer() {
                 </div>
               ))}
               <button
-                onClick={() => useStudioView.getState().showLibrary()}
+                onClick={() => useStudioView.getState().showLibrary(missing === "beat" ? "beat" : missing === "vocal" ? "vocals" : "songs")}
                 className="flex h-11 items-center justify-center gap-2 rounded-xl bg-brand px-5 text-sm font-semibold text-white hover:bg-brand-strong"
               >
                 + Pick from the library
@@ -1697,8 +1340,21 @@ export default function AiProducer() {
             </p>
           )}
 
-          {ready && session && tab === "sync" && (
-            <div className="flex flex-col gap-5">
+          {ready && session && explaining && (
+            <WhatHappened
+              trial={trial}
+              onIds={onIds}
+              working={working}
+              scores={scores}
+              onBack={() => setExplaining(false)}
+              onSwitch={switchIdea}
+              onPart={setPart}
+              onDismiss={dismissOff}
+            />
+          )}
+
+          {ready && session && !explaining && tab === "sync" && (
+            <div className="flex flex-col gap-4">
               {(vocals.filter((l) => !leadOf(l.laneId)).length > 1 || backings.length > 1) && (
                 <div className="grid grid-cols-1 gap-2 text-[11px] text-muted min-[380px]:grid-cols-2">
                   <label className="flex min-w-0 flex-col gap-1">
@@ -1726,17 +1382,26 @@ export default function AiProducer() {
                 </div>
               )}
 
+              {lists.auto && (
+                <div className={`flex items-center gap-3 rounded-2xl p-3 text-white transition-all ${autoOn ? "bg-brand ring-2 ring-brand-strong" : "bg-gradient-to-r from-brand to-vocals shadow-[0_0_24px_-10px_var(--vocals)]"}`}>
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/20 text-xl">
+                    {working === lists.auto.id ? <Loader2 className="animate-spin" /> : autoOn ? <CheckIcon /> : <WandSparkles />}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[13px] font-bold">Make it sound good</p>
+                    <p className="line-clamp-2 text-[10.5px] leading-snug text-white/85">{autoOn ? lists.auto.short || "Every fix on" : "Speed, timing, key and volumes — every fix at once"}</p>
+                  </div>
+                  <Switch on={autoOn} onChange={act.fixAll} label={`Make it sound good: ${autoOn ? "on" : "off"}`} busy={working === lists.auto.id} disabled={!fits(lists.auto) || (working !== null && working !== lists.auto.id)} />
+                </div>
+              )}
+
               {groups.length > 0 && (
-                <MixDoctor
+                <MixCheck
                   groups={groups}
                   helped={helped}
-                  total={total}
                   showing={trial ? trial.showing : null}
                   fixState={fixState}
                   working={working}
-                  auto={auto}
-                  autoOn={!!auto && onIds.has(auto.id)}
-                  autoFits={!!auto && fits(auto)}
                   canChoose={!!session.pair}
                   best={session.pair ? bestFound : null}
                   bestBlocked={working !== null && working !== "best"}
@@ -1746,68 +1411,39 @@ export default function AiProducer() {
                 />
               )}
 
-              {outOfTune && !onIds.has("key-part") && (
-                <div className="flex items-center gap-3 rounded-xl border border-amber-400/50 bg-amber-400/10 p-3 text-xs">
-                  <Info className="shrink-0 text-amber-400" />
-                  <p className="min-w-0 flex-1">
-                    <span className="font-semibold">Out of tune at {clock(outOfTune.start)}–{clock(outOfTune.end)}</span>
-                    <span className="block text-[11px] text-muted">
-                      Only {Math.round(outOfTune.now.inChord * 100)}% of the notes sit in the beat&apos;s chords there; {outOfTune.shift > 0 ? "+" : ""}
-                      {outOfTune.shift} st on just that part gets {Math.round(outOfTune.best.inChord * 100)}%.
-                    </span>
-                  </p>
-                  <button
-                    onClick={fixStretch}
+              <LineSync lanes={lanes} projectBpm={projectBpm} scope={scope} onScope={changeScope} disabled={working !== null} />
+
+              {session.pair && (
+                <Section icon={Users} title="Who leads" hint="Whose speed and key every line takes — every style and fix uses your pick">
+                  <ChoiceCards
+                    label="Who leads"
+                    choices={LEADERS}
+                    value={syncId}
+                    working={working?.startsWith("sync-") ? working.slice(5) : null}
                     disabled={working !== null}
-                    aria-busy={working === "key-part"}
-                    className="shrink-0 rounded-lg bg-brand px-2.5 py-1.5 font-semibold text-white hover:bg-brand-strong disabled:opacity-40"
-                  >
-                    {working === "key-part" ? <Loader2 className="animate-spin" /> : "Fix just this part"}
-                  </button>
-                </div>
-              )}
-
-              <Section icon={Scissors} title="Cutting" hint="How the AI may edit your tracks — everything on is worked out again when you switch">
-                <div className="flex overflow-hidden rounded-xl border border-border text-xs font-semibold" role="group" aria-label="How the AI may edit your tracks">
-                  {([
-                    [false, Scissors, "Cut into lines", "Tightest fit: the vocal is cut at its silences and every line laid on the beat"],
-                    [true, RectangleHorizontal, "Keep tracks whole", "Nothing is cut: tracks are only moved, sped up or slowed, re-keyed and levelled"],
-                  ] as const).map(([whole, ChoiceIcon, label, hint]) => (
-                    <button
-                      key={label}
-                      onClick={() => chooseWhole(whole)}
-                      aria-pressed={keepWhole === whole}
-                      aria-busy={working === "whole" && keepWhole === whole}
-                      title={hint}
-                      className={`flex flex-1 items-center justify-center gap-1 px-2 py-2 whitespace-nowrap transition-colors ${keepWhole === whole ? "bg-brand text-white" : "text-muted hover:text-foreground"}`}
-                    >
-                      {working === "whole" && keepWhole === whole ? <Loader2 className="animate-spin" /> : <ChoiceIcon />} {label}
-                    </button>
-                  ))}
-                </div>
-              </Section>
-
-              {syncs.length > 0 && (
-                <Section icon={Link} title="Sync templates" hint="How the vocal, the beat and every other lane meet — your pick is used by every style and fix">
-                  <div className="grid grid-cols-2 gap-2">
-                    {syncs.map((idea) => {
-                      const chosen = idea.id === `sync-${syncId}`;
-                      return (
-                        <Tile
-                          key={idea.id}
-                          idea={idea}
-                          on={onIds.has(idea.id)}
-                          selected={chosen}
-                          disabled={!fits(idea)}
-                          onPick={act.chooseSync}
-                          working={working === idea.id}
-                          badge={chosen ? "Your sync" : idea.id === "sync-perfect" ? "Best start" : undefined}
-                        />
-                      );
-                    })}
-                  </div>
+                    onChange={(id) => {
+                      // The one picked and playing: nothing to change (its switch below takes it off).
+                      if (id === syncId && onIds.has(`sync-${id}`)) return;
+                      const idea = lists.byId.get(`sync-${id}`);
+                      if (idea) act.chooseSync(idea);
+                    }}
+                  />
+                  {leaderIdea && (
+                    <SwitchRow
+                      title={`${leaderIdea.title} — playing`}
+                      hint={syncOn ? "Every line locked together your way. Switch off to hear the lines as they were." : "Switch on to hear every line synced this way (a style or fix on uses it anyway)."}
+                      on={!!syncOn}
+                      busy={working === leaderIdea.id}
+                      disabled={working !== null && working !== leaderIdea.id}
+                      onChange={() => act.toggle(syncOn ?? leaderIdea)}
+                    />
+                  )}
                 </Section>
               )}
+
+              {lists.lockAll && <Section icon={Link} title="Every other line" hint="Other beats, vocals and parts, all at one speed">{sw(lists.lockAll)}</Section>}
+
+              {scopeBar(true)}
 
               {vocalLane?.bpm && (
                 <details className="group rounded-xl border border-border">
@@ -1827,7 +1463,7 @@ export default function AiProducer() {
 
               {session.notes.map((note) => (
                 <p key={note} className="text-[11px] text-muted">
-                  <Info /> {note}
+                  {note}
                 </p>
               ))}
 
@@ -1835,86 +1471,145 @@ export default function AiProducer() {
             </div>
           )}
 
-          {ready && session && tab === "styles" && (
-            <div className="flex flex-col gap-5">
-              {styles.length > 0 ? (
+          {ready && session && !explaining && tab === "timing" && (
+            <div className="flex flex-col gap-4">
+              {scopeBar()}
+              <Section icon={DoorOpen} title="When the vocal comes in" hint="Goes with whoever leads — every style and fix comes in here too">
+                <ChoiceCards label="When the vocal comes in" choices={ENTRIES} value={timing.entry} columns={4} working={working === "timing" ? timing.entry : null} disabled={working !== null || !session.pair} onChange={(entry) => chooseTiming({ entry })} />
+              </Section>
+              <div className="flex flex-col gap-3 rounded-2xl border border-border bg-surface p-3">
+                <SwitchRow
+                  title="Lock every line to the beat"
+                  hint={keepWhole ? "Off: tracks stay whole — only moved, sped up or slowed, re-keyed and levelled; the vocal plays as sung from where its first line lands." : "On: the vocal is cut at its silences and every line is laid on the beat's bars — the tightest fit."}
+                  on={!keepWhole}
+                  busy={working === "whole"}
+                  disabled={working !== null && working !== "whole"}
+                  onChange={(on) => chooseWhole(!on)}
+                />
+                <SwitchRow
+                  title="Close long gaps"
+                  hint="Long instrumental breaks between the vocal's parts are cut short, so it never goes quiet for long."
+                  on={timing.tight}
+                  busy={working === "timing"}
+                  disabled={(working !== null && working !== "timing") || !session.pair}
+                  onChange={(tight) => chooseTiming({ tight })}
+                />
+              </div>
+              {lists.shapes.length > 0 && <Section icon={Puzzle} title="Song shape" hint="The vocal's parts in another order — one at a time">{lists.shapes.map((i) => sw(i))}</Section>}
+              {lists.tempos.length > 0 && <Section icon={Timer} title="Whose speed" hint="Another way to agree on a tempo">{lists.tempos.map((i) => sw(i))}</Section>}
+              {lists.timingFixes.length > 0 && <Section icon={Bandage} title="Timing fixes" hint="Small problems the AI spotted">{lists.timingFixes.map((i) => sw(i))}</Section>}
+              {vocalLane && (
+                <Section icon={SlidersVertical} title="Nudge" hint="Small hands-on moves — each one is a single undo">
+                  <FineTune vocal={vocalLane} beat={beatLane} only="timing" />
+                </Section>
+              )}
+            </div>
+          )}
+
+          {ready && session && !explaining && tab === "drop" && (
+            <div className="flex flex-col gap-4">
+              {scopeBar()}
+              <DropMap session={session} lanes={lanes} projectBpm={projectBpm} duration={songLength} />
+              {partsNote && <p className="-mt-2 text-[11px] text-muted">Drops use the beat&apos;s own drums &amp; bass — taken from the library, nothing is split again.</p>}
+              {lists.dropGroups.map((g) => (
+                <Section key={g.title} icon={g.icon} title={g.title} hint={g.hint}>
+                  {g.ideas.map((i) => sw(i, i.id === "moment-chorus-drop" && session.drop ? "Top pick" : undefined))}
+                </Section>
+              ))}
+              {lists.moreMoments.length > 0 && <Section icon={Sparkles} title="More moments" hint="They stack with everything">{lists.moreMoments.map((i) => sw(i))}</Section>}
+            </div>
+          )}
+
+          {ready && session && !explaining && tab === "harmony" && (
+            <div className="flex flex-col gap-4">
+              {scopeBar()}
+              <HarmonyCard session={session} lanes={lanes} onTryShift={tryShift} disabled={working !== null} />
+              <div className="flex flex-col gap-3 rounded-2xl border border-border bg-surface p-3">
+                <SwitchRow
+                  title="Match the key"
+                  hint={
+                    keyFix === "none"
+                      ? "Already in key — nothing to move."
+                      : syncId === "vocal-leads"
+                        ? "The music moves to the singer's key (Vocal leads) — the voice keeps its natural pitch."
+                        : "The vocal moves to the beat's key — every note by the same step, so the melody stays the same."
+                  }
+                  on={keyFix === "fixed"}
+                  busy={working === "fix:key"}
+                  disabled={keyFix === "none" || (working !== null && working !== "fix:key")}
+                  onChange={(on) => (on ? act.fixCheck("key") : act.unfixCheck("key"))}
+                />
+                {(outOfTune || keyPart) && (
+                  <SwitchRow
+                    title={outOfTune ? `Fix just ${clock(outOfTune.start)}–${clock(outOfTune.end)}` : keyPart!.title}
+                    hint={
+                      outOfTune
+                        ? `Only ${Math.round(outOfTune.now.inChord * 100)}% of the notes sit in the chords there; ${outOfTune.shift > 0 ? "+" : ""}${outOfTune.shift} st on just that part gets ${Math.round(outOfTune.best.inChord * 100)}%.`
+                        : keyPart!.short
+                    }
+                    on={!!keyPart}
+                    busy={working === "key-part"}
+                    disabled={working !== null && working !== "key-part"}
+                    onChange={(on) => (on ? fixStretch() : keyPart && act.toggle(keyPart))}
+                  />
+                )}
+                {tune && (
+                  <SwitchRow title={tune.title} hint="Picked on the chart above — switch off to put the vocal back." on busy={working === tune.id} onChange={() => act.toggle(tune)} />
+                )}
+              </div>
+              {lists.layers.length > 0 && <Section icon={Mic} title="Vocal harmonies" hint="Extra voices that follow the vocal wherever it goes — they stack with everything">{lists.layers.map((i) => sw(i))}</Section>}
+            </div>
+          )}
+
+          {ready && session && !explaining && tab === "style" && (
+            <div className="flex flex-col gap-4">
+              <div className="-mx-4 flex gap-1.5 overflow-x-auto px-4 pb-0.5" role="radiogroup" aria-label="Producer style — ideas that suit it come first">
+                {PERSONAS.map((p) => (
+                  <button
+                    key={p.id}
+                    role="radio"
+                    aria-checked={persona.id === p.id}
+                    onClick={() => choosePersona(p.id)}
+                    className={`shrink-0 rounded-full border px-3 py-1 text-[11px] font-semibold whitespace-nowrap transition-colors ${
+                      persona.id === p.id ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted hover:text-foreground"
+                    }`}
+                  >
+                    <p.icon /> {p.label}
+                  </button>
+                ))}
+              </div>
+              {scopeBar()}
+              {lists.styles.length > 0 ? (
                 <Section
                   icon={Palette}
                   title="Styles"
-                  hint="A whole remix in one tap — synced your way, and your layers and moments stay on"
+                  hint="A whole remix in one switch — one at a time; your sync, drops and harmonies stay on"
                   action={
                     <button onClick={surprise} aria-busy={working === "surprise"} className="shrink-0 rounded-lg border border-border px-2.5 py-1 text-xs font-semibold hover:border-brand">
                       {working === "surprise" ? <Loader2 className="animate-spin" /> : <Dices />} Surprise me
                     </button>
                   }
                 >
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-2">{styles.map((idea) => tile(idea))}</div>
+                  {lists.styles.map((i) => sw(i))}
                 </Section>
               ) : (
                 <p className="text-xs text-muted">Styles need a vocal and a beat the AI could match.</p>
               )}
-              {arrangement.length > 0 && (
-                <Section icon={Puzzle} title="Song shape & speed" hint="One change to the arrangement at a time">
-                  <div className="flex flex-col">
-                    {arrangement.map(row)}
-                  </div>
-                </Section>
-              )}
-            </div>
-          )}
-
-          {ready && session && tab === "moments" && (
-            <div className="flex flex-col gap-5">
-              {moments.length > 0 && (
-                <Section
-                  icon={Zap}
-                  title="Drops & moments"
-                  hint={
-                    session.drop
-                      ? `The beat's ${session.drop.kind === "drop" ? "drop" : "biggest moment"} is at bar ${session.drop.bar + 1}${partsNote}`
-                      : `Moments that make people listen${partsNote}`
-                  }
-                >
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-2">{moments.map((idea) => tile(idea))}</div>
-                </Section>
-              )}
-              {layers.length > 0 && (
-                <Section icon={Mic} title="Vocal layers" hint="Extra lanes that follow the vocal — they stack with everything">
-                  <div className="grid grid-cols-2 gap-2 min-[420px]:grid-cols-3">{layers.map((idea) => tile(idea))}</div>
-                </Section>
-              )}
-              {otherFixes.length > 0 && (
-                <Section icon={Bandage} title="Other fixes" hint="Small problems the AI spotted">
-                  <div className="flex flex-col">
-                    {otherFixes.map(row)}
-                  </div>
-                </Section>
-              )}
-            </div>
-          )}
-
-          {ready && session && tab === "mix" && (
-            <div className="flex flex-col gap-5">
+              {lists.sounds.length > 0 && <Section icon={Sparkles} title="Sound" hint="Effects and levels on every line — one sound at a time">{lists.sounds.map((i) => sw(i))}</Section>}
+              {lists.cleanUp.length > 0 && <Section icon={Bandage} title="Clean-up" hint="Small problems the AI spotted">{lists.cleanUp.map((i) => sw(i))}</Section>}
               <Section icon={SlidersHorizontal} title="Master it" hint="The finishing touch on the whole mix — one undo">
                 <MasterIt vibes={vibesNow} />
               </Section>
-              {sounds.length > 0 && (
-                <Section icon={Sparkles} title="Sound" hint="Effects and levels on every lane — one sound at a time">
-                  <div className="flex flex-col">
-                    {sounds.map(row)}
-                  </div>
-                </Section>
-              )}
               {vocalLane && (
                 <Section icon={SlidersVertical} title="Fine-tune" hint="Small hands-on fixes — each one is a single undo">
-                  <FineTune vocal={vocalLane} beat={beatLane} />
+                  <FineTune vocal={vocalLane} beat={beatLane} only="mix" />
                 </Section>
               )}
             </div>
           )}
 
           {/* Kept mounted on the other tabs (and while listening), so the conversation carries on. */}
-          <div hidden={tab !== "ask"} className="min-h-full">
+          <div hidden={tab !== "ask" || explaining} className="min-h-full">
             <CoProducer ctx={coproducer} question={question} />
           </div>
         </div>
@@ -1935,7 +1630,7 @@ export default function AiProducer() {
               <button
                 onClick={() => {
                   if (swipe.current?.done) return;
-                  setDetails((d) => !d);
+                  setExplaining(true);
                 }}
                 onPointerDown={(e) => (swipe.current = { x: e.clientX, done: false })}
                 onPointerUp={(e) => {
@@ -1949,7 +1644,7 @@ export default function AiProducer() {
                   }
                 }}
                 className="min-w-0 flex-1 touch-pan-y px-1 text-left"
-                aria-expanded={details}
+                title="What happened — exactly what's changed"
               >
                 <span className="block truncate text-xs font-semibold">
                   {trial.showing === "idea" ? <Play className="mr-1 fill-current" /> : <><Pause className="mr-1 fill-current" />Before · </>}
@@ -1965,17 +1660,11 @@ export default function AiProducer() {
                   )}
                 </span>
                 <span className="block text-[10px] text-muted">
-                  {trying.length > 1 ? `${trying.length} on · ` : ""}
+                  {scores ? `Score ${scores.before} → ${scores.after} · ` : ""}
                   {trial.off.length ? `${trial.off.length} off · ` : ""}
-                  {details ? (
-                    <>
-                      Hide <ChevronUp />
-                    </>
-                  ) : (
-                    <>
-                      Switch each change on or off <ChevronDown />
-                    </>
-                  )}
+                  <span className="font-semibold text-brand-strong">
+                    What happened <ChevronUp />
+                  </span>
                   <span className="sm:hidden"> · swipe for more</span>
                 </span>
               </button>
@@ -1983,58 +1672,6 @@ export default function AiProducer() {
                 {working === "step" ? <Loader2 className="mx-auto animate-spin" /> : <ChevronRight className="mx-auto h-5 w-5 sm:h-4 sm:w-4" />}
               </button>
             </div>
-            {details && (
-              <div className="mt-2 max-h-[22dvh] overflow-y-auto overscroll-contain rounded-lg bg-background p-2.5 text-[11px] text-muted sm:max-h-[30dvh]">
-                {[...trying, ...trial.off].map((i) => {
-                  const isOn = onIds.has(i.id);
-                  const parts = partsOf(i);
-                  const partsOff = trial.without[i.id] ?? [];
-                  return (
-                    <div key={i.id} className="mb-2.5 border-b border-border pb-2.5 last:mb-0 last:border-0 last:pb-0">
-                      <div className="flex items-center gap-2 font-semibold text-foreground">
-                        <span className={`min-w-0 flex-1 truncate ${isOn ? "" : "text-muted line-through decoration-muted/60"}`}>
-                          <Icon name={i.icon} className="text-brand-strong" /> {i.title}
-                        </span>
-                        {!isOn && (
-                          <button onClick={() => dismissOff(i.id)} className="shrink-0 rounded p-1 text-muted hover:text-danger" aria-label={`Remove ${i.title} from the list`} title="Remove from the list">
-                            <X />
-                          </button>
-                        )}
-                        <Switch on={isOn} onChange={(on) => switchIdea(i, on)} label={`${i.title}: ${isOn ? "on" : "off"}`} busy={working === i.id} />
-                      </div>
-                      {parts.length > 1 && (
-                        <div className="mt-1.5 flex flex-wrap gap-1" role="group" aria-label={`Parts of ${i.title}`}>
-                          {parts.map((part) => {
-                            const partOn = !partsOff.includes(part);
-                            const label = PARTS.find((p) => p.id === part)!.label;
-                            return (
-                              <button
-                                key={part}
-                                onClick={() => setPart(i, part, !partOn)}
-                                aria-pressed={partOn}
-                                aria-busy={working === `${i.id}#${part}`}
-                                title={partOn ? `Switch off just its ${label.toLowerCase()}` : `Switch its ${label.toLowerCase()} back on`}
-                                className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold transition-colors ${
-                                  partOn ? "border-brand/60 bg-brand/15 text-foreground" : "border-border text-muted line-through"
-                                }`}
-                              >
-                                {working === `${i.id}#${part}` ? <Loader2 className="animate-spin" /> : partOn ? <CheckIcon /> : <Minus />} {label}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                      <p className="mt-1">{i.why}</p>
-                      <ul className="mt-1 list-disc space-y-0.5 pl-4">
-                        {i.lines.map((line, n) => (
-                          <li key={n}>{line}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
             <div className="mt-2 flex items-stretch gap-1.5">
               <div className="flex shrink-0 overflow-hidden rounded-lg border border-border text-[11px] font-bold" role="group" aria-label="Compare (B)" title="Compare (B)">
                 {(["original", "idea"] as const).map((side) => (

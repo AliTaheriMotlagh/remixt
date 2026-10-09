@@ -26,7 +26,7 @@ import { exportMixdown, getExportFormat, setExportFormat, type ExportFormat } fr
 import { useExportJob } from "@/lib/client/exportJob";
 import { camelotCode, keyLabel } from "@/lib/client/musicKey";
 import { lanesToPayload, projectToPayload } from "@/lib/client/remixLanes";
-import { GRID_CHOICES, beatLength, effectiveKey, referenceLane, useStudioStore } from "@/lib/client/studioStore";
+import { GRID_CHOICES, beatLength, effectiveKey, keyReference, useStudioStore } from "@/lib/client/studioStore";
 import MasterPanel, { isMastered } from "./studio/MasterPanel";
 import { redo, startNewStep, undo, useStudioHistory } from "@/lib/client/studioHistory";
 import { markDraftClean } from "@/lib/client/studioDraft";
@@ -267,7 +267,7 @@ function TempoControl() {
 function KeyControl() {
   const lanes = useStudioStore((s) => s.lanes);
   const matchAllKeys = useStudioStore((s) => s.matchAllKeys);
-  const reference = referenceLane(lanes, (l) => !!l.musicalKey);
+  const reference = keyReference(lanes);
   const key = reference ? effectiveKey(reference) : null;
   return (
     <Popover
@@ -334,12 +334,15 @@ export default function StudioTransport({
   viewing = false,
   artistName,
   cover,
+  simple = false,
 }: {
   user: User | null;
   remixId: string | null;
   defaultTitle?: string;
   /** On a remix's own page (rather than the Studio): `remixId` is the remix being played. */
   viewing?: boolean;
+  /** The Easy studio's bar: play, the song's speed and key, level, master, export and save — no grid, loop or click. */
+  simple?: boolean;
   /** Who made the remix being played, for the social clip and exports (default: you). */
   artistName?: string;
   /** The remix's cover, for exported files' artwork. */
@@ -393,6 +396,16 @@ export default function StudioTransport({
   const router = useRouter();
 
   const hasLoop = loopEnd > loopStart;
+
+  // The Easy studio's "Save & share" step opens the save form here.
+  const saveAsk = useStudioView((s) => s.saveAsk);
+  const barRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!saveAsk) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- following the store: the save form asked for elsewhere
+    setShowSave(true);
+    barRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [saveAsk]);
 
   async function handlePlayPause() {
     if (lanes.length === 0) return;
@@ -494,6 +507,7 @@ export default function StudioTransport({
     // popovers is open it rises above the AI producer's sheet (z-[56]):
     // this bar is a stacking context, so a popover's own z-index can't.
     <div
+      ref={barRef}
       className={`sticky top-[var(--header-h)] z-40 has-[.popover-sheet]:z-[70] rounded-xl border border-border bg-surface shadow-lg shadow-black/20 sm:bg-surface/95 sm:backdrop-blur-md ${
         showSave ? "max-sm:static" : ""
       }`}
@@ -529,18 +543,20 @@ export default function StudioTransport({
           >
             <Square className="fill-current" />
           </button>
-          <button
-            onClick={() => setLoop({ enabled: !loopEnabled, start: hasLoop ? loopStart : 0, end: hasLoop ? loopEnd : Math.min(duration, 16) })}
-            disabled={empty}
-            className={`flex h-9 w-9 items-center justify-center rounded-lg text-sm transition-colors disabled:opacity-40 max-sm:hidden ${
-              loopEnabled ? "bg-brand/25 text-foreground" : "text-muted hover:bg-white/5 hover:text-foreground"
-            }`}
-            title={hasLoop ? `Loop ${formatTime(loopStart)}–${formatTime(loopEnd)} (L)` : "Loop — or drag across the ruler to pick a region (L)"}
-            aria-pressed={loopEnabled}
-            aria-label="Loop"
-          >
-            <Repeat />
-          </button>
+          {!simple && (
+            <button
+              onClick={() => setLoop({ enabled: !loopEnabled, start: hasLoop ? loopStart : 0, end: hasLoop ? loopEnd : Math.min(duration, 16) })}
+              disabled={empty}
+              className={`flex h-9 w-9 items-center justify-center rounded-lg text-sm transition-colors disabled:opacity-40 max-sm:hidden ${
+                loopEnabled ? "bg-brand/25 text-foreground" : "text-muted hover:bg-white/5 hover:text-foreground"
+              }`}
+              title={hasLoop ? `Loop ${formatTime(loopStart)}–${formatTime(loopEnd)} (L)` : "Loop — or drag across the ruler to pick a region (L)"}
+              aria-pressed={loopEnabled}
+              aria-label="Loop"
+            >
+              <Repeat />
+            </button>
+          )}
         </div>
 
         {/* The display. Not overflow-hidden (for its corners): that clipped the tempo and key popovers away. */}
@@ -552,10 +568,12 @@ export default function StudioTransport({
               <div className="border-l border-white/10">
                 <KeyControl />
               </div>
-              <div className="flex flex-col justify-center border-l border-white/10 px-3 py-1 max-2xl:hidden">
-                <LcdLabel>Sig</LcdLabel>
-                <span className="font-mono text-sm leading-tight">4/4</span>
-              </div>
+              {!simple && (
+                <div className="flex flex-col justify-center border-l border-white/10 px-3 py-1 max-2xl:hidden">
+                  <LcdLabel>Sig</LcdLabel>
+                  <span className="font-mono text-sm leading-tight">4/4</span>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -570,15 +588,17 @@ export default function StudioTransport({
               </div>
             </div>
           )}
-          <button
-            onClick={() => setLoop({ enabled: !loopEnabled, start: hasLoop ? loopStart : 0, end: hasLoop ? loopEnd : Math.min(duration, 16) })}
-            disabled={empty}
-            className={`${toggle(loopEnabled)} sm:hidden`}
-            aria-pressed={loopEnabled}
-          >
-            <Repeat /> Loop
-          </button>
-          {!viewing && (
+          {!simple && (
+            <button
+              onClick={() => setLoop({ enabled: !loopEnabled, start: hasLoop ? loopStart : 0, end: hasLoop ? loopEnd : Math.min(duration, 16) })}
+              disabled={empty}
+              className={`${toggle(loopEnabled)} sm:hidden`}
+              aria-pressed={loopEnabled}
+            >
+              <Repeat /> Loop
+            </button>
+          )}
+          {!viewing && !simple && (
             <div className="flex items-center gap-1">
               <button onClick={toggleMetronome} className={toggle(metronome)} title="Metronome (K)" aria-pressed={metronome}>
                 <Drum />
@@ -603,7 +623,7 @@ export default function StudioTransport({
               </select>
             </div>
           )}
-          {hasXfade && (
+          {hasXfade && !simple && (
             <label className="flex items-center gap-1.5 text-[10px] font-semibold text-muted" title="Crossfader between side A and side B lanes (double-click to centre)">
               A
               <input

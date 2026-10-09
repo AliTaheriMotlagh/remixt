@@ -1,7 +1,7 @@
 "use client";
 
 import { camelotCode, keyFit, keyLabel, transposeKey, type KeyFit } from "@/lib/client/musicKey";
-import { effectiveKey, referenceLane, useStudioStore, type StudioLane } from "@/lib/client/studioStore";
+import { effectiveKey, keyReference, useStudioStore, type StudioLane } from "@/lib/client/studioStore";
 
 const FIT: Record<KeyFit, { label: string; className: string }> = {
   same: { label: "same key", className: "bg-success/20 text-success" },
@@ -18,7 +18,7 @@ const FIT: Record<KeyFit, { label: string; className: string }> = {
  */
 export default function KeyHelper({ lane }: { lane: StudioLane }) {
   const setPitchSemitones = useStudioStore((s) => s.setPitchSemitones);
-  const reference = useStudioStore((s) => referenceLane(s.lanes, (l) => !!l.musicalKey));
+  const reference = useStudioStore((s) => keyReference(s.lanes));
   const target = reference && reference.laneId !== lane.laneId ? effectiveKey(reference) : null;
 
   if (!lane.musicalKey) {

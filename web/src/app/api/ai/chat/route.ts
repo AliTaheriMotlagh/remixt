@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { getCurrentUser } from "@/lib/auth";
 import { DEFAULT_AI_MODEL, isAiModel, isModelFor, isProvider, looksLikeKey, savedAiKey, type AiModel, type AiProvider } from "@/lib/aiKeys";
+import { returnSharedTurn, sharedAi, takeSharedTurn } from "@/lib/aiShared";
 import { COPRODUCER_SYSTEM, COPRODUCER_TOOLS } from "@/lib/coproducer";
 import { OpenRouterError, openRouterTurn } from "@/lib/openrouter";
 
@@ -16,6 +17,8 @@ import { OpenRouterError, openRouterTurn } from "@/lib/openrouter";
 // The key is the one saved on their account for that provider, or — for
 // someone who keeps it in their browser only — sent with this request
 // (x-ai-key) and used for this call alone. It's never logged or stored here.
+// Someone signed in with no key of their own can use the site's shared key,
+// when the site offers one (lib/aiShared.ts), up to a number of questions a day.
 
 export const maxDuration = 300;
 
@@ -45,8 +48,20 @@ export async function POST(req: NextRequest) {
   const fromBrowser = (req.headers.get("x-ai-key") ?? req.headers.get("x-anthropic-key"))?.trim();
   const user = fromBrowser ? null : await getCurrentUser();
   const saved = user ? await savedAiKey(user.id, provider) : null;
-  const apiKey = fromBrowser && looksLikeKey(provider, fromBrowser) ? fromBrowser : saved?.apiKey;
+  const own = fromBrowser && looksLikeKey(provider, fromBrowser) ? fromBrowser : saved?.apiKey;
   const who = provider === "anthropic" ? "Anthropic" : "OpenRouter";
+  // No key of their own: the site's shared one, for someone signed in, while today's questions last.
+  const shared = !own && provider === "anthropic" && user ? sharedAi() : null;
+  // A new question, rather than the next round of one (tool results going back).
+  const last = messages[messages.length - 1] as { role: string; content: unknown };
+  const question = last.role === "user" && (typeof last.content === "string" || (Array.isArray(last.content) && last.content.some((b) => b?.type === "text")));
+  if (shared && !(await takeSharedTurn(user!.id, shared, question))) {
+    return NextResponse.json(
+      { error: `That's today's ${shared.dailyQuestions} free questions — they come back tomorrow. Add your own key to keep going now.`, quota: true },
+      { status: 429 }
+    );
+  }
+  const apiKey = own ?? shared?.apiKey;
   if (!apiKey) {
     return NextResponse.json({ error: `Add your ${who} key to talk to the co-producer`, needsKey: true }, { status: 400 });
   }
@@ -67,7 +82,8 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const model: AiModel = isAiModel(body.model) ? body.model : saved && isAiModel(saved.model) ? saved.model : DEFAULT_AI_MODEL;
+  // On the shared key, the site picks the model.
+  const model: AiModel = shared ? shared.model : isAiModel(body.model) ? body.model : saved && isAiModel(saved.model) ? saved.model : DEFAULT_AI_MODEL;
   const fallback = model === "claude-haiku-5-5" ? {} : { betas: ["server-side-fallback-2026-07-01" as const], fallbacks: "default" as const };
 
   try {
@@ -91,6 +107,11 @@ export async function POST(req: NextRequest) {
       usage: response.usage,
     });
   } catch (error) {
+    // A failure on Anthropic's side (or reaching it) doesn't cost the person a question.
+    if (shared && !(error instanceof Anthropic.BadRequestError)) await returnSharedTurn(user!.id, question).catch(() => {});
+    if (shared && (error instanceof Anthropic.AuthenticationError || error instanceof Anthropic.PermissionDeniedError)) {
+      return NextResponse.json({ error: "The site's free AI isn't working right now — add your own key to keep going" }, { status: 503 });
+    }
     if (error instanceof Anthropic.AuthenticationError || error instanceof Anthropic.PermissionDeniedError) {
       return NextResponse.json({ error: "Anthropic rejected your API key — check it, or add a new one", needsKey: true }, { status: 401 });
     }

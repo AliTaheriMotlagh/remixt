@@ -545,6 +545,28 @@ export function referenceLane(
   return lanes.find((l) => isBacking(l.kind) && has(l)) ?? lanes.find(has);
 }
 
+/**
+ * Whether a lane's key means anything: it's known, and the lane plays
+ * notes — drums don't, so a key read from them is noise. The project key
+ * and key matching go by the lanes that carry one.
+ */
+export function carriesKey(lane: Pick<StudioLane, "musicalKey" | "kind">) {
+  return !!lane.musicalKey && lane.kind !== "drums";
+}
+
+/**
+ * The lane the project key is read from: a full beat, else the melody,
+ * else the bass (the instruments whose notes a key is best heard in), else
+ * any lane that carries a key — the first of each, as they're listed.
+ */
+export function keyReference(lanes: StudioLane[]): StudioLane | undefined {
+  for (const kind of ["beat", "other", "bass"] as const) {
+    const found = lanes.find((l) => l.kind === kind && carriesKey(l));
+    if (found) return found;
+  }
+  return lanes.find(carriesKey);
+}
+
 /** The key a lane is sounding in right now, after its pitch shift. */
 export function effectiveKey(lane: StudioLane): MusicalKey | null {
   return lane.musicalKey ? transposeKey(lane.musicalKey, lane.pitchSemitones) : null;
@@ -552,7 +574,7 @@ export function effectiveKey(lane: StudioLane): MusicalKey | null {
 
 function withKeyMatched(lane: StudioLane, reference: StudioLane | undefined): StudioLane {
   const target = reference && effectiveKey(reference);
-  if (!target || !lane.musicalKey || lane.laneId === reference.laneId) return lane;
+  if (!target || !lane.musicalKey || !carriesKey(lane) || lane.laneId === reference.laneId) return lane;
   return { ...lane, pitchSemitones: semitonesToMatch(lane.musicalKey, target) };
 }
 
@@ -746,7 +768,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   // lane (relative major/minor count as a match — they share every note).
   matchLaneKey: (laneId) => {
     set((state) => {
-      const reference = referenceLane(state.lanes, (l) => !!l.musicalKey);
+      const reference = keyReference(state.lanes);
       return {
         lanes: state.lanes.map((l) => (l.laneId === laneId ? withKeyMatched(l, reference) : l)),
       };
@@ -755,7 +777,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
   matchAllKeys: () => {
     set((state) => {
-      const reference = referenceLane(state.lanes, (l) => !!l.musicalKey);
+      const reference = keyReference(state.lanes);
       return { lanes: state.lanes.map((l) => withKeyMatched(l, reference)) };
     });
   },

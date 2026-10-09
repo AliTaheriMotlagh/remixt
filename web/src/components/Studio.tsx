@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Flag, Library, SlidersHorizontal, Sparkles, Users } from "lucide-react";
+import { Flag, GanttChart, Library, SlidersHorizontal, SlidersVertical, Sparkles, Users } from "lucide-react";
 import StudioTransport from "./StudioTransport";
 import StudioLibraryPanel from "./StudioLibraryPanel";
 import SamplePads from "./studio/SamplePads";
@@ -11,6 +11,9 @@ import StudioShortcuts from "./studio/StudioShortcuts";
 import CollabBar from "./studio/CollabBar";
 import Arrangement from "./studio/Arrangement";
 import LaneInspector from "./studio/LaneInspector";
+import MixerConsole from "./studio/MixerConsole";
+import EasyStudio from "./studio/easy/EasyStudio";
+import { ModeChooser, ModeSwitch } from "./studio/ModePicker";
 import AiProducer from "./studio/AiProducer";
 import SplitLaneDialog from "./studio/SplitLaneDialog";
 import ContextMenuHost from "./studio/ContextMenu";
@@ -148,6 +151,13 @@ export default function Studio({ user }: { user: User | null }) {
   const remixTitle = sourceRemix?.title ?? null;
   const aiOpen = useStudioView((s) => s.aiOpen);
   const aiSheet = useStudioView((s) => s.aiSheet);
+  // Easy or producer: remembered in this browser, read once the page has mounted.
+  const mode = useStudioView((s) => s.mode);
+  const modeKnown = useStudioView((s) => s.modeKnown);
+  const proView = useStudioView((s) => s.proView);
+  const setProView = useStudioView((s) => s.setProView);
+  useEffect(() => useStudioView.getState().readMode(), []);
+  const easy = mode === "easy";
 
   // Asked for from elsewhere (the AI producer's "Pick from the library").
   const libraryAsk = useStudioView((s) => s.libraryAsk);
@@ -337,11 +347,12 @@ export default function Studio({ user }: { user: User | null }) {
             ) : remixTitle ? (
               `Remixing “${remixTitle}” — changes save as a new remix`
             ) : (
-              "Mix vocals from one song with the beat from another."
+              "Remix every line of a song — vocals, drums, bass and melody — over any other."
             )}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          <ModeSwitch />
           {!liveId && !projectId && <GoLiveStudioButton signedIn={!!user} />}
           {!projectId && (
             <button
@@ -406,16 +417,23 @@ export default function Studio({ user }: { user: User | null }) {
               </button>
             </div>
           )}
+          {modeKnown && !mode ? (
+            <ModeChooser />
+          ) : !modeKnown ? null : (
+            <>
           <StudioTransport
             user={user}
             remixId={sourceRemix?.id ?? null}
             defaultTitle={remixTitle ? `${remixTitle} (remix)` : undefined}
+            simple={easy}
           />
 
           {loadingRemix ? (
             <div className="rounded-xl border border-dashed border-border bg-surface p-12 text-center text-muted">
               Loading remix…
             </div>
+          ) : easy ? (
+            <EasyStudio />
           ) : lanes.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-10 text-center text-muted sm:p-12">
               <SlidersHorizontal className="mx-auto h-8 w-8 text-brand-strong" />
@@ -433,13 +451,43 @@ export default function Studio({ user }: { user: User | null }) {
             </div>
           ) : (
             <>
-              <Arrangement />
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex overflow-hidden rounded-lg border border-border text-xs font-semibold" role="radiogroup" aria-label="View">
+                  {(
+                    [
+                      ["arrange", GanttChart, "Arrange", "The timeline: clips, cuts, automation"],
+                      ["mixer", SlidersVertical, "Mixer", "Channel strips: faders, meters, inserts, pan"],
+                    ] as const
+                  ).map(([id, ViewIcon, label, hint]) => (
+                    <button
+                      key={id}
+                      role="radio"
+                      aria-checked={proView === id}
+                      onClick={() => setProView(id)}
+                      title={hint}
+                      className={`flex h-8 items-center gap-1.5 px-3 transition-colors ${proView === id ? "bg-surface-raised text-foreground" : "text-muted hover:text-foreground"}`}
+                    >
+                      <ViewIcon /> {label}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={() => useStudioView.getState().showLibrary("songs")}
+                  className="flex h-8 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-semibold text-muted hover:border-brand hover:text-foreground"
+                  title="Add a song's vocals, drums, bass and melody as lanes of their own"
+                >
+                  + Song lines
+                </button>
+              </div>
+              {proView === "mixer" ? <MixerConsole /> : <Arrangement />}
               <LaneInspector />
             </>
           )}
 
           <VocalRecorder signedIn={!!user} />
-          {lanes.length > 0 && <SamplePads />}
+          {lanes.length > 0 && !easy && <SamplePads />}
+            </>
+          )}
         </div>
 
         {libraryOpen && (

@@ -15,16 +15,25 @@ import {
   type Provider,
 } from "@/lib/client/coproducerChat";
 import type { CoproducerContext } from "@/lib/client/coproducerTools";
+import QuickHelp from "./QuickHelp";
 
 // The AI co-producer: a chat with an AI that can listen to the mix
 // (through the Studio's analysis), try the AI producer's ideas, adjust
 // lanes and play the result. It runs on the person's own key — Anthropic
 // (Claude) or OpenRouter (Claude or any other tool-using model), each saved
-// to their account (encrypted) or kept in this browser only.
+// to their account (encrypted) or kept in this browser only — or, when the
+// site offers it, on the site's shared key for a few questions a day.
+// Without either, Quick help answers (no AI model; see QuickHelp.tsx).
 
 type Model = { id: string; label: string; hint: string };
 type RouterModel = { id: string; name: string; context: number; promptPerMillion: number | null; completionPerMillion: number | null };
-type KeyState = { signedIn: boolean; saved: Partial<Record<Provider, { hint: string; model: string }>>; models: Model[] };
+type KeyState = {
+  signedIn: boolean;
+  saved: Partial<Record<Provider, { hint: string; model: string }>>;
+  models: Model[];
+  /** The site's free AI, when it offers one: questions a day, and how many are left today (null when not signed in). */
+  shared?: { limit: number; left: number | null } | null;
+};
 
 const PROVIDERS: { id: Provider; label: string; prefix: string; getKey: string; billed: string }[] = [
   { id: "anthropic", label: "Claude", prefix: "sk-ant-", getKey: "https://console.anthropic.com/settings/keys", billed: "your Anthropic account" },
@@ -255,6 +264,8 @@ export default function CoProducer({ ctx, question }: { ctx: CoproducerContext; 
   const [events, setEvents] = useState<ChatEvent[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  /** Connecting a key of their own, rather than using the site's free questions. */
+  const [ownKey, setOwnKey] = useState(false);
   const stop = useRef(false);
   const end = useRef<HTMLDivElement>(null);
 
@@ -290,7 +301,11 @@ export default function CoProducer({ ctx, question }: { ctx: CoproducerContext; 
   }, [question]);
 
   /** How the current provider is connected: its key in this browser, on the account, or not yet. */
-  const mode: "browser" | "account" | null = keys[provider] ? "browser" : keyState?.saved[provider] ? "account" : null;
+  const own: "browser" | "account" | null = keys[provider] ? "browser" : keyState?.saved[provider] ? "account" : null;
+  const shared = keyState?.shared ?? null;
+  // No key of their own: the site's free questions, while there are some left today (Claude only).
+  const canShare = !own && !ownKey && provider === "anthropic" && !!keyState?.signedIn && (shared?.left ?? 0) > 0;
+  const mode: "browser" | "account" | "shared" | null = own ?? (canShare ? "shared" : null);
   const model = models[provider];
 
   async function send(text: string) {
@@ -307,6 +322,8 @@ export default function CoProducer({ ctx, question }: { ctx: CoproducerContext; 
         key: mode === "browser" ? keys[provider]! : null,
         onEvent: (e) => {
           setEvents((list) => [...list, e]);
+          // Today's free questions used up: Quick help takes over until tomorrow.
+          if (e.type === "error" && e.quota) setKeyState((s) => (s?.shared ? { ...s, shared: { ...s.shared, left: 0 } } : s));
           // A rejected key: back to connecting this provider.
           if (e.type === "error" && e.needsKey) {
             setBrowserKey(asked, null);
@@ -317,6 +334,13 @@ export default function CoProducer({ ctx, question }: { ctx: CoproducerContext; 
         shouldStop: () => stop.current,
       });
       setHistory(next);
+      // How many of the site's free questions are left now (a failed call doesn't use one up).
+      if (mode === "shared") {
+        void fetch("/api/ai/key")
+          .then((res) => res.json())
+          .then((state: KeyState) => setKeyState((s) => (s ? { ...s, shared: state.shared ?? null } : s)))
+          .catch(() => {});
+      }
     } finally {
       setBusy(false);
     }
@@ -354,19 +378,43 @@ export default function CoProducer({ ctx, question }: { ctx: CoproducerContext; 
     );
   }
   if (!mode) {
+    const freeNote = shared
+      ? keyState.signedIn
+        ? shared.left === 0
+          ? ` — today's ${shared.limit} free questions are used up (they come back tomorrow)`
+          : ""
+        : ` — sign in for ${shared.limit} free questions a day`
+      : "";
     return (
-      <div className="flex flex-col gap-2">
-        <ProviderSwitch value={provider} onChange={chooseProvider} disabled={busy} />
-        <KeySetup
-          key={provider}
-          provider={provider}
-          state={keyState}
-          onReady={(how, k, chosen) => {
-            setModels((m) => ({ ...m, [provider]: chosen }));
-            if (how === "browser") setKeys((all) => ({ ...all, [provider]: k ?? undefined }));
-            else setKeyState((s) => (s ? { ...s, saved: { ...s.saved, [provider]: { hint: "", model: chosen } } } : s));
-          }}
-        />
+      <div className="flex flex-col gap-3">
+        <QuickHelp ctx={ctx} question={question} />
+        <details className="group rounded-xl border border-border" open={ownKey}>
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2.5 text-xs font-bold">
+            <span>
+              <KeyRound className="text-brand-strong" /> Talk to Claude — a real conversation
+              <span className="font-normal text-muted">{freeNote || " — on your own key"}</span>
+            </span>
+          </summary>
+          <div className="flex flex-col gap-2 px-3 pb-3">
+            {ownKey && shared && (shared.left ?? 0) > 0 && (
+              <button onClick={() => setOwnKey(false)} className="self-start text-[11px] font-semibold text-brand-strong hover:underline">
+                ← Back to the free questions ({shared.left} left today)
+              </button>
+            )}
+            <ProviderSwitch value={provider} onChange={chooseProvider} disabled={busy} />
+            <KeySetup
+              key={provider}
+              provider={provider}
+              state={keyState}
+              onReady={(how, k, chosen) => {
+                setOwnKey(false);
+                setModels((m) => ({ ...m, [provider]: chosen }));
+                if (how === "browser") setKeys((all) => ({ ...all, [provider]: k ?? undefined }));
+                else setKeyState((s) => (s ? { ...s, saved: { ...s.saved, [provider]: { hint: "", model: chosen } } } : s));
+              }}
+            />
+          </div>
+        </details>
       </div>
     );
   }
@@ -375,9 +423,20 @@ export default function CoProducer({ ctx, question }: { ctx: CoproducerContext; 
   return (
     <div className="flex min-h-full flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted">
-        <ProviderSwitch value={provider} onChange={chooseProvider} disabled={busy} />
-        <ModelPicker provider={provider} models={keyState.models} value={model} onChange={chooseModel} compact />
-        <span className="min-w-0 flex-1 truncate">{mode === "browser" ? "key in this browser" : `key on your account${hint ? ` (${hint})` : ""}`}</span>
+        {mode === "shared" ? (
+          <span className="min-w-0 flex-1 truncate">
+            <span className="font-semibold text-success">Free AI</span> · {shared?.left ?? 0} of {shared?.limit} questions left today ·{" "}
+            <button onClick={() => setOwnKey(true)} disabled={busy} className="font-semibold text-brand-strong hover:underline">
+              use my own key
+            </button>
+          </span>
+        ) : (
+          <>
+            <ProviderSwitch value={provider} onChange={chooseProvider} disabled={busy} />
+            <ModelPicker provider={provider} models={keyState.models} value={model} onChange={chooseModel} compact />
+            <span className="min-w-0 flex-1 truncate">{mode === "browser" ? "key in this browser" : `key on your account${hint ? ` (${hint})` : ""}`}</span>
+          </>
+        )}
         {events.length > 0 && (
           <button
             onClick={() => {
@@ -392,9 +451,11 @@ export default function CoProducer({ ctx, question }: { ctx: CoproducerContext; 
             <RotateCcw />
           </button>
         )}
-        <button onClick={() => void forgetKey()} disabled={busy} className="rounded p-1 hover:bg-surface-hover hover:text-danger" title="Remove the key" aria-label="Remove the key">
-          <Trash2 />
-        </button>
+        {mode !== "shared" && (
+          <button onClick={() => void forgetKey()} disabled={busy} className="rounded p-1 hover:bg-surface-hover hover:text-danger" title="Remove the key" aria-label="Remove the key">
+            <Trash2 />
+          </button>
+        )}
       </div>
 
       {events.length === 0 && (

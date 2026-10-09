@@ -131,6 +131,14 @@ export type IdeaOptions = {
    * so picking a style never undoes the sync the person chose.
    */
   sync?: string;
+  /**
+   * When the vocal comes in, chosen on its own: after the beat's intro
+   * ("auto"), on bar 1, or after 4 or 8 bars. It goes with whichever of
+   * the "who leads" syncs is picked (see LEAD_SYNCS); unset, the sync's own.
+   */
+  entry?: Entry;
+  /** Long instrumental gaps between the vocal's sections closed up — with any "who leads" sync. */
+  tight?: boolean;
 };
 
 /** What the ideas are worked out from — the mix as it was when asked. */
@@ -461,9 +469,27 @@ function gentlestTempo(pair: PairContext): TempoChoice {
   return cost("vocal") < cost("beat") - 0.01 ? "vocal" : "beat";
 }
 
-/** The sync template the person chose (Perfect sync when none). */
+/** The sync template `options` ask for (Perfect sync when none), with the person's own timing choices on it. */
+export function syncOf(options: IdeaOptions) {
+  return withTiming(SYNC_TEMPLATES.find((t) => t.id === options.sync) ?? SYNC_TEMPLATES[0], options);
+}
+
+/** The sync template the person chose for this session. */
 function syncChoice(session: Session) {
-  return SYNC_TEMPLATES.find((t) => t.id === session.options.sync) ?? SYNC_TEMPLATES[0];
+  return syncOf(session.options);
+}
+
+/**
+ * The syncs that only say who leads — whose speed and key everything
+ * takes. When the vocal comes in and whether gaps are closed are settings
+ * of their own (IdeaOptions.entry, .tight) that go with any of them; the
+ * other templates are those settings, ready-made, and keep their own.
+ */
+export const LEAD_SYNCS = ["perfect", "beat-leads", "vocal-leads", "middle"];
+
+function withTiming(t: SyncTemplate, options: IdeaOptions): SyncTemplate {
+  if (!LEAD_SYNCS.includes(t.id)) return t;
+  return { ...t, entry: options.entry ?? t.entry, structure: options.tight ? "tight" : t.structure };
 }
 
 /** Who keeps their speed, as the chosen sync says — `own` (a style's own choice) only when the person left it on Perfect sync. */
@@ -663,7 +689,8 @@ function extendBeat(draft: Draft, structure: BeatStructure) {
 export function keysNow(pair: PairContext, vocal: StudioLane, beat: StudioLane) {
   return {
     vocalKey: effectiveKey(vocal) ?? transposeKey(pair.vocalAnalysis.key, vocal.pitchSemitones),
-    beatKey: effectiveKey(beat) ?? transposeKey(pair.beatAnalysis.key, beat.pitchSemitones),
+    // Drums carry no key: the one heard in the line playing with them stands in (see preparePair).
+    beatKey: (beat.kind === "drums" ? null : effectiveKey(beat)) ?? transposeKey(pair.beatAnalysis.key, beat.pitchSemitones),
   };
 }
 
@@ -980,30 +1007,65 @@ function fixKey(draft: Draft) {
 /** How far above the beat a balanced vocal sits (about 1 dB). */
 const VOCAL_LIFT = 1.12;
 
-/** Loudness-matched levels: the beat at 85% for headroom, vocals riding ~1 dB above it. */
+/** The most the backing is turned down to make room for a very quiet vocal (9 dB): any more and the mix all but vanishes. */
+const MAX_BACKING_CUT = 10 ** (9 / 20);
+
+/**
+ * The backing lanes of one recording with `lane` (it included): a song's
+ * beat and its own drums, bass and melody — split on upload or in the
+ * Studio — which belong together and keep their balance with each other.
+ */
+export function recordingOf(lanes: StudioLane[], lane: StudioLane) {
+  return lanes.filter((l) => isBacking(l.kind) && (l.laneId === lane.laneId || sameSong(l, lane)));
+}
+
+/**
+ * How loud lanes play together at their volumes (their powers add): the
+ * beat as it's heard, every one of its lines. 0 when none was heard.
+ */
+export function playedLoudness(session: Session, lanes: StudioLane[]) {
+  return Math.sqrt(lanes.reduce((sum, l) => sum + ((session.analyses.get(l.laneId)?.loudness ?? 0) * (l.muted ? 0 : l.volume)) ** 2, 0));
+}
+
+/**
+ * Loudness-matched levels: the beat at 85% for headroom (its loudest line
+ * there, a song's other lines in proportion — the beat's own balance is
+ * never touched), other songs' backing level with it, vocals riding ~1 dB
+ * above it all.
+ */
 function balancedLevels(session: Session): Map<string, number> {
-  const levels = new Map<string, number>();
-  const ref =
-    (session.beat && session.analyses.get(session.beat.laneId)?.loudness ? session.beat : null) ??
-    session.lanes.find((l) => isBacking(l.kind) && (session.analyses.get(l.laneId)?.loudness ?? 0) > 0) ??
-    session.lanes.find((l) => (session.analyses.get(l.laneId)?.loudness ?? 0) > 0);
-  const refLoudness = ref ? session.analyses.get(ref.laneId)!.loudness : 0;
-  for (const lane of session.lanes) {
-    const loudness = session.analyses.get(lane.laneId)?.loudness ?? 0;
-    if (!ref || loudness <= 0) {
-      levels.set(lane.laneId, lane.volume);
-      continue;
-    }
-    const lift = lane.kind === "vocals" && isBacking(ref.kind) ? VOCAL_LIFT : 1;
-    // Drums, bass and melody parts sit under the full beat, not level with it.
-    const part = lane.kind !== "vocals" && lane.kind !== "beat" && ref.kind === "beat" ? 0.8 : 1;
-    levels.set(lane.laneId, lane.laneId === ref.laneId ? 0.85 : (0.85 * lift * part * refLoudness) / loudness);
+  const levels = new Map<string, number>(session.lanes.map((l) => [l.laneId, l.volume]));
+  const loud = (l: StudioLane) => session.analyses.get(l.laneId)?.loudness ?? 0;
+  const heard = session.lanes.filter((l) => loud(l) > 0);
+  const ref = (session.beat && loud(session.beat) > 0 ? session.beat : null) ?? heard.find((l) => isBacking(l.kind)) ?? heard[0];
+  if (!ref) return levels;
+  // The backing, recording by recording: a song's own lines move together.
+  const groups: StudioLane[][] = [];
+  for (const lane of heard.filter((l) => isBacking(l.kind))) {
+    const group = groups.find((g) => g.some((l) => sameSong(l, lane)));
+    if (group) group.push(lane);
+    else groups.push([lane]);
   }
-  // A very quiet stem can't be turned up past 150%: turn everything else
-  // down with it instead, so the balance still holds.
-  const loudest = Math.max(...levels.values());
-  const scale = loudest > 1.5 ? 1.5 / loudest : 1;
-  for (const [id, volume] of levels) levels.set(id, Math.round(Math.min(1.5, Math.max(0.08, volume * scale)) * 100) / 100);
+  const refGroup = groups.find((g) => g.includes(ref)) ?? [ref];
+  const power = (group: StudioLane[], volume: (l: StudioLane) => number) => Math.sqrt(group.reduce((sum, l) => sum + (loud(l) * volume(l)) ** 2, 0));
+  const refScale = 0.85 / Math.max(1e-3, ...refGroup.map((l) => l.volume));
+  for (const l of refGroup) levels.set(l.laneId, l.volume * refScale);
+  /** How loud the beat plays at those levels: what everything else is matched to. */
+  const target = power(refGroup, (l) => l.volume * refScale);
+  for (const group of groups) {
+    if (group === refGroup) continue;
+    const own = power(group, (l) => l.volume);
+    if (!(own > 0)) continue;
+    // Another song's full beat sits level with the beat; just its drums, bass or melody a little under.
+    const k = ((group.some((l) => l.kind === "beat") ? 1 : 0.8) * target) / own;
+    for (const l of group) levels.set(l.laneId, l.volume * k);
+  }
+  const lift = isBacking(ref.kind) ? VOCAL_LIFT : 1;
+  for (const lane of heard) if (lane.kind === "vocals" && lane !== ref) levels.set(lane.laneId, (lift * target) / loud(lane));
+  // A very quiet vocal can't go past 150%: the backing comes down with it to keep the balance — but only so far.
+  const loudestVocal = Math.max(0, ...heard.filter((l) => l.kind === "vocals").map((l) => levels.get(l.laneId)!));
+  const cut = loudestVocal > 1.5 ? Math.min(loudestVocal / 1.5, MAX_BACKING_CUT) : 1;
+  for (const lane of heard) levels.set(lane.laneId, Math.round(Math.min(1.5, Math.max(0.05, levels.get(lane.laneId)! / cut)) * 100) / 100);
   return levels;
 }
 
@@ -2056,6 +2118,28 @@ const LAYERS: { id: string; icon: IconName; title: string; short: string; why: s
     vibes: ["chill", "radio", "lofi"],
     layers: [{ suffix: "oct-up", label: "octave up", pitch: 12, offset: 0, level: 0.2, fx: { highpass: 500, reverb: 0.4, reverbSize: 3.2, width: 0.6, delay: 0 } }],
   },
+  {
+    id: "fifth",
+    icon: "music",
+    title: "Fifth harmony",
+    short: "A second voice singing a fifth above",
+    why: "A quiet copy of the vocal a fifth higher (7 semitones), off to one side — the simplest harmony there is: it follows every note of the lead and sits in almost any key. Best on long, held notes.",
+    vibes: ["radio", "chill", "club"],
+    layers: [{ suffix: "fifth", label: "harmony a fifth up", pitch: 7, offset: 0.008, level: 0.3, fx: { pan: 0.4, highpass: 280, reverb: 0.22, reverbSize: 2.4, width: 0.2, delay: 0 } }],
+  },
+  {
+    id: "choir",
+    icon: "users",
+    title: "Choir stack",
+    short: "Low, fifth and high voices around the lead",
+    why: "Three quiet voices around the lead — an octave below in the middle, a fifth above on the left and an octave above on the right — for a big, choir-like hook. Best on the chorus.",
+    vibes: ["club", "radio", "chill"],
+    layers: [
+      { suffix: "choir-lo", label: "choir low", pitch: -12, offset: 0.004, level: 0.22, fx: { lowpass: 5000, highpass: 80, reverb: 0.2, width: 0, delay: 0 } },
+      { suffix: "choir-5th", label: "choir fifth", pitch: 7, offset: 0.011, level: 0.22, fx: { pan: -0.6, highpass: 260, reverb: 0.3, reverbSize: 3, width: 0, delay: 0 } },
+      { suffix: "choir-hi", label: "choir high", pitch: 12, offset: 0.017, level: 0.16, fx: { pan: 0.6, highpass: 500, reverb: 0.36, reverbSize: 3.2, width: 0, delay: 0 } },
+    ],
+  },
 ];
 
 /** Doubles and octave layers for the lead vocal, as extra lanes that follow it. */
@@ -2325,7 +2409,8 @@ function syncTemplateIdeas(session: Session): Idea[] {
   if (!pair) return [];
   const seen = new Set<string>();
   const ideas: Idea[] = [];
-  for (const t of SYNC_TEMPLATES) {
+  for (const template of SYNC_TEMPLATES) {
+    const t = withTiming(template, session.options);
     const draft = new Draft(session);
     try {
       arrange(draft, { tempo: t.tempo === "gentlest" ? gentlestTempo(pair) : t.tempo, structure: t.structure, entry: t.entry });
@@ -2335,9 +2420,10 @@ function syncTemplateIdeas(session: Session): Idea[] {
     if (t.keyTo === "vocal") fixBeatKey(draft);
     else fixKey(draft);
     lockAllLanes(draft, t.keyTo);
-    // Two templates that come out the same (an "auto" entry that is 8 bars anyway) are one.
+    // Two ready-made templates that come out the same (an "auto" entry that is 8 bars anyway) are one.
+    // The "who leads" ones are always there, even when one comes out like another: each is a choice of its own.
     const signature = JSON.stringify([draft.patches, draft.projectBpm]);
-    if (seen.has(signature)) continue;
+    if (seen.has(signature) && !LEAD_SYNCS.includes(t.id)) continue;
     seen.add(signature);
     ideas.push(
       draft.idea({ id: `sync-${t.id}`, kind: "sync", role: "beatmaker", icon: t.icon, title: t.title, short: t.short, why: t.why, vibes: t.vibes, listenAt: vocalListen(draft) })
@@ -2697,10 +2783,11 @@ export function checkMix(session: Session, lanes: StudioLane[]): Check[] {
   if (vocal && backing.length) {
     const ref = beat ?? backing[0];
     const vl = session.analyses.get(vocal.laneId)?.loudness ?? 0;
-    // Parts swapped in carry the beat's level, so the beat's loudness still applies.
-    const bl = session.analyses.get(ref.laneId)?.loudness ?? (session.beat ? session.analyses.get(session.beat.laneId)?.loudness : 0) ?? 0;
+    // The beat as it plays: every line of its recording together. Parts swapped in carry the beat's level, so the beat's loudness still applies.
+    const played = playedLoudness(session, recordingOf(lanes, ref));
+    const bl = played > 0 ? played : (session.beat ? session.analyses.get(session.beat.laneId)?.loudness ?? 0 : 0) * ref.volume;
     if (vl > 0 && bl > 0) {
-      const ratio = (vl * vocal.volume) / (bl * ref.volume) / VOCAL_LIFT;
+      const ratio = (vl * vocal.volume) / bl / VOCAL_LIFT;
       checks.push({
         id: "volume",
         icon: "volume-2",

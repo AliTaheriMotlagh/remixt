@@ -91,3 +91,29 @@ export function saveSync(id: string) {
     // Private mode or storage blocked: remembered for this visit only.
   }
 }
+
+const TIMING_KEY = "remixt.aiTiming";
+
+/** When the vocal comes in, and whether long gaps are closed — the person's own timing choices (see IdeaOptions). */
+export type Timing = { entry: "auto" | 0 | 4 | 8; tight: boolean };
+
+export const DEFAULT_TIMING: Timing = { entry: "auto", tight: false };
+
+/** The timing the person chose last — remembered per browser. */
+export function loadTiming(): Timing {
+  try {
+    const saved = JSON.parse(localStorage.getItem(TIMING_KEY) ?? "null") as Partial<Timing> | null;
+    const entry = saved?.entry === 0 || saved?.entry === 4 || saved?.entry === 8 ? saved.entry : "auto";
+    return { entry, tight: saved?.tight === true };
+  } catch {
+    return DEFAULT_TIMING;
+  }
+}
+
+export function saveTiming(timing: Timing) {
+  try {
+    localStorage.setItem(TIMING_KEY, JSON.stringify(timing));
+  } catch {
+    // Private mode or storage blocked: remembered for this visit only.
+  }
+}

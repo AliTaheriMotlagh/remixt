@@ -31,8 +31,8 @@ import { startNewStep } from "@/lib/client/studioHistory";
 import {
   beatLength,
   effectiveKey,
+  keyReference,
   laneName,
-  referenceLane,
   snapTime,
   useStudioStore,
   type StudioLane,
@@ -252,7 +252,7 @@ function MixTab({ lane }: { lane: StudioLane }) {
 
 function TempoTab({ lane }: { lane: StudioLane }) {
   const projectBpm = useStudioStore((s) => s.projectBpm);
-  const keyReference = useStudioStore((s) => referenceLane(s.lanes, (l) => !!l.musicalKey));
+  const keyRef = useStudioStore((s) => keyReference(s.lanes));
   const store = useStudioStore.getState();
   const [pitchDraft, setPitchDraft] = useState(lane.pitchSemitones);
   const [seenPitch, setSeenPitch] = useState(lane.pitchSemitones);
@@ -290,8 +290,8 @@ function TempoTab({ lane }: { lane: StudioLane }) {
     tempoTimer.current = setTimeout(() => store.setTempoRatio(lane.laneId, value), 200);
   }
 
-  const isReference = keyReference?.laneId === lane.laneId;
-  const targetKey = keyReference && !isReference ? effectiveKey(keyReference) : null;
+  const isReference = keyRef?.laneId === lane.laneId;
+  const targetKey = keyRef && !isReference ? effectiveKey(keyRef) : null;
   const playsAt = lane.bpm ? lane.bpm * tempoDraft : null;
 
   return (

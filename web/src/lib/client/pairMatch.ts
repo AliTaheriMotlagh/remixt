@@ -144,6 +144,21 @@ export type PairContext = {
   keys: string;
 };
 
+/**
+ * The line that carries a drums lane's song's notes — its melody, else its
+ * bass — playing in step with it (same place, speed and cut), if it's in
+ * the mix: a beat taken apart into its lines has no full beat to hear the
+ * key and chords from.
+ */
+export function tonalPartner(lanes: StudioLane[], drums: StudioLane): StudioLane | null {
+  const inStep = (l: StudioLane) =>
+    l.trackTitle === drums.trackTitle &&
+    Math.abs(l.offsetSeconds - drums.offsetSeconds) < 0.01 &&
+    Math.abs(l.tempoRatio - drums.tempoRatio) < 1e-4 &&
+    JSON.stringify(l.clips ?? null) === JSON.stringify(drums.clips ?? null);
+  return lanes.find((l) => l.kind === "other" && inStep(l)) ?? lanes.find((l) => l.kind === "bass" && inStep(l)) ?? null;
+}
+
 /** Listens to a vocal and a beat — cached per stem, so asking again is quick. */
 export async function preparePair(vocalLaneId: string, beatLaneId: string): Promise<PairContext> {
   const lanes = useStudioStore.getState().lanes;
@@ -151,13 +166,19 @@ export async function preparePair(vocalLaneId: string, beatLaneId: string): Prom
   const beatLane = lanes.find((l) => l.laneId === beatLaneId);
   if (!vocalLane || !beatLane) throw new Error("One of those lanes doesn't exist.");
   if (vocalLane.kind !== "vocals" || !isBacking(beatLane.kind)) throw new Error("Give one vocal lane and one beat lane.");
+  // Drums give the bars, but carry no notes: the key and chords come from the line playing with them.
+  const tonal = beatLane.kind === "drums" ? tonalPartner(lanes, beatLane) : null;
 
-  const [vocalAnalysis, beatAnalysis, guide] = await Promise.all([
+  const [vocalAnalysis, rhythm, guide, tonalAnalysis] = await Promise.all([
     analyzeLane(vocalLane),
     analyzeBeatLane(beatLane),
     analyzeGuide(vocalLane),
+    tonal ? analyzeLane(tonal).catch(() => null) : Promise.resolve(null),
   ]);
-  if (!vocalAnalysis || !beatAnalysis) throw new Error("Couldn't load the audio of those lanes.");
+  if (!vocalAnalysis || !rhythm) throw new Error("Couldn't load the audio of those lanes.");
+  const beatAnalysis: StemAnalysis = tonalAnalysis
+    ? { ...rhythm, key: tonalAnalysis.key, keyConfidence: tonalAnalysis.keyConfidence, chroma: tonalAnalysis.chroma, chromaRate: tonalAnalysis.chromaRate }
+    : rhythm;
 
   // Tempos, sharpened against the songs' real hits.
   const beatSource = beatLane.bpm ?? beatAnalysis.bpmEstimate;
@@ -183,7 +204,7 @@ export async function preparePair(vocalLaneId: string, beatLaneId: string): Prom
   if (!heard) throw new Error(`Couldn't hear clear phrases in “${vocalLane.trackTitle}”.`);
 
   const vocalKey = effectiveKey(vocalLane) ?? vocalAnalysis.key;
-  const beatKey = effectiveKey(beatLane) ?? beatAnalysis.key;
+  const beatKey = (tonal ? effectiveKey(tonal) : beatLane.kind === "drums" ? null : effectiveKey(beatLane)) ?? beatAnalysis.key;
   const keyMatch = bestKeyShift(vocalKey, beatKey);
   const keys =
     keyMatch.semitones === 0

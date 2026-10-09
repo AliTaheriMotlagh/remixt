@@ -15,7 +15,7 @@ import SplitStep from "./SplitStep";
 const STEPS = [
   { title: "Pick a song", short: "Pick", blurb: "A real song from the library, or one of six original demo songs synthesised in your browser." },
   { title: "Split it", short: "Split", blurb: "What a stem splitter hands back: the vocal on its own, and everything else." },
-  { title: "Match a vocal and a beat", short: "Match", blurb: "Put one song's vocal on another's beat: library songs, demo songs, or one of each. Hear it raw, then matched." },
+  { title: "Match a vocal and a beat", short: "Match", blurb: "Put one song's vocal on another's beat: library songs, demo songs, or one of each. See exactly what happens, step by step — switch each step on or off and hear what it fixes." },
   { title: "Recipes", short: "Recipes", blurb: "Ready-made pairings that each teach one idea. One tap loads them into Match." },
 ];
 
@@ -159,8 +159,10 @@ export default function ExamplesLab() {
           <Link href="/studio" className="font-semibold text-brand-strong underline">
             Studio
           </Link>
-          , the Match panel measures each stem&apos;s tempo, key and bars, then does what you saw above: stretches one to the other&apos;s tempo, pitches the
-          vocal into the beat&apos;s key, and lays it on the bar lines. The tempo and pitch changes in step 3 are rendered by the same engine.{" "}
+          , every line of a song — vocals, drums, bass, melody — is a lane of its own, and the AI producer does what you saw above for all of them: stretches
+          each to one tempo, pitches the vocal into the beat&apos;s key, lays every line on the bar lines, and can put the chorus on the drop or add harmonies.
+          Every change is a switch, and its &ldquo;What happened&rdquo; view says exactly what it changed, line by line. The tempo and pitch changes in step 3
+          are rendered by the same engine.{" "}
           <Link href="/upload" className="font-semibold text-brand-strong underline">
             Upload a song
           </Link>{" "}

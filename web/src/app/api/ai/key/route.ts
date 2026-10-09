@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import { AI_MODELS, aiKeyStatuses, deleteAiKey, isModelFor, isProvider, looksLikeKey, saveAiKey, setAiModel, type AiProvider } from "@/lib/aiKeys";
+import { sharedAi, sharedQuestionsLeft } from "@/lib/aiShared";
 import { checkOpenRouterKey } from "@/lib/openrouter";
 
 // The person's own API keys for the AI co-producer — Anthropic and/or
@@ -13,8 +14,11 @@ import { checkOpenRouterKey } from "@/lib/openrouter";
 
 export async function GET() {
   const user = await getCurrentUser();
-  if (!user) return NextResponse.json({ signedIn: false, saved: {}, models: AI_MODELS });
-  return NextResponse.json({ signedIn: true, saved: await aiKeyStatuses(user.id), models: AI_MODELS });
+  // The site's free AI, when it offers one: how many questions a day, and how many are left today.
+  const shared = sharedAi();
+  if (!user) return NextResponse.json({ signedIn: false, saved: {}, models: AI_MODELS, shared: shared ? { limit: shared.dailyQuestions, left: null } : null });
+  const left = shared ? await sharedQuestionsLeft(user.id, shared).catch(() => shared.dailyQuestions) : null;
+  return NextResponse.json({ signedIn: true, saved: await aiKeyStatuses(user.id), models: AI_MODELS, shared: shared ? { limit: shared.dailyQuestions, left } : null });
 }
 
 const putSchema = z.object({ provider: z.string().refine(isProvider), key: z.string().trim().min(20).max(400), model: z.string() });

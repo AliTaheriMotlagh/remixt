@@ -43,11 +43,14 @@ export default function AiScopeBar({
   suggestions,
   onChange,
   disabled,
+  hideLanes = false,
 }: {
   lanes: StudioLane[];
   suggestions: SectionPick[];
   onChange: (scope: Scope) => void;
   disabled: boolean;
+  /** Leave picking lanes to someone else (the AI producer's line-sync list). */
+  hideLanes?: boolean;
 }) {
   const scope = useAiScope((s) => s.scope);
   const view = useStudioStore(
@@ -338,7 +341,7 @@ export default function AiScopeBar({
         </>
       )}
 
-      {own.length > 1 && (
+      {own.length > 1 && !hideLanes && (
         <div className="flex flex-col gap-1.5">
           <button type="button" onClick={() => setShowLanes((v) => !v)} aria-expanded={showLanes} className="flex items-center justify-between text-[11px] text-muted hover:text-foreground">
             <span>
