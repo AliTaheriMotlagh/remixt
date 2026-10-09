@@ -4,7 +4,9 @@
 separation-service/venv/
 separation-service/__pycache__/
 separation-service/*.pyc
-storage/
+# Local stems (STORAGE_DIR). Anchored: an unanchored rule also hid
+# web/src/app/storage/, so "Saved on this device" 404ed when deployed.
+/storage/
 .claude/
 **/.claude/
 

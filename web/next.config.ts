@@ -1,4 +1,6 @@
 import type { NextConfig } from "next";
+import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
+import fs from "fs";
 import path from "path";
 
 // Hosts that ../share.sh can put in front of the dev server. Without these the
@@ -7,7 +9,22 @@ import path from "path";
 // own domain.
 const tunnelHost = process.env.TUNNEL_HOSTNAME?.trim();
 
-const nextConfig: NextConfig = {
+// This build's name (scripts/build-id.mjs). The page knows the one it was
+// built from, and /api/version reports the live one, so an open tab or
+// installed app can tell it's out of date (components/UpdatePrompt). It also
+// makes a client-side navigation into a newer build a full reload instead
+// of a broken one.
+function buildId(): string | undefined {
+  if (process.env.NEXT_DEPLOYMENT_ID) return process.env.NEXT_DEPLOYMENT_ID;
+  try {
+    return fs.readFileSync(path.join(__dirname, ".build-id"), "utf8").trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const nextConfig = (phase: string): NextConfig => ({
+  deploymentId: phase === PHASE_DEVELOPMENT_SERVER ? undefined : buildId(),
   // Emits .next/standalone — a self-contained server.js plus only the
   // node_modules it uses — which is what the Docker image ships.
   output: "standalone",
@@ -50,6 +67,6 @@ const nextConfig: NextConfig = {
     "*.trycloudflare.com",
     ...(tunnelHost ? [tunnelHost] : []),
   ],
-};
+});
 
 export default nextConfig;

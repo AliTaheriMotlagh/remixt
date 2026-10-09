@@ -48,3 +48,6 @@ next-env.d.ts
 # yt-dlp for link import — downloaded by scripts/fetch-ytdlp.mjs before
 # dev/build.
 /bin/
+
+# This build's name — written by scripts/build-id.mjs before build.
+/.build-id

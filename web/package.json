@@ -5,7 +5,7 @@
   "scripts": {
     "predev": "node scripts/copy-ort.mjs && node scripts/fetch-ytdlp.mjs",
     "dev": "next dev",
-    "prebuild": "node scripts/copy-ort.mjs && node scripts/fetch-ytdlp.mjs",
+    "prebuild": "node scripts/copy-ort.mjs && node scripts/fetch-ytdlp.mjs && node scripts/build-id.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

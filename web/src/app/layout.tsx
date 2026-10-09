@@ -7,6 +7,7 @@ import PreviewBar from "@/components/PreviewBar";
 import SplitterStatus from "@/components/SplitterStatus";
 import PresenceHeartbeat from "@/components/PresenceHeartbeat";
 import InstallPrompt from "@/components/InstallPrompt";
+import UpdatePrompt from "@/components/UpdatePrompt";
 import { BackgroundActivity } from "@/components/UploadActivity";
 import { getCurrentUser } from "@/lib/auth";
 import { isAdmin } from "@/lib/admin";
@@ -81,6 +82,7 @@ export default async function RootLayout({
         <PreviewBar />
         <PresenceHeartbeat />
         <InstallPrompt />
+        <UpdatePrompt />
         <SplitterStatus signedIn={!!user} />
         <BackgroundActivity signedIn={!!user} />
         <MobileTabBar user={user} isAdmin={isAdmin(user)} />
