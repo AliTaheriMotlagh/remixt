@@ -7,7 +7,7 @@ import { peaksOf } from "@/lib/client/demoSongs";
 import { durationLabel, firstStrongPhrase, alignExcerpt, trackIdOf } from "@/lib/client/examplesLibrary";
 import type { LabAudio, LabLayer, LabPlayback } from "@/lib/client/examplesPlayer";
 import { hasParts } from "@/lib/client/libraryAudio";
-import { loadParts, useLibraryTrack, type LibraryState } from "./libraryTracks";
+import { loadParts, releaseParts, useLibraryTrack, type LibraryState } from "./libraryTracks";
 import { SongBadges, StemChips } from "./SongPicker";
 import StemRow from "./StemRow";
 
@@ -53,6 +53,11 @@ export default function LibrarySplit({
   const [muted, setMuted] = useState<Flags>(PARTS_MUTED);
   const [solo, setSolo] = useState<Flags>(NO_FLAGS);
   const playback = useRef<LabPlayback | null>(null);
+
+  // The parts are only played here: leaving the step (or the song) lets go of them.
+  useEffect(() => {
+    if (song) return () => releaseParts(song);
+  }, [song]);
 
   const partBuffers = parts && parts.id === song?.trackId ? parts.buffers : undefined;
   const partsError = parts && parts.id === song?.trackId ? parts.error : undefined;

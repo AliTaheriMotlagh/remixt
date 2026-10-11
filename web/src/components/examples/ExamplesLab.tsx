@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, ArrowRight, Disc3 } from "lucide-react";
+import { keepOnlyDemoSongs } from "@/lib/client/demoSongs";
 import { LabAudio } from "@/lib/client/examplesPlayer";
 import type { PairSettings } from "@/lib/client/examplesMatch";
 import { trackIdOf } from "@/lib/client/examplesLibrary";
@@ -32,12 +33,20 @@ export default function ExamplesLab() {
 
   useEffect(() => () => audio.dispose(), [audio]);
 
-  // Decoded library stems are big: keep only the songs a step is showing,
-  // and let go of all of them when the page closes.
+  // Decoded library stems and rendered demo songs are big: keep only the
+  // songs a step is showing, and let go of all of them when the page closes.
   useEffect(() => {
-    keepOnly([songId, pair.vocalId, pair.beatId].map(trackIdOf).filter((id): id is string => !!id));
+    const ids = [songId, pair.vocalId, pair.beatId];
+    keepOnly(ids.map(trackIdOf).filter((id): id is string => !!id));
+    keepOnlyDemoSongs(ids.filter((id) => !trackIdOf(id)));
   }, [songId, pair.vocalId, pair.beatId]);
-  useEffect(() => () => keepOnly([]), []);
+  useEffect(
+    () => () => {
+      keepOnly([]);
+      keepOnlyDemoSongs([]);
+    },
+    []
+  );
 
   const go = (n: number) => {
     setStep(n);

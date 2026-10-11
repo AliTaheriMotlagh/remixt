@@ -232,6 +232,20 @@ export async function loadParts(song: LibrarySong): Promise<Record<"drums" | "ba
   }
 }
 
+/**
+ * Lets go of a song's drums, bass and other: only the Split step plays them,
+ * and they're three more whole stems (~250 MB for a 4-minute song).
+ */
+export function releaseParts(song: LibrarySong) {
+  const set = held.get(song.trackId);
+  for (const k of ["drums", "bass", "other"] as const) {
+    const stemId = song.stems[k]?.id;
+    if (!stemId) continue;
+    set?.delete(stemId);
+    releaseStem(stemId);
+  }
+}
+
 // --- Hooks -----------------------------------------------------------------------
 
 /** The library's songs (with vocals and beat), fetched once per page. */

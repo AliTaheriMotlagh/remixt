@@ -100,15 +100,15 @@ async function renderVariant(sources: NonNullable<Prepared["sources"]>, a: PairA
 /** Slices both excerpts on their bar lines and renders the raw and matched pair (the other variants follow when asked for). */
 async function prepare(vocal: ReadySide, beat: ReadySide, a: PairAnalysis, key: string): Promise<Prepared> {
   try {
-    const [vs, bs] = await Promise.all([vocal.audio(), beat.audio()]);
     const barV = 240 / vocal.song.bpm;
     const barB = 240 / beat.song.bpm;
     const startV = vocal.song.excerptStart;
     const startB = beat.song.excerptStart;
-    // Only the excerpt is rendered: seconds of audio, not the whole song.
+    // Only the excerpt is rendered: seconds of audio, not the whole song. One
+    // side at a time, so two demo songs are never synthesised side by side.
     const sources = {
-      vocal: sliceBuffer(vs, startV, startV + a.vocalSourceBars * barV),
-      beat: sliceBuffer(bs, startB, startB + a.beatSourceBars * barB),
+      vocal: sliceBuffer(await vocal.audio(), startV, startV + a.vocalSourceBars * barV),
+      beat: sliceBuffer(await beat.audio(), startB, startB + a.beatSourceBars * barB),
     };
     const [raw, matched] = await Promise.all([renderVariant(sources, a, "00"), renderVariant(sources, a, "11")]);
     return { key, sources, variants: { "00": raw, "11": matched } };

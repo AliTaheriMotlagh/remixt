@@ -5,6 +5,7 @@
 // DJ simulator can show what stem splitting is for — with no copyrighted
 // audio anywhere. Rendering is deterministic and cached per session.
 
+import { isConstrainedDevice } from "./device";
 import { saveFile } from "./saveFile";
 import {
   DEMO_SONG_DEFS,
@@ -82,15 +83,28 @@ export function peaksOf(buffer: AudioBuffer, bins: number): Float32Array {
   return peaksOfArrays(buffer.getChannelData(0), buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : buffer.getChannelData(0), bins);
 }
 
+/** Peaks of stems played together; the sum is let go of straight after. */
+function peaksOfSum(parts: Stereo[]): Float32Array {
+  const sum = sumStereo(parts);
+  return peaksOfArrays(sum.l, sum.r, PEAK_BINS);
+}
+
 const yieldToUi = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-// A rendered song is ~125 MB of audio, so only the few most recent are kept.
-const MAX_CACHED = 3;
+// A rendered song is ~125 MB of audio, so only the few most recent are kept
+// (one on a phone, which reloads the page once it holds more than it allows).
+const MAX_CACHED = isConstrainedDevice() ? 1 : 3;
 const cache = new Map<string, Promise<RenderedDemoSong>>();
 
 /** Lets go of a cached song (the DJ simulator does once it has what it needs). */
 export function releaseDemoSong(id: string) {
   cache.delete(id);
+}
+
+/** Lets go of every cached song except these (the Examples lab, as its picks change). */
+export function keepOnlyDemoSongs(ids: Iterable<string>) {
+  const keep = new Set(ids);
+  for (const id of [...cache.keys()]) if (!keep.has(id)) cache.delete(id);
 }
 
 /**
@@ -115,18 +129,22 @@ export function renderDemoSong(id: string): Promise<RenderedDemoSong> {
       await yieldToUi();
     }
     const balanced = balanceStems(def, raw);
-    const mixSum = sumStereo(DEMO_STEMS.map((s) => balanced[s]));
-    const beatSum = sumStereo([balanced.drums, balanced.bass, balanced.chords]);
     const peaks = {
-      mix: peaksOfArrays(mixSum.l, mixSum.r, PEAK_BINS),
-      beat: peaksOfArrays(beatSum.l, beatSum.r, PEAK_BINS),
+      mix: peaksOfSum(DEMO_STEMS.map((s) => balanced[s])),
+      beat: peaksOfSum([balanced.drums, balanced.bass, balanced.chords]),
       vocal: peaksOfArrays(balanced.vocal.l, balanced.vocal.r, PEAK_BINS),
       drums: peaksOfArrays(balanced.drums.l, balanced.drums.r, PEAK_BINS),
       bass: peaksOfArrays(balanced.bass.l, balanced.bass.r, PEAK_BINS),
       chords: peaksOfArrays(balanced.chords.l, balanced.chords.r, PEAK_BINS),
     } satisfies Record<DemoPeakKey, Float32Array>;
     const stems = {} as Record<DemoStem, AudioBuffer>;
-    for (const stem of DEMO_STEMS) stems[stem] = makeBuffer(balanced[stem]);
+    // `balanced` is `raw`, balanced in place.
+    const arrays: Partial<Record<DemoStem, Stereo>> = balanced;
+    for (const stem of DEMO_STEMS) {
+      stems[stem] = makeBuffer(arrays[stem]!);
+      // Copied: let go of the arrays at once, so the song is never held twice over.
+      delete arrays[stem];
+    }
     let mix: AudioBuffer | null = null;
     let beat: AudioBuffer | null = null;
     return {
