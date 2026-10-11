@@ -1,155 +1,169 @@
 # Graph Report - code  (2026-10-11)
 
 ## Corpus Check
-- 440 files · ~503,824 words
-- Verdict: corpus is large enough that graph structure adds value.
-- Unclassified: 11 file(s) not represented in the graph (top: (none) 6, .ttf 2, .ico 2)
+- cluster-only mode — file stats not available
 
 ## Summary
-- 4289 nodes · 13488 edges · 138 communities (123 shown, 15 thin omitted)
-- Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 183 edges (avg confidence: 0.86)
+- 4318 nodes · 13515 edges · 154 communities (135 shown, 19 thin omitted)
+- Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 188 edges (avg confidence: 0.85)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `d77f1dfb`
+- Built from commit: `f09a8fb6`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
-- clipCommands.ts
-- aiIdeas.ts
-- projects.ts
-- models.ts
 - DjEngine
-- djEngine.ts
-- sql
-- LiveRoom.tsx
-- SongPicker.tsx
-- extras.tsx
-- getCurrentUser
-- useStudioStore
-- Waveform
-- musicKey.ts
-- libraryTracks.ts
-- audioEngine
-- splitter.ts
-- MissionSession.tsx
 - app/page.tsx
-- client/splitQueue.ts
-- storage.ts
-- ExamplesLab.tsx
-- audioGraph.ts
-- ensureLiveSchema
-- clipEdit.ts
-- MatchStep.tsx
-- beatNet.ts
-- Live.tsx
-- djMath.ts
-- pairMatch.ts
-- directUpload.ts
-- AiProducer
-- lucide-react
-- demoSongs.ts
-- aiTrial.ts
-- CoProducer.tsx
-- stemKinds.ts
-- AdminPanel.tsx
-- arrange.ts
-- EmbedPlayer.tsx
-- PartyWorld
-- aiKeys.ts
-- Remixt Brand Mark (split audio-waveform bars)
-- demoSongsDsp.ts
-- linkImport.ts
-- aiExplain.ts
-- studioStore.ts
-- coproducerTools.ts
-- mixScore.ts
-- StudioTransport.tsx
-- analysis.ts
-- audioEngine.ts
-- uploads.ts
-- Lakebase Postgres
-- StudioLane
-- app.py
-- VocalRecorder.tsx
-- SocialClipButton.tsx
-- package.json
-- next
-- Neon
+- aiIdeas.ts
+- MissionSession.tsx
+- getCurrentUser
+- djTypes.ts
+- sql
 - dj-realism.test.ts
-- localCache.ts
-- stretch-memory.test.ts
-- autoMatch.ts
-- remixLanes.ts
-- examplesLibrary.ts
+- models.ts
 - live.ts
+- djMath.ts
+- studioStore.ts
+- SocialClipButton.tsx
+- lucide-react
+- AdminPanel.tsx
+- SongPicker.tsx
+- Studio.tsx
+- clipCommands.ts
+- audioEngine
+- Arrangement.tsx
+- studio-session.test.ts
+- aiTrial.ts
+- mixScore.ts
+- demoSongsDsp.ts
+- Lakebase Postgres
+- analysis.ts
+- DjConsole.tsx
+- AiProducer
+- api/remixes/route.ts
+- camelotCode
+- audioEngine.ts
+- demoSongs.ts
+- client/splitQueue.ts
+- Neon
+- musicKey.ts
+- AiProducer.tsx
+- mixdown.ts
+- exportMeta.ts
+- directUpload.ts
+- CoProducer.tsx
+- libraryTracks.ts
+- WhatHappened.tsx
+- Remixt Brand Mark (split audio-waveform bars)
+- quickHelp.ts
+- PartyWorld
+- stemKinds.ts
+- remixLanes.ts
+- LaneInspector.tsx
+- useStudioStore
+- exportJob.ts
+- package.json
+- app.py
+- stemResults.ts
+- splitter.ts
+- VocalRecorder.tsx
+- beatNet.ts
+- scenarios.ts
+- projects.ts
+- uploads.ts
 - UploadManager.tsx
-- neuralBeats.ts
-- openrouter.ts
+- aiKeys.ts
+- audioGraph.ts
+- collab.ts
+- localCache.ts
+- extras.tsx
+- aiExplain.ts
+- ai/chat/route.ts
 - NavBar.tsx
 - SplitLaneDialog.tsx
-- exportJob.ts
+- splitter.worker.ts
 - dependencies
-- challenges.ts
-- MixerConsole.tsx
-- .renderClip
+- stretch-memory.test.ts
+- autoMatch.ts
+- ref_fs
+- react
+- openrouter.ts
+- djMidi.ts
+- LaneMatchPanel.tsx
+- arrange.ts
 - FakeContext
 - compilerOptions
-- audioTags.ts
-- mixdown.ts
-- splitter.worker.ts
-- studioHistory.ts
+- MixerConsole.tsx
 - StudioLibraryPanel.tsx
+- pairMatch.ts
+- challenges.ts
+- MatchStep.tsx
 - splitHelper
 - soundtouchjs.d.ts
-- test.mjs
-- [id]/opengraph-image.tsx
-- react
-- RemixtMark
-- uploads
+- linkImport.ts
+- StorageSettings.tsx
+- liveSync.ts
 - EasyStudio.tsx
-- AiProducer.tsx
-- .play
+- test.mjs
+- rtlText.ts
+- Live.tsx
+- uploads
+- Remixt
+- partyWorld.ts
+- devDependencies
+- lib/presence.ts
+- neuralBeats.ts
 - stemFetch.ts
 - Remixt Social Share Image (1920x1080)
-- appIcon
-- Free on Vercel, with Neon and Vercel Blob
-- previewPlayer
 - LineCard.tsx
+- AutomationLane.tsx
+- StudioShortcuts.tsx
+- liveStudio.ts
 - pitchTempo.ts
-- devDependencies
-- exportMeta.ts
-- previewPlayer.ts
-- MatchFinder.tsx
+- signup/route.ts
+- app/layout.tsx
+- mediaSession.ts
+- trackBeats
+- previewPlayer
 - demucs-web.d.ts
-- Free, all in one place: Oracle Cloud
-- live.test.ts
-- studioView.ts
+- MatchFinder.tsx
 - liveStudioDiff.ts
-- postgres
-- Remixt
-- phone-export.test.ts
-- Python separation service dependencies (FastAPI, demucs 4.0.1, librosa)
-- Sharing Remixt with someone else
-- notifications.ts
-- RemixCover.tsx
-- Remixt — repo map
+- studioView.ts
 - scripts
-- web/README.md
+- live.test.ts
+- Free on Vercel, with Neon and Vercel Blob
+- client/presence.ts
+- RemixCover.tsx
+- Sharing Remixt with someone else
+- mixSignature
+- Free, all in one place: Oracle Cloud
 - run.sh
-- AGENTS.md
-- parse-env.md
+- Image
+- InstallPrompt.tsx
 - GoLiveStudioButton
+- Deploying Remixt
+- Deployment options (Vercel, Oracle Cloud, own Docker server)
+- Your own server (Docker)
+- In-browser song splitter (Demucs via ONNX)
 - ref_node_fs
-- sdk.md
-- ai/chat/route.ts
+- FakeOfflineContext
+- Remixt — repo map
+- AI co-producer on each person's own key
+- Repo map for AI assistants (web, separation-service, storage)
 - entrypoint.sh
+- web/README.md
 - start-dev.sh
 - signalsmith-stretch.d.ts
+- YouTube imports off by default because cloud data centres get blocked
+- AGENTS.md
+- parse-env.md
+- sdk.md
 - postcss.config.mjs
-- CONSTANTS
+- Python separation service dependencies (FastAPI, demucs 4.0.1, librosa)
 - Google Search Console site verification file
+- CONSTANTS
 
 ## God Nodes (most connected - your core abstractions)
 1. `sql` - 138 edges
@@ -166,14 +180,14 @@
 ## Surprising Connections (you probably didn't know these)
 - `Studio Page Mockup in Demo Poster` --semantically_similar_to--> `Studio Page Mockup (remixt-free.vercel.app/studio)`  [INFERRED] [semantically similar]
   web/public/remixt-demo-poster.jpg → remixt-share-1920x1080.png
-- `6. Try it` --references--> `main()`  [INFERRED]
-  DEPLOY.md → web/scripts/fetch-ytdlp.mjs
 - `Tune the Index` --references--> `quality()`  [INFERRED]
   web/.agents/skills/neon-postgres/references/vector-search.md → web/src/lib/client/harmony.ts
 - `Pooled vs direct connections: use the direct URL for migrations, dumps, and replication` --references--> `url()`  [INFERRED]
   web/.agents/skills/neon-postgres/SKILL.md → web/tests/shared-results.test.ts
 - `Remixt Demo Video Poster (1280x720)` --semantically_similar_to--> `Remixt Social Share Image (1920x1080)`  [INFERRED] [semantically similar]
   web/public/remixt-demo-poster.jpg → remixt-share-1920x1080.png
+- `Path` --references--> `create()`  [INFERRED]
+  web/.agents/skills/neon/references/claimable-neon.md → web/src/components/AdminPanel.tsx
 
 ## Import Cycles
 - 3-file cycle: `web/src/lib/models.ts -> web/src/lib/schema.ts -> web/src/lib/social.ts -> web/src/lib/models.ts`
@@ -184,7 +198,9 @@
 - 5-file cycle: `web/src/lib/live.ts -> web/src/lib/schema.ts -> web/src/lib/social.ts -> web/src/lib/splitQueue.ts -> web/src/lib/notifications.ts -> web/src/lib/live.ts`
 
 ## Hyperedges (group relationships)
+- **Hosting paths** — deploy_free_on_vercel_with_neon_and_vercel_blob, deploy_oracle_setup, deploy_docker_server [EXTRACTED 1.00]
 - **Remixt core workflow: split stems, match BPM/pitch, mix, publish** — remixt_share_1920x1080_vocal_beat_split, remixt_share_1920x1080_bpm_pitch_match, remixt_share_1920x1080_multitrack_stem_lanes, remixt_share_1920x1080_publish_remix [EXTRACTED 1.00]
+- **Client-side splitting pipeline** — readme_browser_splitter, readme_cross_origin_isolation, readme_split_in_browser_rationale [INFERRED 0.85]
 - **Remixt background-free mark variants for overlay use** — web_public_remixt_logo_remixt_mark_transparent_mark_transparent, web_public_remixt_logo_remixt_mark_black_mark_black, web_public_remixt_logo_remixt_mark_white_mark_white [INFERRED 0.85]
 - **Remixt light/dark theme-paired logo variants** — web_public_remixt_logo_remixt_mark_dark_mark_dark, web_public_remixt_logo_remixt_mark_light_mark_light, web_public_remixt_logo_remixt_logo_dark_bg_logo_dark_bg, web_public_remixt_logo_remixt_logo_light_bg_logo_light_bg, web_public_remixt_logo_remixt_avatar_dark_avatar_dark, web_public_remixt_logo_remixt_avatar_avatar [INFERRED 0.85]
 - **Remixt Horizontal Logo Lockups (light/dark bg)** — web_public_remixt_logo_png_remixt_logo_dark_bg_logo_dark_bg, web_public_remixt_logo_png_remixt_logo_light_bg_logo_light_bg, web_public_remixt_logo_wordmark, web_public_remixt_logo_brand_gradient [INFERRED 0.85]
@@ -192,499 +208,547 @@
 - **create-next-app default public icons** — web_public_file_file_icon, web_public_globe_globe_icon, web_public_next_nextjs_wordmark, web_public_vercel_vercel_logo, web_public_window_window_icon [INFERRED 0.95]
 - **Remixt Mark 1024px Color/Background Variants** — web_public_remixt_logo_png_remixt_mark_1024_mark, web_public_remixt_logo_png_remixt_mark_black_1024_mark_black, web_public_remixt_logo_png_remixt_mark_dark_1024_mark_dark, web_public_remixt_logo_png_remixt_mark_light_1024_mark_light, web_public_remixt_logo_png_remixt_mark_transparent_1024_mark_transparent, web_public_remixt_logo_png_remixt_mark_white_1024_mark_white [INFERRED 0.95]
 
-## Communities (138 total, 15 thin omitted)
+## Communities (154 total, 19 thin omitted)
 
-### Community 0 - "clipCommands.ts"
-Cohesion: 0.13
-Nodes (53): gatePattern(), pumpPattern(), spliceAutomation(), clearAutomation(), clearSelection(), clipFade(), clipGain(), copy() (+45 more)
-
-### Community 1 - "aiIdeas.ts"
+### Community 0 - "DjEngine"
 Cohesion: 0.06
-Nodes (93): activeShare(), adoptTiming(), ALL_FIXES, applyLevels(), applyMix(), arrange(), arrangementIdeas(), arrangeOnDrop() (+85 more)
+Nodes (8): DjConsole(), quantizePos(), DeckUnit, DjEngine, clamp(), applyMidi(), DeckId, EqBand
 
-### Community 2 - "projects.ts"
-Cohesion: 0.17
-Nodes (18): DELETE(), GET(), PUT(), putSchema, POST(), schema, POST(), createProject() (+10 more)
-
-### Community 3 - "models.ts"
+### Community 1 - "app/page.tsx"
 Cohesion: 0.04
-Nodes (66): DELETE(), POST(), setLiked(), POST(), createSchema, GET(), generateMetadata(), EmbedPage() (+58 more)
+Nodes (99): DELETE(), GET(), POST(), postSchema, visible(), DELETE(), POST(), setLiked() (+91 more)
 
-### Community 4 - "DjEngine"
-Cohesion: 0.06
-Nodes (12): DjConsole(), dbToGain(), emptyHotCues(), quantizePos(), DeckUnit, DjEngine, clamp(), applyMidi() (+4 more)
-
-### Community 5 - "djEngine.ts"
+### Community 2 - "aiIdeas.ts"
 Cohesion: 0.05
-Nodes (67): BarCounter(), DeckPanel(), Pad(), PAD_JUMPS, PAD_MODE_LABEL, ROLLS, sign(), STEM_BUTTONS (+59 more)
+Nodes (104): tuneIdea(), remove(), FIT, KeyHelper(), Vibe, activeShare(), adoptTiming(), ALL_FIXES (+96 more)
+
+### Community 3 - "MissionSession.tsx"
+Cohesion: 0.03
+Nodes (94): DjPage(), metadata, BeatMatchMeter(), FIT_TEXT, Gauge(), CopilotPanel(), ICON, DjApp() (+86 more)
+
+### Community 4 - "getCurrentUser"
+Cohesion: 0.05
+Nodes (79): POST(), GET(), POST(), GET(), POST(), POST(), DELETE(), POST() (+71 more)
+
+### Community 5 - "djTypes.ts"
+Cohesion: 0.04
+Nodes (87): FIT_LABEL, OtherDeck, SORTS, DemoStem, SectionName, AiDj, Phase, browse() (+79 more)
 
 ### Community 6 - "sql"
 Cohesion: 0.07
-Nodes (53): DELETE(), findJunk(), GET(), maxDuration, POST(), GET(), DELETE(), PATCH() (+45 more)
+Nodes (58): next, zod, AdminPage(), metadata, DELETE(), GET(), POST(), schema (+50 more)
 
-### Community 7 - "LiveRoom.tsx"
-Cohesion: 0.08
-Nodes (47): dynamic, LiveSessionPage(), api(), HostConsole(), chooseRemix(), endSession(), goLive(), saveSettings() (+39 more)
-
-### Community 8 - "SongPicker.tsx"
-Cohesion: 0.14
-Nodes (29): Flags, INFO, Kind, LibrarySplit(), NO_FLAGS, Part, PARTS, PARTS_MUTED (+21 more)
-
-### Community 9 - "extras.tsx"
-Cohesion: 0.19
-Nodes (23): Engines(), FineTune(), keepWhatsPlaying(), MasterIt(), TuneButton(), TuneRow(), Switch(), SwitchRow() (+15 more)
-
-### Community 10 - "getCurrentUser"
-Cohesion: 0.06
-Nodes (77): GET(), DELETE(), GET(), PATCH(), patchSchema, POST(), DELETE(), POST() (+69 more)
-
-### Community 11 - "useStudioStore"
-Cohesion: 0.08
-Nodes (66): ReadOnlyStudio(), AiSection(), Arrangement(), onContentPointerDown(), onContentPointerUp(), snapDelta(), timeAt(), ClipFades() (+58 more)
-
-### Community 12 - "Waveform"
-Cohesion: 0.23
-Nodes (7): ChallengeStemCard(), formatTime(), PreviewBar(), drawBars(), Waveform(), WaveformProps, usePreviewState()
-
-### Community 13 - "musicKey.ts"
-Cohesion: 0.03
-Nodes (115): FIT_LABEL, SORTS, TrackLibrary(), CHORD_INTERVALS, ChordDef, ChordQuality, CHORUS_CYCLE, DEMO_STEMS (+107 more)
-
-### Community 14 - "libraryTracks.ts"
-Cohesion: 0.13
-Nodes (19): decoder(), entries, fold(), held, hold(), kept, loadParts(), NO_SUMMARIES (+11 more)
-
-### Community 15 - "audioEngine"
-Cohesion: 0.14
-Nodes (3): audioEngine, queueReschedule(), Pad
-
-### Community 16 - "splitter.ts"
-Cohesion: 0.14
-Nodes (15): isConstrainedDevice(), decode(), Job, MODEL_URL, splitSong(), splitter, splitTrackPayload(), Turn (+7 more)
-
-### Community 17 - "MissionSession.tsx"
+### Community 7 - "dj-realism.test.ts"
 Cohesion: 0.04
-Nodes (87): DjPage(), metadata, CopilotPanel(), ICON, DjApp(), Mode, OpenDecks(), DjHome() (+79 more)
+Nodes (61): BarCounter(), DeckPanel(), Pad(), PAD_JUMPS, PAD_MODE_LABEL, ROLLS, sign(), STEM_BUTTONS (+53 more)
 
-### Community 18 - "app/page.tsx"
+### Community 8 - "models.ts"
 Cohesion: 0.06
-Nodes (57): DELETE(), GET(), POST(), postSchema, visible(), DELETE(), handle(), POST() (+49 more)
+Nodes (65): GET(), kept(), redirect(), DELETE(), GET(), keyFor(), bodySchema, maxDuration (+57 more)
 
-### Community 19 - "client/splitQueue.ts"
-Cohesion: 0.10
-Nodes (36): ago(), duration(), HelperPanel(), jobDetail(), LastBlock(), noSubscription(), QueuedSongRow(), RewardRules() (+28 more)
+### Community 9 - "live.ts"
+Cohesion: 0.05
+Nodes (66): PUT(), POST(), schema, DELETE(), GET(), PATCH(), patchSchema, PUT() (+58 more)
 
-### Community 20 - "storage.ts"
+### Community 10 - "djMath.ts"
+Cohesion: 0.08
+Nodes (63): MissionSession(), sessionGear(), CrowdRequest, crowdScore(), CrowdState, ECHO_KEYS, fxTotal(), KINDS (+55 more)
+
+### Community 11 - "studioStore.ts"
 Cohesion: 0.09
-Nodes (37): buildId(), nextConfig(), tunnelHost, GET(), kept(), redirect(), DELETE(), GET() (+29 more)
+Nodes (66): Logs: CLI, Loki, and SDK pagination, Loki-compatible read API, onContentPointerMove(), allClipRefs(), asWholeTake(), cleanClip(), clipId(), clipsOf() (+58 more)
 
-### Community 21 - "ExamplesLab.tsx"
-Cohesion: 0.13
-Nodes (12): ExamplesPage(), metadata, DEFAULT_PAIR, ExamplesLab(), STEPS, keepOnly(), useLibrarySongs(), RecipeGallery() (+4 more)
+### Community 12 - "SocialClipButton.tsx"
+Cohesion: 0.06
+Nodes (49): qrcode, GET(), SIZES, AppleIcon(), contentType, size, Error(), contentType (+41 more)
 
-### Community 22 - "audioGraph.ts"
-Cohesion: 0.21
-Nodes (14): clipEnvelope(), createLaneChain(), update(), update(), curveCache, driveCurve(), getImpulse(), hasOwnStretch() (+6 more)
+### Community 13 - "lucide-react"
+Cohesion: 0.09
+Nodes (46): lucide-react, api(), HostConsole(), chooseRemix(), endSession(), goLive(), saveSettings(), NOTE_PRESETS (+38 more)
 
-### Community 23 - "ensureLiveSchema"
+### Community 14 - "AdminPanel.tsx"
+Cohesion: 0.06
+Nodes (57): Claim, Claimable Neon, If neon claim is missing, Path, With REST, With the CLI, Function Triggers (CLI, MCP, REST), AdminChallenge (+49 more)
+
+### Community 15 - "SongPicker.tsx"
+Cohesion: 0.07
+Nodes (44): ExamplesPage(), metadata, DEFAULT_PAIR, ExamplesLab(), STEPS, Flags, INFO, Kind (+36 more)
+
+### Community 16 - "Studio.tsx"
+Cohesion: 0.07
+Nodes (49): CollabBar(), SYNC_LABEL, formatAgo(), LaneInspector(), ModeChooser(), MODES, ModeSwitch(), SamplePads() (+41 more)
+
+### Community 17 - "clipCommands.ts"
+Cohesion: 0.12
+Nodes (57): cutSilences(), gatePattern(), MAX_AUTOMATION_POINTS, pumpPattern(), spliceAutomation(), clearAutomation(), clearSelection(), clipFade() (+49 more)
+
+### Community 18 - "audioEngine"
+Cohesion: 0.09
+Nodes (18): audioEngine, queueModulation(), reportMixNowPlaying(), sliceBuffer(), stopSources(), createMasterChain(), scheduleLane(), getPlayingRemix() (+10 more)
+
+### Community 19 - "Arrangement.tsx"
+Cohesion: 0.10
+Nodes (50): react-dom, AiSection(), Arrangement(), onContentPointerDown(), onContentPointerUp(), snapDelta(), timeAt(), ClipFades() (+42 more)
+
+### Community 20 - "studio-session.test.ts"
+Cohesion: 0.09
+Nodes (48): zustand, AiScopeBar(), Drag, Pick, PICK_ICONS, Playhead(), clock(), Part (+40 more)
+
+### Community 21 - "aiTrial.ts"
+Cohesion: 0.10
+Nodes (47): putBackOn(), compatible(), findDrop(), fixesOf(), fixGroups(), HandEdit, ideaFits(), slotOf() (+39 more)
+
+### Community 22 - "mixScore.ts"
+Cohesion: 0.08
+Nodes (40): FIT_WORDS, STATUS_COLOR, checkMix(), chooseShift(), harmonyOf(), keyStretch(), playedLoudness(), recordingOf() (+32 more)
+
+### Community 23 - "demoSongsDsp.ts"
+Cohesion: 0.08
+Nodes (47): activeRms(), addClap(), addCrash(), addHat(), addKick(), addReverb(), addRim(), addSnare() (+39 more)
+
+### Community 24 - "Lakebase Postgres"
+Cohesion: 0.04
+Nodes (43): Full-Text Search with BM25 Ranking, Prepare and Index Text, Query and Interpret Scores, Set Parameters at Build Time or Per Query, Set the Candidate Limit, Use Prefilter Selectively, Adapt the Hybrid Search, Hybrid Search (+35 more)
+
+### Community 25 - "analysis.ts"
+Cohesion: 0.08
+Nodes (45): activeLoudness(), ANALYSIS_RATE, analyzeAndKeep(), analyzeMono(), autocorrelation(), cache, chromagram(), correlation() (+37 more)
+
+### Community 26 - "DjConsole.tsx"
+Cohesion: 0.09
+Nodes (38): BAND_COLOR, bandsAt(), DeckOverview(), DeckWave(), DRAW_ORDER, killedSlot(), STEM_COLOR, WaveMode (+30 more)
+
+### Community 27 - "AiProducer"
+Cohesion: 0.12
+Nodes (44): AiProducer(), applyOptions(), changeScope(), chooseSync(), chooseTiming(), chooseWhole(), close(), findBest() (+36 more)
+
+### Community 28 - "api/remixes/route.ts"
+Cohesion: 0.08
+Nodes (32): GET(), POST(), DELETE(), GET(), PATCH(), patchSchema, createSchema, laneSchema (+24 more)
+
+### Community 29 - "camelotCode"
 Cohesion: 0.11
-Nodes (27): DELETE(), GET(), PATCH(), patchSchema, createSchema, GET(), POST(), dynamic (+19 more)
+Nodes (38): demoLabSong(), EXCERPT_BARS, LabSong, libraryLabSong(), LoadedTrack, useSongSummaries(), Found, SongSelect() (+30 more)
 
-### Community 24 - "clipEdit.ts"
-Cohesion: 0.13
-Nodes (52): Logs: CLI, Loki, and SDK pagination, Loki-compatible read API, onContentPointerMove(), allClipRefs(), asWholeTake(), cleanClip(), clipId(), clipsOf() (+44 more)
-
-### Community 25 - "MatchStep.tsx"
+### Community 30 - "audioEngine.ts"
 Cohesion: 0.08
-Nodes (45): AnalysisCard(), LEVEL_STYLE, pct(), Row(), Verdict(), BarGrid(), MatchStep(), prepare() (+37 more)
+Nodes (28): bytesOf(), clipKey(), DecodedStem, lastUsed, LoadedLane, PHONE, PlaybackBlockedError, QueuedRender (+20 more)
 
-### Community 26 - "beatNet.ts"
-Cohesion: 0.13
-Nodes (24): aggregate(), BEAT_NET, cosTable, deduplicate(), fft(), hzToMel(), LEVELS, logMelSpectrogram() (+16 more)
+### Community 31 - "demoSongs.ts"
+Cohesion: 0.08
+Nodes (37): useSide(), State, useDemoSong(), CHORD_INTERVALS, ChordDef, ChordQuality, CHORUS_CYCLE, DEMO_SONG_DEFS (+29 more)
 
-### Community 27 - "Live.tsx"
+### Community 32 - "client/splitQueue.ts"
+Cohesion: 0.09
+Nodes (40): ago(), duration(), HelperPanel(), jobDetail(), LastBlock(), noSubscription(), QueuedSongRow(), QueuedSongs() (+32 more)
+
+### Community 33 - "Neon"
+Cohesion: 0.05
+Nodes (41): Data API external JWKS, Functions: verify the JWT, then authorize the user, Incompatibilities, Managed Better Auth, Trusted domains, 1. Install the Neon CLI, 2. Install the Neon MCP Server, 3. Install Neon Agent Skills (+33 more)
+
+### Community 34 - "musicKey.ts"
 Cohesion: 0.10
-Nodes (34): GET(), POST(), ACTIVITY_ICON, ActivityGlyph(), activityKey(), ActivityText(), ago(), AREA_LABEL (+26 more)
+Nodes (38): TrackLibrary(), AnalysisCard(), LEVEL_STYLE, pct(), Row(), Verdict(), BarGrid(), FIT_WORDS (+30 more)
 
-### Community 28 - "djMath.ts"
+### Community 35 - "AiProducer.tsx"
 Cohesion: 0.06
-Nodes (74): BeatMatchMeter(), FIT_TEXT, Gauge(), MissionSession(), CrowdRequest, crowdScore(), CrowdState, ECHO_KEYS (+66 more)
+Nodes (35): Best, CheckActions, FixState, STATUS, afterPaint(), DROP_GROUPS, ENTRIES, GROUPED (+27 more)
 
-### Community 29 - "pairMatch.ts"
+### Community 36 - "mixdown.ts"
+Cohesion: 0.11
+Nodes (34): wavHeader(), Bounce, bounceToFile(), encodeAudio(), encodeWav(), ExportOptions, ExportRange, gcd() (+26 more)
+
+### Community 37 - "exportMeta.ts"
+Cohesion: 0.14
+Nodes (35): asciiUrl(), audioFileName(), AudioTags, chunk(), comment(), concat(), creditLine(), describedText() (+27 more)
+
+### Community 38 - "directUpload.ts"
 Cohesion: 0.09
-Nodes (39): Baseline, Choice(), LaneMatchPanel(), handleApply(), handleUndo(), snapshot(), untouchedSince(), HeardVocal (+31 more)
+Nodes (32): @vercel/blob, blobApi(), blobMultipart(), blobRequest(), BlobTarget, FinalUploadError, isFinalStatus(), isHidden() (+24 more)
 
-### Community 30 - "directUpload.ts"
-Cohesion: 0.10
-Nodes (34): @vercel/blob, blobApi(), blobMultipart(), blobRequest(), BlobTarget, FinalUploadError, isFinalStatus(), isHidden() (+26 more)
-
-### Community 31 - "AiProducer"
-Cohesion: 0.16
-Nodes (38): AiProducer(), applyOptions(), changeScope(), chooseSync(), chooseTiming(), chooseWhole(), close(), findBest() (+30 more)
-
-### Community 32 - "lucide-react"
-Cohesion: 0.08
-Nodes (46): lucide-react, react-dom, RemixDetailPlayer(), CollabBar(), SYNC_LABEL, ContextMenuHost(), isSheet(), MenuItem (+38 more)
-
-### Community 33 - "demoSongs.ts"
-Cohesion: 0.09
-Nodes (34): useSide(), BEAT_PARTS, COLORS, DemoSplit(), Flags, NONE, STAGES, StemRow() (+26 more)
-
-### Community 34 - "aiTrial.ts"
-Cohesion: 0.08
-Nodes (55): analyse(), putBackOn(), compatible(), fixesOf(), HandEdit, mixFix(), mixSignature(), prepareSession() (+47 more)
-
-### Community 35 - "CoProducer.tsx"
+### Community 39 - "CoProducer.tsx"
 Cohesion: 0.12
 Nodes (35): @anthropic-ai/sdk, CoProducer(), chooseModel(), chooseProvider(), forgetKey(), send(), defaultRouterModel(), KeySetup() (+27 more)
 
-### Community 36 - "stemKinds.ts"
-Cohesion: 0.19
-Nodes (13): GET(), LibraryPage(), metadata, formatDuration(), LibraryBrowser(), StemWithTrack, TabButton(), getLibraryStems() (+5 more)
-
-### Community 37 - "AdminPanel.tsx"
-Cohesion: 0.06
-Nodes (59): Claim, Claimable Neon, If neon claim is missing, Path, With REST, With the CLI, Function Triggers (CLI, MCP, REST), AdminPage() (+51 more)
-
-### Community 38 - "arrange.ts"
+### Community 40 - "libraryTracks.ts"
 Cohesion: 0.11
-Nodes (32): findPhrases(), onsetAt(), Phrase, trackBeats(), argmax(), Arrangement, arrangeVocal(), BeatGrid (+24 more)
+Nodes (35): decoder(), entries, fold(), held, hold(), kept, load(), loadParts() (+27 more)
 
-### Community 39 - "EmbedPlayer.tsx"
-Cohesion: 0.26
-Nodes (11): Clock(), EmbedPlayer(), formatTime(), hostPosition(), useLiveFollower(), sync(), setPlayingRemix(), isClipList() (+3 more)
-
-### Community 40 - "PartyWorld"
-Cohesion: 0.07
-Nodes (12): three, Avatar, bubble(), CameraMode, canvasSprite(), emojiTexture(), emojiTextures, Floater (+4 more)
-
-### Community 41 - "aiKeys.ts"
-Cohesion: 0.17
-Nodes (22): check(), DELETE(), PATCH(), patchSchema, PUT(), putSchema, AI_MODELS, AI_PROVIDERS (+14 more)
+### Community 41 - "WhatHappened.tsx"
+Cohesion: 0.11
+Nodes (32): ArtistProgressCard(), Icon(), IconName, ICONS, MEDAL_COLORS, Choice, ChoiceCards(), clock() (+24 more)
 
 ### Community 42 - "Remixt Brand Mark (split audio-waveform bars)"
 Cohesion: 0.11
 Nodes (33): File Icon (document glyph), Globe Icon, Next.js Wordmark Logo, Next.js Starter Template Assets, Remixt Brand Gradient (pink to violet to cyan), Remixt Brand Mark (split audio-waveform bars), Remixt Duotone Palette (pink top / cyan bottom bars), Apple Touch Icon (180px, gradient rounded-square, white bars) (+25 more)
 
-### Community 43 - "demoSongsDsp.ts"
-Cohesion: 0.08
-Nodes (50): songBars(), songMeta(), vocalPlan(), activeRms(), addClap(), addCrash(), addHat(), addKick() (+42 more)
+### Community 43 - "quickHelp.ts"
+Cohesion: 0.10
+Nodes (20): Line, QuickHelp(), send(), SUGGESTIONS, FixId, Idea, useAiTrial, CoproducerContext (+12 more)
 
-### Community 44 - "linkImport.ts"
+### Community 45 - "stemKinds.ts"
+Cohesion: 0.12
+Nodes (19): GET(), ChallengeStemCard(), formatDuration(), LibraryBrowser(), StemWithTrack, TabButton(), drawBars(), resolveColor() (+11 more)
+
+### Community 46 - "remixLanes.ts"
 Cohesion: 0.14
-Nodes (19): bodySchema, maxDuration, POST(), POST(), metadata, UploadPage(), checkLink(), downloadSong() (+11 more)
+Nodes (25): Clock(), EmbedPlayer(), formatTime(), MixWaveform(), RemixDetailPlayer(), ContextMenuHost(), load(), hostPosition() (+17 more)
 
-### Community 45 - "aiExplain.ts"
-Cohesion: 0.08
-Nodes (43): Icon(), IconName, ICONS, MEDAL_COLORS, Choice, ChoiceCards(), clock(), IdeaSwitch (+35 more)
-
-### Community 46 - "studioStore.ts"
-Cohesion: 0.06
-Nodes (42): FxSlider(), hz(), LaneFxPanel(), pct(), AutomationLane(), at(), commit(), handleDown() (+34 more)
-
-### Community 47 - "coproducerTools.ts"
-Cohesion: 0.08
-Nodes (35): Line, QuickHelp(), send(), SUGGESTIONS, availableFixes(), findDrop(), FixId, Idea (+27 more)
-
-### Community 48 - "mixScore.ts"
-Cohesion: 0.10
-Nodes (34): FIT_WORDS, STATUS_COLOR, chooseShift(), harmonyOf(), keyStretch(), playedLoudness(), accentCache, accents() (+26 more)
-
-### Community 49 - "StudioTransport.tsx"
-Cohesion: 0.21
-Nodes (17): formatBars(), formatTime(), KeyControl(), LcdLabel(), MobileSeek(), Popover(), StudioTransport(), handleSave() (+9 more)
-
-### Community 50 - "analysis.ts"
-Cohesion: 0.07
-Nodes (48): activeLoudness(), ANALYSIS_RATE, analyzeAndKeep(), analyzeMono(), autocorrelation(), cache, chromagram(), correlation() (+40 more)
-
-### Community 51 - "audioEngine.ts"
+### Community 47 - "LaneInspector.tsx"
 Cohesion: 0.11
-Nodes (17): DecodedStem, lastUsed, LoadedLane, PHONE, QueuedRender, queueModulation(), RenderAsk, LaneChain (+9 more)
+Nodes (21): FxSlider(), hz(), LaneFxPanel(), pct(), askAbout(), EditTab(), formatOffset(), InspectorBody() (+13 more)
 
-### Community 52 - "uploads.ts"
+### Community 48 - "useStudioStore"
 Cohesion: 0.16
-Nodes (20): ProgressBar(), RigStatus(), formatMB(), SplitterStatus(), BackgroundActivity(), doneText(), UploadList(), UploadRow() (+12 more)
+Nodes (25): Playhead(), isMastered(), MasterPanel(), masterPresetOf(), same(), Slider(), formatBars(), formatTime() (+17 more)
 
-### Community 53 - "Lakebase Postgres"
-Cohesion: 0.04
-Nodes (43): Full-Text Search with BM25 Ranking, Prepare and Index Text, Query and Interpret Scores, Set Parameters at Build Time or Per Query, Set the Candidate Limit, Use Prefilter Selectively, Adapt the Hybrid Search, Hybrid Search (+35 more)
+### Community 49 - "exportJob.ts"
+Cohesion: 0.15
+Nodes (24): ExportSheet(), save(), formatBytes(), formatDuration(), formatLeft(), noSubscription(), phoneKind(), ExportJobState (+16 more)
 
-### Community 54 - "StudioLane"
-Cohesion: 0.10
-Nodes (39): zustand, Playhead(), AiScopeBar(), Drag, Pick, PICK_ICONS, Playhead(), clock() (+31 more)
+### Community 50 - "package.json"
+Cohesion: 0.07
+Nodes (26): @ast-grep/cli, aws4fetch, bcryptjs, eslint, eslint-config-next, jose, knip, onnxruntime-web (+18 more)
 
-### Community 55 - "app.py"
+### Community 51 - "app.py"
 Cohesion: 0.12
 Nodes (6): compute_peaks(), detect_bpm(), health(), load_and_encode(), separate(), SeparateRequest
 
-### Community 56 - "VocalRecorder.tsx"
+### Community 52 - "stemResults.ts"
+Cohesion: 0.11
+Nodes (20): share(), packAnalysis(), unpackAnalysis(), ANALYSIS_ARRAYS, ANALYSIS_NUMBERS, encodeBeats(), isTimeList(), MAX_RESULT_BYTES (+12 more)
+
+### Community 53 - "splitter.ts"
+Cohesion: 0.14
+Nodes (15): isConstrainedDevice(), decode(), Job, MODEL_URL, splitSong(), splitter, splitTrackPayload(), Turn (+7 more)
+
+### Community 54 - "VocalRecorder.tsx"
 Cohesion: 0.15
 Nodes (21): formatTime(), LevelMeter(), VocalRecorder(), begin(), keep(), listen(), stopPreview(), ensureRunning() (+13 more)
 
-### Community 57 - "SocialClipButton.tsx"
-Cohesion: 0.14
-Nodes (19): formatCount(), RemixStatsBar(), share(), ShareMenu(), clipRange(), formatTime(), noSubscription(), SocialClipButton() (+11 more)
-
-### Community 58 - "package.json"
-Cohesion: 0.07
-Nodes (27): @ast-grep/cli, aws4fetch, bcryptjs, eslint, eslint-config-next, jose, knip, onnxruntime-web (+19 more)
-
-### Community 59 - "next"
-Cohesion: 0.06
-Nodes (43): next, zod, POST(), schema, POST(), POST(), schema, POST() (+35 more)
-
-### Community 60 - "Neon"
-Cohesion: 0.05
-Nodes (41): Data API external JWKS, Functions: verify the JWT, then authorize the user, Incompatibilities, Managed Better Auth, Trusted domains, 1. Install the Neon CLI, 2. Install the Neon MCP Server, 3. Install Neon Agent Skills (+33 more)
-
-### Community 61 - "dj-realism.test.ts"
-Cohesion: 0.04
-Nodes (56): BAND_COLOR, bandsAt(), DeckOverview(), DeckWave(), DRAW_ORDER, killedSlot(), STEM_COLOR, WaveMode (+48 more)
-
-### Community 62 - "localCache.ts"
-Cohesion: 0.10
-Nodes (31): metadata, StoragePage(), formatBytes(), KIND_TEXT, MODEL_TEXT, ModelKey, ModelUsage, StorageSettings() (+23 more)
-
-### Community 63 - "stretch-memory.test.ts"
-Cohesion: 0.11
-Nodes (11): files, from, root, stretch, stretchFrom, stretchTo, to, fixStretchWorklet() (+3 more)
-
-### Community 64 - "autoMatch.ts"
-Cohesion: 0.12
-Nodes (29): load(), analyzeStem(), beatPhase(), gridScore(), refineTempo(), PRE_ROLL, TAIL, ALL_STEPS (+21 more)
-
-### Community 65 - "remixLanes.ts"
-Cohesion: 0.09
-Nodes (31): CollabMember, CollabSession, connectCollab(), idle, mergeShared(), normalise(), same(), SharedLane (+23 more)
-
-### Community 66 - "examplesLibrary.ts"
-Cohesion: 0.11
-Nodes (28): demoLabSong(), EXCERPT_BARS, LabSong, libraryLabSong(), LibraryState, LoadedTrack, Found, alignExcerpt() (+20 more)
-
-### Community 67 - "live.ts"
-Cohesion: 0.08
-Nodes (34): GoLiveForm(), localInputValue(), RemixChoice, Avatar(), submit(), Message(), readGuestName(), FollowStatus (+26 more)
-
-### Community 68 - "UploadManager.tsx"
-Cohesion: 0.09
-Nodes (27): RemixOwnerControls(), QueuedSongs(), QueueNotice(), TagInput(), add(), nameList(), noSubscription(), skippedMessage() (+19 more)
-
-### Community 69 - "neuralBeats.ts"
-Cohesion: 0.10
-Nodes (30): share(), beatModelEnabled(), BeatModelState, beatModelSupported(), diskKey(), keep(), keptBeats(), legacyResult() (+22 more)
-
-### Community 70 - "openrouter.ts"
-Cohesion: 0.18
-Nodes (16): GET(), Block, checkOpenRouterKey(), Completion, fromOpenAi(), headers(), OpenAiMessage, OpenRouterError (+8 more)
-
-### Community 71 - "NavBar.tsx"
-Cohesion: 0.12
-Nodes (22): RootLayout(), InstallEvent, InstallPrompt(), dismiss(), install(), read(), write(), MobileTabBar() (+14 more)
-
-### Community 72 - "SplitLaneDialog.tsx"
-Cohesion: 0.19
-Nodes (19): SplitLaneDialog(), finish(), start(), cache, findParts(), placeStems(), siblingStems(), swapInParts() (+11 more)
-
-### Community 73 - "exportJob.ts"
-Cohesion: 0.14
-Nodes (25): ExportSheet(), save(), formatBytes(), formatDuration(), formatLeft(), noSubscription(), phoneKind(), ExportJobState (+17 more)
-
-### Community 74 - "dependencies"
-Cohesion: 0.10
-Nodes (21): dependencies, @anthropic-ai/sdk, aws4fetch, bcryptjs, demucs-web, jose, lucide-react, next (+13 more)
-
-### Community 75 - "challenges.ts"
-Cohesion: 0.16
-Nodes (20): GET(), POST(), schema, GET(), ChallengeDetail(), ChallengesPage(), metadata, timeLeft() (+12 more)
-
-### Community 76 - "MixerConsole.tsx"
+### Community 55 - "beatNet.ts"
 Cohesion: 0.13
-Nodes (26): isMastered(), MasterPanel(), masterPresetOf(), same(), Slider(), buffers, bypassed, ChannelStrip (+18 more)
+Nodes (24): aggregate(), BEAT_NET, cosTable, deduplicate(), fft(), hzToMel(), LEVELS, logMelSpectrogram() (+16 more)
 
-### Community 77 - ".renderClip"
-Cohesion: 0.12
-Nodes (15): bytesOf(), clipKey(), renderKey(), RenderQueue, RenderSkipped, sliceBuffer(), used(), ClipBufferLookup (+7 more)
-
-### Community 79 - "compilerOptions"
+### Community 56 - "scenarios.ts"
 Cohesion: 0.10
-Nodes (19): compilerOptions, allowImportingTsExtensions, allowJs, esModuleInterop, incremental, isolatedModules, jsx, lib (+11 more)
+Nodes (15): djTrackInfo(), deckName(), fmt(), MISSIONS, MissionSetup, Objective, phaseHint(), ScenarioCategory (+7 more)
 
-### Community 80 - "audioTags.ts"
-Cohesion: 0.24
-Nodes (23): asciiUrl(), audioFileName(), AudioTags, chunk(), comment(), concat(), creditLine(), describedText() (+15 more)
-
-### Community 81 - "mixdown.ts"
-Cohesion: 0.19
-Nodes (23): createMasterChain(), scheduleLane(), wavHeader(), bounceToFile(), encodeAudio(), encodeWav(), exportLane(), ExportOptions (+15 more)
-
-### Community 82 - "splitter.worker.ts"
+### Community 57 - "projects.ts"
 Cohesion: 0.15
-Nodes (16): demucs-web, wasm-media-encoders, cachedDownload(), MODEL_CACHES, resumableDownload(), SIZE_HEADER, cancelled, init() (+8 more)
+Nodes (21): DELETE(), GET(), PUT(), putSchema, POST(), schema, GET(), POST() (+13 more)
 
-### Community 83 - "studioHistory.ts"
-Cohesion: 0.12
-Nodes (24): clearDraft(), draftNow(), hasWork(), normaliseDraft(), projectOf(), readDraft(), removeLocal(), startDraftAutosave() (+16 more)
+### Community 58 - "uploads.ts"
+Cohesion: 0.15
+Nodes (22): ProgressBar(), RigStatus(), formatMB(), SplitterStatus(), BackgroundActivity(), doneText(), UploadList(), UploadRow() (+14 more)
 
-### Community 84 - "StudioLibraryPanel.tsx"
-Cohesion: 0.24
-Nodes (16): add(), KIND_ICON, ListedStem, SongRow(), StemWithTrack, StudioLibraryPanel(), TAB_LABEL, takeOut() (+8 more)
+### Community 59 - "UploadManager.tsx"
+Cohesion: 0.14
+Nodes (20): QueueNotice(), nameList(), noSubscription(), skippedMessage(), SplitterInfo(), StatusBadge(), Stem, StemMiniRow() (+12 more)
 
-### Community 85 - "splitHelper"
+### Community 60 - "aiKeys.ts"
 Cohesion: 0.17
-Nodes (9): audioDuration(), ifNoOtherTabHelping(), LostJob, shrinkForQueue(), splitHelper, done(), stageName(), stageProgress() (+1 more)
+Nodes (22): check(), DELETE(), PATCH(), patchSchema, PUT(), putSchema, AI_MODELS, AI_PROVIDERS (+14 more)
 
-### Community 86 - "soundtouchjs.d.ts"
-Cohesion: 0.11
-Nodes (5): FifoSampleBuffer, SimpleFilter, SoundTouch, soundtouchjs, WebAudioBufferSource
-
-### Community 87 - "test.mjs"
-Cohesion: 0.14
-Nodes (9): databaseUrl, envLocal(), log, prepareDatabase(), root, server, serverEnv, storage (+1 more)
-
-### Community 88 - "[id]/opengraph-image.tsx"
+### Community 61 - "audioGraph.ts"
 Cohesion: 0.12
-Nodes (21): alt, contentType, Image(), size, alt, contentType, coverDataUri(), Image() (+13 more)
+Nodes (20): clipEnvelope(), createLaneChain(), update(), update(), curveCache, driveCurve(), getImpulse(), hasOwnStretch() (+12 more)
 
-### Community 89 - "react"
+### Community 62 - "collab.ts"
 Cohesion: 0.20
-Nodes (11): react, formatTime(), MixWaveform(), ago(), AtPlayhead(), formatAt(), RemixComments(), REASONS (+3 more)
+Nodes (12): CollabMember, CollabSession, connectCollab(), idle, mergeShared(), normalise(), same(), SharedLane (+4 more)
 
-### Community 90 - "RemixtMark"
-Cohesion: 0.12
-Nodes (22): Error(), Field(), LoginPage(), metadata, NotFound(), Field(), SignupPage(), metadata (+14 more)
+### Community 63 - "localCache.ts"
+Cohesion: 0.16
+Nodes (19): budget(), BUDGETS, cacheGet(), cachePut(), cacheUsage, clearCache(), done(), kindMetas() (+11 more)
 
-### Community 91 - "uploads"
-Cohesion: 0.20
-Nodes (4): fileKey(), isAudioFile(), rememberInFlight(), uploads
+### Community 64 - "extras.tsx"
+Cohesion: 0.21
+Nodes (21): Engines(), FineTune(), keepWhatsPlaying(), MasterIt(), TuneButton(), TuneRow(), masterFor(), setBeatModelEnabled() (+13 more)
 
-### Community 92 - "EasyStudio.tsx"
-Cohesion: 0.25
-Nodes (12): AddButton(), EasyStudio(), Guide(), Step, handleExport(), allInStep(), IN_STEP, KeyRef (+4 more)
+### Community 65 - "aiExplain.ts"
+Cohesion: 0.15
+Nodes (18): Aspect, Change, clock(), cutWords(), diffMix(), endOf(), entryOf(), fxChanges() (+10 more)
 
-### Community 93 - "AiProducer.tsx"
-Cohesion: 0.05
-Nodes (44): Best, CheckActions, FixState, STATUS, afterPaint(), DROP_GROUPS, ENTRIES, GROUPED (+36 more)
-
-### Community 94 - ".play"
-Cohesion: 0.28
-Nodes (5): PlaybackBlockedError, reportMixNowPlaying(), stopSources(), disableNowPlayingAnchor(), stopNowPlayingAnchor()
-
-### Community 95 - "stemFetch.ts"
-Cohesion: 0.18
-Nodes (9): fetchSongFromLink(), fetchInSlices(), fetchRange(), fetchStem(), fetchWhole(), download(), FILE, Handler (+1 more)
-
-### Community 96 - "Remixt Social Share Image (1920x1080)"
-Cohesion: 0.23
-Nodes (12): App Navigation: Library / Studio / Remixes / Upload, BPM & Pitch Match feature (Sync BPM), remixt-free.vercel.app (Vercel deployment), Multitrack Stem Lanes (VOCALS/BEAT waveforms with Vol & Pitch sliders), Publish Remix Under Your Name, Remixt Brand (gradient R logo, pink-purple-cyan palette), Remixt Social Share Image (1920x1080), Studio Page Mockup (remixt-free.vercel.app/studio) (+4 more)
-
-### Community 97 - "appIcon"
-Cohesion: 0.22
-Nodes (10): GET(), SIZES, AppleIcon(), contentType, size, contentType, Icon(), size (+2 more)
-
-### Community 98 - "Free on Vercel, with Neon and Vercel Blob"
-Cohesion: 0.14
-Nodes (13): 1. Put the code on GitHub, 2. Create the Vercel project, 3. Add the database (Neon), 4. Add stem storage (Vercel Blob), 5. Redeploy and finish, 6. Try it, Free on Vercel, with Neon and Vercel Blob, Optional (+5 more)
-
-### Community 100 - "LineCard.tsx"
-Cohesion: 0.33
-Nodes (10): BigSwitch(), LineCard(), separate(), presetOf(), SOUND_FIELDS, SOUND_NAMES, stretchWords(), canSeparate() (+2 more)
-
-### Community 101 - "pitchTempo.ts"
-Cohesion: 0.26
-Nodes (10): signalsmith-stretch, soundtouchjs, feedAsRendered(), hasSound(), renderHq(), renderInWorker(), renderOnPage(), renderPitchTempo() (+2 more)
-
-### Community 102 - "devDependencies"
-Cohesion: 0.13
-Nodes (15): devDependencies, @ast-grep/cli, eslint, eslint-config-next, knip, tailwindcss, @tailwindcss/postcss, @types/bcryptjs (+7 more)
-
-### Community 103 - "exportMeta.ts"
-Cohesion: 0.31
-Nodes (10): id3Key(), TrackCredit, Cover, drawCover(), exportTags(), fetchCover(), imageType(), laneCredits() (+2 more)
-
-### Community 104 - "previewPlayer.ts"
-Cohesion: 0.14
-Nodes (16): apply(), artworkFor(), getPlayingRemix(), lastPosition, mediaSession(), NowPlaying, Owner, owners (+8 more)
-
-### Community 105 - "MatchFinder.tsx"
-Cohesion: 0.33
-Nodes (8): cache, Kind, libraryStems(), MatchFinder(), add(), Candidate, describeFit(), rankByTempo()
-
-### Community 106 - "demucs-web.d.ts"
-Cohesion: 0.17
-Nodes (7): Channels, demucs-web, demucs-web/constants, demucs-web/processor, DemucsProcessor, Progress, Spec
-
-### Community 107 - "Free, all in one place: Oracle Cloud"
-Cohesion: 0.12
-Nodes (17): 1. Create the account, 2. Create the server, 3. Open ports 80 and 443, 4. Get a free domain name, 5. Install Docker and start Remixt, 6. Keep it running, Before you open it to the public, Building on a Mac for a different server (+9 more)
-
-### Community 108 - "live.test.ts"
-Cohesion: 0.29
-Nodes (8): chat(), Client, feed(), json(), ok(), remixOf(), signUp(), sql
-
-### Community 109 - "studioView.ts"
-Cohesion: 0.18
-Nodes (10): AiTab, InspectorTab, LibraryTab, MAX_ZOOM, MIN_ZOOM, ProView, recall(), remember() (+2 more)
-
-### Community 110 - "liveStudioDiff.ts"
-Cohesion: 0.27
-Nodes (6): describeMixChanges(), DiffLane, DiffMix, FX_WORDS, laneLabel(), same()
-
-### Community 111 - "postgres"
-Cohesion: 0.22
-Nodes (5): postgres, root, __dirname, schema, sql
-
-### Community 112 - "Remixt"
-Cohesion: 0.18
-Nodes (9): Architecture, Community, Configuration, Deploying it, Notes, Remixt, Running it, The Studio (+1 more)
-
-### Community 113 - "phone-export.test.ts"
-Cohesion: 0.13
-Nodes (19): Bounce, channels(), encodeMp3(), encodeMp3Bytes(), openMp3Stream(), PcmSink, handleStream(), Mp3Response (+11 more)
-
-### Community 115 - "Sharing Remixt with someone else"
-Cohesion: 0.25
-Nodes (7): `./share.sh cloudflared` — your Cloudflare tunnel, `./share.sh ngrok` — ngrok, `./share.sh` — serveo (default), Sharing Remixt with someone else, The three providers, Things worth knowing before you send the link, Why not Cloudflare's quick tunnel
-
-### Community 116 - "notifications.ts"
-Cohesion: 0.22
-Nodes (13): GET(), POST(), describe(), hrefFor(), metadata, NotificationsPage(), timeAgo(), MarkNotificationsRead() (+5 more)
-
-### Community 117 - "RemixCover.tsx"
-Cohesion: 0.36
-Nodes (6): RemixCover(), pick(), decode(), Decoded, squareCover(), uploadCover()
-
-### Community 118 - "Remixt — repo map"
-Cohesion: 0.40
-Nodes (4): Commands, Finding code, Layout, Remixt — repo map
-
-### Community 119 - "scripts"
-Cohesion: 0.20
-Nodes (10): scripts, build, dev, knip, lint, prebuild, predev, sg (+2 more)
-
-### Community 120 - "web/README.md"
-Cohesion: 0.50
-Nodes (3): Deploy on Vercel, Getting Started, Learn More
-
-### Community 121 - "run.sh"
-Cohesion: 0.29
-Nodes (3): PATH, run.sh script, share.sh script
-
-### Community 124 - "GoLiveStudioButton"
-Cohesion: 0.38
-Nodes (6): api(), GoLiveStudioButton(), endExistingAndStart(), start(), end(), goLive()
-
-### Community 125 - "ref_node_fs"
-Cohesion: 0.40
-Nodes (3): resolve(), src, withExtension()
-
-### Community 127 - "ai/chat/route.ts"
+### Community 66 - "ai/chat/route.ts"
 Cohesion: 0.19
 Nodes (19): maxDuration, POST(), GET(), AiModel, DEFAULT_AI_MODEL, isAiModel(), isModelFor(), isOpenRouterModel() (+11 more)
 
-### Community 128 - "entrypoint.sh"
+### Community 67 - "NavBar.tsx"
+Cohesion: 0.18
+Nodes (14): MobileTabBar(), Tab(), AccountMenu(), MoreLinks(), NavBar(), ICONS, isActive(), MORE_LINKS (+6 more)
+
+### Community 68 - "SplitLaneDialog.tsx"
+Cohesion: 0.20
+Nodes (18): SplitLaneDialog(), finish(), start(), cache, findParts(), placeStems(), siblingStems(), swapInParts() (+10 more)
+
+### Community 69 - "splitter.worker.ts"
+Cohesion: 0.15
+Nodes (16): demucs-web, wasm-media-encoders, cachedDownload(), MODEL_CACHES, resumableDownload(), SIZE_HEADER, cancelled, init() (+8 more)
+
+### Community 70 - "dependencies"
+Cohesion: 0.10
+Nodes (21): dependencies, @anthropic-ai/sdk, aws4fetch, bcryptjs, demucs-web, jose, lucide-react, next (+13 more)
+
+### Community 71 - "stretch-memory.test.ts"
+Cohesion: 0.11
+Nodes (11): files, from, root, stretch, stretchFrom, stretchTo, to, fixStretchWorklet() (+3 more)
+
+### Community 72 - "autoMatch.ts"
+Cohesion: 0.16
+Nodes (19): PRE_ROLL, TAIL, ALL_STEPS, analyzeBeatLane(), analyzeGuide(), analyzeLane(), beatsAttempted, buildPlan() (+11 more)
+
+### Community 73 - "ref_fs"
+Cohesion: 0.13
+Nodes (11): postgres, buildId(), nextConfig(), tunnelHost, root, assets, root, target (+3 more)
+
+### Community 74 - "react"
+Cohesion: 0.17
+Nodes (11): react, formatTime(), ago(), AtPlayhead(), formatAt(), RemixComments(), REASONS, ReportButton() (+3 more)
+
+### Community 75 - "openrouter.ts"
+Cohesion: 0.18
+Nodes (16): GET(), Block, checkOpenRouterKey(), Completion, fromOpenAi(), headers(), OpenAiMessage, OpenRouterError (+8 more)
+
+### Community 76 - "djMidi.ts"
+Cohesion: 0.19
+Nodes (14): MidiPanel(), controlKey(), learn(), loadMidiMap(), MIDI_ACTIONS, MidiAction, MidiLink, MidiMap (+6 more)
+
+### Community 77 - "LaneMatchPanel.tsx"
+Cohesion: 0.16
+Nodes (18): Baseline, Choice(), LaneMatchPanel(), handleApply(), handleUndo(), snapshot(), untouchedSince(), DEFAULT_OPTIONS (+10 more)
+
+### Community 78 - "arrange.ts"
+Cohesion: 0.20
+Nodes (18): findPhrases(), argmax(), Arrangement, beatStructure, downbeatScores(), gridCache, hearVocal(), margin() (+10 more)
+
+### Community 80 - "compilerOptions"
+Cohesion: 0.10
+Nodes (19): compilerOptions, allowImportingTsExtensions, allowJs, esModuleInterop, incremental, isolatedModules, jsx, lib (+11 more)
+
+### Community 81 - "MixerConsole.tsx"
+Cohesion: 0.19
+Nodes (18): buffers, bypassed, ChannelStrip, dbText(), Fader(), faderGain(), faderPos(), Insert (+10 more)
+
+### Community 82 - "StudioLibraryPanel.tsx"
+Cohesion: 0.23
+Nodes (17): add(), ListedStem, SongRow(), StemWithTrack, StudioLibraryPanel(), TAB_LABEL, takeOut(), withPeaks() (+9 more)
+
+### Community 83 - "pairMatch.ts"
+Cohesion: 0.16
+Nodes (18): HeardVocal, LaneInput, layout(), sameSongLayout(), SectionPlacement, SuggestedLayout, suggestLayout(), BEAT_PRESETS (+10 more)
+
+### Community 84 - "challenges.ts"
+Cohesion: 0.20
+Nodes (15): GET(), ChallengeDetail(), ChallengesPage(), metadata, timeLeft(), PlaceMedal(), Challenge, challengeEntries() (+7 more)
+
+### Community 85 - "MatchStep.tsx"
+Cohesion: 0.16
+Nodes (15): MatchStep(), prepare(), Prepared, ReadySide, renderVariant(), settingsKey(), Side, SideInfo() (+7 more)
+
+### Community 86 - "splitHelper"
+Cohesion: 0.20
+Nodes (7): ifNoOtherTabHelping(), LostJob, splitHelper, done(), stageName(), stageProgress(), tabSession()
+
+### Community 87 - "soundtouchjs.d.ts"
+Cohesion: 0.11
+Nodes (5): FifoSampleBuffer, SimpleFilter, SoundTouch, soundtouchjs, WebAudioBufferSource
+
+### Community 88 - "linkImport.ts"
+Cohesion: 0.19
+Nodes (14): metadata, UploadPage(), checkLink(), downloadSong(), explain(), EXTENSIONS, ImportedSong, ImportError (+6 more)
+
+### Community 89 - "StorageSettings.tsx"
+Cohesion: 0.15
+Nodes (14): metadata, StoragePage(), formatBytes(), KIND_TEXT, MODEL_TEXT, ModelKey, ModelUsage, StorageSettings() (+6 more)
+
+### Community 90 - "liveSync.ts"
+Cohesion: 0.15
+Nodes (13): Avatar(), LiveChat(), submit(), Message(), readGuestName(), FollowStatus, LiveConnection, LiveFeedState (+5 more)
+
+### Community 91 - "EasyStudio.tsx"
+Cohesion: 0.23
+Nodes (13): AddButton(), EasyStudio(), Guide(), Step, KIND_ICON, handleExport(), allInStep(), IN_STEP (+5 more)
+
+### Community 92 - "test.mjs"
+Cohesion: 0.14
+Nodes (9): databaseUrl, envLocal(), log, prepareDatabase(), root, server, serverEnv, storage (+1 more)
+
+### Community 93 - "rtlText.ts"
+Cohesion: 0.22
+Nodes (11): CardText(), BidiRun, bidiRuns(), FORMS, hasRtl(), joinLetters(), joins(), joinsForward() (+3 more)
+
+### Community 94 - "Live.tsx"
+Cohesion: 0.23
+Nodes (15): ACTIVITY_ICON, ActivityGlyph(), activityKey(), ActivityText(), ago(), AREA_LABEL, AREA_SHORT, AreaShort() (+7 more)
+
+### Community 96 - "Remixt"
+Cohesion: 0.14
+Nodes (14): Architecture, Community, Configuration, Deploying it, Notes, Postgres (accounts, tracks, stems, remixes), Remixt, Running it (+6 more)
+
+### Community 97 - "partyWorld.ts"
+Cohesion: 0.17
+Nodes (11): three, Avatar, bubble(), CameraMode, canvasSprite(), emojiTexture(), emojiTextures, Floater (+3 more)
+
+### Community 98 - "devDependencies"
+Cohesion: 0.13
+Nodes (15): devDependencies, @ast-grep/cli, eslint, eslint-config-next, knip, tailwindcss, @tailwindcss/postcss, @types/bcryptjs (+7 more)
+
+### Community 99 - "lib/presence.ts"
+Cohesion: 0.25
+Nodes (13): GET(), POST(), Activity, ActivityType, Area, areaFor(), AREAS, ensurePresenceSchema() (+5 more)
+
+### Community 100 - "neuralBeats.ts"
+Cohesion: 0.24
+Nodes (14): beatModelEnabled(), BeatModelState, beatModelSupported(), diskKey(), keep(), keptBeats(), legacyResult(), neuralBeats() (+6 more)
+
+### Community 101 - "stemFetch.ts"
+Cohesion: 0.19
+Nodes (8): fetchSongFromLink(), fetchInSlices(), fetchRange(), fetchWhole(), download(), FILE, Handler, server
+
+### Community 102 - "Remixt Social Share Image (1920x1080)"
+Cohesion: 0.23
+Nodes (12): App Navigation: Library / Studio / Remixes / Upload, BPM & Pitch Match feature (Sync BPM), remixt-free.vercel.app (Vercel deployment), Multitrack Stem Lanes (VOCALS/BEAT waveforms with Vol & Pitch sliders), Publish Remix Under Your Name, Remixt Brand (gradient R logo, pink-purple-cyan palette), Remixt Social Share Image (1920x1080), Studio Page Mockup (remixt-free.vercel.app/studio) (+4 more)
+
+### Community 103 - "LineCard.tsx"
+Cohesion: 0.25
+Nodes (12): formatTime(), PreviewBar(), BigSwitch(), LineCard(), separate(), presetOf(), SOUND_FIELDS, SOUND_NAMES (+4 more)
+
+### Community 104 - "AutomationLane.tsx"
+Cohesion: 0.22
+Nodes (11): AutomationLane(), at(), commit(), handleDown(), handleMove(), remove(), formatValue(), PARAMS (+3 more)
+
+### Community 105 - "StudioShortcuts.tsx"
+Cohesion: 0.22
+Nodes (13): PAD_KEYS, GROUPS, handleKey(), isTyping(), Mode, scrollToLane(), Shortcut, stepSelection() (+5 more)
+
+### Community 106 - "liveStudio.ts"
+Cohesion: 0.21
+Nodes (13): applyLiveMix(), isMix(), LiveMix, mixFields(), mixOf(), startStudioBroadcast(), scheduleMix(), scheduleState() (+5 more)
+
+### Community 107 - "pitchTempo.ts"
+Cohesion: 0.26
+Nodes (10): signalsmith-stretch, soundtouchjs, feedAsRendered(), hasSound(), renderHq(), renderInWorker(), renderOnPage(), renderPitchTempo() (+2 more)
+
+### Community 108 - "signup/route.ts"
+Cohesion: 0.23
+Nodes (8): POST(), schema, POST(), schema, createSessionCookie(), hashPassword(), verifyPassword(), REF_COOKIE
+
+### Community 109 - "app/layout.tsx"
+Cohesion: 0.19
+Nodes (9): geistMono, geistSans, metadata, viewport, isStaleChunk(), readLater(), UpdatePrompt(), SITE_DESCRIPTION (+1 more)
+
+### Community 110 - "mediaSession.ts"
+Cohesion: 0.23
+Nodes (11): NOW_PLAYING_ARTWORK, apply(), artworkFor(), lastPosition, mediaSession(), NowPlaying, Owner, owners (+3 more)
+
+### Community 111 - "trackBeats"
+Cohesion: 0.21
+Nodes (10): onsetAt(), trackBeats(), arrangeVocal(), BeatGrid, localPeriod(), neuralGrid(), placementNotes(), placeVocal() (+2 more)
+
+### Community 113 - "demucs-web.d.ts"
+Cohesion: 0.17
+Nodes (7): Channels, demucs-web, demucs-web/constants, demucs-web/processor, DemucsProcessor, Progress, Spec
+
+### Community 114 - "MatchFinder.tsx"
+Cohesion: 0.31
+Nodes (9): cache, Kind, libraryStems(), MatchFinder(), add(), Candidate, describeFit(), rankByTempo() (+1 more)
+
+### Community 115 - "liveStudioDiff.ts"
+Cohesion: 0.27
+Nodes (6): describeMixChanges(), DiffLane, DiffMix, FX_WORDS, laneLabel(), same()
+
+### Community 116 - "studioView.ts"
+Cohesion: 0.18
+Nodes (10): AiTab, InspectorTab, LibraryTab, MAX_ZOOM, MIN_ZOOM, ProView, recall(), remember() (+2 more)
+
+### Community 117 - "scripts"
+Cohesion: 0.20
+Nodes (10): scripts, build, dev, knip, lint, prebuild, predev, sg (+2 more)
+
+### Community 118 - "live.test.ts"
+Cohesion: 0.29
+Nodes (8): chat(), Client, feed(), json(), ok(), remixOf(), signUp(), sql
+
+### Community 119 - "Free on Vercel, with Neon and Vercel Blob"
+Cohesion: 0.22
+Nodes (9): 1. Put the code on GitHub, 2. Create the Vercel project, 3. Add the database (Neon), 4. Add stem storage (Vercel Blob), 5. Redeploy and finish, 6. Try it, Free on Vercel, with Neon and Vercel Blob, Optional (+1 more)
+
+### Community 120 - "client/presence.ts"
+Cohesion: 0.33
+Nodes (7): RootLayout(), PresenceHeartbeat(), listeners, randomId(), sendHeartbeat(), subscribe(), visitorId()
+
+### Community 121 - "RemixCover.tsx"
+Cohesion: 0.36
+Nodes (6): RemixCover(), pick(), decode(), Decoded, squareCover(), uploadCover()
+
+### Community 122 - "Sharing Remixt with someone else"
+Cohesion: 0.25
+Nodes (7): `./share.sh cloudflared` — your Cloudflare tunnel, `./share.sh ngrok` — ngrok, `./share.sh` — serveo (default), Sharing Remixt with someone else, The three providers, Things worth knowing before you send the link, Why not Cloudflare's quick tunnel
+
+### Community 123 - "mixSignature"
+Cohesion: 0.43
+Nodes (8): analyse(), mixSignature(), prepareSession(), rebaseSession(), timingSignature(), session(), session(), session()
+
+### Community 124 - "Free, all in one place: Oracle Cloud"
+Cohesion: 0.29
+Nodes (7): 1. Create the account, 2. Create the server, 3. Open ports 80 and 443, 4. Get a free domain name, 5. Install Docker and start Remixt, 6. Keep it running, Free, all in one place: Oracle Cloud
+
+### Community 125 - "run.sh"
+Cohesion: 0.29
+Nodes (3): PATH, run.sh script, share.sh script
+
+### Community 126 - "Image"
+Cohesion: 0.33
+Nodes (6): alt, contentType, Image(), size, Image(), cardFonts()
+
+### Community 127 - "InstallPrompt.tsx"
+Cohesion: 0.48
+Nodes (6): InstallEvent, InstallPrompt(), dismiss(), install(), read(), write()
+
+### Community 128 - "GoLiveStudioButton"
+Cohesion: 0.38
+Nodes (6): api(), GoLiveStudioButton(), endExistingAndStart(), start(), end(), goLive()
+
+### Community 129 - "Deploying Remixt"
+Cohesion: 0.33
+Nodes (4): Before you open it to the public, Deploying Remixt, How the splitting works (and what it costs visitors), Songs from a link
+
+### Community 130 - "Deployment options (Vercel, Oracle Cloud, own Docker server)"
+Cohesion: 0.33
+Nodes (6): Database and storage backups (pg_dump and tar), Cloudflare Tunnel deployment (no open ports), Own server via the Docker image (Caddy HTTPS), Deployment options (Vercel, Oracle Cloud, own Docker server), Free all-in-one server on Oracle Cloud, Checklist before opening to the public (copyright, quotas, plan)
+
+### Community 131 - "Your own server (Docker)"
+Cohesion: 0.33
+Nodes (6): Building on a Mac for a different server, Options, The AI co-producer, Through a Cloudflare Tunnel instead (no open ports), Updating and backups, Your own server (Docker)
+
+### Community 132 - "In-browser song splitter (Demucs via ONNX)"
+Cohesion: 0.33
+Nodes (3): In-browser song splitter (Demucs via ONNX), Cross-origin isolation (COOP/COEP) for WebAssembly threads, separation-service (retired Python Demucs splitter)
+
+### Community 133 - "ref_node_fs"
+Cohesion: 0.40
+Nodes (3): resolve(), src, withExtension()
+
+### Community 135 - "Remixt — repo map"
+Cohesion: 0.40
+Nodes (4): Commands, Finding code, Layout, Remixt — repo map
+
+### Community 136 - "AI co-producer on each person's own key"
+Cohesion: 0.40
+Nodes (5): AI co-producer on each person's own key, Optional shared free AI questions (AI_SHARED_ANTHROPIC_KEY), AI producer panel, Arrangement engine (fits lanes together without changing pitch), Quick help (no-AI request handling, English and Persian)
+
+### Community 137 - "Repo map for AI assistants (web, separation-service, storage)"
+Cohesion: 0.50
+Nodes (3): Dev, typecheck, lint and test commands, Repo map for AI assistants (web, separation-service, storage), web/CLAUDE.md and AGENTS.md hold Next.js rules
+
+### Community 138 - "entrypoint.sh"
 Cohesion: 1.00
 Nodes (3): log(), entrypoint.sh script, shutdown()
+
+### Community 139 - "web/README.md"
+Cohesion: 0.50
+Nodes (3): Deploy on Vercel, Getting Started, Learn More
 
 ## Ambiguous Edges - Review These
 - `Remixt Brand Gradient (pink to violet to cyan)` → `Remixt Mark - Black Monochrome`  [AMBIGUOUS]
@@ -693,23 +757,23 @@ Nodes (3): log(), entrypoint.sh script, shutdown()
   web/public/remixt-logo/remixt-mark-white.svg · relation: references
 
 ## Knowledge Gaps
-- **27 isolated node(s):** `PATH`, `onnxruntime-web`, `uuid`, `@ast-grep/cli`, `@tailwindcss/postcss` (+22 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 1069 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **15 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **39 isolated node(s):** `Python separation service dependencies (FastAPI, demucs 4.0.1, librosa)`, `Google Search Console site verification file`, `Vazirmatn font (SIL Open Font License 1.1)`, `PATH`, `CONSTANTS` (+34 more)
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 1089 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **19 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `react` connect `react` to `models.ts`, `djEngine.ts`, `LiveRoom.tsx`, `SongPicker.tsx`, `extras.tsx`, `useStudioStore`, `Waveform`, `musicKey.ts`, `libraryTracks.ts`, `splitter.ts`, `MissionSession.tsx`, `app/page.tsx`, `client/splitQueue.ts`, `ExamplesLab.tsx`, `ensureLiveSchema`, `MatchStep.tsx`, `Live.tsx`, `djMath.ts`, `pairMatch.ts`, `lucide-react`, `demoSongs.ts`, `CoProducer.tsx`, `stemKinds.ts`, `AdminPanel.tsx`, `EmbedPlayer.tsx`, `aiExplain.ts`, `studioStore.ts`, `coproducerTools.ts`, `mixScore.ts`, `StudioTransport.tsx`, `uploads.ts`, `StudioLane`, `VocalRecorder.tsx`, `SocialClipButton.tsx`, `package.json`, `dj-realism.test.ts`, `localCache.ts`, `examplesLibrary.ts`, `live.ts`, `UploadManager.tsx`, `NavBar.tsx`, `SplitLaneDialog.tsx`, `exportJob.ts`, `MixerConsole.tsx`, `StudioLibraryPanel.tsx`, `RemixtMark`, `EasyStudio.tsx`, `AiProducer.tsx`, `LineCard.tsx`, `previewPlayer.ts`, `MatchFinder.tsx`, `notifications.ts`, `RemixCover.tsx`?**
-  _High betweenness centrality (0.167) - this node is a cross-community bridge._
-- **What connects `PATH`, `onnxruntime-web`, `uuid` to the rest of the system?**
-  _27 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `clipCommands.ts` be split into smaller, more focused modules?**
-  _Cohesion score 0.1344155844155844 - nodes in this community are weakly interconnected._
-- **Why does `next` connect `next` to `projects.ts`, `models.ts`, `sql`, `LiveRoom.tsx`, `SongPicker.tsx`, `getCurrentUser`, `musicKey.ts`, `MissionSession.tsx`, `app/page.tsx`, `client/splitQueue.ts`, `storage.ts`, `ExamplesLab.tsx`, `ensureLiveSchema`, `Live.tsx`, `lucide-react`, `demoSongs.ts`, `stemKinds.ts`, `AdminPanel.tsx`, `aiKeys.ts`, `linkImport.ts`, `StudioTransport.tsx`, `uploads.ts`, `VocalRecorder.tsx`, `SocialClipButton.tsx`, `package.json`, `examplesLibrary.ts`, `live.ts`, `UploadManager.tsx`, `openrouter.ts`, `NavBar.tsx`, `challenges.ts`, `[id]/opengraph-image.tsx`, `react`, `RemixtMark`, `appIcon`, `notifications.ts`, `RemixCover.tsx`, `ai/chat/route.ts`?**
-  _High betweenness centrality (0.140) - this node is a cross-community bridge._
-- **Should `aiIdeas.ts` be split into smaller, more focused modules?**
-  _Cohesion score 0.05881254667662435 - nodes in this community are weakly interconnected._
+- **Why does `next` connect `sql` to `app/page.tsx`, `MissionSession.tsx`, `getCurrentUser`, `djTypes.ts`, `models.ts`, `live.ts`, `SocialClipButton.tsx`, `lucide-react`, `AdminPanel.tsx`, `SongPicker.tsx`, `Studio.tsx`, `api/remixes/route.ts`, `camelotCode`, `client/splitQueue.ts`, `stemKinds.ts`, `remixLanes.ts`, `useStudioStore`, `package.json`, `VocalRecorder.tsx`, `projects.ts`, `uploads.ts`, `UploadManager.tsx`, `aiKeys.ts`, `ai/chat/route.ts`, `NavBar.tsx`, `ref_fs`, `react`, `openrouter.ts`, `challenges.ts`, `linkImport.ts`, `liveSync.ts`, `Live.tsx`, `lib/presence.ts`, `signup/route.ts`, `app/layout.tsx`, `client/presence.ts`, `RemixCover.tsx`?**
+  _High betweenness centrality (0.128) - this node is a cross-community bridge._
+- **What connects `Python separation service dependencies (FastAPI, demucs 4.0.1, librosa)`, `Google Search Console site verification file`, `Vazirmatn font (SIL Open Font License 1.1)` to the rest of the system?**
+  _39 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **Should `DjEngine` be split into smaller, more focused modules?**
+  _Cohesion score 0.05910852713178295 - nodes in this community are weakly interconnected._
+- **Why does `react` connect `react` to `app/page.tsx`, `MissionSession.tsx`, `getCurrentUser`, `djTypes.ts`, `dj-realism.test.ts`, `models.ts`, `live.ts`, `SocialClipButton.tsx`, `lucide-react`, `AdminPanel.tsx`, `SongPicker.tsx`, `Studio.tsx`, `audioEngine`, `Arrangement.tsx`, `studio-session.test.ts`, `mixScore.ts`, `DjConsole.tsx`, `api/remixes/route.ts`, `camelotCode`, `demoSongs.ts`, `client/splitQueue.ts`, `musicKey.ts`, `AiProducer.tsx`, `CoProducer.tsx`, `libraryTracks.ts`, `WhatHappened.tsx`, `quickHelp.ts`, `stemKinds.ts`, `remixLanes.ts`, `LaneInspector.tsx`, `useStudioStore`, `exportJob.ts`, `package.json`, `splitter.ts`, `VocalRecorder.tsx`, `uploads.ts`, `UploadManager.tsx`, `extras.tsx`, `NavBar.tsx`, `SplitLaneDialog.tsx`, `djMidi.ts`, `LaneMatchPanel.tsx`, `MixerConsole.tsx`, `StudioLibraryPanel.tsx`, `MatchStep.tsx`, `StorageSettings.tsx`, `liveSync.ts`, `EasyStudio.tsx`, `Live.tsx`, `LineCard.tsx`, `AutomationLane.tsx`, `StudioShortcuts.tsx`, `app/layout.tsx`, `MatchFinder.tsx`, `client/presence.ts`, `RemixCover.tsx`, `InstallPrompt.tsx`?**
+  _High betweenness centrality (0.126) - this node is a cross-community bridge._
+- **Should `app/page.tsx` be split into smaller, more focused modules?**
+  _Cohesion score 0.03826279527559055 - nodes in this community are weakly interconnected._
 
 ### Low-confidence Hints
 _AMBIGUOUS edges — the extractor was unsure. Verify before acting on these._
