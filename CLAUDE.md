@@ -21,7 +21,11 @@ Query the graph before grepping or opening many files:
 graphify query "how does X work?"
 ```
 
+From inside `web/` (or any subfolder), pass the graph explicitly: `graphify query "..." --graph ../graphify-out/graph.json`. A query without `--graph` fails outside the repo root.
+
 Read `graphify-out/GRAPH_REPORT.md` for the community map. Rebuild after big changes with `/graphify . --update`.
+
+Use the graph before grep for "where is X" or "how does X work" questions. Fall back to grep only for exact strings, or when the graph has no answer.
 
 ## Commands
 
