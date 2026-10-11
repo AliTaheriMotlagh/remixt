@@ -4,6 +4,7 @@ import { ensureSchema } from "./schema";
 import { ensureSocialSchema } from "./social";
 import { ensureRemixStats } from "./models";
 import { normaliseTags } from "./tags";
+import { stateChanged, type Replay, type ReplayChat } from "./liveReplay";
 
 // Live sessions: an artist goes live with one of their published remixes,
 // performs it (play, pause, mute and solo stems, move the faders) and
@@ -151,6 +152,18 @@ export function ensureLiveSchema(): Promise<void> {
     await sql`ALTER TABLE live_streams ADD COLUMN IF NOT EXISTS mix_json TEXT NOT NULL DEFAULT ''`;
     await sql`ALTER TABLE live_streams ADD COLUMN IF NOT EXISTS mix_version INTEGER NOT NULL DEFAULT 0`;
     await sql`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS live_id TEXT REFERENCES live_streams(id) ON DELETE CASCADE`;
+    // The performance as it happened, for the replay (see lib/liveReplay.ts).
+    await sql`
+      CREATE TABLE IF NOT EXISTS live_timeline (
+        id BIGSERIAL PRIMARY KEY,
+        stream_id TEXT NOT NULL REFERENCES live_streams(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        body TEXT NOT NULL,
+        remix_id TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_live_timeline_stream ON live_timeline(stream_id, kind, id)`;
   })();
   schema.catch(() => (schema = null));
   return schema;
@@ -202,9 +215,10 @@ export async function liveDirectory(): Promise<LiveDirectory> {
     `,
     sql<LiveStream[]>`
       ${streamSelect()}
-      WHERE s.status = 'ended' AND s.started_at IS NOT NULL AND s.ended_at > now() - interval '14 days'
+      WHERE s.status = 'ended' AND s.started_at IS NOT NULL AND s.ended_at > now() - interval '60 days'
         AND s.ended_at - s.started_at > interval '1 minute'
-      ORDER BY s.ended_at DESC LIMIT 12
+        AND EXISTS (SELECT 1 FROM live_timeline t WHERE t.stream_id = s.id)
+      ORDER BY s.ended_at DESC LIMIT 24
     `,
   ]);
   return { live, upcoming, recent };
@@ -322,13 +336,24 @@ export async function updateStream(id: string, patch: StreamPatch) {
   if (patch.scheduledAt !== undefined) await sql`UPDATE live_streams SET scheduled_at = ${patch.scheduledAt} WHERE id = ${id} AND status = 'scheduled'`;
   if (patch.remixId !== undefined) {
     // A different remix: listeners reload the stage, starting from the top.
-    await sql`
+    const [row] = await sql<{ status: LiveStatus }[]>`
       UPDATE live_streams SET remix_id = ${patch.remixId}, state_json = ${JSON.stringify(IDLE_STATE)},
         state_at = now(), state_version = state_version + 1
-      WHERE id = ${id}
+      WHERE id = ${id} RETURNING status
     `;
+    if (row?.status === "live") {
+      await sql`
+        INSERT INTO live_timeline (stream_id, kind, body, remix_id)
+        VALUES (${id}, 'state', ${JSON.stringify(IDLE_STATE)}, ${patch.remixId})
+      `;
+    }
   }
 }
+
+/** Edits this close together are kept as one mix in the replay. */
+const REPLAY_MIX_GAP_SECONDS = 4;
+/** A replay keeps at most this many mixes; past it, the latest one is updated in place. */
+const REPLAY_MIX_MAX = 1500;
 
 /** A studio session's whole mix (lanes, clips, effects, tempo), as the host's Studio has it. */
 export async function publishMix(id: string, mixJson: string) {
@@ -337,15 +362,42 @@ export async function publishMix(id: string, mixJson: string) {
     WHERE id = ${id} AND status = 'live' AND mode = 'studio'
     RETURNING mix_version AS version
   `;
+  if (row) await keepMix(id, mixJson);
   return row?.version ?? null;
 }
 
+/** Keeps the mix for the replay: a burst of edits becomes one entry, from when the burst began. */
+async function keepMix(id: string, mixJson: string) {
+  const [last] = await sql<{ id: number; age: number; n: number }[]>`
+    SELECT id::float8 AS id, (extract(epoch FROM now() - created_at))::float8 AS age,
+           (SELECT COUNT(*)::int FROM live_timeline WHERE stream_id = ${id} AND kind = 'mix') AS n
+    FROM live_timeline WHERE stream_id = ${id} AND kind = 'mix' ORDER BY id DESC LIMIT 1
+  `;
+  if (last && (last.age < REPLAY_MIX_GAP_SECONDS || last.n >= REPLAY_MIX_MAX)) {
+    await sql`UPDATE live_timeline SET body = ${mixJson} WHERE id = ${last.id}`;
+  } else {
+    await sql`INSERT INTO live_timeline (stream_id, kind, body) VALUES (${id}, 'mix', ${mixJson})`;
+  }
+}
+
 export async function publishState(id: string, state: LiveStageState) {
+  const [before] = await sql<{ state_json: string; ago: number; remix_id: string | null }[]>`
+    SELECT state_json, (extract(epoch FROM now() - state_at))::float8 AS ago, remix_id
+    FROM live_streams WHERE id = ${id} AND status = 'live'
+  `;
+  if (!before) return;
   await sql`
     UPDATE live_streams SET state_json = ${JSON.stringify(state)}, state_at = now(),
       state_version = state_version + 1, host_seen_at = now()
     WHERE id = ${id} AND status = 'live'
   `;
+  // Keyframes that only confirm what was already known stay out of the replay.
+  if (stateChanged(parseState(before.state_json), state, before.ago)) {
+    await sql`
+      INSERT INTO live_timeline (stream_id, kind, body, remix_id)
+      VALUES (${id}, 'state', ${JSON.stringify(state)}, ${before.remix_id})
+    `;
+  }
 }
 
 // --- The feed ----------------------------------------------------------------------------
@@ -773,6 +825,59 @@ export async function recap(stream: Pick<LiveStream, "id" | "host_id" | "started
     newFollowers: stats.followers,
     chatters: stats.chatters,
   };
+}
+
+/**
+ * An ended session's replay: its stage states, studio mixes (without their
+ * bodies: see replayMix), chat and reactions, timed from when it started.
+ * Null while it's live or before it started.
+ */
+export async function readReplay(stream: Pick<LiveStream, "id" | "mode" | "status" | "started_at" | "ended_at">): Promise<Replay | null> {
+  await ensureLiveSchema();
+  if (stream.status !== "ended" || !stream.started_at) return null;
+  const start = stream.started_at;
+  const since = (column: string) => sql`(extract(epoch FROM ${sql(column)} - ${start}::timestamptz))::float8`;
+  const [states, mixes, chat, reactions] = await Promise.all([
+    sql<{ t: number; body: string; remix_id: string | null }[]>`
+      SELECT ${since("created_at")} AS t, body, remix_id FROM live_timeline
+      WHERE stream_id = ${stream.id} AND kind = 'state' ORDER BY id
+    `,
+    sql<{ id: number; t: number }[]>`
+      SELECT id::float8 AS id, ${since("created_at")} AS t FROM live_timeline
+      WHERE stream_id = ${stream.id} AND kind = 'mix' ORDER BY id
+    `,
+    sql<ReplayChat[]>`
+      SELECT e.id::float8 AS id, ${since("e.created_at")} AS t, e.user_id, e.body,
+             COALESCE(u.artist_name, e.guest_name, 'Guest') AS name, COALESCE(u.avatar_color, '#52525b') AS color,
+             (e.user_id IS NOT NULL AND e.user_id = s.host_id) AS is_host
+      FROM live_events e JOIN live_streams s ON s.id = e.stream_id LEFT JOIN users u ON u.id = e.user_id
+      WHERE e.stream_id = ${stream.id} AND e.kind = 'chat' AND NOT e.hidden
+      ORDER BY e.id LIMIT 3000
+    `,
+    sql<{ t: number; emoji: string; count: number }[]>`
+      SELECT ${since("created_at")} AS t, body AS emoji, count FROM live_events
+      WHERE stream_id = ${stream.id} AND kind = 'reaction' ORDER BY id LIMIT 5000
+    `,
+  ]);
+  const end = stream.ended_at ? new Date(stream.ended_at).getTime() : Date.now();
+  return {
+    duration: Math.max(0, (end - new Date(start).getTime()) / 1000),
+    mode: stream.mode,
+    states: states.map((r) => ({ t: Math.max(0, r.t), state: parseState(r.body), remixId: r.remix_id })),
+    mixes: mixes.map((m) => ({ id: m.id, t: Math.max(0, m.t) })),
+    chat: chat.map((c) => ({ ...c, t: Math.max(0, c.t) })),
+    reactions: reactions.map((r) => ({ ...r, t: Math.max(0, r.t) })),
+  };
+}
+
+/** One studio mix from a replay, as the host's Studio sent it. */
+export async function replayMix(streamId: string, mixId: number): Promise<string | null> {
+  await ensureLiveSchema();
+  const [row] = await sql<{ body: string }[]>`
+    SELECT t.body FROM live_timeline t JOIN live_streams s ON s.id = t.stream_id
+    WHERE t.id = ${mixId} AND t.stream_id = ${streamId} AND t.kind = 'mix' AND s.status = 'ended'
+  `;
+  return row?.body ?? null;
 }
 
 /** The host's published remixes, to choose what to perform. */

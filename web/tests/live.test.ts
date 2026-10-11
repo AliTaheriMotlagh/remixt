@@ -149,6 +149,10 @@ describe("live sessions", () => {
     assert.equal(f.stream.state.note, "Drop incoming");
     assert.ok(Math.abs(f.now - f.stream.stateAt) < 60_000, "state and clock share one clock");
     await ok(await json(host, "PUT", `/api/live/${id}/state`, { playing: true, position: -1, lanes: [] }), 400);
+    // A keyframe that only confirms the state adds nothing to the replay; a stem muted does.
+    await ok(await json(host, "PUT", `/api/live/${id}/state`, { playing: true, position: 12.6, lanes: [{ muted: true, solo: false, volume: 0.8 }], note: "Drop incoming" }));
+    await ok(await json(host, "PUT", `/api/live/${id}/state`, { playing: true, position: 13, lanes: [{ muted: false, solo: false, volume: 0.8 }], note: "Drop incoming" }));
+    await ok(await fetch(`${BASE_URL}/api/live/${id}/replay`), 409); // no replay while it's live
 
     // The host sees who's here.
     f = await feed(host, id);
@@ -197,6 +201,19 @@ describe("live sessions", () => {
     assert.ok(detail.recap.unique >= 1);
     const after = await ok(await fetch(`${BASE_URL}/api/live`));
     assert.ok(!after.live.some((s: { id: string }) => s.id === id));
+
+    // The replay: the performance as it changed, and the chat as it was said (hidden messages left out).
+    const replay = await ok(await fetch(`${BASE_URL}/api/live/${id}/replay`));
+    assert.equal(replay.mode, "perform");
+    assert.equal(replay.states.length, 2, "keyframes that change nothing aren't kept");
+    assert.equal(replay.states[0].state.position, 12.5);
+    assert.equal(replay.states[0].remixId, remixId);
+    assert.equal(replay.states[1].state.lanes[0].muted, false);
+    assert.ok(replay.states[0].t <= replay.states[1].t);
+    assert.ok(replay.chat.some((c: { body: string }) => c.body === "great drop!"));
+    assert.ok(!replay.chat.some((c: { id: number }) => c.id === adaId), "hidden messages stay hidden");
+    assert.ok(replay.reactions.length > 0);
+    assert.ok(replay.duration >= replay.states[1].t);
   });
 
   test("scheduled sessions start on demand and a vanished host's session is ended", async () => {
@@ -264,6 +281,15 @@ describe("live sessions", () => {
 
     await ok(await json(stranger, "PATCH", `/api/live/${id}`, { action: "end" }));
     await ok(await json(stranger, "PUT", `/api/live/${id}/mix`, mix), 409);
+
+    // The replay keeps the mix (edits close together are one entry) and serves it on its own.
+    const replay = await ok(await fetch(`${BASE_URL}/api/live/${id}/replay`));
+    assert.equal(replay.mode, "studio");
+    assert.equal(replay.mixes.length, 1);
+    assert.deepEqual(await ok(await fetch(`${BASE_URL}/api/live/${id}/replay?mix=${replay.mixes[0].id}`)), mix);
+    await ok(await fetch(`${BASE_URL}/api/live/${id}/replay?mix=999999999`), 404);
+    // Ended: the host's page is the replay, not the Studio.
+    assert.equal((await stranger.fetch(`/live/${id}`, { redirect: "manual" })).status, 200);
   });
 
   test("anyone can read the directory and pages render", async () => {

@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Eye, Headphones, Link2, RefreshCw, Volume2, VolumeX, WifiOff } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Eye, Headphones, History, Link2, RefreshCw, Volume2, VolumeX, WifiOff } from "lucide-react";
 import FollowButton from "@/components/FollowButton";
 import ReportButton from "@/components/ReportButton";
 import { audioEngine } from "@/lib/client/audioEngine";
@@ -75,6 +76,7 @@ export default function LiveRoom({
   follow: FollowState;
   userId: string | null;
 }) {
+  const router = useRouter();
   const layer = useRef<ReactionLayerHandle>(null);
   const party = useRef<PartyHandle>(null);
   const studio = stream.mode === "studio";
@@ -314,7 +316,18 @@ export default function LiveRoom({
             </section>
           )}
 
-          {status === "ended" && <Recap recap={recap ?? emptyRecap(stream)} title={title} remixId={stream.remix_id} />}
+          {status === "ended" && (
+            <>
+              <button
+                type="button"
+                onClick={() => router.refresh()}
+                className="flex h-11 items-center justify-center gap-2 self-start rounded-lg bg-brand px-5 text-sm font-semibold text-white hover:bg-brand-strong"
+              >
+                <History className="h-4 w-4" /> Watch the replay
+              </button>
+              <Recap recap={recap ?? emptyRecap(stream)} title={title} remixId={stream.remix_id} />
+            </>
+          )}
 
           {status === "live" && (
             <section aria-label="Stage" className="flex flex-col gap-3">

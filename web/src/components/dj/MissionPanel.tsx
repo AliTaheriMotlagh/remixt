@@ -304,9 +304,13 @@ export function Debrief({
         <button type="button" onClick={onRetry} className="flex min-h-11 items-center gap-2 rounded-xl border border-border px-4 text-sm font-semibold hover:bg-surface-hover">
           <RotateCcw /> Try again
         </button>
-        {hasNext && passed && (
-          <button type="button" onClick={onNext} className="flex min-h-11 items-center gap-2 rounded-xl bg-brand px-5 text-sm font-semibold text-white hover:bg-brand-strong">
-            Next <ArrowRight />
+        {hasNext && (
+          <button
+            type="button"
+            onClick={onNext}
+            className={`flex min-h-11 items-center gap-2 rounded-xl px-5 text-sm font-semibold ${passed ? "bg-brand text-white hover:bg-brand-strong" : "border border-border hover:bg-surface-hover"}`}
+          >
+            {passed ? "Next" : "Skip to the next one"} <ArrowRight />
           </button>
         )}
         <button type="button" onClick={onExit} className="flex min-h-11 items-center gap-2 rounded-xl border border-border px-4 text-sm font-medium hover:bg-surface-hover">
@@ -360,7 +364,7 @@ export function CamelotWheel({ mark, size = 200 }: { mark?: string | null; size?
 }
 
 /** A theory quiz: one question at a time, the explanation after each answer. */
-export function Quiz({ title, questions, onDone }: { title: string; questions: QuizQuestion[]; onDone: (correct: number) => void }) {
+export function Quiz({ title, questions, onDone, onSkip }: { title: string; questions: QuizQuestion[]; onDone: (correct: number) => void; onSkip?: () => void }) {
   const [i, setI] = useState(0);
   const [picked, setPicked] = useState<number | null>(null);
   const [correct, setCorrect] = useState(0);
@@ -372,9 +376,16 @@ export function Quiz({ title, questions, onDone }: { title: string; questions: Q
   const mark = q.wheel ? (inQuestion ?? (answered ? answerCode : null)) : null;
   return (
     <section aria-label="Quiz" className="rounded-2xl border border-border bg-surface p-4 sm:p-6">
-      <p className="text-xs font-semibold uppercase tracking-wide text-brand-strong">
-        {title} · Question {i + 1} of {questions.length}
-      </p>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-brand-strong">
+          {title} · Question {i + 1} of {questions.length}
+        </p>
+        {onSkip && (
+          <button type="button" onClick={onSkip} className="min-h-9 rounded-lg border border-border px-3 text-xs font-semibold text-muted hover:text-foreground">
+            Skip the theory, go to the decks
+          </button>
+        )}
+      </div>
       <div className={`mt-2 grid gap-4 ${q.wheel ? "md:grid-cols-[1fr_auto]" : ""}`}>
         <div className="min-w-0">
           <h2 className="text-lg font-bold">{q.q}</h2>

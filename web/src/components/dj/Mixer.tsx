@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Circle, Download, Headphones, Mic, Square } from "lucide-react";
 import { DjEngine, type RecordingResult } from "@/lib/client/dj/djEngine";
 import type { Curve, DeckId, DjSnapshot, EqBand, FaderCurve, MonitorMode } from "@/lib/client/dj/djTypes";
@@ -316,26 +316,62 @@ export function HeadphoneSection({ engine, ui }: { engine: DjEngine; ui: DjSnaps
   );
 }
 
-/** Talkover and the master recorder. */
-export function BoothSection({ engine, ui }: { engine: DjEngine; ui: DjSnapshot }) {
+/** Records the master output (what the crowd hears), then offers it as a file. */
+export function RecordMix({ engine, recording, big = false }: { engine: DjEngine; recording: boolean; big?: boolean }) {
   const [rec, setRec] = useState<RecordingResult | null>(null);
-  const [mic, setMic] = useState<"off" | "on" | "denied">("off");
   const time = useRef<HTMLSpanElement>(null);
-  const url = useRef<string | null>(null);
   useRaf(() => {
     if (time.current) {
       const s = engine.recordingSeconds();
       time.current.textContent = `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
     }
-  }, ui.mix.recording);
-  useEffect(
-    () => () => {
-      if (url.current) URL.revokeObjectURL(url.current);
-    },
-    []
-  );
+  }, recording);
   const canRec = DjEngine.recordingSupported();
   const ext = rec?.mime.includes("mp4") ? "m4a" : rec?.mime.includes("ogg") ? "ogg" : "webm";
+  const size = big ? "min-h-11 px-4 text-sm" : "min-h-10 px-3 text-xs";
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {recording ? (
+        <button
+          type="button"
+          onClick={async () => {
+            const r = await engine.stopRecording();
+            if (r) setRec(r);
+          }}
+          className={`flex items-center gap-1.5 rounded-lg bg-danger font-bold text-white ${size}`}
+        >
+          <Square className="fill-white" /> STOP <span ref={time} className="font-mono tabular-nums" />
+        </button>
+      ) : (
+        <button
+          type="button"
+          disabled={!canRec}
+          onClick={() => {
+            setRec(null);
+            engine.startRecording();
+          }}
+          title={canRec ? "Record the master output" : "This browser can't record audio"}
+          className={`flex items-center gap-1.5 rounded-lg bg-surface-raised font-bold hover:bg-surface-hover disabled:opacity-40 ${size}`}
+        >
+          <Circle className="fill-danger text-danger" /> {big ? "Record my mix" : "REC"}
+        </button>
+      )}
+      {rec && (
+        <button
+          type="button"
+          onClick={() => downloadBlob(rec.blob, `Remixt DJ mix ${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.${ext}`)}
+          className={`flex items-center gap-1.5 rounded-lg border border-border font-semibold hover:bg-surface-hover ${size}`}
+        >
+          <Download /> Download ({Math.round(rec.seconds)} s)
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Talkover and the master recorder. */
+export function BoothSection({ engine, ui }: { engine: DjEngine; ui: DjSnapshot }) {
+  const [mic, setMic] = useState<"off" | "on" | "denied">("off");
 
   return (
     <section aria-label="Talkover and recording" className="flex flex-col gap-2 rounded-xl border border-border bg-black/25 p-2.5">
@@ -376,41 +412,8 @@ export function BoothSection({ engine, ui }: { engine: DjEngine; ui: DjSnapshot 
           {mic === "on" ? "Mic ready" : mic === "denied" ? "No mic: ducking only" : "Use mic"}
         </button>
       </div>
-      <div className="flex flex-wrap items-center gap-1.5" data-dj="M-record">
-        {ui.mix.recording ? (
-          <button
-            type="button"
-            onClick={async () => {
-              const r = await engine.stopRecording();
-              if (r) setRec(r);
-            }}
-            className="flex min-h-10 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-bold text-white"
-          >
-            <Square className="fill-white" /> STOP <span ref={time} className="font-mono tabular-nums" />
-          </button>
-        ) : (
-          <button
-            type="button"
-            disabled={!canRec}
-            onClick={() => {
-              setRec(null);
-              engine.startRecording();
-            }}
-            title={canRec ? "Record the master output" : "This browser can't record audio"}
-            className="flex min-h-10 items-center gap-1.5 rounded-lg bg-surface-raised px-3 text-xs font-bold hover:bg-surface-hover disabled:opacity-40"
-          >
-            <Circle className="fill-danger text-danger" /> REC
-          </button>
-        )}
-        {rec && (
-          <button
-            type="button"
-            onClick={() => downloadBlob(rec.blob, `Remixt DJ mix ${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.${ext}`)}
-            className="flex min-h-10 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-surface-hover"
-          >
-            <Download /> Download ({Math.round(rec.seconds)} s)
-          </button>
-        )}
+      <div data-dj="M-record">
+        <RecordMix engine={engine} recording={ui.mix.recording} />
       </div>
     </section>
   );

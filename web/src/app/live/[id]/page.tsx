@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import HostConsole from "@/components/live/HostConsole";
+import LiveReplay from "@/components/live/LiveReplay";
 import LiveRoom from "@/components/live/LiveRoom";
 import { getCurrentUser } from "@/lib/auth";
 import { coverUrl } from "@/lib/cover";
-import { getStream, performableRemixes } from "@/lib/live";
+import { getStream, performableRemixes, recap } from "@/lib/live";
 import { pageMetadata } from "@/lib/seo";
 import { getFollowState } from "@/lib/social";
 
@@ -30,8 +31,14 @@ export default async function LiveSessionPage({ params }: { params: Promise<{ id
   if (!stream) notFound();
   const cover = stream.remix_id ? coverUrl(stream.remix_id, stream.remix_cover_key) : null;
 
+  // Over: anyone (the host too) can play it back.
+  if (stream.status === "ended") {
+    const [follow, stats] = await Promise.all([getFollowState(stream.host_id, user?.id ?? null), recap(stream)]);
+    return <LiveReplay stream={stream} cover={cover} follow={follow} userId={user?.id ?? null} recap={stats} />;
+  }
+
   // A studio session is run from the Studio itself.
-  if (user?.id === stream.host_id && stream.mode === "studio" && stream.status !== "ended") redirect(`/studio?live=${id}`);
+  if (user?.id === stream.host_id && stream.mode === "studio") redirect(`/studio?live=${id}`);
 
   if (user?.id === stream.host_id && stream.mode === "perform") {
     const remixes = await performableRemixes(user.id);

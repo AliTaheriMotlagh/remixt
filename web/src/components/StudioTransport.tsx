@@ -508,6 +508,7 @@ export default function StudioTransport({
     // this bar is a stacking context, so a popover's own z-index can't.
     <div
       ref={barRef}
+      data-studio-transport
       className={`sticky top-[var(--header-h)] z-40 has-[.popover-sheet]:z-[70] rounded-xl border border-border bg-surface shadow-lg shadow-black/20 sm:bg-surface/95 sm:backdrop-blur-md ${
         showSave ? "max-sm:static" : ""
       }`}

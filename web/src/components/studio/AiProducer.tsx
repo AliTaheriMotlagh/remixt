@@ -420,6 +420,21 @@ export default function AiProducer() {
   const sheetRef = useRef<HTMLElement>(null);
   const drag = useRef<{ y: number; at: Sheet; moved: boolean } | null>(null);
   const swipe = useRef<{ x: number; done: boolean } | null>(null);
+  // Opening on a phone: the page scrolls so the lanes sit just under the
+  // transport, not the page title — the space above the sheet is the mix's.
+  useEffect(() => {
+    if (!open || !window.matchMedia("(max-width: 63.99rem)").matches) return;
+    const timer = setTimeout(() => {
+      const bar = document.querySelector<HTMLElement>("[data-studio-transport]");
+      const mix = document.querySelector<HTMLElement>("[data-studio-mix]");
+      if (!bar || !mix) return;
+      // The transport is sticky: once scrolled, it sits right under the header.
+      const header = parseFloat(getComputedStyle(bar).top) || 0;
+      const gap = mix.getBoundingClientRect().top - (header + bar.offsetHeight + 8);
+      if (gap > 0) window.scrollBy({ top: gap, behavior: "smooth" });
+    }, 220);
+    return () => clearTimeout(timer);
+  }, [open]);
   // The Studio pads its bottom by the sheet's height, so every lane stays reachable behind it.
   useEffect(() => {
     const el = sheetRef.current;
@@ -1143,7 +1158,7 @@ export default function AiProducer() {
           sheet === "full"
             ? "max-lg:h-[calc(100dvh-var(--header-h)-var(--bottom-chrome)-0.5rem)]"
             : sheet === "half"
-              ? "max-lg:h-[min(58dvh,calc(100dvh-var(--header-h)-var(--bottom-chrome)-0.5rem))] landscape:max-lg:h-[calc(100dvh-var(--header-h)-var(--bottom-chrome)-0.5rem)]"
+              ? "max-lg:h-[min(46dvh,calc(100dvh-var(--header-h)-var(--bottom-chrome)-0.5rem))] landscape:max-lg:h-[calc(100dvh-var(--header-h)-var(--bottom-chrome)-0.5rem)]"
               : "max-lg:h-auto"
         }`}
         style={{ animation: "sheet-in 0.2s ease-out" }}

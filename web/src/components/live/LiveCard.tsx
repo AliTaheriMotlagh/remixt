@@ -8,7 +8,7 @@ function when(stream: LiveStream) {
   if (stream.status === "scheduled" && stream.scheduled_at) {
     return new Date(stream.scheduled_at).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit", month: "short", day: "numeric" });
   }
-  if (stream.status === "ended" && stream.ended_at) return `Ended ${new Date(stream.ended_at).toLocaleDateString()}`;
+  if (stream.status === "ended" && stream.ended_at) return `Replay · ${new Date(stream.ended_at).toLocaleDateString()}`;
   return null;
 }
 

@@ -280,6 +280,7 @@ export default function MissionSession({
       <Quiz
         title={mission.title}
         questions={questions}
+        onSkip={mission.category !== "test" && mission.objectives.length > 0 ? () => void startPractical() : undefined}
         onDone={(correct) => {
           setQuizScore({ correct, total: questions.length });
           if (mission.objectives.length === 0) finishQuizOnly(correct, questions.length);

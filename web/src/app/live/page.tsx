@@ -85,8 +85,9 @@ export default async function LivePage() {
       {recent.length > 0 && (
         <section className="mt-10" aria-labelledby="recent">
           <h2 id="recent" className="text-lg font-semibold">
-            Recently ended
+            Replays
           </h2>
+          <p className="text-sm text-muted">Missed it? Play a session back — the stems, the studio and the chat, as they happened.</p>
           <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {recent.map((s) => (
               <LiveCard key={s.id} stream={s} />

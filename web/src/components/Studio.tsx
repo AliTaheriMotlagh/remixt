@@ -160,10 +160,14 @@ export default function Studio({ user }: { user: User | null }) {
   const easy = mode === "easy";
 
   // Asked for from elsewhere (the AI producer's "Pick from the library").
+  // The count lives in a store that outlives this page: only asks made since
+  // it opened count, or coming back to the Studio would pop the sheet open.
   const libraryAsk = useStudioView((s) => s.libraryAsk);
+  const libraryAskSeen = useRef(libraryAsk);
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- following the store: the library asked for elsewhere
-    if (libraryAsk) revealLibrary();
+    if (libraryAsk === libraryAskSeen.current) return;
+    libraryAskSeen.current = libraryAsk;
+    revealLibrary();
   }, [libraryAsk]);
 
   // With the AI producer docked on a desktop narrower than ~1600px, the
@@ -329,6 +333,11 @@ export default function Studio({ user }: { user: User | null }) {
     };
   }, [libraryOpen]);
 
+  // Phones: one way to add stems on screen at a time. The empty Studio and
+  // the Easy studio have their own add buttons, and over the AI producer's
+  // sheet the button would cover the transport.
+  const showAddFab = modeKnown && mode === "pro" && !loadingRemix && lanes.length > 0 && !libraryOpen && !(aiOpen && aiSheet !== "mini");
+
   return (
     // With the AI producer docked on the right, the Studio makes room for it.
     <div
@@ -339,7 +348,7 @@ export default function Studio({ user }: { user: User | null }) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-xl font-bold tracking-tight">Studio</h1>
-          <p className="mt-0.5 truncate text-xs text-muted sm:text-sm">
+          <p className={`mt-0.5 truncate text-xs text-muted sm:text-sm ${challenge || remixTitle ? "" : "max-sm:hidden"}`}>
             {challenge ? (
               <>
                 <Flag /> Challenge: “{challenge.title}” — publish to enter
@@ -433,7 +442,9 @@ export default function Studio({ user }: { user: User | null }) {
               Loading remix…
             </div>
           ) : easy ? (
-            <EasyStudio />
+            <div data-studio-mix>
+              <EasyStudio />
+            </div>
           ) : lanes.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-10 text-center text-muted sm:p-12">
               <SlidersHorizontal className="mx-auto h-8 w-8 text-brand-strong" />
@@ -451,7 +462,7 @@ export default function Studio({ user }: { user: User | null }) {
             </div>
           ) : (
             <>
-              <div className="flex items-center justify-between gap-2">
+              <div data-studio-mix className="flex items-center justify-between gap-2">
                 <div className="flex overflow-hidden rounded-lg border border-border text-xs font-semibold" role="radiogroup" aria-label="View">
                   {(
                     [
@@ -472,11 +483,11 @@ export default function Studio({ user }: { user: User | null }) {
                   ))}
                 </div>
                 <button
-                  onClick={() => useStudioView.getState().showLibrary("songs")}
-                  className="flex h-8 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-semibold text-muted hover:border-brand hover:text-foreground"
-                  title="Add a song's vocals, drums, bass and melody as lanes of their own"
+                  onClick={() => useStudioView.getState().showLibrary()}
+                  className="flex h-8 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-semibold text-muted hover:border-brand hover:text-foreground max-lg:hidden"
+                  title="Add a vocal, a beat, or a song's vocals, drums, bass and melody as lanes of their own"
                 >
-                  + Song lines
+                  + Add stems
                 </button>
               </div>
               {proView === "mixer" ? <MixerConsole /> : <Arrangement />}
@@ -528,7 +539,7 @@ export default function Studio({ user }: { user: User | null }) {
       </div>
 
       {/* With the AI producer open it floats above its sheet (see .bottom-float) — hidden only when the sheet covers the mix. */}
-      {!libraryOpen && !(aiOpen && aiSheet === "full") && (
+      {showAddFab && (
         <button
           onClick={() => setLibraryOpen(true)}
           className="bottom-float fixed right-4 z-40 flex h-12 items-center gap-2 rounded-full bg-brand px-5 text-sm font-semibold text-white shadow-lg shadow-brand/30 hover:bg-brand-strong lg:hidden"
