@@ -2,7 +2,7 @@
 
 import { audioEngine } from "./audioEngine";
 import { siblingStems } from "./beatParts";
-import { isConstrainedDevice, splitter, uploadStems, type UploadStage } from "./splitter";
+import { dropUnfinished, isConstrainedDevice, splitter, uploadStems, type UploadStage } from "./splitter";
 import type { LaneKind, LoadableStem, StudioLane } from "./studioStore";
 import type { IconName } from "@/components/Icon";
 
@@ -94,9 +94,14 @@ export async function splitLane(lane: StudioLane, onStage: (stage: UploadStage) 
     }),
     "Couldn't save the split"
   );
-  await uploadStems(track.uploads, result, onStage);
-  onStage({ stage: "saving" });
-  await json(await fetch(`/api/tracks/${track.id}/complete`, { method: "POST" }), "Couldn't finish saving the split");
+  try {
+    await uploadStems(track.uploads, result, onStage);
+    onStage({ stage: "saving" });
+    await json(await fetch(`/api/tracks/${track.id}/complete`, { method: "POST" }), "Couldn't finish saving the split");
+  } catch (err) {
+    dropUnfinished(track.id);
+    throw err;
+  }
 
   // Its four parts, as the library knows them: the siblings of its beat.
   const { stems } = await json<{ stems: { id: string; kind: string }[] }>(await fetch(`/api/tracks/${track.id}`), "Couldn't read the split back");

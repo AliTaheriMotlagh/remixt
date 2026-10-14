@@ -477,15 +477,28 @@ export async function uploadSong(
     throw new Error(track?.error ?? "Couldn't save the track");
   }
 
-  await uploadStems(track.uploads, result, onStage);
+  try {
+    await uploadStems(track.uploads, result, onStage);
 
-  onStage({ stage: "saving" });
-  const done = await fetch(`/api/tracks/${track.id}/complete`, { method: "POST" });
-  if (!done.ok) {
-    const data = await done.json().catch(() => null);
-    throw new Error(data?.error ?? "Couldn't finish saving the track");
+    onStage({ stage: "saving" });
+    const done = await fetch(`/api/tracks/${track.id}/complete`, { method: "POST" });
+    if (!done.ok) {
+      const data = await done.json().catch(() => null);
+      throw new Error(data?.error ?? "Couldn't finish saving the track");
+    }
+  } catch (err) {
+    dropUnfinished(track.id);
+    throw err;
   }
   return track.id as string;
+}
+
+/**
+ * Takes a track whose stems never all arrived out of the library at once,
+ * rather than leaving it "Uploading…" until the server's 20-minute sweep.
+ */
+export function dropUnfinished(trackId: string) {
+  void fetch(`/api/tracks/${trackId}`, { method: "DELETE" }).catch(() => {});
 }
 
 /**

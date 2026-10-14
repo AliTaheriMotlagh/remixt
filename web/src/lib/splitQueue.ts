@@ -1,9 +1,9 @@
 import { randomUUID } from "crypto";
 import sql from "./db";
 import { notify } from "./notifications";
-import { deleteObject, deleteStemFile, storedObject } from "./storage";
+import { deleteObject, storedObject } from "./storage";
 import { normaliseTags } from "./tags";
-import { finishTrackUpload } from "./trackUpload";
+import { dropUnfinishedTrack, finishTrackUpload } from "./trackUpload";
 import {
   LONG_SONG_SECONDS,
   RUSH_AFTER_MINUTES,
@@ -159,18 +159,6 @@ export async function markQueued(job: SplitJob): Promise<string | null> {
   return null;
 }
 
-/** Deletes a half-made track (a helper that stopped mid-upload), files included. */
-async function dropTrack(trackId: string | null) {
-  if (!trackId) return;
-  const stems = await sql<{ file_url: string }[]>`
-    DELETE FROM stems WHERE track_id = ${trackId}
-      AND EXISTS (SELECT 1 FROM tracks WHERE id = ${trackId} AND status = 'processing')
-    RETURNING file_url
-  `;
-  await sql`DELETE FROM tracks WHERE id = ${trackId} AND status = 'processing'`;
-  await Promise.all(stems.map((s) => deleteStemFile(s.file_url).catch(() => {})));
-}
-
 /** Hands jobs whose helper went quiet back to the queue (or gives up on them). */
 async function reapStale() {
   const stale = await sql<SplitJob[]>`
@@ -302,7 +290,7 @@ export async function completeJob(job: SplitJob): Promise<Reward | null> {
  * song is kept, so the owner can try again.
  */
 export async function failJob(job: SplitJob, workerId: string | null, error: string) {
-  await dropTrack(job.track_id);
+  await dropUnfinishedTrack(job.track_id);
   const giveUp = job.attempts >= MAX_ATTEMPTS;
   await sql`
     UPDATE split_jobs
@@ -330,7 +318,7 @@ export async function retryJob(job: SplitJob): Promise<boolean> {
 /** The owner changed their mind: the song is deleted, whatever stage it's at. */
 export async function cancelJob(job: SplitJob) {
   await sql`DELETE FROM split_jobs WHERE id = ${job.id}`;
-  await dropTrack(job.track_id);
+  await dropUnfinishedTrack(job.track_id);
   await deleteObject(job.source_key).catch(() => {});
 }
 

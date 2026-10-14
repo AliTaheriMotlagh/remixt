@@ -5,6 +5,7 @@ import sql from "@/lib/db";
 import { getTrackById, getStemsByTrack } from "@/lib/models";
 import { ensureSchema } from "@/lib/schema";
 import { normaliseTags } from "@/lib/tags";
+import { dropUnfinishedTrack } from "@/lib/trackUpload";
 
 export async function GET(
   _req: NextRequest,
@@ -41,4 +42,20 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     RETURNING title, tags
   `;
   return NextResponse.json(row);
+}
+
+/**
+ * The uploader's browser gave up on a song half-way (a stem wouldn't
+ * upload): drop it now, rather than leave it "Uploading…" in the list
+ * until the 20-minute sweep. Only a track that isn't ready yet.
+ */
+export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: "Sign in required" }, { status: 401 });
+  const track = await getTrackById(id);
+  if (!track || track.owner_id !== user.id) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (track.status !== "processing") return NextResponse.json({ error: "Only an unfinished upload can be dropped" }, { status: 409 });
+  await dropUnfinishedTrack(id);
+  return NextResponse.json({ id, dropped: true });
 }

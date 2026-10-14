@@ -3,7 +3,7 @@ import { z } from "zod";
 import sql from "./db";
 import { getStemsByTrack } from "./models";
 import { ensureSchema } from "./schema";
-import { createUploadTarget, storedObject, type UploadTarget } from "./storage";
+import { createUploadTarget, deleteStemFile, storedObject, type UploadTarget } from "./storage";
 import { normaliseTags } from "./tags";
 import { STEM_KINDS, type StemKind } from "./stemKinds";
 
@@ -94,4 +94,20 @@ export async function finishTrackUpload(trackId: string): Promise<boolean> {
     await tx`UPDATE tracks SET status = 'ready', error = NULL WHERE id = ${trackId}`;
   });
   return true;
+}
+
+/**
+ * Deletes a track that never finished uploading, files included — one
+ * whose browser gave up on it, or a helper that stopped mid-upload. A
+ * track that's ready is left alone.
+ */
+export async function dropUnfinishedTrack(trackId: string | null) {
+  if (!trackId) return;
+  const stems = await sql<{ file_url: string }[]>`
+    DELETE FROM stems WHERE track_id = ${trackId}
+      AND EXISTS (SELECT 1 FROM tracks WHERE id = ${trackId} AND status = 'processing')
+    RETURNING file_url
+  `;
+  await sql`DELETE FROM tracks WHERE id = ${trackId} AND status = 'processing'`;
+  await Promise.all(stems.map((s) => deleteStemFile(s.file_url).catch(() => {})));
 }
