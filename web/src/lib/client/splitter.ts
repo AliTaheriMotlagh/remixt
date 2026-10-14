@@ -1,7 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
-import { upload, type UploadTarget } from "./directUpload";
+import { upload, type Send, type UploadTarget } from "./directUpload";
 import { fetchInSlices } from "./stemFetch";
 import { isConstrainedDevice } from "./device";
 import {
@@ -411,7 +411,8 @@ const STEMS_AT_ONCE = 4;
 export async function uploadStems(
   uploads: Record<string, UploadTarget>,
   result: SplitResult,
-  onStage: (stage: UploadStage) => void
+  onStage: (stage: UploadStage) => void,
+  send?: Send
 ) {
   const files = (Object.entries(uploads) as [SplitOutput, UploadTarget][])
     .map(([kind, target]) => ({ kind, target, bytes: result.mp3[kind] }))
@@ -425,13 +426,26 @@ export async function uploadStems(
     });
   report();
   const waiting = [...files];
+  // Once one stem has failed the track is abandoned, so the others stop
+  // taking new stems rather than keep uploading into it.
+  let failed = false;
   const next = async (): Promise<void> => {
     const f = waiting.shift();
-    if (!f) return;
-    await upload(f.target, new Blob([f.bytes as BlobPart], { type: "audio/mpeg" }), (n) => {
-      sent[f.kind] = Math.min(n, f.bytes.length);
-      report();
-    });
+    if (!f || failed) return;
+    try {
+      await upload(
+        f.target,
+        new Blob([f.bytes as BlobPart], { type: "audio/mpeg" }),
+        (n) => {
+          sent[f.kind] = Math.min(n, f.bytes.length);
+          report();
+        },
+        send
+      );
+    } catch (err) {
+      failed = true;
+      throw err;
+    }
     return next();
   };
   await Promise.all(Array.from({ length: Math.min(STEMS_AT_ONCE, files.length) }, next));
