@@ -13,8 +13,8 @@ import { renderedWith, stretchEngine } from "./pitchTempo";
 // Written and read a slice at a time, so a phone never holds a second
 // whole copy of the render (see device.ts).
 
-/** Bump when the stretch engines change how they sound, so old renders aren't played. */
-const RENDER_VERSION = 1;
+/** Bump when the stretch engines change how they sound, so old renders aren't played. (2: the stretcher runs in workers, streaming — see stretch.worker.ts.) */
+const RENDER_VERSION = 2;
 /** Frames per slice written or read. */
 const SLICE = 1 << 18;
 

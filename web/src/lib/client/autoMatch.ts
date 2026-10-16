@@ -32,7 +32,7 @@ import {
 
 export async function analyzeLane(lane: StudioLane): Promise<StemAnalysis | null> {
   await audioEngine.ensureLane(lane.laneId, lane.stemId);
-  const buffer = audioEngine.getRawBuffer(lane.laneId);
+  const buffer = await audioEngine.getRawBuffer(lane.laneId);
   return buffer ? analyzeStem(lane.stemId, buffer, lane.kind) : null;
 }
 
@@ -43,7 +43,7 @@ export async function analyzeLane(lane: StudioLane): Promise<StemAnalysis | null
  */
 export async function analyzeBeatLane(lane: StudioLane): Promise<StemAnalysis | null> {
   const analysis = await analyzeLane(lane);
-  const buffer = audioEngine.getRawBuffer(lane.laneId);
+  const buffer = await audioEngine.getRawBuffer(lane.laneId);
   if (analysis && buffer && isBacking(lane.kind)) await hearBeats(analysis, lane.stemId, buffer);
   return analysis;
 }

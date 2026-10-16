@@ -1,12 +1,15 @@
 "use client";
 
 import {
+  WINDOW_SEAM,
   createLaneChain,
   createMasterChain,
   needsOwnRender,
   scheduleLane,
+  windowRange,
   type ClipBufferLookup,
   type LaneChain,
+  type LaneWindow,
   type MasterChain,
 } from "./audioGraph";
 import { scheduleModulation } from "./modulation";
@@ -42,7 +45,20 @@ import {
  * stretching it all over again.
  */
 type DecodedStem = {
-  raw: AudioBuffer;
+  id: string;
+  /**
+   * Its audio as decoded. Let go while every lane playing it plays a
+   * render of it instead (at another speed or pitch) and memory is short
+   * — a mix of twenty stretched lanes held twice what it played — and
+   * decoded again, from this device's copy of the file, when it's wanted
+   * (see rawOf).
+   */
+  raw: AudioBuffer | null;
+  /** How long it is and at what rate, known while `raw` is let go. */
+  duration: number;
+  sampleRate: number;
+  /** Being decoded again. */
+  redecoding: Promise<AudioBuffer> | null;
   /** Whole-stem renders at a speed and pitch (see renderKey). */
   renders: Map<string, AudioBuffer>;
   /** Clips with a speed of their own, each rendered separately (see clipKey). */
@@ -51,15 +67,42 @@ type DecodedStem = {
 
 type LoadedLane = {
   stemId: string;
-  rawBuffer: AudioBuffer;
+  /** Its stem's decoded audio and renders (shared with every lane playing that stem). */
+  stem: DecodedStem;
   processedBuffer: AudioBuffer;
   appliedTempo: number;
   appliedPitch: number;
   chain: LaneChain;
-  /** One per clip while playing (just one for a lane that isn't arranged). */
+  /** One per clip while playing (just one for a lane that isn't arranged), and the stand-in windows queued. */
   sources: AudioBufferSourceNode[];
+  /** What this play's sources go through, so a re-schedule crossfades from one to the next instead of cutting. */
+  voice: GainNode | null;
+  /** While its render at the speed and pitch it's set to is on its way: what plays instead (see StandIn). */
+  standIn: StandIn | null;
+  /** What its voice is playing: its render, or a stand-in (by key) — null when silent. */
+  playing: string | null;
   renders: Map<string, AudioBuffer>;
   clipBuffers: Map<string, AudioBuffer>;
+};
+
+/**
+ * A lane heard before its render is ready. Rendering a whole stem at a
+ * new speed takes a while — a mix of twenty took a minute and a half
+ * before the first note — so the next few seconds from the playhead are
+ * rendered first, on their own (a few seconds renders in well under one),
+ * and played; then the next few, ahead of time, and so on, each
+ * crossfading into the next, until the whole render is in and takes over
+ * (crossfaded too). So play starts at once with every lane in it, at its
+ * speed and in its key.
+ */
+type StandIn = {
+  /** What it stands in for: the lane's speed, pitch and arrangement, as they were when it started. */
+  key: string;
+  windows: LaneWindow[];
+  /** A window on its way. */
+  asking: boolean;
+  /** The last window failed: no more are asked for (the whole render still comes). */
+  failed: boolean;
 };
 
 /**
@@ -88,6 +131,19 @@ const PARKED_STEMS = PHONE ? 1 : 3;
  */
 const MAX_RENDERS = PHONE ? 2 : 4;
 const MAX_RENDER_SECONDS = PHONE ? 150 : Math.min(480, Math.max(180, deviceGb() * 75));
+
+/** Seconds each stand-in window covers (see StandIn), and how far ahead of the playhead the next is asked for. */
+const STAND_IN_SECONDS = PHONE ? 15 : 20;
+const FIRST_STAND_IN_SECONDS = 4;
+const STAND_IN_LEAD = PHONE ? 10 : 14;
+/** Whole renders running at once while any lane plays on a stand-in. */
+const RENDERS_BESIDE_STAND_INS = PHONE ? 1 : 2;
+/** Rendered before a window starts, so the stretcher has settled by the time it's heard. */
+const STAND_IN_PREROLL = 0.5;
+/** How long play waits for lanes to be ready before it starts with the ones that are (the rest join in). */
+const PLAY_WAIT_MS = 6000;
+/** Stems downloaded and decoded at once: each holds its whole file and its decoded audio while it does. */
+const MAX_DECODES = PHONE ? 2 : 4;
 
 /** Identifies a whole-stem render. */
 function renderKey(tempo: number, pitch: number) {
@@ -125,6 +181,34 @@ class RenderQueue {
   private seconds = 0;
   private queued: QueuedRender[] = [];
 
+  private readonly maxRenders: number;
+  private readonly maxSeconds: number;
+  /** Another queue that goes first: nothing new starts here while it has work waiting. */
+  private readonly after: RenderQueue | null;
+  /** While it's true, only this many run at once — the stand-ins get the rest of the computer. */
+  yieldTo: { busy: () => boolean; renders: number } | null = null;
+  /** Told when this one has nothing waiting any more (the queue that goes after it). */
+  onIdle: (() => void) | null = null;
+
+  constructor(maxRenders = MAX_RENDERS, maxSeconds = MAX_RENDER_SECONDS, after: RenderQueue | null = null) {
+    this.maxRenders = maxRenders;
+    this.maxSeconds = maxSeconds;
+    this.after = after;
+  }
+
+  /** Renders waiting for their turn. */
+  get waiting() {
+    return this.queued.length;
+  }
+
+  private idlers: (() => void)[] = [];
+
+  /** Resolves once nothing is running or waiting here. */
+  idle(): Promise<void> {
+    if (!this.running && !this.queued.length) return Promise.resolve();
+    return new Promise((resolve) => this.idlers.push(resolve));
+  }
+
   run<T>(seconds: number, ask: Pick<QueuedRender, "urgent" | "wanted">, work: () => Promise<T>): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       this.queued.push({
@@ -154,16 +238,54 @@ class RenderQueue {
     this.queued = this.queued.filter((job) => !gone.includes(job));
     for (const job of gone) job.skip();
     while (this.queued.length) {
+      // Stand-ins first: a few seconds each, and what's heard right now.
+      if (this.after?.waiting && this.running > 0) return;
       const job = this.queued.find((j) => j.urgent()) ?? this.queued[0];
+      const most = this.yieldTo?.busy() ? Math.min(this.yieldTo.renders, this.maxRenders) : this.maxRenders;
       // One always runs, however long.
-      if (this.running > 0 && (this.running >= MAX_RENDERS || this.seconds + job.seconds > MAX_RENDER_SECONDS)) return;
+      if (this.running > 0 && (this.running >= most || this.seconds + job.seconds > this.maxSeconds)) return;
       this.queued.splice(this.queued.indexOf(job), 1);
       job.start();
+    }
+    if (!this.queued.length) this.onIdle?.();
+    if (!this.running && !this.queued.length) for (const resolve of this.idlers.splice(0)) resolve();
+  }
+}
+
+/** Stand-ins take their turn apart from whole renders, so a few seconds never waits behind minutes of audio. */
+const standInQueue = new RenderQueue(PHONE ? 2 : 6, Infinity);
+/**
+ * Where the stretcher can only run as an AudioWorklet (no workers — see
+ * stretchWorkers.ts, which holds whole renders for stand-ins itself),
+ * renders take turns on one audio thread (several at once only slice it
+ * up — measured), so a whole render pauses every few seconds of it while
+ * a stand-in, which is what's heard, is waiting or rendering.
+ */
+const yieldToStandIns = () => standInQueue.idle();
+const renderQueue = new RenderQueue(MAX_RENDERS, MAX_RENDER_SECONDS, standInQueue);
+standInQueue.onIdle = () => renderQueue.next();
+
+/** One at a time past `limit` at once — for stems downloading and decoding. */
+class Gate {
+  private running = 0;
+  private waiting: (() => void)[] = [];
+  private readonly limit: number;
+  constructor(limit: number) {
+    this.limit = limit;
+  }
+  async run<T>(work: () => Promise<T>): Promise<T> {
+    if (this.running >= this.limit) await new Promise<void>((resolve) => this.waiting.push(resolve));
+    this.running++;
+    try {
+      return await work();
+    } finally {
+      this.running--;
+      this.waiting.shift()?.();
     }
   }
 }
 
-const renderQueue = new RenderQueue();
+const decodeGate = new Gate(MAX_DECODES);
 
 /** Identifies one clip render: its slice of the stem, the speed and pitch it was rendered at, and direction. */
 function clipKey(lane: StudioLane, clip: LaneClip) {
@@ -401,19 +523,24 @@ class AudioEngine {
     const { projectBpm } = useStudioStore.getState();
 
     const promise = this.decodedStem(stemId)
-      .then((stem) => {
+      .then(async (stem) => {
+        // Until it's brought to its speed and pitch, a lane plays the stem as it is.
+        const raw = await this.rawOf(stem);
         const lane = useStudioStore.getState().lanes.find((l) => l.laneId === laneId);
-        if (!lane) return;
+        if (!lane || this.lanes.has(laneId)) return;
         // The context may have been replaced while this downloaded.
         const chain = createLaneChain(this.getContext(), lane, projectBpm, this.master!.input);
         this.lanes.set(laneId, {
           stemId,
-          rawBuffer: stem.raw,
-          processedBuffer: stem.raw,
+          stem,
+          processedBuffer: raw,
           appliedTempo: 1,
           appliedPitch: 0,
           chain,
           sources: [],
+          voice: null,
+          standIn: null,
+          playing: null,
           renders: stem.renders,
           clipBuffers: stem.clipBuffers,
         });
@@ -436,24 +563,20 @@ class AudioEngine {
     // A vocal and its layers play the same stem: one download for all of them.
     let pending = this.decoding.get(stemId);
     if (!pending) {
-      const decode = async () => {
-        const ctx = this.getContext();
-        const bytes = await fetchStem(stemId);
-        try {
-          return await ctx.decodeAudioData(bytes);
-        } catch (error) {
-          // The context was replaced while it decoded (iOS after a call or
-          // another app's audio) and the old one closed under it: once more
-          // on the new one. (Decoding took the bytes, so they're fetched
-          // again — from this device's cache.)
-          if (this.ctx === ctx) throw error;
-          return this.getContext().decodeAudioData(await fetchStem(stemId));
-        }
-      };
-      pending = decode()
+      pending = decodeGate
+        .run(() => this.decode(stemId))
         .then((raw) => {
-          const stem: DecodedStem = { raw, renders: new Map(), clipBuffers: new Map() };
+          const stem: DecodedStem = {
+            id: stemId,
+            raw,
+            duration: raw.duration,
+            sampleRate: raw.sampleRate,
+            redecoding: null,
+            renders: new Map(),
+            clipBuffers: new Map(),
+          };
           used(stem);
+          used(raw);
           this.decoded.set(stemId, stem);
           this.trimCaches();
           return stem;
@@ -462,6 +585,40 @@ class AudioEngine {
       this.decoding.set(stemId, pending);
     }
     return pending;
+  }
+
+  /** Downloads (or reads from this device) and decodes a stem. */
+  private async decode(stemId: string): Promise<AudioBuffer> {
+    const ctx = this.getContext();
+    const bytes = await fetchStem(stemId);
+    try {
+      return await ctx.decodeAudioData(bytes);
+    } catch (error) {
+      // The context was replaced while it decoded (iOS after a call or
+      // another app's audio) and the old one closed under it: once more
+      // on the new one. (Decoding took the bytes, so they're fetched
+      // again — from this device's cache.)
+      if (this.ctx === ctx) throw error;
+      return this.getContext().decodeAudioData(await fetchStem(stemId));
+    }
+  }
+
+  /** A stem's decoded audio: as kept, or decoded again if it was let go (see DecodedStem.raw). */
+  private rawOf(stem: DecodedStem): Promise<AudioBuffer> {
+    if (stem.raw) {
+      used(stem.raw);
+      return Promise.resolve(stem.raw);
+    }
+    stem.redecoding ??= decodeGate
+      .run(() => this.decode(stem.id))
+      .then((raw) => {
+        stem.raw = raw;
+        used(raw);
+        this.trimCaches();
+        return raw;
+      })
+      .finally(() => (stem.redecoding = null));
+    return stem.redecoding;
   }
 
   /**
@@ -495,6 +652,11 @@ class AudioEngine {
         parked.push([stemId, stem]);
         continue;
       }
+      // Its audio as decoded, when every lane on it plays a render and none is getting a new one.
+      const raw = stem.raw;
+      if (raw && !needed.has(raw) && this.rawIdle(stemId, lanes)) {
+        spare.push({ bytes: bytesOf(raw), at: lastUsed.get(raw) ?? 0, drop: () => stem.raw === raw && (stem.raw = null) });
+      }
       for (const map of [stem.renders, stem.clipBuffers]) {
         for (const [key, buffer] of map) {
           if (!needed.has(buffer)) spare.push({ bytes: bytesOf(buffer), at: lastUsed.get(buffer) ?? 0, drop: () => map.delete(key) });
@@ -507,7 +669,7 @@ class AudioEngine {
       const drop = () => this.decoded.delete(stemId);
       if (n < parked.length - PARKED_STEMS) drop();
       else {
-        const bytes = [stem.raw, ...stem.renders.values(), ...stem.clipBuffers.values()].reduce((sum, b) => sum + bytesOf(b), 0);
+        const bytes = [stem.raw, ...stem.renders.values(), ...stem.clipBuffers.values()].reduce((sum, b) => sum + (b ? bytesOf(b) : 0), 0);
         spare.push({ bytes, at: lastUsed.get(stem) ?? 0, drop });
       }
     }
@@ -519,6 +681,16 @@ class AudioEngine {
       s.drop();
       total -= s.bytes;
     }
+  }
+
+  /** Whether nothing playing `stemId` reads its decoded audio now or soon: every lane on it is in tune, with nothing rendering. */
+  private rawIdle(stemId: string, lanes: StudioLane[]) {
+    for (const [laneId, entry] of this.lanes) {
+      if (entry.stemId !== stemId) continue;
+      const lane = lanes.find((l) => l.laneId === laneId);
+      if (!lane || !this.inTune(entry, lane) || this.waitingOn.has(laneId) || this.clipRendering.has(laneId)) return false;
+    }
+    return true;
   }
 
   /**
@@ -564,16 +736,17 @@ class AudioEngine {
    */
   private async renderClip(entry: LoadedLane, lane: StudioLane, key: string, clip: LaneClip, ask: RenderAsk) {
     const voice = lane.kind === "vocals";
-    const disk = renderId(entry.stemId, `clip|${key}`, entry.rawBuffer.sampleRate, voice);
+    const disk = renderId(entry.stemId, `clip|${key}`, entry.stem.sampleRate, voice);
     const rendered =
       (await keptRender(this.getContext(), disk)) ??
       (await renderQueue.run(Math.max(0, clip.to - clip.from), { urgent: () => ask.urgent, wanted: ask.wanted }, async () => {
-        const slice = sliceBuffer(this.getContext(), entry.rawBuffer, clip.from, clip.to, clip.reverse);
+        const slice = sliceBuffer(this.getContext(), await this.rawOf(entry.stem), clip.from, clip.to, clip.reverse);
         if (!slice) return null;
         const out = await renderPitchTempo(this.getContext(), slice, {
           tempo: lane.tempoRatio * (clip.stretch ?? 1),
           pitchSemitones: lane.pitchSemitones,
           voice,
+          hold: yieldToStandIns,
         });
         if (out !== slice) keepRender(disk, out);
         return out;
@@ -651,8 +824,9 @@ class AudioEngine {
   }
 
   /** The decoded stem before any pitch/tempo render — what analysis reads. */
-  getRawBuffer(laneId: string): AudioBuffer | null {
-    return this.lanes.get(laneId)?.rawBuffer ?? null;
+  async getRawBuffer(laneId: string): Promise<AudioBuffer | null> {
+    const entry = this.lanes.get(laneId);
+    return entry ? this.rawOf(entry.stem) : null;
   }
 
   /** Whether a lane's loaded audio is at the speed and pitch the lane is set to. */
@@ -667,7 +841,7 @@ class AudioEngine {
    * rejects with RenderSkipped if by then nobody who asked wants it.
    */
   private render(entry: LoadedLane, tempo: number, pitch: number, voice: boolean, ask: RenderAsk): AudioBuffer | Promise<AudioBuffer> {
-    if (Math.abs(tempo - 1) < 0.001 && Math.abs(pitch) < 0.001) return entry.rawBuffer;
+    if (Math.abs(tempo - 1) < 0.001 && Math.abs(pitch) < 0.001) return entry.stem.raw ?? this.rawOf(entry.stem);
     const key = renderKey(tempo, pitch);
     const kept = entry.renders.get(key);
     if (kept) {
@@ -681,26 +855,26 @@ class AudioEngine {
       return running.promise;
     }
     const asks = [ask];
-    const { renders, rawBuffer } = entry;
+    const { renders, stem } = entry;
     // Rendered on an earlier visit: read from disk (renderCache.ts), no turn needed.
-    const disk = renderId(entry.stemId, key, rawBuffer.sampleRate, voice);
+    const disk = renderId(entry.stemId, key, stem.sampleRate, voice);
     const promise = keptRender(this.getContext(), disk)
       .then(
         (kept) =>
           kept ??
           renderQueue
             .run(
-              rawBuffer.duration,
+              stem.duration,
               { urgent: () => asks.some((a) => a.urgent), wanted: () => asks.some((a) => a.wanted()) },
-              () => renderPitchTempo(this.getContext(), rawBuffer, { tempo, pitchSemitones: pitch, voice })
+              async () => renderPitchTempo(this.getContext(), await this.rawOf(stem), { tempo, pitchSemitones: pitch, voice, hold: yieldToStandIns })
             )
             .then((rendered) => {
-              if (rendered !== rawBuffer) keepRender(disk, rendered);
+              if (rendered !== stem.raw) keepRender(disk, rendered);
               return rendered;
             })
       )
       .then((rendered) => {
-        if (rendered !== rawBuffer) {
+        if (rendered !== stem.raw) {
           renders.set(key, rendered);
           used(rendered);
           this.trimCaches();
@@ -755,6 +929,8 @@ class AudioEngine {
     current.processedBuffer = buffer;
     current.appliedTempo = tempo;
     current.appliedPitch = pitch;
+    // The render takes over from its stand-in (crossfaded), which can go.
+    current.standIn = null;
     // What it played before is kept only as spare now.
     this.trimCaches();
     if (useStudioStore.getState().isPlaying) this.rescheduleLane(laneId);
@@ -776,13 +952,13 @@ class AudioEngine {
       return run === this.prepareRun;
     };
     let bytes = 0;
-    const roomFor = (seconds: number, entry: LoadedLane) => (bytes += seconds * entry.rawBuffer.sampleRate * 8) <= SPARE_BYTES / 2;
+    const roomFor = (seconds: number, entry: LoadedLane) => (bytes += seconds * entry.stem.sampleRate * 8) <= SPARE_BYTES / 2;
     try {
       for (const lane of speeds) {
         const entry = this.lanes.get(lane.laneId);
         if (!entry || entry.stemId !== lane.stemId) continue;
         if (entry.renders.has(renderKey(lane.tempoRatio, lane.pitchSemitones))) continue;
-        if (!roomFor(entry.rawBuffer.duration / lane.tempoRatio, entry)) return;
+        if (!roomFor(entry.stem.duration / lane.tempoRatio, entry)) return;
         if (!(await idle())) return;
         await this.render(entry, lane.tempoRatio, lane.pitchSemitones, lane.kind === "vocals", ask);
       }
@@ -818,7 +994,7 @@ class AudioEngine {
 
   removeLane(laneId: string) {
     const entry = this.lanes.get(laneId);
-    if (entry) stopSources(entry.sources);
+    if (entry) this.dropVoice(entry);
     entry?.chain.disconnect();
     this.lanes.delete(laneId);
     // Its stem may be parked now: the newest parked, the last to go.
@@ -885,10 +1061,12 @@ class AudioEngine {
   }
 
   /**
-   * Starts the transport. Normally every lane is loaded and rendered first,
-   * so they all start together. With `join` (playing on after a seek, or
-   * hearing an AI idea) it starts at once with the lanes that are ready;
-   * the others join in, in time, as soon as their audio is.
+   * Starts the transport. Normally every lane is loaded first, so they all
+   * start together; one still rendering at its speed and pitch starts on a
+   * stand-in (see StandIn) and switches to its render when that's in. With
+   * `join` (playing on after a seek, or hearing an AI idea) it starts at
+   * once with the lanes that are ready; the others join in, in time, as
+   * soon as their audio (or its stand-in) is.
    */
   async play({ join = false }: { join?: boolean } = {}) {
     const request = ++this.playRequest;
@@ -924,7 +1102,7 @@ class AudioEngine {
 
     if (join) {
       for (const lane of lanes) if (!this.lanes.has(lane.laneId)) void this.prefetchLane(lane.laneId, lane.stemId);
-      for (const lane of lanes) if (this.lanes.has(lane.laneId)) void this.ensureTransform(lane.laneId).catch(() => {});
+      for (const lane of lanes) if (this.lanes.has(lane.laneId)) void this.readyToPlay(lane.laneId, playhead).catch(() => {});
     } else {
       // A stem that won't download (taken down, a dropped connection) doesn't
       // keep the rest of the mix from playing: it's left out, and said so.
@@ -932,31 +1110,53 @@ class AudioEngine {
       if (request !== this.playRequest) return;
       const failed = loads.filter((r) => r.status === "rejected");
       if (failed.length === lanes.length && failed.length) throw (failed[0] as PromiseRejectedResult).reason;
-      const renders = await Promise.allSettled(lanes.map((l) => this.ensureTransform(l.laneId)));
+      // Each lane at its speed and pitch, or a stand-in for its first seconds. A lane that takes
+      // longer than PLAY_WAIT_MS doesn't hold up the rest: it joins in when it's ready.
+      const renders = lanes.map((l, i) => (loads[i].status === "fulfilled" ? this.readyToPlay(l.laneId, playhead) : Promise.resolve()));
+      await Promise.race([Promise.allSettled(renders), new Promise((resolve) => setTimeout(resolve, PLAY_WAIT_MS))]);
       // Left out: it didn't download, or couldn't be brought to its speed and pitch — not a lane deleted meanwhile.
-      const now = useStudioStore.getState().lanes;
-      const missing = lanes.filter((l, i) => (loads[i].status === "rejected" || renders[i].status === "rejected") && now.some((n) => n.laneId === l.laneId));
-      if (missing.length && request === this.playRequest) {
-        const names = missing.map((l) => l.name?.trim() || l.trackTitle).slice(0, 2).join(", ");
-        useStudioView.getState().notify(`Couldn't get ${names}${missing.length > 2 ? ` and ${missing.length - 2} more` : ""} ready — playing the rest. Tap play again to retry.`, "error");
-      }
+      const missing = new Set(lanes.filter((_, i) => loads[i].status === "rejected").map((l) => l.laneId));
+      const report = () => {
+        const now = useStudioStore.getState().lanes;
+        const gone = lanes.filter((l) => missing.has(l.laneId) && now.some((n) => n.laneId === l.laneId));
+        if (!gone.length || request !== this.playRequest) return;
+        const names = gone.map((l) => l.name?.trim() || l.trackTitle).slice(0, 2).join(", ");
+        useStudioView.getState().notify(`Couldn't get ${names}${gone.length > 2 ? ` and ${gone.length - 2} more` : ""} ready — playing the rest. Tap play again to retry.`, "error");
+      };
+      // A render that fails after play has started is said then.
+      renders.forEach((r, i) =>
+        r.catch((error) => {
+          if (error instanceof RenderSkipped) return;
+          missing.add(lanes[i].laneId);
+          report();
+        })
+      );
+      report();
     }
     // Paused, stopped or a preview started while the stems loaded.
     if (request !== this.playRequest || this.ctx !== ctx) return;
 
     const audible = getAudibleLaneIds(lanes);
     const startTime = ctx.currentTime + 0.08;
+    const now = useStudioStore.getState().lanes;
 
-    for (const lane of lanes) {
+    for (const lane of now) {
       const entry = this.lanes.get(lane.laneId);
       if (!entry) continue;
-      stopSources(entry.sources);
-      entry.sources = [];
+      this.dropVoice(entry);
       entry.chain.update(lane, useStudioStore.getState().projectBpm);
       entry.chain.volumeGain.gain.value = laneGain(lane, audible, useStudioStore.getState().crossfader);
-      // Still rendering at its new speed: it joins in when that's ready (see ensureTransform).
-      if (!this.inTune(entry, lane)) continue;
-
+      entry.voice = this.newVoice(entry, startTime, false);
+      if (!this.inTune(entry, lane)) {
+        // Still rendering at its speed: its stand-in plays meanwhile, if it's in.
+        const standIn = this.currentStandIn(entry, lane);
+        if (standIn) {
+          entry.playing = `stand-in:${standIn.key}`;
+          for (const window of standIn.windows) this.scheduleWindow(entry, lane, window, startTime, playhead);
+        }
+        continue;
+      }
+      entry.playing = "render";
       entry.sources = scheduleLane({
         ctx,
         lane,
@@ -965,6 +1165,7 @@ class AudioEngine {
         startTime,
         playhead,
         clipBuffer: this.clipLookup(lane.laneId),
+        destination: entry.voice,
       });
       this.modulate(lane, entry.chain, startTime, playhead);
     }
@@ -973,6 +1174,7 @@ class AudioEngine {
     this.startedAtPlayhead = playhead;
     useStudioStore.getState()._setPlaybackState(true, playhead);
     this.startMetronome(playhead);
+    this.startStandIns();
     this.tick();
   }
 
@@ -987,6 +1189,7 @@ class AudioEngine {
 
     this.stopAllSources();
     this.stopMetronome();
+    this.stopStandIns();
     stopNowPlayingAnchor();
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
@@ -1000,6 +1203,7 @@ class AudioEngine {
     this.playRequest++;
     this.stopAllSources();
     this.stopMetronome();
+    this.stopStandIns();
     stopNowPlayingAnchor();
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
@@ -1012,17 +1216,52 @@ class AudioEngine {
   }
 
   private stopAllSources() {
-    for (const entry of this.lanes.values()) {
-      stopSources(entry.sources);
-      entry.sources = [];
+    for (const entry of this.lanes.values()) this.dropVoice(entry);
+  }
+
+  /** Silences a lane at once: its sources stop and what they played through goes. */
+  private dropVoice(entry: LoadedLane) {
+    stopSources(entry.sources);
+    entry.sources = [];
+    entry.voice?.disconnect();
+    entry.voice = null;
+    entry.playing = null;
+  }
+
+  /** What a lane's sources play through from `at` — faded in over a seam when it takes over from another. */
+  private newVoice(entry: LoadedLane, at: number, fadeIn: boolean) {
+    const voice = this.getContext().createGain();
+    if (fadeIn) {
+      voice.gain.setValueAtTime(0, at);
+      voice.gain.linearRampToValueAtTime(1, at + WINDOW_SEAM);
     }
+    voice.connect(entry.chain.input);
+    return voice;
+  }
+
+  /** Fades out what a lane is playing from `at`, then stops it — so what replaces it crossfades in instead of cutting. */
+  private releaseVoice(entry: LoadedLane, at: number) {
+    const { voice, sources } = entry;
+    entry.sources = [];
+    entry.voice = null;
+    entry.playing = null;
+    if (!voice) {
+      stopSources(sources, at);
+      return;
+    }
+    voice.gain.cancelScheduledValues(at);
+    voice.gain.setTargetAtTime(0, at, WINDOW_SEAM / 3);
+    const end = at + WINDOW_SEAM * 2;
+    stopSources(sources, end);
+    setTimeout(() => voice.disconnect(), Math.max(0, (end - (this.ctx?.currentTime ?? 0)) * 1000) + 60);
   }
 
   /**
    * Re-schedules one lane against the running transport, e.g. while its
-   * clip is being dragged. The other lanes keep playing untouched; this
-   * one is restarted a few milliseconds ahead at the position the
-   * transport will have reached by then, so it lands sample-aligned.
+   * clip is being dragged, or when its render comes in. The other lanes
+   * keep playing untouched; this one is restarted a few milliseconds ahead
+   * at the position the transport will have reached by then, so it lands
+   * sample-aligned, crossfading from what it played.
    */
   rescheduleLane(laneId: string) {
     const ctx = this.ctx;
@@ -1032,23 +1271,23 @@ class AudioEngine {
     const entry = this.lanes.get(laneId);
     if (!lane || !entry) return;
 
-    const now = ctx.currentTime;
-    const startTime = now + 0.02;
-    if (entry.sources.length) {
-      // Duck the outgoing source over a few ms instead of cutting it
-      // mid-waveform, which would click on every drag step.
-      const fade = entry.chain.fadeGain.gain;
-      fade.cancelScheduledValues(now);
-      fade.setTargetAtTime(0, now, 0.004);
-      stopSources(entry.sources, startTime);
-      entry.sources = [];
+    const startTime = ctx.currentTime + 0.02;
+    const playhead = this.timelineAt(startTime);
+    this.releaseVoice(entry, startTime);
+    entry.voice = this.newVoice(entry, startTime, true);
+
+    // At its old speed it would play out of time with the rest: its
+    // stand-in plays instead, if there is one for where it is now (and
+    // otherwise it waits for one, or for its render — see feedStandIns).
+    if (!this.inTune(entry, lane)) {
+      const standIn = this.currentStandIn(entry, lane);
+      if (!standIn) return;
+      entry.playing = `stand-in:${standIn.key}`;
+      for (const window of standIn.windows) this.scheduleWindow(entry, lane, window, startTime, playhead);
+      return;
     }
 
-    // At its old speed it would play out of time with the rest: it waits
-    // for its render instead, and joins in then (see ensureTransform).
-    if (!this.inTune(entry, lane)) return;
-
-    const playhead = this.startedAtPlayhead + (startTime - this.startedAtContextTime);
+    entry.playing = "render";
     const audible = getAudibleLaneIds(state.lanes);
     entry.chain.volumeGain.gain.value = laneGain(lane, audible, state.crossfader);
     entry.sources = scheduleLane({
@@ -1059,8 +1298,190 @@ class AudioEngine {
       startTime,
       playhead,
       clipBuffer: this.clipLookup(laneId),
+      destination: entry.voice,
     });
     this.modulate(lane, entry.chain, startTime, playhead);
+  }
+
+  // --- Stand-ins (see StandIn) -------------------------------------------------
+
+  private standInTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** Identifies what a stand-in plays: the lane's speed, pitch, place and arrangement. */
+  private standInKey(lane: StudioLane) {
+    const clips = lane.clips?.map((c) => `${c.from},${c.to},${c.at},${c.muted ? 1 : 0},${c.stretch ?? 1},${c.reverse ? 1 : 0}`).join(";") ?? "";
+    return `${renderKey(lane.tempoRatio, lane.pitchSemitones)}|${lane.offsetSeconds}|${clips}`;
+  }
+
+  /** Whether any lane is playing (or about to play) on a stand-in. */
+  onStandIns() {
+    for (const entry of this.lanes.values()) if (entry.standIn && !entry.standIn.failed) return true;
+    return false;
+  }
+
+  /** The lane's stand-in, if it's for the lane as it is now. */
+  private currentStandIn(entry: LoadedLane, lane: StudioLane) {
+    const standIn = entry.standIn;
+    return standIn && standIn.key === this.standInKey(lane) ? standIn : null;
+  }
+
+  /** How long the lane's audio is at its speed — as long as its render will be. */
+  private stretchedLength(entry: LoadedLane, lane: StudioLane) {
+    return entry.stem.duration / lane.tempoRatio;
+  }
+
+  /** Where the lane's last sound ends on the timeline. */
+  private laneEnd(entry: LoadedLane, lane: StudioLane) {
+    const length = this.stretchedLength(entry, lane);
+    if (!lane.clips?.length) return lane.offsetSeconds + length;
+    return Math.max(lane.offsetSeconds, ...lane.clips.map((c) => lane.offsetSeconds + c.at / lane.tempoRatio + (c.to - c.from) / (lane.tempoRatio * (c.stretch ?? 1))));
+  }
+
+  /**
+   * Gets a lane ready to be heard from `playhead`: its render (kept from
+   * before, read from disk, or done in a moment), else a stand-in for its
+   * first seconds. Resolves when either is in; rejects if the lane can't
+   * be brought to its speed and pitch at all.
+   */
+  private async readyToPlay(laneId: string, playhead: number): Promise<void> {
+    const transform = this.ensureTransform(laneId);
+    const lane = useStudioStore.getState().lanes.find((l) => l.laneId === laneId);
+    const entry = this.lanes.get(laneId);
+    if (!lane || !entry || this.inTune(entry, lane)) return transform;
+    // A render kept on this device comes back in a moment: no stand-in needed.
+    const quick = await Promise.race([transform.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 300))]);
+    if (quick) return;
+    const now = useStudioStore.getState().lanes.find((l) => l.laneId === laneId);
+    if (!now || this.lanes.get(laneId) !== entry || this.inTune(entry, now)) return;
+    const standIn = this.currentStandIn(entry, now);
+    // One already playing from here (paused and played again on the spot) does.
+    if (standIn?.windows.some((w) => w.from <= playhead + 0.01 && w.to > playhead + 1)) return;
+    entry.standIn = { key: this.standInKey(now), windows: [], asking: false, failed: false };
+    // A short first window: it's what play is waiting on. The next follows on straight away, so it's in before the first runs out.
+    const first = this.askWindow(entry, now, playhead, FIRST_STAND_IN_SECONDS);
+    void first.then(() => {
+      const standIn = entry.standIn;
+      if (!standIn || standIn.asking || standIn.failed || standIn.windows.length !== 1) return;
+      return this.askWindow(entry, now, standIn.windows[0].to);
+    }).catch(() => {});
+    await Promise.race([first, transform]);
+  }
+
+  /** Every quarter second while playing: each lane on a stand-in gets its next window in good time. */
+  private startStandIns() {
+    this.stopStandIns();
+    this.standInTimer = setInterval(() => this.feedStandIns(), 250);
+  }
+
+  private stopStandIns() {
+    if (this.standInTimer !== null) clearInterval(this.standInTimer);
+    this.standInTimer = null;
+  }
+
+  private feedStandIns() {
+    const ctx = this.ctx;
+    const state = useStudioStore.getState();
+    if (!ctx || !state.isPlaying) return;
+    const now = this.timelineAt(ctx.currentTime);
+    for (const lane of state.lanes) {
+      const entry = this.lanes.get(lane.laneId);
+      if (!entry) continue;
+      if (this.inTune(entry, lane)) {
+        entry.standIn = null;
+        continue;
+      }
+      let standIn = this.currentStandIn(entry, lane);
+      // A new speed, place or cut since: the windows it had don't fit any more.
+      if (!standIn) standIn = entry.standIn = { key: this.standInKey(lane), windows: [], asking: false, failed: false };
+      // What's been heard can go.
+      standIn.windows = standIn.windows.filter((w) => w.to + WINDOW_SEAM > now);
+      if (standIn.asking || standIn.failed) continue;
+      const last = standIn.windows[standIn.windows.length - 1];
+      const from = last ? last.to : now;
+      if (from > now + STAND_IN_LEAD || from >= this.laneEnd(entry, lane)) continue;
+      void this.askWindow(entry, lane, from).catch(() => {});
+    }
+  }
+
+  /**
+   * Renders the lane's stand-in window from `from` on the timeline, and
+   * plays it if the transport is running and it's still wanted. Asked for
+   * once at a time per lane.
+   */
+  private async askWindow(entry: LoadedLane, lane: StudioLane, from: number, seconds = STAND_IN_SECONDS): Promise<void> {
+    const standIn = entry.standIn;
+    if (!standIn) return;
+    const laneId = lane.laneId;
+    const wanted = () => {
+      const now = useStudioStore.getState().lanes.find((l) => l.laneId === laneId);
+      return !!now && entry.standIn === standIn && this.lanes.get(laneId) === entry && !this.inTune(entry, now) && this.standInKey(now) === standIn.key;
+    };
+    standIn.asking = true;
+    let window: LaneWindow;
+    try {
+      window = await this.renderWindow(entry, lane, from, from + seconds, wanted);
+    } catch (error) {
+      if (!(error instanceof RenderSkipped)) standIn.failed = true;
+      throw error;
+    } finally {
+      standIn.asking = false;
+    }
+    if (!wanted()) return;
+    standIn.windows.push(window);
+    const ctx = this.ctx;
+    if (!ctx || !useStudioStore.getState().isPlaying) return;
+    const startTime = ctx.currentTime + 0.03;
+    const playhead = this.timelineAt(startTime);
+    const key = `stand-in:${standIn.key}`;
+    // Taking over from what the lane played before (its old speed, an earlier stand-in): crossfaded.
+    if (entry.playing !== key) {
+      this.releaseVoice(entry, startTime);
+      entry.voice = this.newVoice(entry, startTime, true);
+      entry.playing = key;
+    }
+    this.scheduleWindow(entry, lane, window, startTime, playhead);
+  }
+
+  /** The lane's audio at its speed and pitch for `from`..`to` on the timeline, rendered on its own. */
+  private async renderWindow(entry: LoadedLane, lane: StudioLane, from: number, to: number, wanted: () => boolean): Promise<LaneWindow> {
+    const ctx = this.getContext();
+    const ratio = lane.tempoRatio;
+    const length = this.stretchedLength(entry, lane);
+    const range = windowRange(lane, length, from, to);
+    // Nothing of its own audio plays then: an empty window, so the next one is asked for after it.
+    const silent = (): LaneWindow => ({ from, to, buffer: ctx.createBuffer(1, 1, ctx.sampleRate), bufferStart: -1 });
+    if (!range) return silent();
+    const start = Math.max(0, range.start - STAND_IN_PREROLL);
+    const end = Math.min(length, range.end + 0.05);
+    const buffer = await standInQueue.run(end - start, { urgent: () => true, wanted }, async () => {
+      const slice = sliceBuffer(ctx, await this.rawOf(entry.stem), start * ratio, end * ratio);
+      if (!slice) return null;
+      return renderPitchTempo(ctx, slice, { tempo: ratio, pitchSemitones: lane.pitchSemitones, voice: lane.kind === "vocals", priority: "now" });
+    });
+    return buffer ? { from, to, buffer, bufferStart: start } : silent();
+  }
+
+  /** Schedules one stand-in window against the transport (`startTime` is when the timeline is at `playhead`). */
+  private scheduleWindow(entry: LoadedLane, lane: StudioLane, window: LaneWindow, startTime: number, playhead: number) {
+    const ctx = this.ctx;
+    if (!ctx || !entry.voice || window.to + WINDOW_SEAM <= playhead) return;
+    const first = entry.sources.length === 0;
+    const sources = scheduleLane({
+      ctx,
+      lane,
+      buffer: entry.processedBuffer,
+      chain: entry.chain,
+      startTime,
+      playhead,
+      clipBuffer: this.clipLookup(lane.laneId),
+      window,
+      laneLength: this.stretchedLength(entry, lane),
+      // Only the first sets the lane's fades and moves: the rest are queued up behind it.
+      keepFade: !first,
+      destination: entry.voice,
+    });
+    entry.sources.push(...sources);
+    if (first && sources.length) this.modulate(lane, entry.chain, startTime, playhead);
   }
 
   /** Schedules a lane's automation and ducking from `playhead` (heard at `when`) to the end. */
@@ -1095,11 +1516,7 @@ class AudioEngine {
   /** A stem's decoded audio: a loaded lane's, or downloaded once for the pads. */
   private stemBuffer(stemId: string): Promise<AudioBuffer> {
     const kept = this.decoded.get(stemId);
-    if (kept) return Promise.resolve(kept.raw);
-    for (const [laneId, entry] of this.lanes) {
-      const lane = useStudioStore.getState().lanes.find((l) => l.laneId === laneId);
-      if (lane?.stemId === stemId) return Promise.resolve(entry.rawBuffer);
-    }
+    if (kept) return this.rawOf(kept);
     let pending = this.stemBuffers.get(stemId);
     if (!pending) {
       // A whole stem is ~85 MB and a pad only keeps its slice: just the latest stem stays, for the next pad cut from it.
@@ -1178,7 +1595,7 @@ class AudioEngine {
     }
     const entry = this.lanes.get(laneId);
     const lane = useStudioStore.getState().lanes.find((l) => l.laneId === laneId);
-    if (useStudioStore.getState().isPlaying && entry && lane && !entry.sources.length && this.inTune(entry, lane)) {
+    if (useStudioStore.getState().isPlaying && entry && lane && entry.playing !== "render" && this.inTune(entry, lane)) {
       this.rescheduleLane(laneId);
     }
   }
@@ -1267,6 +1684,7 @@ class AudioEngine {
 }
 
 export const audioEngine = new AudioEngine();
+renderQueue.yieldTo = { busy: () => audioEngine.onStandIns(), renders: RENDERS_BESIDE_STAND_INS };
 
 /** Whether the mix has played since it was last stopped — only then is it on the lock screen. */
 let mixOnLockScreen = false;

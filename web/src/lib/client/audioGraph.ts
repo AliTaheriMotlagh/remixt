@@ -14,7 +14,7 @@ import {
 //   source → highpass → lowpass → low/mid/high EQ → drive → compressor
 //          → fadeGain → autoGain → autoFilter → duckGain
 //          → volumeGain → widener (Haas) → panner → master
-//                                  ├→ reverb send → convolver ─┘
+//                                  ├→ reverb send → reverb bus ─┘  (one per room size, shared)
 //                                  └→ delay send → delay(+feedback) ─┘
 //
 // Everything except `drive` is a plain AudioParam, so a lane's chain is
@@ -82,6 +82,34 @@ function setParam(param: AudioParam, value: number, ctx: BaseAudioContext) {
   param.setTargetAtTime(value, ctx.currentTime, 0.01);
 }
 
+/**
+ * One reverb per room size, shared by every lane that sends to it, by
+ * where it plays into. A convolver is the costliest node a lane has, and
+ * the sum of the sends through one is exactly the sum of each through its
+ * own (the same impulse) — so twenty lanes with reverb cost one.
+ */
+const reverbBuses = new WeakMap<AudioNode, Map<string, ConvolverNode>>();
+
+function reverbBus(ctx: BaseAudioContext, destination: AudioNode, seconds: number): ConvolverNode {
+  let buses = reverbBuses.get(destination);
+  if (!buses) {
+    buses = new Map();
+    reverbBuses.set(destination, buses);
+  }
+  const key = Math.max(0.1, seconds).toFixed(2);
+  let bus = buses.get(key);
+  if (!bus) {
+    bus = ctx.createConvolver();
+    bus.buffer = getImpulse(ctx, seconds);
+    bus.connect(destination);
+    buses.set(key, bus);
+  }
+  return bus;
+}
+
+/** How long a stage switched off keeps running, so what it's still sounding (a compressor's release, a reverb's tail) isn't cut off. */
+const RELEASE_MS = 80;
+
 export function createLaneChain(
   ctx: BaseAudioContext,
   lane: StudioLane,
@@ -106,6 +134,11 @@ export function createLaneChain(
 
   const shaper = ctx.createWaveShaper();
   shaper.oversample = "2x";
+  // What the oversampled shaper delays a lane by (measured in Chrome: one
+  // 128-frame block). With drive off a plain delay stands in for it, so
+  // switching drive on or off never moves the lane against the others.
+  const shaperLatency = ctx.createDelay(0.01);
+  shaperLatency.delayTime.value = 128 / ctx.sampleRate;
   // Saturation adds level, so trim it back to keep the fader meaningful.
   const driveTrim = ctx.createGain();
 
@@ -131,7 +164,6 @@ export function createLaneChain(
   const panner = ctx.createStereoPanner();
 
   const reverbSend = ctx.createGain();
-  const convolver = ctx.createConvolver();
   const delaySend = ctx.createGain();
   const delayNode = ctx.createDelay(4);
   const feedback = ctx.createGain();
@@ -144,12 +176,11 @@ export function createLaneChain(
   lowpass.connect(eqLow);
   eqLow.connect(eqMid);
   eqMid.connect(eqHigh);
-  eqHigh.connect(shaper);
   shaper.connect(driveTrim);
+  shaperLatency.connect(driveTrim);
 
-  driveTrim.connect(compressor);
-  compressor.connect(compressorWet);
   driveTrim.connect(compressorBypass);
+  compressor.connect(compressorWet);
   compressorWet.connect(fadeGain);
   compressorBypass.connect(fadeGain);
 
@@ -166,8 +197,6 @@ export function createLaneChain(
   panner.connect(destination);
 
   volumeGain.connect(reverbSend);
-  reverbSend.connect(convolver);
-  convolver.connect(destination);
 
   volumeGain.connect(delaySend);
   delaySend.connect(delayNode);
@@ -177,7 +206,65 @@ export function createLaneChain(
   delayNode.connect(destination);
 
   let appliedDrive = -1;
-  let appliedReverbSize = -1;
+
+  // The costly stages — drive (oversampled), the compressor and the
+  // reverb — are only in the signal path while they're on, so a lane
+  // with them off costs nothing for them. (Twenty lanes running all
+  // three took a third of a fast computer's audio thread, and all of a
+  // phone's: the mix broke up.) A node nothing feeds stops working once
+  // what it's still sounding has died away.
+  const unlink = (from: AudioNode, to: AudioNode) => {
+    try {
+      from.disconnect(to);
+    } catch {
+      // wasn't connected
+    }
+  };
+  let driveOn: boolean | null = null;
+  let compressOn: boolean | null = null;
+  let compressorRelease: ReturnType<typeof setTimeout> | null = null;
+  let reverbTo: ConvolverNode | null = null;
+  let reverbRelease: ReturnType<typeof setTimeout> | null = null;
+
+  function routeDrive(on: boolean) {
+    if (on === driveOn) return;
+    driveOn = on;
+    unlink(eqHigh, on ? shaperLatency : shaper);
+    eqHigh.connect(on ? shaper : shaperLatency);
+  }
+
+  function routeCompressor(on: boolean) {
+    if (on === compressOn) return;
+    const first = compressOn === null;
+    compressOn = on;
+    if (compressorRelease) clearTimeout(compressorRelease);
+    compressorRelease = null;
+    if (on) driveTrim.connect(compressor);
+    // Switched off: unhooked once the crossfade to the dry path is over.
+    else if (!first) compressorRelease = setTimeout(() => ((compressorRelease = null), unlink(driveTrim, compressor)), RELEASE_MS);
+  }
+
+  function routeReverb(level: number, seconds: number) {
+    const bus = level > 0 ? reverbBus(ctx, destination, seconds) : null;
+    if (bus) {
+      if (reverbRelease) clearTimeout(reverbRelease);
+      reverbRelease = null;
+      if (bus === reverbTo) return;
+      // A new room size: the old room's tail rings out on its own.
+      if (reverbTo) unlink(reverbSend, reverbTo);
+      reverbSend.connect(bus);
+      reverbTo = bus;
+    } else if (reverbTo && !reverbRelease) {
+      // Unhooked once the send has faded to nothing (the tail is the bus's, and plays on).
+      const leaving = reverbTo;
+      reverbRelease = setTimeout(() => {
+        reverbRelease = null;
+        if (reverbTo !== leaving) return;
+        unlink(reverbSend, leaving);
+        reverbTo = null;
+      }, RELEASE_MS);
+    }
+  }
 
   function update(next: StudioLane, bpm: number) {
     const fx: LaneFx = next.fx;
@@ -192,6 +279,7 @@ export function createLaneChain(
       appliedDrive = fx.drive;
       shaper.curve = driveCurve(fx.drive);
     }
+    routeDrive(fx.drive > 0.001);
     setParam(driveTrim.gain, 1 - fx.drive * 0.45, ctx);
 
     compressor.threshold.value = -22;
@@ -199,16 +287,14 @@ export function createLaneChain(
     compressor.ratio.value = 4;
     compressor.attack.value = 0.005;
     compressor.release.value = 0.18;
+    routeCompressor(fx.compress);
     setParam(compressorWet.gain, fx.compress ? 1 : 0, ctx);
     setParam(compressorBypass.gain, fx.compress ? 0 : 1, ctx);
 
     setParam(widthDelay.delayTime, fx.width * 0.022, ctx);
     setParam(panner.pan, Math.max(-1, Math.min(1, fx.pan)), ctx);
 
-    if (fx.reverb > 0 && fx.reverbSize !== appliedReverbSize) {
-      appliedReverbSize = fx.reverbSize;
-      convolver.buffer = getImpulse(ctx, fx.reverbSize);
-    }
+    routeReverb(fx.reverb, fx.reverbSize);
     setParam(reverbSend.gain, fx.reverb, ctx);
 
     setParam(delaySend.gain, fx.delay, ctx);
@@ -227,10 +313,12 @@ export function createLaneChain(
     volumeGain,
     update,
     disconnect: () => {
+      if (compressorRelease) clearTimeout(compressorRelease);
+      if (reverbRelease) clearTimeout(reverbRelease);
       for (const node of [
-        highpass, lowpass, eqLow, eqMid, eqHigh, shaper, driveTrim,
+        highpass, lowpass, eqLow, eqMid, eqHigh, shaper, shaperLatency, driveTrim,
         compressor, compressorBypass, compressorWet, fadeGain, autoGain, autoFilter, duckGain, volumeGain,
-        splitter, merger, widthDelay, panner, reverbSend, convolver,
+        splitter, merger, widthDelay, panner, reverbSend,
         delaySend, delayNode, feedback, feedbackDamp,
       ]) {
         try {
@@ -334,14 +422,14 @@ export function needsOwnRender(clip: LaneClip) {
 }
 
 /**
- * Where each piece of a lane sounds, in timeline seconds, and where in
- * which buffer it's read from: the lane's processed (already stretched)
- * buffer, or a clip's own render. A lane without an arrangement is one
- * piece: the whole buffer.
+ * Where each piece of a lane sounds, in timeline seconds, and where it's
+ * read from: a clip's own render (`own`), or the lane's processed (already
+ * stretched) audio, `length` seconds long, at `from`. A lane without an
+ * arrangement is one piece: all of it.
  */
-function laneSegments(lane: StudioLane, buffer: AudioBuffer, clipBuffer?: ClipBufferLookup) {
+export function laneSegments(lane: StudioLane, length: number, clipBuffer?: ClipBufferLookup) {
   if (!lane.clips?.length) {
-    return [{ buffer, start: lane.offsetSeconds, from: 0, length: buffer.duration, fades: false, clip: null }];
+    return [{ own: null, start: lane.offsetSeconds, from: 0, length, fades: false, clip: null }];
   }
   const ratio = lane.tempoRatio;
   return lane.clips
@@ -349,18 +437,42 @@ function laneSegments(lane: StudioLane, buffer: AudioBuffer, clipBuffer?: ClipBu
     .map((clip) => {
       const start = lane.offsetSeconds + clip.at / ratio;
       const own = needsOwnRender(clip) ? clipBuffer?.(clip) : undefined;
-      if (own) return { buffer: own, start, from: 0, length: own.duration, fades: true, clip };
-      // Not rendered yet (or no stretch of its own): read it from the lane's buffer.
-      const from = Math.min(buffer.duration, clip.from / ratio);
-      return {
-        buffer,
-        start,
-        from,
-        length: Math.max(0, Math.min(buffer.duration, clip.to / ratio) - from),
-        fades: true,
-        clip,
-      };
+      if (own) return { own, start, from: 0, length: own.duration, fades: true, clip };
+      // Not rendered yet (or no stretch of its own): read it from the lane's audio.
+      const from = Math.min(length, clip.from / ratio);
+      return { own: null, start, from, length: Math.max(0, Math.min(length, clip.to / ratio) - from), fades: true, clip };
     });
+}
+
+/**
+ * A stand-in for a lane whose audio at its speed and pitch is still
+ * rendering: a few seconds of it, rendered on their own, played for the
+ * timeline from `from` to `to` (see audioEngine's stand-ins). `buffer` is
+ * the lane's audio from `bufferStart` (in the lane's stretched seconds).
+ */
+export type LaneWindow = { from: number; to: number; buffer: AudioBuffer; bufferStart: number };
+
+/** How long one stand-in window crossfades into the next (and a stand-in into the finished render). */
+export const WINDOW_SEAM = 0.015;
+
+/**
+ * The stretch of a lane's audio (in its stretched seconds) that plays
+ * between `from` and `to` on the timeline, the seam after it included —
+ * what a stand-in for that time has to render. Null when the lane plays
+ * none of its own audio then (silent, or only clips with renders of their own).
+ */
+export function windowRange(lane: StudioLane, length: number, from: number, to: number): { start: number; end: number } | null {
+  let start = Infinity;
+  let end = -Infinity;
+  for (const s of laneSegments(lane, length)) {
+    if (s.clip && needsOwnRender(s.clip)) continue;
+    const a = Math.max(s.start, from);
+    const b = Math.min(s.start + s.length, to + WINDOW_SEAM);
+    if (b <= a) continue;
+    start = Math.min(start, s.from + (a - s.start));
+    end = Math.max(end, s.from + (b - s.start));
+  }
+  return end > start ? { start, end } : null;
 }
 
 /**
@@ -390,6 +502,14 @@ export function clipEnvelope(clip: Pick<LaneClip, "gain" | "fadeIn" | "fadeOut">
  * the playhead is scheduled into the future instead of being trimmed, and
  * a piece whose end is already behind the playhead is skipped entirely.
  * Returns the sources started (none when the lane has nothing left to play).
+ *
+ * With `window`, it plays a stand-in instead (see LaneWindow): only the
+ * timeline from `window.from` to `window.to`, read from the stand-in's
+ * audio, faded across the seams with the windows either side. `laneLength`
+ * is how long the lane's audio is at its speed (the buffer's own length
+ * when there's no window). `keepFade` leaves the lane's fade in/out as it
+ * was scheduled (a window queued up behind the one playing). Sources go to
+ * `destination` (default: the lane's chain).
  */
 export function scheduleLane({
   ctx,
@@ -400,6 +520,10 @@ export function scheduleLane({
   playhead,
   until,
   clipBuffer,
+  window,
+  laneLength = buffer.duration,
+  keepFade = false,
+  destination = chain.input,
 }: {
   ctx: BaseAudioContext;
   lane: StudioLane;
@@ -409,8 +533,12 @@ export function scheduleLane({
   playhead: number;
   until?: number;
   clipBuffer?: ClipBufferLookup;
+  window?: LaneWindow;
+  laneLength?: number;
+  keepFade?: boolean;
+  destination?: AudioNode;
 }): AudioBufferSourceNode[] {
-  const segments = laneSegments(lane, buffer, clipBuffer);
+  const segments = laneSegments(lane, laneLength, clipBuffer);
   const laneEnd = Math.max(...segments.map((s) => s.start + s.length));
   if (playhead >= laneEnd) return [];
 
@@ -418,58 +546,88 @@ export function scheduleLane({
   const at = (seconds: number) => startTime + (seconds - playhead);
 
   // The lane's own fade in/out spans the whole lane, clips and all.
-  const { fadeIn, fadeOut } = lane.fx;
-  const fade = chain.fadeGain.gain;
-  fade.cancelScheduledValues(startTime);
-  const laneStart = lane.offsetSeconds;
-  const into = Math.max(0, playhead - laneStart);
-  const when = at(Math.max(playhead, laneStart));
-  if (fadeIn > 0 && into < fadeIn) {
-    fade.setValueAtTime(into / fadeIn, when);
-    fade.linearRampToValueAtTime(1, at(laneStart + fadeIn));
-  } else {
-    fade.setValueAtTime(1, when);
-  }
-  if (fadeOut > 0) {
-    const fadeOutStart = laneEnd - fadeOut;
-    if (fadeOutStart > playhead) fade.setValueAtTime(1, at(fadeOutStart));
-    fade.linearRampToValueAtTime(0.0001, at(laneEnd));
+  if (!keepFade) {
+    const { fadeIn, fadeOut } = lane.fx;
+    const fade = chain.fadeGain.gain;
+    fade.cancelScheduledValues(startTime);
+    const laneStart = lane.offsetSeconds;
+    const into = Math.max(0, playhead - laneStart);
+    const when = at(Math.max(playhead, laneStart));
+    if (fadeIn > 0 && into < fadeIn) {
+      fade.setValueAtTime(into / fadeIn, when);
+      fade.linearRampToValueAtTime(1, at(laneStart + fadeIn));
+    } else {
+      fade.setValueAtTime(1, when);
+    }
+    if (fadeOut > 0) {
+      const fadeOutStart = laneEnd - fadeOut;
+      if (fadeOutStart > playhead) fade.setValueAtTime(1, at(fadeOutStart));
+      fade.linearRampToValueAtTime(0.0001, at(laneEnd));
+    }
   }
 
   const sources: AudioBufferSourceNode[] = [];
   for (const segment of segments) {
-    const local = playhead - segment.start;
-    if (segment.length <= 0 || local >= segment.length) continue;
-    const offset = Math.max(0, local);
-    const startsAt = local < 0 ? startTime - local : startTime;
-    const remaining = segment.length - offset;
+    if (segment.length <= 0) continue;
+    // What it reads: a clip's own render, the stand-in's audio, or the lane's.
+    const source = segment.own ?? (window ? window.buffer : buffer);
+    const shift = !segment.own && window ? window.bufferStart : 0;
+    // The part of it heard: from the playhead (and the window, and where the stand-in's audio starts) to its end (or the window's, and the stand-in's).
+    let from = Math.max(segment.start, playhead);
+    let to = segment.start + segment.length;
+    if (window) {
+      from = Math.max(from, window.from, segment.start + (shift - segment.from));
+      to = Math.min(to, window.to + WINDOW_SEAM, segment.start + (shift + source.duration - segment.from));
+    }
+    if (to - from < 0.002) continue;
+    const offset = from - segment.start;
+    const remaining = to - from;
+    const startsAt = at(from);
 
-    const source = ctx.createBufferSource();
-    source.buffer = segment.buffer;
+    const node = ctx.createBufferSource();
+    node.buffer = source;
+    let out: AudioNode = destination;
+    const gains: GainNode[] = [];
+    if (window) {
+      // Across a seam the windows either side overlap, one fading in as the other fades out.
+      const seam = ctx.createGain();
+      const g = seam.gain;
+      const seamIn = from > playhead + 0.001 && from <= window.from + 0.001 && window.from > segment.start + 0.001;
+      const seamOut = to > window.to + 0.001;
+      g.setValueAtTime(seamIn ? 0 : 1, startsAt);
+      if (seamIn) g.linearRampToValueAtTime(1, startsAt + Math.min(WINDOW_SEAM, remaining));
+      if (seamOut) {
+        g.setValueAtTime(1, at(window.to));
+        g.linearRampToValueAtTime(0, at(to));
+      }
+      seam.connect(out);
+      out = seam;
+      gains.push(seam);
+    }
     if (segment.fades) {
       const gain = ctx.createGain();
       const g = gain.gain;
       const shape = clipEnvelope(segment.clip, segment.length);
+      const end = offset + remaining;
       // From where playback joins the clip: up to full level, held, then down to nothing at its end.
       g.setValueAtTime(shape.at(offset), startsAt);
-      if (offset < shape.fadeIn) g.linearRampToValueAtTime(shape.level, startsAt + shape.fadeIn - offset);
+      if (offset < shape.fadeIn && shape.fadeIn < end) g.linearRampToValueAtTime(shape.level, startsAt + shape.fadeIn - offset);
       const fadeOutFrom = segment.length - shape.fadeOut;
-      if (fadeOutFrom > offset) g.setValueAtTime(shape.level, startsAt + fadeOutFrom - offset);
-      g.linearRampToValueAtTime(0, startsAt + remaining);
-      source.connect(gain);
-      gain.connect(chain.input);
-      source.onended = () => {
-        source.disconnect();
-        gain.disconnect();
-      };
-    } else {
-      source.connect(chain.input);
-      // Safari holds on to a finished source (and the buffer it played) while it's still connected.
-      source.onended = () => source.disconnect();
+      if (fadeOutFrom > offset && fadeOutFrom < end) g.setValueAtTime(shape.level, startsAt + fadeOutFrom - offset);
+      g.linearRampToValueAtTime(shape.at(end), startsAt + remaining);
+      gain.connect(out);
+      out = gain;
+      gains.push(gain);
     }
-    source.start(startsAt, segment.from + offset, remaining);
-    if (until !== undefined) source.stop(until);
-    sources.push(source);
+    node.connect(out);
+    // Safari holds on to a finished source (and the buffer it played) while it's still connected.
+    node.onended = () => {
+      node.disconnect();
+      for (const gain of gains) gain.disconnect();
+    };
+    node.start(startsAt, segment.from - shift + offset, remaining);
+    if (until !== undefined) node.stop(until);
+    sources.push(node);
   }
   return sources;
 }

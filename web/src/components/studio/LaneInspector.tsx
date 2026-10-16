@@ -38,6 +38,7 @@ import {
   type StudioLane,
 } from "@/lib/client/studioStore";
 import { useStudioView, type InspectorTab } from "@/lib/client/studioView";
+import HistoryList from "./HistoryList";
 
 // Everything about one lane, in one place: the lane you clicked last. Docked
 // under the arrangement on larger screens, a sheet from the bottom on a
@@ -49,6 +50,7 @@ const TABS: { id: InspectorTab; label: string }[] = [
   { id: "fx", label: "Effects" },
   { id: "edit", label: "Edit" },
   { id: "match", label: "Match" },
+  { id: "history", label: "History" },
 ];
 
 function formatOffset(seconds: number) {
@@ -589,6 +591,7 @@ function InspectorBody({ lane, onClose }: { lane: StudioLane; onClose?: () => vo
         {tab === "fx" && <LaneFxPanel lane={lane} />}
         {tab === "edit" && <EditTab lane={lane} />}
         {tab === "match" && <LaneMatchPanel key={lane.laneId} lane={lane} />}
+        {tab === "history" && <HistoryList laneId={lane.laneId} />}
       </div>
     </>
   );

@@ -7,7 +7,7 @@ import type { StemKind } from "@/lib/stemKinds";
 // the touch "select" mode, a short notice after an edit. None of it is
 // part of the mix: not saved, not undone, not shared with collaborators.
 
-export type InspectorTab = "mix" | "tempo" | "fx" | "match" | "edit";
+export type InspectorTab = "mix" | "tempo" | "fx" | "match" | "edit" | "history";
 
 /**
  * Who the Studio is laid out for: "easy" — someone who's never made music

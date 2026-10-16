@@ -16,7 +16,12 @@ How you work:
 - After you change something, say what you changed and why in one or two lines, tell them what to listen for, and call play so they hear it (from the moment that matters, if you know it). Ask them to press Keep if they like it.
 - If something can't be fixed well (the vocal and beat are very far apart in tempo or key, or the vocal is rap with no melody to tune), say so honestly and suggest an alternative, like picking another beat.
 - Don't change things the person didn't ask about, and never keep_changes unless they asked you to keep them.
-- get_mix's "trying" shows what's on, what the person switched off, and which parts of an idea they switched off — respect those choices; don't switch them back on unless asked.`;
+- get_mix's "trying" shows what's on, what the person switched off, and which parts of an idea they switched off — respect those choices; don't switch them back on unless asked.
+
+The history (what's been kept):
+- list_changes shows every change kept in the mix, newest first — each with its step number, who made it (the person or you), when, and what it changed, lane by lane. Use it when the person asks what changed, what you did, or to go back on something.
+- undo_change takes back one of those changes on its own — only what it changed; everything after it stays (if a later change touched the very same setting, that goes back too, and the result says so). With lane_id, only what it did to that lane. undo_back_to takes the mix back to before a change (that change and everything after it). Both only when the person asks; both are steps of their own, so they can be undone in turn. Say which change you took back, in their words.
+- remove_lane, set_master and set_loop change the mix straight away (they aren't tried): each is a step in the history the person can undo. Use them only when the person asks for exactly that.`;
 
 /** The tools, in the Messages API's shape (JSON Schema inputs). */
 export const COPRODUCER_TOOLS = [
@@ -116,6 +121,10 @@ export const COPRODUCER_TOOLS = [
             lowpass: { type: "number", minimum: 1000, maximum: 20000 },
             compress: { type: "boolean" },
             pan: { type: "number", minimum: -1, maximum: 1 },
+            reverb_size: { type: "number", minimum: 0.3, maximum: 6, description: "Seconds of reverb tail: small room ~0.8, hall ~3." },
+            delay_feedback: { type: "number", minimum: 0, maximum: 0.85, description: "How many echoes: 0 one, 0.85 many." },
+            fade_in: { type: "number", minimum: 0, maximum: 30, description: "Seconds the lane fades in over at its start." },
+            fade_out: { type: "number", minimum: 0, maximum: 30, description: "Seconds the lane fades out over at its end." },
           },
           additionalProperties: false,
         },
@@ -132,6 +141,77 @@ export const COPRODUCER_TOOLS = [
       type: "object",
       properties: { factor: { type: "number", minimum: 0.8, maximum: 1.25 } },
       required: ["factor"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "list_changes",
+    description:
+      "The history: every change kept in the mix, newest first, each with its step number (for undo_change), who made it (you = the person, ai = you or the AI producer), how long ago, its title and what it changed in words, and the lanes it touched. With lane_id, only the changes that touched that lane.",
+    input_schema: {
+      type: "object",
+      properties: {
+        lane_id: { type: "string" },
+        limit: { type: "integer", minimum: 1, maximum: 50, description: "How many, newest first (default 15)." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "undo_change",
+    description:
+      "Takes back one change from list_changes on its own, by its step number: only what it changed goes back, everything after it stays (a later change to the very same setting goes back too, and is listed in the result). With lane_id, only what it did to that lane. A step of its own in the history. Only when the person asks.",
+    input_schema: {
+      type: "object",
+      properties: { step: { type: "integer", minimum: 0 }, lane_id: { type: "string" } },
+      required: ["step"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "undo_back_to",
+    description: "Takes the mix back to how it was before a change from list_changes (that change and every one after it are undone; redo brings them back). Only when the person asks.",
+    input_schema: {
+      type: "object",
+      properties: { step: { type: "integer", minimum: 0 } },
+      required: ["step"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "remove_lane",
+    description: "Takes a lane out of the mix, straight away (a step in the history the person can undo). Only when the person asks.",
+    input_schema: {
+      type: "object",
+      properties: { lane_id: { type: "string" } },
+      required: ["lane_id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "set_master",
+    description:
+      "The whole mix's level and finish, straight away (a step in the history). volume 0–1.5 (0.9 is the default); preset: off (just the safety limiter), clean, loud (punchy, for streaming and phones), warm (lo-fi, chill), bright (pop, radio), club (big low end).",
+    input_schema: {
+      type: "object",
+      properties: {
+        volume: { type: "number", minimum: 0, maximum: 1.5 },
+        preset: { type: "string", enum: ["off", "clean", "loud", "warm", "bright", "club"] },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "set_loop",
+    description: "Loops a stretch of the song while it plays (or stops looping), straight away. from_seconds and to_seconds on the timeline; on false turns the loop off.",
+    input_schema: {
+      type: "object",
+      properties: {
+        on: { type: "boolean" },
+        from_seconds: { type: "number", minimum: 0 },
+        to_seconds: { type: "number", minimum: 0 },
+      },
+      required: ["on"],
       additionalProperties: false,
     },
   },

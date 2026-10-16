@@ -426,7 +426,7 @@ export function keepTrial(): Idea[] {
     return [];
   }
   if (trial.showing === "original") setMix(trial.result);
-  recordStep(trial.baseline);
+  recordStep(trial.baseline, { label: ideasLabel(trial.ideas) });
   useAiTrial.setState({ trial: null });
   const kept: Kept = {
     id: ++keptCount,
@@ -437,6 +437,11 @@ export function keepTrial(): Idea[] {
   };
   useAiLog.setState((log) => ({ kept: [kept, ...log.kept].slice(0, MAX_KEPT) }));
   return trial.ideas;
+}
+
+/** What the history calls ideas kept together. */
+function ideasLabel(ideas: Idea[]) {
+  return ideas.map((i) => i.title).join(" + ");
 }
 
 /** Puts the original mix back. Returns what was being tried (to work it out again, see tryIdeas). */
@@ -495,7 +500,7 @@ if (typeof window !== "undefined") {
     const { past } = useStudioHistory.getState();
     const justRecorded = past[past.length - 1]?.lanes === prev.lanes;
     if (trial.showing === "idea" && prev.lanes === trial.result.lanes && justRecorded) {
-      recordStep(trial.baseline, { beforeLast: true });
+      recordStep(trial.baseline, { beforeLast: true, label: ideasLabel(trial.ideas) });
     }
     if (cleared) forgetTrial();
     else useAiTrial.setState({ trial: null });

@@ -2,6 +2,7 @@
 
 import { SimpleFilter, SoundTouch, WebAudioBufferSource } from "soundtouchjs";
 import type { PitchTempoRequest, PitchTempoResponse } from "./pitchTempo.worker";
+import { stretchInWorker, stretchWorkersBroken, type StretchPriority } from "./stretchWorkers";
 
 // Renders a new AudioBuffer with an independent tempo and pitch applied.
 // This is a "freeze"/bounce-style operation, not live DSP — we run it once
@@ -10,7 +11,8 @@ import type { PitchTempoRequest, PitchTempoResponse } from "./pitchTempo.worker"
 // transform, buffer duration == real playback duration, same as today.
 //
 // Two engines. High quality (the default) is Signalsmith Stretch, a
-// spectral stretcher, run through an OfflineAudioContext: far fewer of the
+// spectral stretcher, run in workers of its own (see stretchWorkers.ts) —
+// or, where those can't run it, through an OfflineAudioContext: far fewer of the
 // warbles and echoes a vocal picks up when it's sped up or re-keyed, and
 // it keeps a voice's formants where they were when its pitch moves, so a
 // vocal shifted a few semitones doesn't turn into a chipmunk or a giant.
@@ -47,14 +49,39 @@ export function renderedWith(): StretchEngine {
 export async function renderPitchTempo(
   audioCtx: BaseAudioContext,
   sourceBuffer: AudioBuffer,
-  { tempo, pitchSemitones, voice = false }: { tempo: number; pitchSemitones: number; voice?: boolean }
+  {
+    tempo,
+    pitchSemitones,
+    voice = false,
+    hold,
+    priority,
+  }: {
+    tempo: number;
+    pitchSemitones: number;
+    voice?: boolean;
+    /** How soon it's wanted, for the workers' queue (see stretchWorkers.ts). */
+    priority?: StretchPriority;
+    /**
+     * Asked at every pause in a high-quality render (every few seconds of
+     * it); the render waits for it before going on. Renders share one
+     * audio thread, so this is how something more pressing goes first.
+     */
+    hold?: () => Promise<void>;
+  }
 ): Promise<AudioBuffer> {
   if (Math.abs(tempo - 1) < 0.001 && Math.abs(pitchSemitones) < 0.001) {
     return sourceBuffer;
   }
   if (!hqBroken && stretchEngine() === "hq") {
+    if (!stretchWorkersBroken()) {
+      try {
+        return await stretchInWorker(audioCtx, sourceBuffer, { rate: tempo, semitones: pitchSemitones, voice, priority });
+      } catch {
+        // The workers can't run it here: the AudioWorklet does.
+      }
+    }
     try {
-      return await renderHq(sourceBuffer, tempo, pitchSemitones, voice);
+      return await renderHq(sourceBuffer, tempo, pitchSemitones, voice, hold);
     } catch {
       hqBroken = true;
     }
@@ -96,7 +123,7 @@ const FEED_MARGIN = 2;
  * it. (A render never depends on what comes after it: this is sample for
  * sample the start of a longer one.)
  */
-async function renderHq(source: AudioBuffer, tempo: number, semitones: number, voice: boolean): Promise<AudioBuffer> {
+async function renderHq(source: AudioBuffer, tempo: number, semitones: number, voice: boolean, hold?: () => Promise<void>): Promise<AudioBuffer> {
   const { default: SignalsmithStretch } = await import("signalsmith-stretch");
   // Every render loads the same worklet module (copied to public/stretch by
   // scripts/copy-ort.mjs), instead of the library making a new blob URL
@@ -114,7 +141,7 @@ async function renderHq(source: AudioBuffer, tempo: number, semitones: number, v
   ]);
   node.connect(ctx.destination);
 
-  const feeding = await feedAsRendered(ctx, node, source, tempo);
+  const feeding = await feedAsRendered(ctx, node, source, tempo, hold);
   await node.schedule({
     output: 0,
     input: 0,
@@ -148,7 +175,8 @@ export async function feedAsRendered(
   ctx: Pick<OfflineAudioContext, "length" | "sampleRate" | "suspend" | "resume">,
   node: StretchInput,
   source: AudioBuffer,
-  tempo: number
+  tempo: number,
+  hold?: () => Promise<void>
 ) {
   const rate = source.sampleRate;
   const channels = [source.getChannelData(0), source.numberOfChannels > 1 ? source.getChannelData(1) : source.getChannelData(0)];
@@ -176,6 +204,7 @@ export async function feedAsRendered(
       .suspend(t)
       .then(() => feedUntil(t))
       .catch((err) => (fault ??= err))
+      .then(() => hold?.())
       .then(() => ctx.resume())
       .catch(() => {});
   }

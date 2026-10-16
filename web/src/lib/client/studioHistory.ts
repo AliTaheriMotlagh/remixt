@@ -11,9 +11,20 @@ import { useStudioStore } from "./studioStore";
 // A slider drag or a clip drag changes the store dozens of times a
 // second; edits closer together than GROUP_MS are one step, so a drag
 // undoes in one go.
+//
+// Each step remembers when it was made and who made it — the person, or
+// the AI (an idea kept, or the co-producer's own hands) — and what it was
+// called, so the history can be read back and any one step taken back on
+// its own (see historySteps.ts).
 
 const GROUP_MS = 600;
 const LIMIT = 100;
+
+/** Who made a change. */
+export type StepAuthor = "you" | "ai";
+
+/** About the step from a snapshot to the next: when, by whom, and what it was called (an AI idea's title). */
+export type StepMeta = { at: number; by: StepAuthor; label?: string };
 
 export type Snapshot = Pick<
   ReturnType<typeof useStudioStore.getState>,
@@ -28,12 +39,20 @@ export type Snapshot = Pick<
   | "crossfader"
   | "pads"
   | "master"
->;
+> & {
+  /** On a step in the history: the change from it to the next (see StepMeta). */
+  meta?: StepMeta;
+};
 
 function snapshot(state: Snapshot): Snapshot {
   const { lanes, duration, projectBpm, masterVolume, loopEnabled, loopStart, loopEnd, markers, crossfader, pads, master } =
     state;
   return { lanes, duration, projectBpm, masterVolume, loopEnabled, loopStart, loopEnd, markers, crossfader, pads, master };
+}
+
+/** The mix as it is now, as a history snapshot. */
+export function currentSnapshot(): Snapshot {
+  return snapshot(useStudioStore.getState());
 }
 
 function changed(a: Snapshot, b: Snapshot) {
@@ -57,11 +76,16 @@ export const useStudioHistory = create<History>(() => ({ past: [], future: [] })
 
 let restoring = false;
 let lastEditAt = 0;
+/** Who the edits being made now are by, while it isn't the person (see asAuthor). */
+let author: { by: StepAuthor; label?: string } | null = null;
 
 function restore(target: Snapshot) {
   restoring = true;
   try {
-    useStudioStore.setState(target);
+    // The step's meta is history's own, not the mix's.
+    const mix: Partial<Snapshot> = { ...target };
+    delete mix.meta;
+    useStudioStore.setState(mix);
   } finally {
     restoring = false;
   }
@@ -81,7 +105,8 @@ export function undo() {
   const { past, future } = useStudioHistory.getState();
   const previous = past[past.length - 1];
   if (!previous) return;
-  const current = snapshot(useStudioStore.getState());
+  // The step's meta goes with it, to redo.
+  const current = { ...snapshot(useStudioStore.getState()), meta: previous.meta };
   useStudioHistory.setState({ past: past.slice(0, -1), future: [...future, current] });
   restore(previous);
 }
@@ -91,9 +116,26 @@ export function redo() {
   const { past, future } = useStudioHistory.getState();
   const next = future[future.length - 1];
   if (!next) return;
-  const current = snapshot(useStudioStore.getState());
+  const current = { ...snapshot(useStudioStore.getState()), meta: next.meta };
   useStudioHistory.setState({ past: [...past, current], future: future.slice(0, -1) });
   restore(next);
+}
+
+/**
+ * Makes the edits `apply` makes one step of their own, said to be by
+ * `by` and called `label` — the co-producer's own changes, or a step
+ * taken back from the history.
+ */
+export function asAuthor(by: StepAuthor, label: string | undefined, apply: () => void) {
+  const before = author;
+  author = { by, label };
+  lastEditAt = 0;
+  try {
+    apply();
+  } finally {
+    author = before;
+    lastEditAt = 0;
+  }
 }
 
 /**
@@ -131,18 +173,23 @@ export function withoutRecording(apply: () => void) {
 
 /**
  * Records one undo step back to `before`, for a change that was made
- * without recording — an AI idea auditioned, then kept. With
- * `beforeLast`, it goes in before the step just recorded: the person
- * edited on top of the idea, so undo takes back their edit, then the idea.
+ * without recording — an AI idea auditioned, then kept (so by the AI,
+ * unless said otherwise, and called `label`). With `beforeLast`, it goes
+ * in before the step just recorded: the person edited on top of the idea,
+ * so undo takes back their edit, then the idea.
  */
-export function recordStep(before: Partial<Snapshot>, { beforeLast = false } = {}) {
+export function recordStep(
+  before: Partial<Snapshot>,
+  { beforeLast = false, by = "ai", label }: { beforeLast?: boolean; by?: StepAuthor; label?: string } = {}
+) {
   const { past } = useStudioHistory.getState();
   const last = past[past.length - 1];
+  const meta: StepMeta = { at: Date.now(), by, ...(label ? { label } : {}) };
   if (beforeLast && last) {
-    useStudioHistory.setState({ past: [...past.slice(0, -1), { ...last, ...before }, last].slice(-LIMIT) });
+    useStudioHistory.setState({ past: [...past.slice(0, -1), { ...last, ...before, meta }, last].slice(-LIMIT) });
     return;
   }
-  const step = { ...snapshot(useStudioStore.getState()), ...before };
+  const step = { ...snapshot(useStudioStore.getState()), ...before, meta };
   useStudioHistory.setState({ past: [...past, step].slice(-LIMIT), future: [] });
   lastEditAt = 0;
 }
@@ -225,7 +272,8 @@ if (typeof window !== "undefined") {
     // The first change of a step records what it changed from; the rest
     // of the drag folds into it.
     if (!grouped) {
-      useStudioHistory.setState({ past: [...past, snapshot(prev)].slice(-LIMIT), future: [] });
+      const meta: StepMeta = { at: now, by: author?.by ?? "you", ...(author?.label ? { label: author.label } : {}) };
+      useStudioHistory.setState({ past: [...past, { ...snapshot(prev), meta }].slice(-LIMIT), future: [] });
     } else if (useStudioHistory.getState().future.length) {
       useStudioHistory.setState({ future: [] });
     }

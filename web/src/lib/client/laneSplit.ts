@@ -38,7 +38,7 @@ const RATE = 44100;
 /** The lane's whole stem as 44.1 kHz stereo, the way the model wants it. */
 async function laneAudio(lane: StudioLane) {
   await audioEngine.ensureLane(lane.laneId, lane.stemId);
-  const buffer = audioEngine.getRawBuffer(lane.laneId);
+  const buffer = await audioEngine.getRawBuffer(lane.laneId);
   if (!buffer) throw new Error("Couldn't load this lane's audio");
   const ctx = new OfflineAudioContext(2, Math.ceil(buffer.duration * RATE), RATE);
   const source = ctx.createBufferSource();

@@ -8,14 +8,19 @@ import { bestVersions, scoreMix } from "./mixScore";
 import { keyLabel } from "./musicKey";
 import { useBeatModel } from "./neuralBeats";
 import { speedChange } from "./quickAdjust";
-import { beatLength, effectiveKey, laneName, useStudioStore, type LaneFx } from "./studioStore";
+import { historyEntries, undoBackTo, undoStep } from "./historySteps";
+import { asAuthor, currentSnapshot, useStudioHistory } from "./studioHistory";
+import { MASTER_PRESETS, beatLength, effectiveKey, laneName, useStudioStore, type LaneFx } from "./studioStore";
 import type { CoproducerToolName } from "@/lib/coproducer";
 
 // The co-producer's hands: what each of its tools (lib/coproducer.ts)
 // does in the Studio. They run here, in the browser, on the person's own
 // mix — ideas, and its own hands-on changes too, through the same try /
 // switch on-off / keep / undo as the AI producer panel — and answer with
-// plain facts for Claude to reason over.
+// plain facts for Claude to reason over. It reads the history and takes
+// changes back from it the same way the person does (historySteps.ts);
+// what it changes straight away (a lane taken out, the master, the loop)
+// is a step in the history by the AI, which the person can undo.
 
 export type CoproducerContext = {
   /** What the AI producer heard (null until it has listened). */
@@ -142,6 +147,64 @@ async function run(name: CoproducerToolName, input: Record<string, unknown>, ctx
     return json({ kept: kept.map((i) => i.title), note: kept.length ? "Kept as one undo step" : "Nothing was being tried" });
   }
 
+  if (name === "list_changes") {
+    const laneId = typeof input.lane_id === "string" ? input.lane_id : undefined;
+    const limit = typeof input.limit === "number" ? Math.max(1, Math.min(50, Math.round(input.limit))) : 15;
+    const entries = historyEntries(useStudioHistory.getState(), currentSnapshot())
+      .filter((e) => !laneId || e.laneIds.includes(laneId))
+      .reverse();
+    const now = Date.now();
+    return json({
+      changes: entries.slice(0, limit).map((e) => ({
+        step: e.index,
+        by: e.by,
+        seconds_ago: e.at === null ? null : Math.round((now - e.at) / 1000),
+        title: e.title,
+        changed: e.lines.slice(0, 8),
+        lanes: e.laneIds,
+      })),
+      total: entries.length,
+      ...(useAiTrial.getState().trial ? { note: "An idea is being tried (not in the history yet): keep it or undo it before taking changes back" } : {}),
+    });
+  }
+  if (name === "undo_change" || name === "undo_back_to") {
+    const step = Number(input.step);
+    if (!Number.isInteger(step)) return { content: "step must be a step number from list_changes", isError: true };
+    const laneId = typeof input.lane_id === "string" ? input.lane_id : undefined;
+    const result = name === "undo_change" ? undoStep(step, { laneId, by: "ai" }) : undoBackTo(step);
+    if (!result.ok) return { content: result.reason, isError: true };
+    return json({ ok: true, did: result.title, ...(result.later.length ? { also_undone: result.later } : {}), lanes: lanesNow() });
+  }
+  if (name === "remove_lane" || name === "set_master" || name === "set_loop") {
+    // Straight to the mix — while an idea is tried, that would be taken as the person's own edit on top of it.
+    if (useAiTrial.getState().trial) return { content: "An idea is being tried — keep it or undo it first", isError: true };
+    if (name === "remove_lane") {
+      const lane = studio.lanes.find((l) => l.laneId === input.lane_id);
+      if (!lane) return { content: `No lane ${String(input.lane_id)} — get_mix lists the lane ids`, isError: true };
+      asAuthor("ai", `Took out “${laneName(lane)}”`, () => useStudioStore.getState().removeLane(lane.laneId));
+      return json({ ok: true, removed: laneName(lane), note: "The person can undo it from the History", lanes: lanesNow() });
+    }
+    if (name === "set_master") {
+      const preset = typeof input.preset === "string" ? MASTER_PRESETS.find((p) => p.id === input.preset) : undefined;
+      const volume = typeof input.volume === "number" ? Math.max(0, Math.min(1.5, input.volume)) : undefined;
+      if (input.preset !== undefined && !preset) return { content: `No master preset ${String(input.preset)}`, isError: true };
+      if (!preset && volume === undefined) return { content: "Give volume, preset or both", isError: true };
+      const label = [volume !== undefined ? `master volume ${Math.round(volume * 100)}%` : null, preset ? `master: ${preset.label}` : null].filter(Boolean).join(", ");
+      asAuthor("ai", label.charAt(0).toUpperCase() + label.slice(1), () => {
+        if (volume !== undefined) useStudioStore.getState().setMasterVolume(volume);
+        if (preset) useStudioStore.getState().setMaster(preset.master);
+      });
+      const now = useStudioStore.getState();
+      return json({ ok: true, master_volume: now.masterVolume, master: now.master });
+    }
+    const on = input.on === true;
+    const from = typeof input.from_seconds === "number" ? input.from_seconds : studio.loopStart;
+    const to = typeof input.to_seconds === "number" ? input.to_seconds : studio.loopEnd;
+    if (on && !(to > from + 0.25)) return { content: "to_seconds must be after from_seconds", isError: true };
+    asAuthor("ai", on ? `Loop ${Math.round(from)}–${Math.round(to)} s` : "Loop off", () => useStudioStore.getState().setLoop({ enabled: on, start: from, end: to }));
+    return json({ ok: true, loop: { on, from_seconds: round(from), to_seconds: round(to) } });
+  }
+
   const session = await ctx.listen();
   if (!session) {
     return json({ lanes: lanesNow(), note: "The Studio needs a vocal and a beat in the mix to listen — ask the person to add them from the library." });
@@ -255,6 +318,7 @@ async function run(name: CoproducerToolName, input: Record<string, unknown>, ctx
       const names: Record<string, keyof LaneFx> = {
         reverb: "reverb", delay: "delay", width: "width", drive: "drive", duck: "duck",
         eq_low: "eqLow", eq_mid: "eqMid", eq_high: "eqHigh", highpass: "highpass", lowpass: "lowpass", compress: "compress", pan: "pan",
+        reverb_size: "reverbSize", delay_feedback: "delayFeedback", fade_in: "fadeIn", fade_out: "fadeOut",
       };
       const changes: Partial<LaneFx> = {};
       for (const [k, v] of Object.entries(fx)) {

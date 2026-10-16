@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ClipboardPaste,
   Columns4,
@@ -80,11 +80,20 @@ function formatTime(seconds: number) {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-/** The lane's whole waveform, coloured as far as the playhead has got. */
+/** The lane's whole waveform, coloured as far as the playhead has got (followed outside React: it moves every frame). */
 function WholeWaveform({ lane, accent, height }: { lane: StudioLane; accent: string; height: number }) {
-  const playhead = useStudioStore((s) => s.playhead);
-  const progress = lane.duration > 0 ? Math.min(1, Math.max(0, (playhead - lane.offsetSeconds) / lane.duration)) : 0;
-  return <Waveform peaks={lane.peaks} color={`${accent}88`} progressColor={accent} progress={progress} height={height} />;
+  const { offsetSeconds, duration } = lane;
+  const follow = useCallback(
+    (onProgress: (progress: number) => void) => {
+      const at = (playhead: number) => (duration > 0 ? Math.min(1, Math.max(0, (playhead - offsetSeconds) / duration)) : 0);
+      onProgress(at(useStudioStore.getState().playhead));
+      return useStudioStore.subscribe((s, prev) => {
+        if (s.playhead !== prev.playhead) onProgress(at(s.playhead));
+      });
+    },
+    [offsetSeconds, duration]
+  );
+  return <Waveform peaks={lane.peaks} color={`${accent}88`} progressColor={accent} followProgress={follow} height={height} />;
 }
 
 /** The slice of the stem's waveform one clip plays (mirrored when it plays backwards). */
@@ -502,17 +511,25 @@ function Ruler({ span, pxPerSecond, contentRef }: { span: number; pxPerSecond: n
 
 /** The playhead line through the ruler and every lane; keeps itself in view while playing zoomed in. */
 function Playhead({ span, scrollerRef }: { span: number; scrollerRef: React.RefObject<HTMLDivElement | null> }) {
-  const playhead = useStudioStore((s) => s.playhead);
-  const isPlaying = useStudioStore((s) => s.isPlaying);
   const zoom = useStudioView((s) => s.zoom);
+  const line = useRef<HTMLDivElement>(null);
+  // Moved outside React: it follows the playhead every frame.
   useEffect(() => {
-    const el = scrollerRef.current;
-    if (!el || !isPlaying || zoom <= 1) return;
-    const x = (playhead / span) * el.scrollWidth;
-    if (x < el.scrollLeft || x > el.scrollLeft + el.clientWidth * 0.9) el.scrollLeft = x - el.clientWidth * 0.1;
-  }, [playhead, isPlaying, zoom, span, scrollerRef]);
+    const show = (playhead: number, isPlaying: boolean) => {
+      if (line.current) line.current.style.left = `${(playhead / span) * 100}%`;
+      const el = scrollerRef.current;
+      if (!el || !isPlaying || zoom <= 1) return;
+      const x = (playhead / span) * el.scrollWidth;
+      if (x < el.scrollLeft || x > el.scrollLeft + el.clientWidth * 0.9) el.scrollLeft = x - el.clientWidth * 0.1;
+    };
+    const now = useStudioStore.getState();
+    show(now.playhead, now.isPlaying);
+    return useStudioStore.subscribe((s, prev) => {
+      if (s.playhead !== prev.playhead || s.isPlaying !== prev.isPlaying) show(s.playhead, s.isPlaying);
+    });
+  }, [zoom, span, scrollerRef]);
   return (
-    <div className="pointer-events-none absolute inset-y-0 z-20 w-px bg-foreground shadow-[0_0_6px_var(--foreground)]" style={{ left: `${(playhead / span) * 100}%` }}>
+    <div ref={line} className="pointer-events-none absolute inset-y-0 z-20 w-px bg-foreground shadow-[0_0_6px_var(--foreground)]">
       <span className="absolute -top-px -left-[5px] h-0 w-0 border-x-[5.5px] border-t-[7px] border-x-transparent border-t-foreground" />
     </div>
   );

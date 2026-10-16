@@ -21,9 +21,12 @@ const DB_VERSION = 1;
 
 const MB = 1024 * 1024;
 /** Budgets: phones get less, and never more than a share of what the browser allows the site. */
+// A big session — twenty lanes, each stretched to the song's tempo — is
+// ~150 MB of stems and ~900 MB of renders: the budgets hold a few of them,
+// so going back to one doesn't render it all again.
 const BUDGETS: Record<CacheKind, { phone: number; computer: number; share: number }> = {
-  stem: { phone: 150 * MB, computer: 600 * MB, share: 0.3 },
-  render: { phone: 150 * MB, computer: 800 * MB, share: 0.3 },
+  stem: { phone: 250 * MB, computer: 1500 * MB, share: 0.25 },
+  render: { phone: 400 * MB, computer: 3000 * MB, share: 0.35 },
   analysis: { phone: 40 * MB, computer: 120 * MB, share: 0.05 },
   beats: { phone: 8 * MB, computer: 8 * MB, share: 0.05 },
   list: { phone: 20 * MB, computer: 20 * MB, share: 0.05 },

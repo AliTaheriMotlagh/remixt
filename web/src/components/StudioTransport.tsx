@@ -12,6 +12,7 @@ import {
   Grid3x3,
   Pause,
   Play,
+  History,
   Redo2,
   Repeat,
   SkipBack,
@@ -22,6 +23,7 @@ import {
   Undo2,
 } from "lucide-react";
 import { audioEngine, PlaybackBlockedError } from "@/lib/client/audioEngine";
+import HistoryList from "@/components/studio/HistoryList";
 import { exportMixdown, getExportFormat, setExportFormat, type ExportFormat } from "@/lib/client/mixdown";
 import { useExportJob } from "@/lib/client/exportJob";
 import { camelotCode, keyLabel } from "@/lib/client/musicKey";
@@ -58,6 +60,7 @@ function Popover({
   children,
   className = "",
   lcd = false,
+  wide = false,
 }: {
   label: React.ReactNode;
   title: string;
@@ -65,6 +68,8 @@ function Popover({
   align?: "left" | "right";
   children: (close: () => void) => React.ReactNode;
   className?: string;
+  /** A wider panel, for a list. */
+  wide?: boolean;
   /** A cell of the transport's display rather than a button. */
   lcd?: boolean;
 }) {
@@ -111,7 +116,7 @@ function Popover({
           <div
             ref={onScreen}
             style={onScreenStyle}
-            className={`popover-sheet absolute top-full z-[57] mt-2 w-72 max-w-[calc(100vw-1rem)] rounded-xl border border-border bg-surface-raised p-3 shadow-2xl shadow-black/40 ${
+            className={`popover-sheet absolute top-full z-[57] mt-2 ${wide ? "w-96" : "w-72"} max-w-[calc(100vw-1rem)] rounded-xl border border-border bg-surface-raised p-3 shadow-2xl shadow-black/40 ${
               align === "right" ? "right-0" : "left-0"
             }`}
           >
@@ -128,21 +133,21 @@ function LcdLabel({ children }: { children: React.ReactNode }) {
   return <span className="text-[9px] font-semibold uppercase tracking-[0.12em] text-muted">{children}</span>;
 }
 
-/** Bar counter and clock — the parts of the display that follow playback. */
+/** Bar counter and clock — the parts of the display that follow playback (re-drawn when what they show changes, not every frame). */
 function TransportClock() {
-  const playhead = useStudioStore((s) => s.playhead);
+  const bars = useStudioStore((s) => formatBars(s.playhead, s.projectBpm));
+  const time = useStudioStore((s) => formatTime(s.playhead));
   const duration = useStudioStore((s) => s.duration);
-  const projectBpm = useStudioStore((s) => s.projectBpm);
   return (
     <>
       <div className="flex flex-col justify-center px-3 py-1">
         <LcdLabel>Bar</LcdLabel>
-        <span className="font-mono text-lg font-semibold leading-tight text-brand-strong tabular-nums">{formatBars(playhead, projectBpm)}</span>
+        <span className="font-mono text-lg font-semibold leading-tight text-brand-strong tabular-nums">{bars}</span>
       </div>
       <div className="flex flex-col justify-center border-l border-white/10 px-3 py-1 max-sm:hidden">
         <LcdLabel>Time</LcdLabel>
         <span className="whitespace-nowrap font-mono text-sm leading-tight tabular-nums">
-          {formatTime(playhead)}
+          {time}
           <span className="text-muted"> / {formatTime(duration)}</span>
         </span>
       </div>
@@ -152,8 +157,16 @@ function TransportClock() {
 
 /** Phones: a seek bar of their own (larger screens seek on the arrangement's ruler), and the loop. */
 function MobileSeek({ empty }: { empty: boolean }) {
-  const playhead = useStudioStore((s) => s.playhead);
   const duration = useStudioStore((s) => s.duration);
+  // Its fill follows the playhead outside React: it moves every frame.
+  const fill = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const show = (playhead: number) => {
+      if (fill.current) fill.current.style.width = duration > 0 ? `${(Math.min(playhead, duration) / duration) * 100}%` : "0%";
+    };
+    show(useStudioStore.getState().playhead);
+    return useStudioStore.subscribe((s, prev) => s.playhead !== prev.playhead && show(s.playhead));
+  }, [duration]);
   const loopEnabled = useStudioStore((s) => s.loopEnabled);
   const loopStart = useStudioStore((s) => s.loopStart);
   const loopEnd = useStudioStore((s) => s.loopEnd);
@@ -175,7 +188,7 @@ function MobileSeek({ empty }: { empty: boolean }) {
             style={{ left: `${(loopStart / duration) * 100}%`, width: `${((loopEnd - loopStart) / duration) * 100}%` }}
           />
         )}
-        <div className="relative h-full bg-gradient-to-r from-vocals to-beat" style={{ width: duration > 0 ? `${(playhead / duration) * 100}%` : "0%" }} />
+        <div ref={fill} className="relative h-full bg-gradient-to-r from-vocals to-beat" />
       </div>
     </div>
   );
@@ -780,6 +793,9 @@ export default function StudioTransport({
           >
             <Redo2 />
           </button>
+          <Popover align="right" wide title="History — every change, by you or the AI; undo any one of them" label={<History />}>
+            {() => <HistoryList />}
+          </Popover>
           <button
             onClick={() => setShowTools((v) => !v)}
             aria-expanded={showTools}

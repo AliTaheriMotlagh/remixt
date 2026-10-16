@@ -33,7 +33,24 @@ type KeyState = {
   models: Model[];
   /** The site's free AI, when it offers one: questions a day, and how many are left today (null when not signed in). */
   shared?: { limit: number; left: number | null } | null;
+  /** The saved keys couldn't be read just now (they're still there). */
+  error?: string;
 };
+
+/**
+ * Saves a key to the person's account. Resolves with the key's hint and a
+ * warning when the provider couldn't be reached to check it (it's saved
+ * all the same); throws with what to tell the person otherwise.
+ */
+async function saveToAccount(provider: Provider, key: string, model: string): Promise<{ hint: string; warning: string | null }> {
+  const res = await fetch("/api/ai/key", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, key, model }) });
+  const data = (await res.json().catch(() => null)) as { error?: string; hint?: string; warning?: string } | null;
+  if (!res.ok) {
+    if (res.status === 401) throw new Error("Sign in again to save it to your account");
+    throw new Error(data?.error ?? `Couldn't save the key (the server said ${res.status})`);
+  }
+  return { hint: data?.hint ?? "", warning: data?.warning ?? null };
+}
 
 const PROVIDERS: { id: Provider; label: string; prefix: string; getKey: string; billed: string }[] = [
   { id: "anthropic", label: "Claude", prefix: "sk-ant-", getKey: "https://console.anthropic.com/settings/keys", billed: "your Anthropic account" },
@@ -132,7 +149,15 @@ function ModelPicker({ provider, models, value, onChange, compact = false }: { p
   );
 }
 
-function KeySetup({ provider, state, onReady }: { provider: Provider; state: KeyState; onReady: (mode: "account" | "browser", key: string | null, model: string) => void }) {
+function KeySetup({
+  provider,
+  state,
+  onReady,
+}: {
+  provider: Provider;
+  state: KeyState;
+  onReady: (mode: "account" | "browser", key: string | null, model: string, saved?: { hint: string; warning: string | null }) => void;
+}) {
   const info = PROVIDERS.find((p) => p.id === provider)!;
   const [key, setKey] = useState("");
   const [model, setModel] = useState(savedModelChoice(provider) ?? state.saved[provider]?.model ?? (provider === "anthropic" ? state.models[0]?.id ?? "claude-opus-5-5" : ""));
@@ -159,10 +184,7 @@ function KeySetup({ provider, state, onReady }: { provider: Provider; state: Key
     }
     setBusy(true);
     try {
-      const res = await fetch("/api/ai/key", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider, key: trimmed, model }) });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? "Couldn't save the key");
-      onReady("account", null, model);
+      onReady("account", null, model, await saveToAccount(provider, trimmed, model));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't save the key");
     } finally {
@@ -221,6 +243,7 @@ function KeySetup({ provider, state, onReady }: { provider: Provider; state: Key
           </span>
         </label>
       </fieldset>
+      {state.error && <p className="rounded-lg bg-surface px-2 py-1.5 text-muted">{state.error}</p>}
       {error && <p className="rounded-lg bg-danger/10 px-2 py-1.5 text-danger">{error}</p>}
       <button onClick={() => void save()} disabled={busy || !key.trim()} className="h-9 rounded-lg bg-brand text-xs font-bold text-white hover:bg-brand-strong disabled:opacity-50">
         {busy ? (
@@ -266,6 +289,9 @@ export default function CoProducer({ ctx, question }: { ctx: CoproducerContext; 
   const [busy, setBusy] = useState(false);
   /** Connecting a key of their own, rather than using the site's free questions. */
   const [ownKey, setOwnKey] = useState(false);
+  /** Said once a key is saved, or failed to be: "saved, but couldn't be checked", "couldn't save". */
+  const [keyNote, setKeyNote] = useState<{ text: string; error: boolean } | null>(null);
+  const [moving, setMoving] = useState(false);
   const stop = useRef(false);
   const end = useRef<HTMLDivElement>(null);
 
@@ -356,6 +382,25 @@ export default function CoProducer({ ctx, question }: { ctx: CoproducerContext; 
     }
   }
 
+  /** A key kept in this browser only, moved onto the account (so it works on every device). */
+  async function moveToAccount() {
+    const key = keys[provider];
+    if (!key || moving) return;
+    setMoving(true);
+    setKeyNote(null);
+    try {
+      const saved = await saveToAccount(provider, key, model);
+      setBrowserKey(provider, null);
+      setKeys((k) => ({ ...k, [provider]: undefined }));
+      setKeyState((s) => (s ? { ...s, saved: { ...s.saved, [provider]: { hint: saved.hint, model } } } : s));
+      setKeyNote({ text: saved.warning ?? "Saved to your account — it works on all your devices now", error: false });
+    } catch (err) {
+      setKeyNote({ text: err instanceof Error ? err.message : "Couldn't save the key", error: true });
+    } finally {
+      setMoving(false);
+    }
+  }
+
   function chooseProvider(next: Provider) {
     setProvider(next);
     saveProvider(next);
@@ -406,11 +451,12 @@ export default function CoProducer({ ctx, question }: { ctx: CoproducerContext; 
               key={provider}
               provider={provider}
               state={keyState}
-              onReady={(how, k, chosen) => {
+              onReady={(how, k, chosen, saved) => {
                 setOwnKey(false);
                 setModels((m) => ({ ...m, [provider]: chosen }));
                 if (how === "browser") setKeys((all) => ({ ...all, [provider]: k ?? undefined }));
-                else setKeyState((s) => (s ? { ...s, saved: { ...s.saved, [provider]: { hint: "", model: chosen } } } : s));
+                else setKeyState((s) => (s ? { ...s, saved: { ...s.saved, [provider]: { hint: saved?.hint ?? "", model: chosen } } } : s));
+                setKeyNote(saved?.warning ? { text: saved.warning, error: false } : null);
               }}
             />
           </div>
@@ -457,6 +503,30 @@ export default function CoProducer({ ctx, question }: { ctx: CoproducerContext; 
           </button>
         )}
       </div>
+
+      {mode === "browser" && keyState.signedIn && (
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-surface px-3 py-2 text-[11px] text-muted">
+          <span className="min-w-0 flex-1">Your key is kept in this browser only. On your account (encrypted) it works on all your devices.</span>
+          <button
+            onClick={() => void moveToAccount()}
+            disabled={busy || moving}
+            className="shrink-0 rounded-md border border-border px-2 py-1 font-semibold text-foreground hover:border-brand disabled:opacity-50"
+          >
+            {moving ? (
+              <>
+                <Loader2 className="animate-spin" /> Saving…
+              </>
+            ) : (
+              "Save to my account"
+            )}
+          </button>
+        </p>
+      )}
+      {keyNote && (
+        <p className={`rounded-lg px-3 py-2 text-[11px] ${keyNote.error ? "bg-danger/10 text-danger" : "bg-surface text-muted"}`} role="status">
+          {keyNote.text}
+        </p>
+      )}
 
       {events.length === 0 && (
         <div className="flex flex-col gap-2">

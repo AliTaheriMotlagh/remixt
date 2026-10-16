@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
+import Anthropic from "@anthropic-ai/sdk";
 import sql from "./db";
+import { checkOpenRouterKey } from "./openrouter";
 
 // Each person's own API keys for the AI co-producer — Anthropic (Claude
 // directly) and/or OpenRouter (Claude or any other model it carries), one
@@ -34,6 +36,29 @@ export function isOpenRouterModel(value: unknown): value is string {
 
 export function isModelFor(provider: AiProvider, value: unknown): value is string {
   return provider === "anthropic" ? isAiModel(value) : isOpenRouterModel(value);
+}
+
+export type KeyCheck = { ok: true } | { ok: false; error: string; status: number } | { ok: "unchecked"; warning: string };
+
+/** Checks the key with its provider: accepted, turned away (and what to tell the person), or not checked because the provider couldn't be reached. */
+export async function checkAiKey(provider: AiProvider, key: string, model: string): Promise<KeyCheck> {
+  if (provider === "openrouter") {
+    const result = await checkOpenRouterKey(key);
+    if (result === "ok") return { ok: true };
+    return result === "invalid"
+      ? { ok: false, error: "OpenRouter didn't accept that key — check it at openrouter.ai/keys", status: 400 }
+      : { ok: "unchecked", warning: "Saved — but OpenRouter couldn't be reached to check it, so if it's mistyped you'll hear on your first question" };
+  }
+  try {
+    await new Anthropic({ apiKey: key, maxRetries: 1, timeout: 15_000 }).models.retrieve(model);
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof Anthropic.AuthenticationError || error instanceof Anthropic.PermissionDeniedError) {
+      return { ok: false, error: "Anthropic didn't accept that key — check it in the Claude Console", status: 400 };
+    }
+    if (error instanceof Anthropic.NotFoundError) return { ok: false, error: "That key works, but can't use this model — pick another", status: 400 };
+    return { ok: "unchecked", warning: "Saved — but Anthropic couldn't be reached to check it, so if it's mistyped you'll hear on your first question" };
+  }
 }
 
 let key: Buffer | null = null;

@@ -5,6 +5,13 @@ import { useEffect, useRef } from "react";
 type WaveformProps = {
   peaks: number[];
   progress?: number; // 0..1
+  /**
+   * Instead of `progress`: calls back with it whenever it moves, and
+   * returns how to stop. For progress that moves every frame — following
+   * it this way updates the canvas's clip directly, with no React render
+   * (twenty lanes re-rendering at 60 fps took a third of the page's time).
+   */
+  followProgress?: (onProgress: (progress: number) => void) => () => void;
   color: string;
   progressColor?: string;
   height?: number;
@@ -80,9 +87,12 @@ function drawBars(
  * moves a CSS clip over the second one — playback updates it every frame,
  * and redrawing the canvases that often made the Studio lag.
  */
+const clipFor = (progress: number) => `inset(0 ${(1 - Math.min(1, Math.max(0, progress))) * 100}% 0 0)`;
+
 export default function Waveform({
   peaks,
   progress = 0,
+  followProgress,
   color,
   progressColor,
   height = 56,
@@ -114,14 +124,24 @@ export default function Waveform({
     return () => observer.disconnect();
   }, [peaks, color, progressColor, height]);
 
+  useEffect(() => {
+    if (!followProgress) return;
+    let shown = "";
+    return followProgress((next) => {
+      // Only when it moves by a visible amount.
+      const clip = clipFor(Math.round(next * 2000) / 2000);
+      if (clip === shown || !playedRef.current) return;
+      shown = clip;
+      playedRef.current.style.clipPath = clip;
+    });
+  }, [followProgress]);
+
   function handleClick(e: React.MouseEvent<HTMLDivElement>) {
     if (!onSeek || !containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
     const fraction = (e.clientX - rect.left) / rect.width;
     onSeek(Math.min(1, Math.max(0, fraction)));
   }
-
-  const hidden = (1 - Math.min(1, Math.max(0, progress))) * 100;
 
   return (
     <div
@@ -135,7 +155,7 @@ export default function Waveform({
         <canvas
           ref={playedRef}
           className="absolute inset-0"
-          style={{ clipPath: `inset(0 ${hidden}% 0 0)` }}
+          style={followProgress ? undefined : { clipPath: clipFor(progress) }}
         />
       )}
     </div>

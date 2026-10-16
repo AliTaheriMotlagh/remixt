@@ -37,4 +37,5 @@ A git hook (`graphify hook install`) refreshes the graph's code nodes after ever
 - Test: `cd web && npm test` (starts its own dev server: stop any `next dev` running in `web/` first, they share `.next`)
 - One test file, no server needed for pure logic: `cd web && node --import ./tests/support/register.mjs --test tests/<name>.test.ts`
 - Screenshot the running app instead of reading UI code: `cd web && npm run shot -- /studio /tmp/s.png phone` (or `desktop`; steps like clicks are in `scripts/shot.mjs`). It uses the installed Chrome.
+- Load-test Studio playback against the running app: `cd web && FIT=1 node scripts/heavy-play.mjs` (18 lanes stretched to one tempo; prints time to first sound, silent moments and memory — options at the top of the file).
 - Port 3000 is sometimes taken by another project on this machine. Check with `curl -s localhost:3000 | head -c 300`; if it isn't Remixt, run `npx next dev -p 3100` and pass `BASE_URL=http://localhost:3100` to `npm run shot`.

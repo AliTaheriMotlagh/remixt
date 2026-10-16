@@ -124,6 +124,17 @@ function describeCall(name: string, input: Record<string, unknown>, result: stri
       return `Trying ${parsed.project_bpm} BPM — switch it on or off below${score}`;
     case "play":
       return `Playing from ${typeof input.from_seconds === "number" ? `${Math.round(input.from_seconds)}s` : "the playhead"}`;
+    case "list_changes":
+      return `Read the history (${typeof parsed.total === "number" ? parsed.total : 0} changes)`;
+    case "undo_change":
+    case "undo_back_to":
+      return typeof parsed.did === "string" ? `${parsed.did} — it's in the History, undo it there to bring it back` : "Took a change back";
+    case "remove_lane":
+      return typeof parsed.removed === "string" ? `Took out “${parsed.removed}” — undo it from the History` : "Took a lane out";
+    case "set_master":
+      return "Changed the master — undo it from the History";
+    case "set_loop":
+      return input.on ? "Looping a stretch of the song" : "Turned the loop off";
     default:
       return name;
   }
