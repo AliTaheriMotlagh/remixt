@@ -7,6 +7,7 @@ import StudioTransport from "./StudioTransport";
 import StudioLibraryPanel from "./StudioLibraryPanel";
 import SamplePads from "./studio/SamplePads";
 import VocalRecorder from "./studio/VocalRecorder";
+import LyricsPanel from "./studio/LyricsPanel";
 import StudioShortcuts from "./studio/StudioShortcuts";
 import CollabBar from "./studio/CollabBar";
 import Arrangement from "./studio/Arrangement";
@@ -495,6 +496,7 @@ export default function Studio({ user }: { user: User | null }) {
             </>
           )}
 
+          <LyricsPanel />
           <VocalRecorder signedIn={!!user} />
           {lanes.length > 0 && !easy && <SamplePads />}
             </>

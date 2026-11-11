@@ -8,6 +8,7 @@ import { audioEngine } from "@/lib/client/audioEngine";
 import { prepareRecording, startRecording, uploadTake, type Recording, type Take } from "@/lib/client/recorder";
 import { useStudioStore } from "@/lib/client/studioStore";
 import { useKeepScreenOn } from "@/lib/client/wakeLock";
+import { LyricsCue } from "./LyricsPanel";
 
 function formatTime(seconds: number) {
   const m = Math.floor(seconds / 60);
@@ -248,6 +249,8 @@ export default function VocalRecorder({ signedIn }: { signedIn: boolean }) {
             )}
           </div>
           {error && <p className="mt-2 text-xs text-danger">{error}</p>}
+          {/* The words to sing, following the take — not while listening back. */}
+          {state !== "review" && state !== "saving" && <LyricsCue />}
         </>
       )}
     </div>

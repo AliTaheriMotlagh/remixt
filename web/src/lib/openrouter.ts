@@ -126,6 +126,22 @@ export async function openRouterTurn(apiKey: string, model: string, system: stri
   return fromOpenAi(data);
 }
 
+/** A single reply in plain text, no tools (e.g. the lyrics writer). */
+export async function openRouterText(apiKey: string, model: string, system: string, prompt: string, maxTokens = 2000): Promise<string> {
+  const res = await fetch(`${BASE}/chat/completions`, {
+    method: "POST",
+    headers: headers(apiKey),
+    body: JSON.stringify({ model, messages: [{ role: "system", content: system }, { role: "user", content: prompt }], max_tokens: maxTokens }),
+    signal: AbortSignal.timeout(120_000),
+  });
+  const data = (await res.json().catch(() => ({}))) as Completion;
+  if (!res.ok || data.error) {
+    throw new OpenRouterError(data.error?.message ?? `HTTP ${res.status}`, data.error?.code ?? res.status);
+  }
+  const content = data.choices?.[0]?.message?.content;
+  return typeof content === "string" ? content : "";
+}
+
 /** Whether OpenRouter accepts `apiKey`: "ok", "invalid", or "unreachable". */
 export async function checkOpenRouterKey(apiKey: string): Promise<"ok" | "invalid" | "unreachable"> {
   try {
