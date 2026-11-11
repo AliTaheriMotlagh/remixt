@@ -6,8 +6,7 @@ import { Flag, GanttChart, Library, SlidersHorizontal, SlidersVertical, Sparkles
 import StudioTransport from "./StudioTransport";
 import StudioLibraryPanel from "./StudioLibraryPanel";
 import SamplePads from "./studio/SamplePads";
-import VocalRecorder from "./studio/VocalRecorder";
-import LyricsPanel from "./studio/LyricsPanel";
+import VocalBooth from "./studio/VocalBooth";
 import StudioShortcuts from "./studio/StudioShortcuts";
 import CollabBar from "./studio/CollabBar";
 import Arrangement from "./studio/Arrangement";
@@ -496,8 +495,7 @@ export default function Studio({ user }: { user: User | null }) {
             </>
           )}
 
-          <LyricsPanel />
-          <VocalRecorder signedIn={!!user} />
+          <VocalBooth signedIn={!!user} />
           {lanes.length > 0 && !easy && <SamplePads />}
             </>
           )}

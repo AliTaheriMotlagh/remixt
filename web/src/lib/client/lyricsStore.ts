@@ -54,9 +54,22 @@ type LyricsState = {
   /** Earlier versions of the open sheet's text, for Undo. */
   past: string[];
   prefs: LyricsPrefs;
-  /** The Studio's lyrics panel is open (the recorder can open it). */
-  panelOpen: boolean;
-  setPanelOpen: (open: boolean) => void;
+  /**
+   * The vocal booth (record + lyrics) is open — one panel for both, so
+   * the words are always a tap away from the take.
+   */
+  boothOpen: boolean;
+  /** Which half of the booth is shown. */
+  boothTab: "record" | "lyrics";
+  setBoothOpen: (open: boolean) => void;
+  /** Opens the booth on a tab. */
+  openBooth: (tab: "record" | "lyrics") => void;
+  /**
+   * Where the take is: a take keeps going (and a recorded one waits to be
+   * kept) with the booth closed or on its lyrics, so the launcher shows it.
+   */
+  take: "idle" | "recording" | "review";
+  setTake: (take: "idle" | "recording" | "review") => void;
   load: () => void;
   select: (id: string | null) => void;
   /** A new sheet, opened. */
@@ -97,8 +110,12 @@ export const useLyrics = create<LyricsState>((set, get) => {
     lines: [],
     past: [],
     prefs: DEFAULT_PREFS,
-    panelOpen: false,
-    setPanelOpen: (panelOpen) => set({ panelOpen }),
+    boothOpen: false,
+    boothTab: "record",
+    setBoothOpen: (boothOpen) => set({ boothOpen }),
+    openBooth: (boothTab) => set({ boothOpen: true, boothTab }),
+    take: "idle",
+    setTake: (take) => set({ take }),
     load: () => {
       if (get().loaded) return;
       const stored = read<LyricSheet[]>(SHEETS_KEY, []);

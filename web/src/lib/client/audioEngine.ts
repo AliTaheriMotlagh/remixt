@@ -515,6 +515,11 @@ class AudioEngine {
     return this.startedAtPlayhead + (contextTime - this.startedAtContextTime);
   }
 
+  /** The audio clock's time at which the timeline reaches `seconds`, while playing (timelineAt, the other way). */
+  contextTimeAt(seconds: number) {
+    return this.startedAtContextTime + (seconds - this.startedAtPlayhead);
+  }
+
   async ensureLane(laneId: string, stemId: string) {
     if (this.lanes.has(laneId) || this.loading.has(laneId)) {
       await this.loading.get(laneId);

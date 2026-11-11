@@ -7,7 +7,8 @@ import type { LyricsResult } from "@/lib/lyrics";
 // doesn't depend on that site's CORS, and answers can be cached.
 //
 //   ?q=<song and/or artist>        a free search
-//   ?track=<title>&artist=<name>   a search by title (and artist)
+//   ?track=<title>&artist=<name>   a search by title (and artist); a free
+//                                  search on the title when that finds nothing
 
 const BASE = "https://lrclib.net/api";
 const MAX_RESULTS = 12;
@@ -30,16 +31,22 @@ export async function GET(req: NextRequest) {
   const artist = params.get("artist")?.trim().slice(0, 200) ?? "";
   if (!q && !track) return NextResponse.json({ error: "Type a song to look for" }, { status: 400 });
 
-  const search = new URLSearchParams(track ? { track_name: track, ...(artist ? { artist_name: artist } : {}) } : { q });
-  let found: LrclibResult[];
-  try {
+  const lookup = async (search: URLSearchParams) => {
     const res = await fetch(`${BASE}/search?${search}`, {
       headers: { "User-Agent": "Remixt Studio (lyrics for singing along)" },
       signal: AbortSignal.timeout(12_000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    found = (await res.json()) as LrclibResult[];
+    const found = (await res.json()) as LrclibResult[];
     if (!Array.isArray(found)) throw new Error("unexpected answer");
+    return found;
+  };
+  let found: LrclibResult[];
+  try {
+    found = await lookup(new URLSearchParams(track ? { track_name: track, ...(artist ? { artist_name: artist } : {}) } : { q }));
+    // A title search wants the name exactly; when that misses, look for
+    // the name anywhere instead (still the song's name, nothing else).
+    if (found.length === 0 && track) found = await lookup(new URLSearchParams({ q: track }));
   } catch {
     return NextResponse.json({ error: "The lyrics library couldn't be reached — try again in a moment, or paste the words in yourself" }, { status: 502 });
   }

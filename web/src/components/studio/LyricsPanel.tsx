@@ -1,13 +1,23 @@
 "use client";
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import {
+  Check,
+  ChevronDown,
+  ClipboardPaste,
   Clock,
-  FileText,
+  Crosshair,
+  Eraser,
+  Magnet,
   Maximize2,
+  Mic,
+  Minus,
+  MoveHorizontal,
   Pause,
   Play,
   Plus,
+  PenLine,
+  Rows3,
   ScrollText,
   Search,
   Sparkles,
@@ -33,6 +43,7 @@ import {
   plainText,
   shiftLines,
   snapLines,
+  songNameOf,
   spreadOverBars,
   startAt,
   syllableTarget,
@@ -41,16 +52,25 @@ import {
   type LyricsResult,
 } from "@/lib/lyrics";
 
-// Lyrics in the Studio: find a song's words (or paste, or write them with
-// the AI), have them follow the playhead while the beat plays, and fit them
-// to it — time each line by tapping along, move or snap them onto the
-// beat, and see which lines are too crammed or too empty for their bars.
-// The recorder shows the same lines while a take is sung (LyricsCue).
+// The words half of the vocal booth: find a song's lyrics (by the song's
+// name — never the uploader's), or paste and write them with the AI, then
+// have them follow the playhead while the beat plays and fit them to it —
+// time each line by tapping along, move or snap them onto the beat, and
+// see which lines are too crammed or too roomy. The recorder sings from
+// the same sheet (LyricsCue).
 
 type Tab = "sing" | "edit" | "find" | "ai";
 
+/** Found sheets already lined up with this beat (or kept as they are), so the hint stays gone for the visit. */
+const alignedSheets = new Set<string>();
+
 /** A moment it takes to react to a line: taken off a tap so it lands where the line was sung. */
 const TAP_REACTION = 0.08;
+
+const CHIP =
+  "rounded-full border border-border px-2.5 py-0.5 text-[11px] text-muted transition-colors hover:border-vocals hover:text-foreground";
+const GHOST =
+  "flex items-center justify-center gap-1.5 rounded-lg border border-border text-muted transition-colors hover:border-vocals hover:text-foreground disabled:opacity-40 max-lg:h-10 max-lg:w-10";
 
 function isTyping(target: EventTarget | null) {
   const el = target as HTMLElement | null;
@@ -80,7 +100,7 @@ function PlayButton({ big = false }: { big?: boolean }) {
     <button
       onClick={() => void togglePlay()}
       className={`flex items-center justify-center gap-1.5 rounded-lg bg-brand font-semibold text-white hover:bg-brand-strong ${
-        big ? "h-12 px-6 text-base" : "h-8 px-3 text-xs"
+        big ? "h-12 px-6 text-base" : "h-9 max-lg:h-10 px-3 text-xs"
       }`}
       aria-label={isPlaying ? "Pause" : "Play"}
     >
@@ -96,8 +116,8 @@ function LineProgress({ start, end }: { start: number; end: number | null }) {
   if (end === null || end <= start) return null;
   const fraction = Math.min(1, Math.max(0, (playhead - start) / (end - start)));
   return (
-    <div className="mt-1 h-0.5 overflow-hidden rounded-full bg-vocals/20">
-      <div className="h-full bg-vocals" style={{ width: `${fraction * 100}%` }} />
+    <div className="mt-1 h-1 overflow-hidden rounded-full bg-vocals/15">
+      <div className="h-full rounded-full bg-vocals transition-[width] duration-100" style={{ width: `${fraction * 100}%` }} />
     </div>
   );
 }
@@ -120,7 +140,13 @@ function useCurrentLine(lines: LyricLine[]) {
 function FitBadge({ fit }: { fit: LineFit }) {
   if (!fit.syllables) return null;
   const tone =
-    fit.verdict === "tight" ? "border-danger/50 text-danger" : fit.verdict === "roomy" ? "border-beat/50 text-beat" : fit.verdict === "ok" ? "border-success/50 text-success" : "border-border text-muted";
+    fit.verdict === "tight"
+      ? "border-danger/50 text-danger"
+      : fit.verdict === "roomy"
+        ? "border-beat/50 text-beat"
+        : fit.verdict === "ok"
+          ? "border-success/50 text-success"
+          : "border-border text-muted";
   const title =
     fit.verdict === null
       ? `About ${fit.syllables} syllables`
@@ -165,7 +191,7 @@ const Prompter = memo(function Prompter({
   }, [current, tapIndex]);
 
   return (
-    <div ref={box} className="relative max-h-[22rem] overflow-y-auto overscroll-contain rounded-lg bg-background/60 px-2 py-3">
+    <div ref={box} className="relative max-h-[min(24rem,50dvh)] overflow-y-auto overscroll-contain rounded-xl border border-border/60 bg-background/60 p-1.5">
       {lines.map((line, i) => {
         if (!line.text) return <div key={i} data-line={i} className="h-4" />;
         const active = i === current;
@@ -174,13 +200,15 @@ const Prompter = memo(function Prompter({
           <div
             key={i}
             data-line={i}
-            className={`group flex items-start gap-2 rounded-md px-2 py-1 transition-colors ${
-              tapping ? "bg-brand/15 ring-1 ring-brand" : active ? "bg-vocals/10" : "hover:bg-surface-raised"
+            className={`group relative flex items-start gap-2 rounded-lg px-2 py-1.5 transition-colors ${
+              tapping ? "bg-vocals/15 ring-1 ring-vocals" : active ? "bg-vocals/10" : "hover:bg-surface-raised"
             }`}
           >
+            {/* The line being sung gets a bar on its left, so it reads at a glance mid-take. */}
+            <span className={`absolute inset-y-1 left-0 w-1 rounded-full bg-vocals transition-opacity ${active ? "opacity-100" : "opacity-0"}`} />
             <button
               onClick={() => (line.time !== null ? audioEngine.seek(line.time) : onPickTap(i))}
-              className="mt-1 w-10 shrink-0 text-left text-[10px] tabular-nums text-muted hover:text-foreground"
+              className="mt-1 w-10 shrink-0 text-left text-[10px] tabular-nums text-muted/70 hover:text-foreground"
               title={line.time !== null ? "Jump here" : "Not timed yet — tap it in"}
             >
               {line.time !== null ? formatClock(line.time) : "–:––"}
@@ -192,8 +220,8 @@ const Prompter = memo(function Prompter({
                   if (tapIndex !== null) onPickTap(i);
                   else if (line.time !== null) audioEngine.seek(line.time);
                 }}
-                className={`cursor-pointer leading-snug transition-[color,opacity] ${active ? "font-semibold text-foreground" : i < current ? "text-muted/70" : "text-muted"}`}
-                style={{ fontSize: active ? fontSize * 1.2 : fontSize }}
+                className={`cursor-pointer leading-snug transition-[color,opacity] ${active ? "font-semibold text-foreground" : i < current ? "text-muted/60" : "text-muted"}`}
+                style={{ fontSize: active ? fontSize * 1.15 : fontSize }}
               >
                 {line.text}
               </p>
@@ -202,7 +230,7 @@ const Prompter = memo(function Prompter({
             {showFit && <FitBadge fit={fits[i]} />}
             <button
               onClick={() => setLines(lines.map((l, j) => (j === i ? { ...l, time: Math.round(useStudioStore.getState().playhead * 100) / 100 } : l)))}
-              className="mt-0.5 shrink-0 rounded p-0.5 text-muted opacity-0 hover:text-foreground focus:opacity-100 group-hover:opacity-100 max-lg:opacity-60"
+              className="mt-0.5 shrink-0 rounded p-1 text-muted opacity-0 hover:text-foreground focus:opacity-100 group-hover:opacity-100 max-lg:opacity-60"
               title="Set this line to the playhead"
               aria-label="Set this line to the playhead"
             >
@@ -215,6 +243,18 @@ const Prompter = memo(function Prompter({
   );
 });
 
+/** One row of the fit tools: an icon and name, then its buttons. */
+function ToolRow({ icon: Icon, label, children }: { icon: ComponentType<{ className?: string }>; label: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center">
+      <span className="flex w-20 shrink-0 items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-beat">
+        <Icon /> {label}
+      </span>
+      <div className="flex flex-wrap items-center gap-1.5">{children}</div>
+    </div>
+  );
+}
+
 /** Moving, snapping and laying the lines out on the beat. */
 function FitTools({ lines }: { lines: LyricLine[] }) {
   const bpm = useStudioStore((s) => s.projectBpm);
@@ -225,37 +265,81 @@ function FitTools({ lines }: { lines: LyricLine[] }) {
   const beat = beatSeconds(bpm);
   const synced = isSynced(lines);
   const move = (delta: number) => setLines(shiftLines(lines, delta));
-  const small = "rounded-md border border-border px-2 py-1 text-[11px] text-muted hover:border-brand hover:text-foreground disabled:opacity-40";
+  const small =
+    "h-8 rounded-lg border border-border bg-background px-2.5 text-[11px] font-medium text-muted transition-colors hover:border-beat hover:text-foreground disabled:opacity-40 max-lg:h-9";
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-border p-2 text-xs">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className="w-14 shrink-0 text-muted">Move</span>
-        {(
-          [
-            ["−1 bar", -beat * 4],
-            ["−1 beat", -beat],
-            ["−0.1s", -0.1],
-            ["+0.1s", 0.1],
-            ["+1 beat", beat],
-            ["+1 bar", beat * 4],
-          ] as const
-        ).map(([label, delta]) => (
-          <button key={label} disabled={!synced} onClick={() => move(delta)} className={small}>
-            {label}
-          </button>
-        ))}
+    <div className="flex flex-col gap-2.5 rounded-xl border border-beat/30 bg-beat/5 p-2.5 text-xs">
+      <ToolRow icon={Rows3} label="Lay out">
+        <label className="flex items-center gap-1 text-muted">
+          from bar
+          <input
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={999}
+            value={startBar}
+            onChange={(e) => setStartBar(Math.max(1, Math.min(999, Math.round(Number(e.target.value) || 1))))}
+            className="h-8 w-14 rounded-lg border border-border bg-background px-1.5 text-foreground max-lg:h-9"
+          />
+        </label>
+        <button onClick={() => setStartBar(barAt(useStudioStore.getState().playhead, bpm))} className={small} title="The bar the playhead is in">
+          <Crosshair className="inline" /> here
+        </button>
+        <select
+          value={barsPerLine}
+          onChange={(e) => setPrefs({ barsPerLine: Number(e.target.value) })}
+          aria-label="A line every"
+          className="h-8 rounded-lg border border-border bg-background px-1.5 text-foreground max-lg:h-9"
+        >
+          <option value={0.5}>a line every ½ bar</option>
+          <option value={1}>a line every bar</option>
+          <option value={2}>a line every 2 bars</option>
+          <option value={4}>a line every 4 bars</option>
+        </select>
+        <button
+          onClick={() => setLines(spreadOverBars(lines, bpm, { startBar, barsPerLine }))}
+          className="h-8 rounded-lg bg-beat px-3 text-[11px] font-semibold text-white hover:opacity-90 max-lg:h-9"
+          title="Put every line on the beat, one after another — a bar's rest between verses"
+        >
+          Lay out
+        </button>
+      </ToolRow>
+      <ToolRow icon={MoveHorizontal} label="Move all">
+        <div className="flex overflow-hidden rounded-lg border border-border">
+          {(
+            [
+              ["−bar", -beat * 4, "Earlier by a bar"],
+              ["−beat", -beat, "Earlier by a beat"],
+              ["−0.1s", -0.1, "A touch earlier"],
+              ["+0.1s", 0.1, "A touch later"],
+              ["+beat", beat, "Later by a beat"],
+              ["+bar", beat * 4, "Later by a bar"],
+            ] as const
+          ).map(([label, delta, title], i) => (
+            <button
+              key={label}
+              disabled={!synced}
+              onClick={() => move(delta)}
+              title={title}
+              className={`h-8 bg-background px-2 text-[11px] font-medium tabular-nums text-muted transition-colors hover:bg-beat/10 hover:text-foreground disabled:opacity-40 max-lg:h-9 ${
+                i === 3 ? "border-l-2 border-l-beat/40" : i > 0 ? "border-l border-border" : ""
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <button
           disabled={!synced}
           onClick={() => setLines(startAt(lines, useStudioStore.getState().playhead))}
           className={small}
           title="Move the whole sheet so its first line starts at the playhead"
         >
-          Start at playhead
+          First line → playhead
         </button>
-      </div>
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className="w-14 shrink-0 text-muted">Snap</span>
+      </ToolRow>
+      <ToolRow icon={Magnet} label="Snap">
         <button disabled={!synced} onClick={() => setLines(snapLines(lines, bpm, 1))} className={small}>
           To beats
         </button>
@@ -263,52 +347,21 @@ function FitTools({ lines }: { lines: LyricLine[] }) {
           To bars
         </button>
         <button disabled={!synced} onClick={() => setLines(clearTimes(lines))} className={small} title="Take every time off, to start again">
-          Clear times
+          <Eraser className="inline" /> Clear times
         </button>
-      </div>
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className="w-14 shrink-0 text-muted">On bars</span>
-        <label className="flex items-center gap-1 text-muted">
-          from bar
-          <input
-            type="number"
-            min={1}
-            max={999}
-            value={startBar}
-            onChange={(e) => setStartBar(Math.max(1, Math.min(999, Math.round(Number(e.target.value) || 1))))}
-            className="w-14 rounded border border-border bg-background px-1.5 py-0.5 text-foreground"
-          />
-        </label>
-        <button onClick={() => setStartBar(barAt(useStudioStore.getState().playhead, bpm))} className={small} title="The bar the playhead is in">
-          ← playhead
-        </button>
-        <label className="flex items-center gap-1 text-muted">
-          a line every
-          <select
-            value={barsPerLine}
-            onChange={(e) => setPrefs({ barsPerLine: Number(e.target.value) })}
-            className="rounded border border-border bg-background px-1 py-0.5 text-foreground"
-          >
-            <option value={0.5}>½ bar</option>
-            <option value={1}>bar</option>
-            <option value={2}>2 bars</option>
-            <option value={4}>4 bars</option>
-          </select>
-        </label>
-        <button
-          onClick={() => setLines(spreadOverBars(lines, bpm, { startBar, barsPerLine }))}
-          className="rounded-md bg-brand/15 px-2 py-1 text-[11px] font-semibold text-brand-strong hover:bg-brand/25"
-          title="Put every line on the beat, one after another — a bar's rest between verses"
-        >
-          Lay out
-        </button>
-      </div>
+      </ToolRow>
     </div>
   );
 }
 
-function SingTab({ lines, onEdit }: { lines: LyricLine[]; onEdit: () => void }) {
+function SingTab({ lines, onEdit, onRecord }: { lines: LyricLine[]; onEdit: () => void; onRecord?: () => void }) {
   const setLines = useLyrics((s) => s.setLines);
+  const sheet = useLyrics(activeSheet);
+  const [, setAligned] = useState(0);
+  const markAligned = () => {
+    if (sheet) alignedSheets.add(sheet.id);
+    setAligned((n) => n + 1);
+  };
   const past = useLyrics((s) => s.past);
   const undo = useLyrics((s) => s.undo);
   const prefs = useLyrics((s) => s.prefs);
@@ -351,26 +404,61 @@ function SingTab({ lines, onEdit }: { lines: LyricLine[]; onEdit: () => void }) 
 
   if (lines.length === 0) {
     return (
-      <p className="py-6 text-center text-xs text-muted">
-        This sheet is empty —{" "}
-        <button onClick={onEdit} className="text-brand-strong hover:underline">
-          write or paste the words
-        </button>
-        .
-      </p>
+      <div className="flex flex-col items-center gap-2 py-6 text-center">
+        <ScrollText className="text-muted/50" />
+        <p className="text-xs text-muted">
+          This sheet is empty —{" "}
+          <button onClick={onEdit} className="text-vocals hover:underline">
+            write or paste the words
+          </button>
+          .
+        </p>
+      </div>
     );
   }
   const synced = isSynced(lines);
   const target = syllableTarget(bpm, prefs.style, prefs.barsPerLine);
+  // Found lyrics are timed to the original recording; on another beat they need lining up once.
+  const fromOriginal = synced && sheet?.source === "library" && !alignedSheets.has(sheet.id);
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-1.5">
+    <div className="flex flex-col gap-2.5">
+      {fromOriginal && tapIndex === null && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-beat/40 bg-beat/10 px-3 py-2 text-xs">
+          <Clock className="shrink-0 text-beat" />
+          <span className="min-w-0 flex-1">
+            <b>Timed to the original song.</b> On another beat, put the playhead where the first line should come in, then:
+          </span>
+          <div className="flex gap-1.5">
+            <button
+              onClick={() => {
+                setLines(startAt(lines, useStudioStore.getState().playhead));
+                markAligned();
+              }}
+              className="h-8 rounded-lg bg-beat px-2.5 font-semibold text-white hover:opacity-90 max-lg:h-9"
+            >
+              Start here
+            </button>
+            <button
+              onClick={markAligned}
+              className="h-8 rounded-lg px-2 text-muted hover:text-foreground max-lg:h-9"
+              aria-label="Keep the original timing"
+              title="Keep the original timing"
+            >
+              <X />
+            </button>
+          </div>
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
         <PlayButton />
         {tapIndex === null ? (
           <button
-            onClick={() => setTapIndex(nextSung(0))}
-            className="flex h-8 items-center gap-1.5 rounded-lg border border-border px-2.5 text-xs text-muted hover:border-brand hover:text-foreground"
+            onClick={() => {
+              markAligned();
+              setTapIndex(nextSung(0));
+            }}
+            className="flex h-9 max-lg:h-10 flex-1 min-w-32 items-center justify-center gap-1.5 rounded-lg border border-vocals/50 px-3 text-xs font-semibold text-vocals transition-colors hover:bg-vocals/10"
             title="Play the beat and tap as each line starts — the lines learn their times"
           >
             <Timer /> Tap to time
@@ -379,67 +467,76 @@ function SingTab({ lines, onEdit }: { lines: LyricLine[]; onEdit: () => void }) 
           <>
             <button
               onClick={() => tap(tapIndex)}
-              className="flex h-8 items-center gap-1.5 rounded-lg bg-vocals px-3 text-xs font-semibold text-white hover:opacity-90"
+              className="flex h-9 max-lg:h-10 flex-1 min-w-32 items-center justify-center gap-1.5 rounded-lg bg-vocals px-3 text-xs font-bold text-white shadow-lg shadow-vocals/25"
             >
               <Timer /> Tap — line {tapIndex + 1}
             </button>
-            <button onClick={() => setTapIndex(null)} className="h-8 rounded-lg border border-border px-2.5 text-xs text-muted hover:text-foreground">
+            <button onClick={() => setTapIndex(null)} className="h-9 max-lg:h-10 rounded-lg border border-border px-3 text-xs text-muted hover:text-foreground">
               Done
             </button>
           </>
         )}
-        <button
-          onClick={() => setTools((v) => !v)}
-          aria-pressed={tools}
-          className={`h-8 rounded-lg border px-2.5 text-xs ${tools ? "border-brand text-foreground" : "border-border text-muted hover:text-foreground"}`}
-        >
-          Fit to beat
-        </button>
-        <button
-          onClick={undo}
-          disabled={past.length === 0}
-          className="flex h-8 items-center gap-1 rounded-lg border border-border px-2.5 text-xs text-muted hover:text-foreground disabled:opacity-40"
-          title="Take back the last change to the lyrics"
-        >
-          <Undo2 /> Undo
-        </button>
         <div className="ml-auto flex items-center gap-1">
+          {onRecord && (
+            <button onClick={onRecord} className={`h-9 w-9 ${GHOST} hover:!border-vocals hover:!text-vocals`} title="Record over the beat, singing from these" aria-label="Record with these lyrics">
+              <Mic />
+            </button>
+          )}
+          <button
+            onClick={undo}
+            disabled={past.length === 0}
+            className={`h-9 w-9 ${GHOST}`}
+            title="Take back the last change to the lyrics"
+            aria-label="Undo"
+          >
+            <Undo2 />
+          </button>
           <button
             onClick={() => setPrefs({ fontSize: Math.max(12, prefs.fontSize - 2) })}
-            className="h-8 w-8 rounded-lg border border-border text-xs text-muted hover:text-foreground"
+            className={`h-9 w-9 ${GHOST}`}
             aria-label="Smaller text"
           >
-            A−
+            <Minus />
           </button>
           <button
             onClick={() => setPrefs({ fontSize: Math.min(36, prefs.fontSize + 2) })}
-            className="h-8 w-8 rounded-lg border border-border text-sm text-muted hover:text-foreground"
+            className={`h-9 w-9 ${GHOST}`}
             aria-label="Bigger text"
           >
-            A+
+            <Plus />
           </button>
-          <button
-            onClick={() => setBig(true)}
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted hover:text-foreground"
-            title="Full screen, to sing from across the room"
-            aria-label="Full screen lyrics"
-          >
+          <button onClick={() => setBig(true)} className={`h-9 w-9 ${GHOST}`} title="Full screen, to sing from across the room" aria-label="Full screen lyrics">
             <Maximize2 />
           </button>
         </div>
       </div>
 
       {tapIndex !== null && (
-        <p className="text-[11px] text-muted">
+        <p className="rounded-lg bg-vocals/10 px-2.5 py-1.5 text-[11px] text-foreground">
           Play the beat, and tap (or press Enter) right as each line starts. Click a line to tap from there; Esc to stop.
         </p>
       )}
       {!synced && tapIndex === null && (
-        <p className="text-[11px] text-muted">
-          These lines aren&apos;t timed yet. <b>Tap to time</b> them as the beat plays, or <b>Fit to beat → Lay out</b> to put one on every bar.
-        </p>
+        <div className="flex items-start gap-2 rounded-xl bg-surface-raised px-3 py-2 text-xs text-muted">
+          <Timer className="mt-0.5 shrink-0 text-vocals" />
+          <span>
+            Not timed yet. Press <b className="text-foreground">Tap to time</b> and tap as each line starts while the beat plays — or open{" "}
+            <b className="text-foreground">Fit to the beat</b> and <b className="text-foreground">Lay out</b> one line a bar.
+          </span>
+        </div>
       )}
 
+      <button
+        onClick={() => setTools((v) => !v)}
+        aria-pressed={tools}
+        aria-expanded={tools}
+        className={`flex h-9 items-center gap-1.5 self-start rounded-full border px-3 text-xs font-semibold transition-colors max-lg:h-10 ${
+          tools ? "border-beat bg-beat/10 text-beat" : "border-border text-muted hover:border-beat hover:text-foreground"
+        }`}
+      >
+        <Magnet /> Fit to the beat
+        <ChevronDown className={`transition-transform ${tools ? "rotate-180" : ""}`} />
+      </button>
       {tools && (
         <>
           <FitTools lines={lines} />
@@ -500,7 +597,7 @@ function BigPrompter({ lines, onClose }: { lines: LyricLine[]; onClose: () => vo
   }, [onClose, synced, lines.length]);
 
   return (
-    <div className="fixed inset-0 z-[70] flex flex-col bg-background/97 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 backdrop-blur" role="dialog" aria-label="Lyrics, full screen">
+    <div data-lyrics-fullscreen className="fixed inset-0 z-[70] flex flex-col bg-background/97 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 backdrop-blur" role="dialog" aria-label="Lyrics, full screen">
       <div className="flex items-center justify-between gap-3">
         <PlayButton big />
         <button onClick={onClose} className="flex h-12 w-12 items-center justify-center rounded-full border border-border text-muted hover:text-foreground" aria-label="Close full screen">
@@ -537,17 +634,33 @@ function EditTab({ onDone }: { onDone: () => void }) {
   const setText = useLyrics((s) => s.setText);
   const rename = useLyrics((s) => s.rename);
   const checkpoint = useLyrics((s) => s.checkpoint);
+  const [pasteError, setPasteError] = useState(false);
   if (!sheet) return null;
+  const canPaste = typeof navigator !== "undefined" && !!navigator.clipboard?.readText;
+
+  async function paste() {
+    if (!sheet) return;
+    try {
+      const text = (await navigator.clipboard.readText()).trim();
+      if (!text) return;
+      checkpoint();
+      setText((sheet.text.trim() ? `${sheet.text.trimEnd()}\n\n${text}` : text).slice(0, 20_000));
+      setPasteError(false);
+    } catch {
+      setPasteError(true);
+    }
+  }
+
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap gap-2">
+    <div className="flex flex-col gap-2.5">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <input
           value={sheet.title}
           onChange={(e) => rename({ title: e.target.value.slice(0, 200) })}
           placeholder="Song title"
           dir="auto"
           aria-label="Song title"
-          className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm"
+          className="h-10 min-w-0 rounded-lg border border-border bg-background px-3 text-sm font-semibold"
         />
         <input
           value={sheet.artist}
@@ -555,7 +668,7 @@ function EditTab({ onDone }: { onDone: () => void }) {
           placeholder="Artist (optional)"
           dir="auto"
           aria-label="Artist"
-          className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm"
+          className="h-10 min-w-0 rounded-lg border border-border bg-background px-3 text-sm"
         />
       </div>
       <textarea
@@ -567,12 +680,22 @@ function EditTab({ onDone }: { onDone: () => void }) {
         spellCheck={false}
         placeholder={"One line of lyrics per line.\nLeave an empty line between verses.\n\nTimes (optional) go first, like this:\n[00:12.50] First line"}
         aria-label="Lyrics"
-        className="w-full resize-y rounded-lg border border-border bg-background px-3 py-2 font-mono text-[13px] leading-relaxed"
+        className="min-h-48 w-full resize-y rounded-xl border border-border bg-background px-3 py-2.5 font-mono text-[13px] leading-relaxed max-lg:text-base"
       />
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] text-muted">Saved in this browser as you type. Times look like [01:23.45] — you can set them on the Sing tab instead.</p>
-        <button onClick={onDone} className="shrink-0 rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-strong">
-          Sing it
+      <div className="flex flex-wrap items-center gap-2">
+        {canPaste && (
+          <button
+            onClick={() => void paste()}
+            className="flex h-10 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-semibold text-muted hover:border-vocals hover:text-foreground"
+          >
+            <ClipboardPaste /> Paste
+          </button>
+        )}
+        <p className="min-w-0 flex-1 text-[11px] text-muted">
+          {pasteError ? "The browser didn't allow pasting from here — long-press (or Ctrl/⌘+V) in the box instead." : "Saved in this browser as you type."}
+        </p>
+        <button onClick={onDone} className="flex h-10 items-center gap-1.5 rounded-lg bg-vocals px-4 text-xs font-semibold text-white hover:opacity-90">
+          <Check /> Done
         </button>
       </div>
     </div>
@@ -583,35 +706,43 @@ function FindTab({ onUse }: { onUse: () => void }) {
   const lanes = useStudioStore((s) => s.lanes);
   const create = useLyrics((s) => s.create);
   const [query, setQuery] = useState("");
+  const [touched, setTouched] = useState(false);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<LyricsResult[] | null>(null);
   const [open, setOpen] = useState<number | null>(null);
 
-  // The songs in the mix, to look up in a click.
+  // The songs in the mix, by name only — a lane's "artist" is whoever
+  // uploaded it, not the song's artist, so the search never sees it.
   const suggestions = useMemo(() => {
     const seen = new Set<string>();
-    const out: { title: string; artist: string }[] = [];
+    const out: string[] = [];
     for (const lane of lanes) {
-      const title = lane.trackTitle.replace(/\s*[([].*?[)\]]\s*/g, " ").replace(/\.(mp3|wav|m4a|flac|ogg)$/i, "").trim();
-      if (!title || lane.artistName === "You" || /^studio vocal/i.test(title)) continue;
-      const key = `${title}|${lane.artistName}`.toLowerCase();
+      if (lane.artistName === "You" || /^studio vocal/i.test(lane.trackTitle)) continue;
+      const title = songNameOf(lane.trackTitle);
+      if (!title) continue;
+      const key = title.toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push({ title, artist: lane.artistName });
+      out.push(title);
     }
     return out.slice(0, 4);
   }, [lanes]);
 
-  async function search(q: string) {
-    const text = q.trim();
-    if (!text) return;
-    setQuery(text);
+  // The search box starts on the mix's song, ready to look up.
+  const shownQuery = touched ? query : query || suggestions[0] || "";
+
+  /** `byName` searches the library by the song's name (a mix lane); otherwise a free search. */
+  async function search(text: string, byName = false) {
+    const q = text.trim();
+    if (!q) return;
+    setQuery(q);
     setSearching(true);
     setError(null);
     setOpen(null);
     try {
-      const res = await fetch(`/api/lyrics/search?q=${encodeURIComponent(text)}`);
+      const url = byName ? `/api/lyrics/search?track=${encodeURIComponent(q)}` : `/api/lyrics/search?q=${encodeURIComponent(q)}`;
+      const res = await fetch(url);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "Couldn't search");
       setResults(data.results as LyricsResult[]);
@@ -623,7 +754,7 @@ function FindTab({ onUse }: { onUse: () => void }) {
     }
   }
 
-  function use(result: LyricsResult) {
+  function applyResult(result: LyricsResult) {
     create({ title: result.title, artist: result.artist, text: result.synced ?? result.plain ?? "", source: "library" });
     onUse();
   }
@@ -633,34 +764,50 @@ function FindTab({ onUse }: { onUse: () => void }) {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          void search(query);
+          void search(shownQuery, !touched && shownQuery === suggestions[0]);
         }}
         className="flex gap-2"
       >
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Song name, and artist"
-          dir="auto"
-          aria-label="Search lyrics"
-          className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm"
-        />
-        <button type="submit" disabled={searching || !query.trim()} className="flex items-center gap-1.5 rounded-lg bg-brand px-3 text-xs font-semibold text-white hover:bg-brand-strong disabled:opacity-50">
-          <Search /> {searching ? "Looking…" : "Find"}
+        <div className="relative min-w-0 flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+          <input
+            value={shownQuery}
+            onChange={(e) => {
+              setTouched(true);
+              setQuery(e.target.value);
+            }}
+            placeholder="Song name"
+            dir="auto"
+            type="search"
+            enterKeyHint="search"
+            aria-label="Search lyrics by song name"
+            className="h-11 w-full rounded-xl border border-border bg-background pl-9 pr-3 text-sm max-lg:text-base"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={searching || !shownQuery.trim()}
+          className="flex h-11 items-center gap-1.5 rounded-xl bg-vocals px-4 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+        >
+          {searching ? "Looking…" : "Find"}
         </button>
       </form>
+      <p className="text-[11px] text-muted">Just the song&apos;s name — no artist or uploader needed.</p>
       {suggestions.length > 0 && !results && (
         <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
-          In your mix:
-          {suggestions.map((s) => (
+          From your mix:
+          {suggestions.map((title) => (
             <button
-              key={`${s.title}|${s.artist}`}
-              onClick={() => void search(`${s.title} ${s.artist}`.trim())}
-              className="max-w-[14rem] truncate rounded-full border border-border px-2 py-0.5 hover:border-brand hover:text-foreground"
+              key={title}
+              onClick={() => {
+                setTouched(true);
+                void search(title, true);
+              }}
+              className={`max-w-[16rem] truncate ${CHIP} max-lg:py-1.5`}
               dir="auto"
+              title={`Find lyrics for “${title}”`}
             >
-              {s.title}
-              {s.artist ? ` — ${s.artist}` : ""}
+              {title}
             </button>
           ))}
         </div>
@@ -668,9 +815,9 @@ function FindTab({ onUse }: { onUse: () => void }) {
       {error && <p className="text-xs text-danger">{error}</p>}
       {results && results.length === 0 && <p className="py-3 text-center text-xs text-muted">No lyrics found — try fewer words, or paste them in yourself.</p>}
       {results && results.length > 0 && (
-        <ul className="flex max-h-[22rem] flex-col gap-1 overflow-y-auto overscroll-contain">
+        <ul className="flex max-h-[22rem] flex-col gap-1.5 overflow-y-auto overscroll-contain">
           {results.map((r) => (
-            <li key={r.id} className="rounded-lg border border-border p-2">
+            <li key={r.id} className="rounded-xl border border-border bg-background/50 p-2 transition-colors hover:border-vocals/50">
               <div className="flex items-center gap-2">
                 <button onClick={() => setOpen(open === r.id ? null : r.id)} className="min-w-0 flex-1 text-left">
                   <p dir="auto" className="truncate text-sm font-medium">
@@ -681,22 +828,30 @@ function FindTab({ onUse }: { onUse: () => void }) {
                   </p>
                 </button>
                 {r.synced ? (
-                  <span className="shrink-0 rounded bg-success/15 px-1.5 py-0.5 text-[10px] font-semibold text-success" title="Every line has its time — they'll follow the song">
-                    Timed
+                  <span className="flex shrink-0 items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-[10px] font-semibold text-success" title="Every line has its time — they'll follow the song">
+                    <Clock className="h-3 w-3" /> Timed
                   </span>
                 ) : r.instrumental ? (
                   <span className="shrink-0 text-[10px] text-muted">Instrumental</span>
                 ) : null}
                 <button
-                  onClick={() => use(r)}
+                  onClick={() => setOpen(open === r.id ? null : r.id)}
+                  className="h-8 w-8 shrink-0 rounded-lg text-muted hover:text-foreground"
+                  aria-label={open === r.id ? "Hide a preview of the words" : "Preview the words"}
+                  aria-expanded={open === r.id}
+                >
+                  <ChevronDown className={`mx-auto transition-transform ${open === r.id ? "rotate-180" : ""}`} />
+                </button>
+                <button
+                  onClick={() => applyResult(r)}
                   disabled={r.instrumental && !r.plain && !r.synced}
-                  className="shrink-0 rounded-lg bg-vocals px-2.5 py-1 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
+                  className="h-9 shrink-0 rounded-lg bg-vocals px-3 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
                 >
                   Use
                 </button>
               </div>
               {open === r.id && (
-                <pre dir="auto" className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap font-sans text-xs text-muted">
+                <pre dir="auto" className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap border-t border-border pt-2 font-sans text-xs text-muted">
                   {(r.plain ?? r.synced ?? "").slice(0, 1500)}
                 </pre>
               )}
@@ -704,9 +859,7 @@ function FindTab({ onUse }: { onUse: () => void }) {
           ))}
         </ul>
       )}
-      <p className="text-[11px] text-muted">
-        Lyrics from LRCLIB, an open lyrics library. Timed lyrics follow the original song — on another beat, move them with <b>Start at playhead</b> or tap them in again on the Sing tab.
-      </p>
+      <p className="text-[11px] text-muted/80">Lyrics from LRCLIB, an open lyrics library.</p>
     </div>
   );
 }
@@ -824,7 +977,7 @@ function AiTabView({ lines, onDone }: { lines: LyricLine[]; onDone: () => void }
         <button
           onClick={() => void ask("complete")}
           disabled={!!busy || (!hasWords && !idea.trim())}
-          className="rounded-lg bg-brand px-2.5 py-1.5 font-semibold text-white hover:bg-brand-strong disabled:opacity-40"
+          className="rounded-lg bg-brand px-2.5 py-2 font-semibold text-white hover:bg-brand-strong disabled:opacity-40"
           title="Carry on from your last line, in your style and rhyme"
         >
           {busy === "complete" ? "Writing…" : "Finish it"}
@@ -832,7 +985,7 @@ function AiTabView({ lines, onDone }: { lines: LyricLine[]; onDone: () => void }
         <button
           onClick={() => void ask("write")}
           disabled={!!busy}
-          className="rounded-lg border border-brand px-2.5 py-1.5 font-semibold text-brand-strong hover:bg-brand/10 disabled:opacity-40"
+          className="rounded-lg border border-brand px-2.5 py-2 font-semibold text-brand-strong hover:bg-brand/10 disabled:opacity-40"
           title="New lines from your idea"
         >
           {busy === "write" ? "Writing…" : "Write new lines"}
@@ -840,7 +993,7 @@ function AiTabView({ lines, onDone }: { lines: LyricLine[]; onDone: () => void }
         <button
           onClick={() => void ask("fit")}
           disabled={!!busy || !hasWords}
-          className="rounded-lg border border-vocals px-2.5 py-1.5 font-semibold text-foreground hover:bg-vocals/10 disabled:opacity-40"
+          className="rounded-lg border border-vocals px-2.5 py-2 font-semibold text-foreground hover:bg-vocals/10 disabled:opacity-40"
           title="Rewrite each line to fit the beat, keeping its meaning and its time"
         >
           {busy === "fit" ? "Fitting…" : "Fit lines to the beat"}
@@ -857,10 +1010,8 @@ function AiTabView({ lines, onDone }: { lines: LyricLine[]; onDone: () => void }
         </p>
       )}
       {draft && (
-        <div className="rounded-lg border border-brand/50 bg-brand/5 p-2">
-          <p className="mb-1 text-[11px] font-semibold text-muted">
-            {draft.mode === "fit" ? "Rewritten to fit — each line keeps its time:" : "New lines:"}
-          </p>
+        <div className="rounded-xl border border-brand/50 bg-brand/5 p-2">
+          <p className="mb-1 text-[11px] font-semibold text-muted">{draft.mode === "fit" ? "Rewritten to fit — each line keeps its time:" : "New lines:"}</p>
           <div className="max-h-56 overflow-y-auto">
             {draft.lines.map((line, i) =>
               line ? (
@@ -873,13 +1024,13 @@ function AiTabView({ lines, onDone }: { lines: LyricLine[]; onDone: () => void }
             )}
           </div>
           <div className="mt-2 flex gap-2">
-            <button onClick={accept} className="rounded-lg bg-brand px-3 py-1.5 font-semibold text-white hover:bg-brand-strong">
+            <button onClick={accept} className="rounded-lg bg-brand px-3 py-2 font-semibold text-white hover:bg-brand-strong">
               {draft.mode === "fit" ? "Use these" : sheet ? "Add to the lyrics" : "Make a sheet"}
             </button>
-            <button onClick={() => void ask(draft.mode)} disabled={!!busy} className="rounded-lg border border-border px-3 py-1.5 text-muted hover:text-foreground disabled:opacity-40">
+            <button onClick={() => void ask(draft.mode)} disabled={!!busy} className="rounded-lg border border-border px-3 py-2 text-muted hover:text-foreground disabled:opacity-40">
               Try again
             </button>
-            <button onClick={() => setDraft(null)} className="rounded-lg border border-border px-3 py-1.5 text-muted hover:text-foreground">
+            <button onClick={() => setDraft(null)} className="rounded-lg border border-border px-3 py-2 text-muted hover:text-foreground">
               Discard
             </button>
           </div>
@@ -890,13 +1041,48 @@ function AiTabView({ lines, onDone }: { lines: LyricLine[]; onDone: () => void }
   );
 }
 
+/** A big, tappable way to start a sheet. */
+function StartCard({
+  icon: Icon,
+  title,
+  text,
+  onClick,
+  tone,
+}: {
+  icon: ComponentType<{ className?: string }>;
+  title: string;
+  text: string;
+  onClick: () => void;
+  tone: "vocals" | "brand" | "beat";
+}) {
+  const tones = {
+    vocals: "bg-vocals/15 text-vocals",
+    brand: "bg-brand/15 text-brand-strong",
+    beat: "bg-beat/15 text-beat",
+  } as const;
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-3 rounded-xl border border-border bg-background/50 p-3 text-left transition-colors hover:border-vocals/60 hover:bg-surface-raised sm:flex-col sm:items-start"
+    >
+      <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${tones[tone]}`}>
+        <Icon />
+      </span>
+      <span className="min-w-0">
+        <span className="block text-sm font-semibold">{title}</span>
+        <span className="block text-[11px] leading-snug text-muted">{text}</span>
+      </span>
+    </button>
+  );
+}
+
 /**
- * Lyrics to sing from while the beat plays — and to record a vocal with
- * (the recorder shows them too).
+ * The words half of the vocal booth: the open sheet and the four tools
+ * (read along, write and paste, find a song, write with the AI). With no
+ * sheet open, three big ways to get one. The recorder shows its cue
+ * beside the take.
  */
-export default function LyricsPanel() {
-  const open = useLyrics((s) => s.panelOpen);
-  const setOpen = useLyrics((s) => s.setPanelOpen);
+export function LyricsTools({ onSing }: { onSing?: () => void }) {
   const load = useLyrics((s) => s.load);
   const sheets = useLyrics((s) => s.sheets);
   const activeId = useLyrics((s) => s.activeId);
@@ -909,98 +1095,151 @@ export default function LyricsPanel() {
 
   useEffect(() => load(), [load]);
 
-  if (!open) {
+  const newSheet = () => {
+    create({ title: "My lyrics", artist: "", text: "", source: "own" });
+    setTab("edit");
+  };
+
+  // Nothing open: pick how to start (or an earlier sheet), unless already finding or writing.
+  if (!sheet && tab !== "find" && tab !== "ai") {
     return (
-      <button
-        onClick={() => setOpen(true)}
-        className="flex items-center gap-2 self-start rounded-lg border border-border px-3 py-2 text-sm text-muted transition-colors hover:border-vocals hover:text-foreground"
-      >
-        <ScrollText /> Lyrics{sheet ? ` — ${sheet.title}` : ""}
-      </button>
+      <div className="flex flex-col gap-3">
+        <div className="text-center">
+          <p className="text-sm font-semibold">Lyrics to sing from</p>
+          <p className="text-xs text-muted">They follow the beat as it plays, and sit beside you while you record.</p>
+        </div>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <StartCard icon={Search} tone="vocals" title="Find a song" text="By its name — timed lyrics follow along" onClick={() => setTab("find")} />
+          <StartCard icon={ClipboardPaste} tone="beat" title="Write or paste" text="Your own words, then tap them in time" onClick={newSheet} />
+          <StartCard icon={Sparkles} tone="brand" title="Write with AI" text="From an idea, sized to the beat" onClick={() => setTab("ai")} />
+        </div>
+        {sheets.length > 0 && (
+          <label className="flex items-center gap-2 text-xs text-muted">
+            Or open one you have:
+            <select
+              value=""
+              onChange={(e) => {
+                if (!e.target.value) return;
+                select(e.target.value);
+                setTab("sing");
+              }}
+              aria-label="Open a lyric sheet"
+              className="h-9 min-w-0 flex-1 rounded-lg border border-border bg-background px-2 text-xs text-foreground"
+            >
+              <option value="">{sheets.length} saved</option>
+              {sheets.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.title}
+                  {s.artist ? ` — ${s.artist}` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
     );
   }
 
   const shownTab: Tab = !sheet && (tab === "sing" || tab === "edit") ? "find" : tab;
-  const tabs: [Tab, string][] = [
-    ["sing", "Sing"],
-    ["edit", "Edit"],
-    ["find", "Find a song"],
-    ["ai", "Write with AI"],
+  const tabs: [Tab, ComponentType<{ className?: string }>, string][] = [
+    ["sing", ScrollText, "Read"],
+    ["edit", PenLine, "Write"],
+    ["find", Search, "Find"],
+    ["ai", Sparkles, "AI"],
   ];
+  const timed = isSynced(lines);
+  const lineCount = lines.filter((l) => l.text).length;
 
   return (
-    <section aria-label="Lyrics" className="rounded-xl border border-vocals/40 bg-vocals/5 p-3 text-sm">
-      <div className="flex flex-wrap items-center gap-2">
-        <p className="font-semibold">
-          <ScrollText className="text-vocals" /> Lyrics
-        </p>
-        <select
-          value={activeId ?? ""}
-          onChange={(e) => {
-            select(e.target.value || null);
-            setTab("sing");
-          }}
-          aria-label="Lyric sheet"
-          className="min-w-0 max-w-[16rem] flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs"
-        >
-          {!sheet && <option value="">No sheet open</option>}
-          {sheets.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.title}
-              {s.artist ? ` — ${s.artist}` : ""}
-            </option>
-          ))}
-        </select>
-        <button
-          onClick={() => {
-            create({ title: "My lyrics", artist: "", text: "", source: "own" });
-            setTab("edit");
-          }}
-          className="flex h-7 items-center gap-1 rounded-lg border border-border px-2 text-xs text-muted hover:text-foreground"
-          title="A new, empty sheet to write or paste into"
-        >
-          <Plus /> New
+    <div className="flex flex-col gap-3">
+      {/* The open sheet, as a card: what it is, whether it's timed, and switching. */}
+      <div className="flex items-center gap-2 rounded-xl border border-border bg-background/50 p-2">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-vocals/15 text-vocals">
+          <ScrollText />
+        </span>
+        <div className="relative min-w-0 flex-1">
+          {sheet ? (
+            <>
+              <p dir="auto" className="truncate text-sm font-semibold leading-tight">
+                {sheet.title || "Untitled"}
+              </p>
+              <p className="flex items-center gap-1.5 truncate text-[11px] text-muted">
+                {sheet.artist && (
+                  <span dir="auto" className="truncate">
+                    {sheet.artist} ·
+                  </span>
+                )}
+                <span>{lineCount} lines</span>
+                {lineCount > 0 && (
+                  <span className={`rounded-full px-1.5 font-semibold ${timed ? "bg-success/15 text-success" : "bg-foreground/10"}`}>{timed ? "Timed" : "Not timed"}</span>
+                )}
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-muted">No sheet open</p>
+          )}
+          {/* The whole title is the switcher: a native picker, easy on a phone. */}
+          {sheets.length > 1 && (
+            <select
+              value={activeId ?? ""}
+              onChange={(e) => {
+                select(e.target.value || null);
+                setTab("sing");
+              }}
+              aria-label="Switch lyric sheet"
+              className="absolute inset-0 cursor-pointer opacity-0"
+            >
+              {!sheet && <option value="">No sheet open</option>}
+              {sheets.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.title}
+                  {s.artist ? ` — ${s.artist}` : ""}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+        {sheets.length > 1 && <ChevronDown className="pointer-events-none shrink-0 text-muted" aria-hidden />}
+        <button onClick={newSheet} className={`h-9 w-9 ${GHOST}`} title="A new, empty sheet to write or paste into" aria-label="New lyric sheet">
+          <Plus />
         </button>
         {sheet && (
           <button
             onClick={() => window.confirm(`Delete the lyrics “${sheet.title}”?`) && remove(sheet.id)}
-            className="flex h-7 w-7 items-center justify-center rounded-lg border border-border text-muted hover:text-danger"
+            className={`h-9 w-9 ${GHOST} hover:!border-danger/50 hover:!text-danger`}
             aria-label="Delete this lyric sheet"
             title="Delete this lyric sheet"
           >
             <Trash2 />
           </button>
         )}
-        <button onClick={() => setOpen(false)} className="ml-auto text-muted hover:text-foreground" aria-label="Close lyrics">
-          <X />
-        </button>
       </div>
 
-      <div className="mt-2 flex gap-1 overflow-x-auto border-b border-border text-xs" role="tablist">
-        {tabs.map(([id, label]) => (
+      {/* The tools, as tabs under the card. */}
+      <div className="flex border-b border-border" role="tablist" aria-label="Lyrics tools">
+        {tabs.map(([id, Icon, label]) => (
           <button
             key={id}
             role="tab"
             aria-selected={shownTab === id}
             disabled={!sheet && (id === "sing" || id === "edit")}
             onClick={() => setTab(id)}
-            className={`-mb-px flex shrink-0 items-center gap-1 border-b-2 px-2.5 py-1.5 disabled:opacity-40 ${
-              shownTab === id ? "border-vocals font-semibold text-foreground" : "border-transparent text-muted hover:text-foreground"
+            className={`-mb-px flex h-10 flex-1 items-center justify-center gap-1.5 border-b-2 text-xs font-semibold transition-colors disabled:opacity-40 ${
+              shownTab === id ? "border-vocals text-foreground" : "border-transparent text-muted hover:text-foreground"
             }`}
           >
-            {id === "find" ? <Search /> : id === "ai" ? <Sparkles /> : id === "edit" ? <FileText /> : null}
-            {label}
+            <Icon className={shownTab === id ? "text-vocals" : ""} /> {label}
           </button>
         ))}
       </div>
 
-      <div className="mt-3">
-        {shownTab === "sing" && <SingTab lines={lines} onEdit={() => setTab("edit")} />}
+      <div>
+        {shownTab === "sing" && <SingTab lines={lines} onEdit={() => setTab("edit")} onRecord={onSing} />}
         {shownTab === "edit" && <EditTab onDone={() => setTab("sing")} />}
         {shownTab === "find" && <FindTab onUse={() => setTab("sing")} />}
         {shownTab === "ai" && <AiTabView lines={lines} onDone={() => setTab("sing")} />}
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -1008,35 +1247,48 @@ export default function LyricsPanel() {
  * The lyrics for the recorder: the line being sung and the next ones,
  * following the playhead — or the whole sheet, when it isn't timed.
  */
-export function LyricsCue() {
+export function LyricsCue({ big = false }: { big?: boolean }) {
   const load = useLyrics((s) => s.load);
   const lines = useLyrics((s) => s.lines);
   const sheet = useLyrics(activeSheet);
-  const fontSize = useLyrics((s) => s.prefs.fontSize);
-  const setPanelOpen = useLyrics((s) => s.setPanelOpen);
+  const baseSize = useLyrics((s) => s.prefs.fontSize);
+  // Mid-take the words are read at a glance from a step back.
+  const fontSize = big ? Math.max(baseSize, 20) * 1.15 : baseSize;
+  const openLyrics = () => useLyrics.getState().openBooth("lyrics");
   const current = useCurrentLine(lines);
   useEffect(() => load(), [load]);
 
   if (!sheet || !lines.some((l) => l.text)) {
     return (
-      <button onClick={() => setPanelOpen(true)} className="mt-2 flex items-center gap-1.5 text-xs text-muted hover:text-foreground">
-        <ScrollText /> Add lyrics to sing from
+      <button
+        onClick={openLyrics}
+        className="flex items-center gap-2 rounded-xl border border-dashed border-border px-3 py-2.5 text-left text-xs text-muted transition-colors hover:border-vocals hover:text-foreground"
+      >
+        <ScrollText className="shrink-0 text-vocals" />
+        <span>
+          <b className="text-foreground">Add lyrics to sing from</b> — find a song by name, paste your own, or write with AI.
+        </span>
       </button>
     );
   }
 
   if (!isSynced(lines)) {
     return (
-      <div className="mt-2 max-h-40 overflow-y-auto rounded-lg bg-background/60 px-3 py-2" aria-label="Lyrics">
-        {lines.map((line, i) =>
-          line.text ? (
-            <p key={i} dir="auto" className="leading-snug" style={{ fontSize }}>
-              {line.text}
-            </p>
-          ) : (
-            <div key={i} className="h-3" />
-          )
-        )}
+      <div className="rounded-xl border border-border/60 bg-background/60 px-3 py-2" aria-label="Lyrics">
+        <div className={`${big ? "max-h-64" : "max-h-36"} overflow-y-auto overscroll-contain`} dir="auto">
+          {lines.map((line, i) =>
+            line.text ? (
+              <p key={i} dir="auto" className="leading-snug" style={{ fontSize }}>
+                {line.text}
+              </p>
+            ) : (
+              <div key={i} className="h-3" />
+            )
+          )}
+        </div>
+        <button onClick={openLyrics} className="mt-1 text-[11px] text-vocals hover:underline">
+          Not timed yet — tap to time them, and they&apos;ll follow the beat
+        </button>
       </div>
     );
   }
@@ -1045,9 +1297,9 @@ export function LyricsCue() {
   for (let i = Math.max(0, current); i < lines.length && shown.length < 3; i++) if (lines[i].text) shown.push(i);
   const previous = current > 0 ? [...lines.slice(0, current)].reverse().find((l) => l.text) : undefined;
   return (
-    <div className="mt-2 rounded-lg bg-background/60 px-3 py-2" aria-label="Lyrics" aria-live="polite">
+    <div className={`rounded-xl border border-border/60 bg-background/60 px-3 ${big ? "py-4" : "py-2.5"}`} aria-label="Lyrics" aria-live="polite">
       {previous && (
-        <p dir="auto" className="truncate text-xs text-muted/60">
+        <p dir="auto" className="truncate text-xs text-muted/50">
           {previous.text}
         </p>
       )}
@@ -1055,7 +1307,7 @@ export function LyricsCue() {
         <div key={i}>
           <p
             dir="auto"
-            className={k === 0 && current >= 0 ? "font-semibold leading-snug text-foreground" : "leading-snug text-muted"}
+            className={k === 0 && current >= 0 ? "font-semibold leading-snug text-foreground" : "leading-snug text-muted/80"}
             style={{ fontSize: k === 0 && current >= 0 ? fontSize * 1.2 : fontSize * 0.9 }}
           >
             {lines[i].text}

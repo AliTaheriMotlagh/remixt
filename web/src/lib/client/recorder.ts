@@ -3,12 +3,23 @@
 import { audioEngine } from "./audioEngine";
 import { encodeMp3Bytes } from "./mp3";
 import { upload, type UploadTarget } from "./directUpload";
+import { bleedWithLag, checkTake, type TakeCheck } from "@/lib/bleed";
 
 // Records a vocal over the Studio mix. The microphone is read inside the
 // Studio's own audio graph (an AudioWorklet), so every block of samples
 // comes stamped with the audio clock's time — which is what lets the take
 // land on the timeline exactly where it was sung, rather than wherever a
 // MediaRecorder happened to start.
+//
+// The mix is fed into the same worklet as a second input, so for every
+// block the worklet has what the singer sang and what they were hearing,
+// sample for sample. Their high-frequency envelopes (drum transients live
+// there; a voice mostly doesn't) are compared over a range of delays: when
+// the mic's envelope follows the mix's, the beat is coming out of speakers
+// and into the take.
+
+/** Frames per envelope step: about 10 ms. */
+const ENV_STEP = 512;
 
 const WORKLET = `
 class RemixtTap extends AudioWorkletProcessor {
@@ -19,23 +30,56 @@ class RemixtTap extends AudioWorkletProcessor {
     this.right = new Float32Array(this.size);
     this.filled = 0;
     this.startTime = 0;
+    this.step = ${ENV_STEP};
+    this.stepFill = 0;
+    this.micSum = 0;
+    this.mixSum = 0;
+    this.micPrev = 0;
+    this.mixPrev = 0;
+    this.micEnv = [];
+    this.mixEnv = [];
   }
   process(inputs) {
     const input = inputs[0];
+    const mix = inputs[1];
     if (input && input[0]) {
       const l = input[0];
       const r = input[1] || input[0];
+      const m0 = mix && mix[0];
+      const m1 = mix && mix[1];
       if (this.filled === 0) this.startTime = currentTime;
       this.left.set(l, this.filled);
       this.right.set(r, this.filled);
       this.filled += l.length;
+      // High-frequency envelopes of the mic and the mix, in step.
+      for (let i = 0; i < l.length; i++) {
+        const v = l[i];
+        const dv = v - this.micPrev;
+        this.micPrev = v;
+        this.micSum += dv * dv;
+        const x = m0 ? (m1 ? (m0[i] + m1[i]) * 0.5 : m0[i]) : 0;
+        const dx = x - this.mixPrev;
+        this.mixPrev = x;
+        this.mixSum += dx * dx;
+        if (++this.stepFill === this.step) {
+          this.micEnv.push(Math.sqrt(this.micSum / this.step));
+          this.mixEnv.push(Math.sqrt(this.mixSum / this.step));
+          this.stepFill = 0;
+          this.micSum = 0;
+          this.mixSum = 0;
+        }
+      }
       if (this.filled + 128 > this.size) {
         this.port.postMessage({
           time: this.startTime,
           left: this.left.slice(0, this.filled),
           right: this.right.slice(0, this.filled),
+          micEnv: this.micEnv,
+          mixEnv: this.mixEnv,
         });
         this.filled = 0;
+        this.micEnv = [];
+        this.mixEnv = [];
       }
     }
     return true;
@@ -63,7 +107,37 @@ export type Take = {
   /** Where the take starts on the project timeline, in seconds. */
   start: number;
   peaks: number[];
+  /** Levels: clipping, or too quiet. */
+  check: TakeCheck;
+  /** The beat was heard leaking into the mic during the take. */
+  bleed: boolean;
 };
+
+/** How the take is captured. */
+export type RecordOptions = {
+  countIn?: CountIn;
+  /** A microphone or audio interface to record from; the default one when left out. */
+  deviceId?: string;
+  /**
+   * The mix plays out of speakers rather than headphones: the browser's
+   * echo canceller is switched on to keep the beat out of the take (at
+   * some cost to the voice). Off — the clean studio path — by default.
+   */
+  speakers?: boolean;
+};
+
+/** The microphones and interfaces to record from (named once the mic has been allowed). */
+export async function listInputs(): Promise<{ id: string; label: string }[]> {
+  if (!navigator.mediaDevices?.enumerateDevices) return [];
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices
+      .filter((d) => d.kind === "audioinput" && d.deviceId && d.deviceId !== "communications")
+      .map((d, i) => ({ id: d.deviceId, label: d.label || `Microphone ${i + 1}` }));
+  } catch {
+    return [];
+  }
+}
 
 export type Recording = {
   /** Stops recording (and the mix) and hands back the take, or null if nothing was captured. */
@@ -72,7 +146,51 @@ export type Recording = {
   cancel: () => void;
   /** Live input level, 0..1, for a meter. */
   level: () => number;
+  /**
+   * How much of the beat is leaking into the mic right now, 0..1 — read
+   * it beside `level` every frame. High while the singer's speakers (not
+   * headphones) are carrying the mix, so the take would come home with
+   * the beat baked in.
+   */
+  bleed: () => number;
 };
+
+/** A one-bar metronome count-in before the mix comes in, so the take starts in time. */
+export type CountIn = {
+  /** The project tempo, which spaces the clicks. */
+  bpm: number;
+  /** Called as each beat is counted, `beats` left (4, 3, 2, 1) — for a countdown on screen. */
+  onBeat?: (beatsLeft: number) => void;
+};
+
+/**
+ * Plays the count-in clicks on the audio clock and waits them out. The
+ * singer gets one bar to breathe in before the mix starts, and nothing
+ * recorded before the first downbeat — the recorder only keeps chunks
+ * once the mix is playing.
+ */
+async function playCountIn(ctx: AudioContext, { bpm, onBeat }: CountIn) {
+  const beats = 4;
+  const beat = 60 / (bpm > 0 ? bpm : 120);
+  const at = ctx.currentTime + 0.08;
+  for (let i = 0; i < beats; i++) {
+    const click = ctx.createOscillator();
+    const gain = ctx.createGain();
+    // The first beat is the downbeat: higher and louder, so it reads.
+    click.type = "sine";
+    click.frequency.value = i === 0 ? 1320 : 880;
+    gain.gain.setValueAtTime(0.0001, at + i * beat);
+    gain.gain.exponentialRampToValueAtTime(i === 0 ? 0.5 : 0.35, at + i * beat + 0.008);
+    gain.gain.exponentialRampToValueAtTime(0.0001, at + i * beat + Math.min(0.14, beat * 0.8));
+    click.connect(gain);
+    gain.connect(ctx.destination);
+    click.start(at + i * beat);
+    click.stop(at + i * beat + 0.2);
+    const left = beats - i;
+    setTimeout(() => onBeat?.(left), Math.max(0, (at + i * beat - ctx.currentTime) * 1000));
+  }
+  await new Promise((resolve) => setTimeout(resolve, (at + beat * beats - ctx.currentTime) * 1000 + 80));
+}
 
 function peaksOf(left: Float32Array, buckets = 600) {
   const size = Math.max(1, Math.floor(left.length / buckets));
@@ -110,18 +228,20 @@ async function ensureRunning(ctx: AudioContext) {
 
 /**
  * Starts recording and the mix together. `ctxPromise` must be the result
- * of prepareRecording() called inside the tap that started this.
+ * of prepareRecording() called inside the tap that started this. With a
+ * `countIn`, the metronome clicks one bar first and the mix (and the take)
+ * comes in on the next downbeat.
  */
-export async function startRecording(ctxPromise: Promise<AudioContext>): Promise<Recording> {
+export async function startRecording(ctxPromise: Promise<AudioContext>, options: RecordOptions = {}): Promise<Recording> {
   try {
-    return await openTake(await ctxPromise);
+    return await openTake(await ctxPromise, options);
   } catch (err) {
     audioEngine.setMicActive(false);
     throw err;
   }
 }
 
-async function openTake(ctx: AudioContext): Promise<Recording> {
+async function openTake(ctx: AudioContext, { countIn, deviceId, speakers = false }: RecordOptions): Promise<Recording> {
   if (!navigator.mediaDevices?.getUserMedia) {
     // Browsers only offer the mic to pages on https (or localhost).
     throw new Error(
@@ -133,10 +253,13 @@ async function openTake(ctx: AudioContext): Promise<Recording> {
   let stream: MediaStream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      // A singer wants their voice as it is, not phone-call processed.
-      // (Preferences, not requirements: a phone's mic is mono.)
+      // A singer wants their voice as it is, not phone-call processed —
+      // unless the beat is coming out of speakers, when cancelling it
+      // matters more. (Preferences, not requirements: a phone's mic is
+      // mono, and a mic that's gone falls back to the default.)
       audio: {
-        echoCancellation: false,
+        ...(deviceId ? { deviceId: { ideal: deviceId } } : {}),
+        echoCancellation: speakers,
         noiseSuppression: false,
         autoGainControl: false,
         channelCount: { ideal: 2 },
@@ -162,7 +285,7 @@ async function openTake(ctx: AudioContext): Promise<Recording> {
     await ensureRunning(ctx);
     await ensureWorklet(ctx);
     source = ctx.createMediaStreamSource(stream);
-    tap = new AudioWorkletNode(ctx, "remixt-tap", { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
+    tap = new AudioWorkletNode(ctx, "remixt-tap", { numberOfInputs: 2, numberOfOutputs: 1, outputChannelCount: [2] });
   } catch (err) {
     for (const track of stream.getTracks()) track.stop();
     // Firefox refuses a mic whose sample rate differs from the output's.
@@ -173,24 +296,62 @@ async function openTake(ctx: AudioContext): Promise<Recording> {
   }
   // The tap has to be connected through to the output to be run; silently.
   silent.gain.value = 0;
-  source.connect(tap);
+  source.connect(tap, 0, 0);
+  // The mix, sample-aligned with the mic, for the bleed watch.
+  const mixTap = audioEngine.getAnalyser();
+  mixTap?.connect(tap, 0, 1);
   tap.connect(silent);
   silent.connect(ctx.destination);
 
+  type Block = { time: number; left: Float32Array; right: Float32Array; micEnv: number[]; mixEnv: number[] };
   const chunks: { time: number; left: Float32Array; right: Float32Array }[] = [];
   let recording = false;
   let lastLevel = 0;
-  tap.port.onmessage = (event: MessageEvent<{ time: number; left: Float32Array; right: Float32Array }>) => {
+
+  // Beat-bleed watch: the last few seconds of both envelopes, compared at
+  // every delay up to ~0.4 s (speakers, the room, Bluetooth). Hysteresis
+  // keeps the verdict from flickering: a few blocks in a row to raise it,
+  // more to drop it.
+  const stepsPerSecond = ctx.sampleRate / ENV_STEP;
+  const WINDOW = Math.round(stepsPerSecond * 3);
+  const MAX_LAG = Math.round(stepsPerSecond * 0.4);
+  const HOT_AT = 0.5;
+  const micEnv: number[] = [];
+  const mixEnv: number[] = [];
+  let hot = 0;
+  let bleeding = 0;
+  let bledDuringTake = false;
+
+  tap.port.onmessage = (event: MessageEvent<Block>) => {
+    const block = event.data;
     let peak = 0;
-    for (let i = 0; i < event.data.left.length; i += 8) peak = Math.max(peak, Math.abs(event.data.left[i]));
+    for (let i = 0; i < block.left.length; i += 8) peak = Math.max(peak, Math.abs(block.left[i]));
     lastLevel = peak;
-    if (recording) chunks.push(event.data);
+    if (mixTap) {
+      micEnv.push(...block.micEnv);
+      mixEnv.push(...block.mixEnv);
+      if (micEnv.length > WINDOW) micEnv.splice(0, micEnv.length - WINDOW);
+      if (mixEnv.length > WINDOW) mixEnv.splice(0, mixEnv.length - WINDOW);
+      // Only a playing beat and a live mic mean anything.
+      let mixLevel = 0;
+      for (const v of block.mixEnv) mixLevel = Math.max(mixLevel, v);
+      const { score } = mixLevel > 0.002 && peak > 0.004 ? bleedWithLag(micEnv, mixEnv, MAX_LAG) : { score: 0 };
+      hot = score >= HOT_AT ? Math.min(8, hot + 1) : Math.max(0, hot - 1);
+      bleeding = hot >= 4 ? Math.max(HOT_AT, score) : hot === 0 ? 0 : bleeding;
+      if (recording && hot >= 4) bledDuringTake = true;
+    }
+    if (recording) chunks.push(block);
   };
 
   const teardown = () => {
     recording = false;
     tap.port.onmessage = null;
     source.disconnect();
+    try {
+      mixTap?.disconnect(tap);
+    } catch {
+      // Already apart.
+    }
     tap.disconnect();
     silent.disconnect();
     for (const track of stream.getTracks()) track.stop();
@@ -205,6 +366,9 @@ async function openTake(ctx: AudioContext): Promise<Recording> {
   const latency = inputLatency + outputLatency;
 
   try {
+    // With a count-in, the metronome gives the singer a bar of beats
+    // first; the mix (and the take) come in on the next downbeat.
+    if (countIn) await playCountIn(ctx, countIn);
     await audioEngine.play();
     // From here on, each block's clock time maps onto the timeline.
     recording = true;
@@ -215,6 +379,7 @@ async function openTake(ctx: AudioContext): Promise<Recording> {
 
   return {
     level: () => lastLevel,
+    bleed: () => bleeding,
     cancel: () => {
       teardown();
       audioEngine.pause();
@@ -246,7 +411,7 @@ async function openTake(ctx: AudioContext): Promise<Recording> {
           right[written] = chunk.right[i];
         }
       }
-      return { buffer, start, peaks: peaksOf(left) };
+      return { buffer, start, peaks: peaksOf(left), check: checkTake(left, ctx.sampleRate), bleed: bledDuringTake };
     },
   };
 }

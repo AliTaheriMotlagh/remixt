@@ -17,6 +17,7 @@ import {
   serializeLyrics,
   shiftLines,
   snapLines,
+  songNameOf,
   spreadOverBars,
   startAt,
   syllableTarget,
@@ -137,5 +138,21 @@ describe("fitting", () => {
   test("cleanAiLines strips list marks, stamps, quotes and fences", () => {
     assert.deepEqual(cleanAiLines('```\n1. "First line"\n- [00:01.00] second\n\n\nthird\n```'), ["First line", "second", "", "third"]);
     assert.deepEqual(cleanAiLines("   "), []);
+  });
+});
+
+describe("songNameOf", () => {
+  test("keeps only the song's name", () => {
+    assert.equal(songNameOf("Blinding Lights"), "Blinding Lights");
+    assert.equal(songNameOf("The Weeknd - Blinding Lights (Official Video).mp3"), "Blinding Lights");
+    assert.equal(songNameOf("Drake – God's Plan [HD]"), "God's Plan");
+    assert.equal(songNameOf("Lose Yourself feat. Someone"), "Lose Yourself");
+    assert.equal(songNameOf("Bohemian Rhapsody - Remastered 2011"), "Bohemian Rhapsody");
+    assert.equal(songNameOf("my_song_final.wav"), "my song final");
+    assert.equal(songNameOf('Artist "Song Name" Official'), "Song Name");
+  });
+
+  test("words in other scripts survive", () => {
+    assert.equal(songNameOf("گل گلدون (Live)"), "گل گلدون");
   });
 });

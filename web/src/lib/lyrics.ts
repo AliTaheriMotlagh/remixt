@@ -23,6 +23,34 @@ export type LyricLine = {
   text: string;
 };
 
+/**
+ * The song's name from a track title, for looking its lyrics up. Titles
+ * come from file names and video titles, so they carry noise the lyrics
+ * library doesn't know: "(Official Video)", "[HD]", "feat. …", ".mp3", and
+ * often the artist in front ("Artist - Song"). Only the song's name is
+ * kept — never an artist, and never the person who uploaded it.
+ */
+export function songNameOf(trackTitle: string): string {
+  let title = trackTitle
+    .replace(/\.(mp3|wav|m4a|aac|flac|ogg|opus|webm|mp4)$/i, "")
+    .replace(/_/g, " ")
+    // Bracketed extras: (Official Video), [Lyrics], {HD}, (feat. X).
+    .replace(/\s*[[({][^\])}]*[\])}]/g, " ")
+    // Featured artists left outside brackets.
+    .replace(/\s+(feat\.?|ft\.?|featuring)\s.*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  // A trailing " - Official Video" / " - Remastered 2011" / " - Live" goes.
+  title = title.replace(/\s+[-–—|]\s+(official|lyrics?|audio|video|visuali[sz]er|remaster(ed)?|hd|hq|4k|live|radio edit|explicit|clean)\b.*$/i, "");
+  // "Artist - Song": the song is the last part.
+  const parts = title.split(/\s+[-–—|]\s+/).map((p) => p.trim()).filter(Boolean);
+  if (parts.length > 1) title = parts[parts.length - 1];
+  // Quotes around the name, as video titles do: Artist "Song".
+  const quoted = title.match(/["“”«»]([^"“”«»]{2,})["“”«»]/);
+  if (quoted) title = quoted[1];
+  return title.replace(/^["'“”‘’]+|["'“”‘’]+$/g, "").trim();
+}
+
 const STAMP = /^\[(\d{1,3}):(\d{1,2}(?:[.:]\d{1,3})?)\]/;
 const TAG = /^\[([a-z]+):(.*)\]\s*$/i;
 

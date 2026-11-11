@@ -1,5 +1,5 @@
 // Screenshots of the running app, for checking a UI change without reading
-// the code: `npm run shot -- <path> <out.png> [phone|desktop] [steps]`.
+// the code: `npm run shot -- <path> <out.png> [phone|tablet|desktop] [steps]`.
 //
 //   npm run shot -- /dj /tmp/dj.png phone
 //   npm run shot -- /studio /tmp/s.png phone '[{"click":"text=Start in Producer"},{"wait":800},{"shot":"/tmp/s2.png"}]'
@@ -13,10 +13,11 @@ import { chromium } from "playwright-core";
 
 const [, , path = "/", out = "shot.png", size = "phone", stepsRaw = "[]"] = process.argv;
 const phone = size !== "desktop";
+const tablet = size === "tablet";
 const base = process.env.BASE_URL ?? "http://localhost:3000";
 const browser = await chromium.launch({ channel: "chrome", args: ["--autoplay-policy=no-user-gesture-required"] });
 const page = await browser.newPage({
-  viewport: phone ? { width: 390, height: 844 } : { width: 1440, height: 900 },
+  viewport: tablet ? { width: 820, height: 1180 } : phone ? { width: 390, height: 844 } : { width: 1440, height: 900 },
   isMobile: phone,
   hasTouch: phone,
 });

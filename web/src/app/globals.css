@@ -270,6 +270,14 @@ body {
   }
 }
 
+/* A count-in number landing on its beat. */
+@keyframes count-pop {
+  from {
+    transform: scale(1.35);
+    opacity: 0.4;
+  }
+}
+
 /* Room for the bars fixed at the bottom, for things floating above them
    (and above the AI producer's sheet on a phone, which sets --ai-sheet-h). */
 .bottom-float {
