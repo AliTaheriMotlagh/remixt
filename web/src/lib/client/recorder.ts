@@ -416,42 +416,105 @@ async function openTake(ctx: AudioContext, { countIn, deviceId, speakers = false
   };
 }
 
+/** Where a take's save has got to — each step is named on screen, so a slow one doesn't look like a frozen 0%. */
+export type SaveStep = "encoding" | "creating" | "uploading" | "finishing";
+
+/** A call to this app's API that gives up rather than hang on a phone's stalled connection. */
+const API_LIMIT_MS = 30_000;
+
+/** `fetch` + reading its JSON, with a time limit, stopped early by `signal`. */
+async function apiJson(url: string, init: RequestInit, signal: AbortSignal | undefined, what: string) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), API_LIMIT_MS);
+  const cancel = () => controller.abort();
+  signal?.addEventListener("abort", cancel, { once: true });
+  try {
+    const res = await fetch(url, { ...init, signal: controller.signal });
+    const data = await res.json().catch(() => null);
+    return { ok: res.ok, data };
+  } catch (err) {
+    signal?.throwIfAborted();
+    throw new Error(`${what} — check your connection and try again`, { cause: err });
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", cancel);
+  }
+}
+
+/** Rejects as soon as `signal` aborts, whatever `work` is still doing. */
+function unlessAborted<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return work;
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
 /**
  * Uploads a take as a vocal stem in the library (a "track" with just a
- * vocal) and returns its stem, ready to add as a lane.
+ * vocal) and returns its stem, ready to add as a lane. `onProgress` gets
+ * the step it's on and how far through that step (0–1). `signal` stops it;
+ * a track already created for it is deleted.
  */
 export async function uploadTake(
   take: Take,
   title: string,
   bpm: number | null,
-  onProgress: (fraction: number) => void
+  onProgress: (step: SaveStep, fraction: number) => void,
+  signal?: AbortSignal
 ): Promise<{ stemId: string; trackId: string }> {
-  const bytes = await encodeMp3Bytes(take.buffer, { bitrate: 192, trimDelay: true });
-  const created = await fetch("/api/tracks", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      title: title.slice(0, 200) || "Recorded vocal",
-      filename: "studio-recording.mp3",
-      duration: take.buffer.duration,
-      bpm: bpm && bpm >= 20 && bpm <= 300 ? bpm : null,
-      vocalsPeaks: take.peaks,
-      recording: true,
-      tags: ["studio recording"],
-      rightsConfirmed: true,
-    }),
+  onProgress("encoding", 0);
+  const bytes = await encodeMp3Bytes(take.buffer, {
+    bitrate: 192,
+    trimDelay: true,
+    signal,
+    onProgress: (f) => onProgress("encoding", f),
   });
-  const track = await created.json().catch(() => null);
+
+  onProgress("creating", 0);
+  const created = await apiJson(
+    "/api/tracks",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: title.slice(0, 200) || "Recorded vocal",
+        filename: "studio-recording.mp3",
+        duration: take.buffer.duration,
+        bpm: bpm && bpm >= 20 && bpm <= 300 ? bpm : null,
+        vocalsPeaks: take.peaks,
+        recording: true,
+        tags: ["studio recording"],
+        rightsConfirmed: true,
+      }),
+    },
+    signal,
+    "Couldn't reach the server to save the take"
+  );
+  const track = created.data;
   if (!created.ok || !track?.id) throw new Error(track?.error ?? "Couldn't save the recording");
 
-  await upload(track.uploads.vocals as UploadTarget, bytes, (n) => onProgress(n / bytes.length));
-  const done = await fetch(`/api/tracks/${track.id}/complete`, { method: "POST" });
-  if (!done.ok) {
-    const data = await done.json().catch(() => null);
-    throw new Error(data?.error ?? "Couldn't finish saving the recording");
+  try {
+    onProgress("uploading", 0);
+    // The upload has its own stall detection and retries; a cancel just stops waiting for it.
+    await unlessAborted(
+      upload(track.uploads.vocals as UploadTarget, bytes, (n) => onProgress("uploading", n / bytes.length)),
+      signal
+    );
+
+    onProgress("finishing", 0);
+    const done = await apiJson(`/api/tracks/${track.id}/complete`, { method: "POST" }, signal, "Couldn't finish saving the take");
+    if (!done.ok) throw new Error(done.data?.error ?? "Couldn't finish saving the recording");
+    const info = await apiJson(`/api/tracks/${track.id}`, {}, signal, "Couldn't finish saving the take");
+    const stem = (info.data?.stems as { id: string; kind: string }[] | undefined)?.find((s) => s.kind === "vocals");
+    if (!stem) throw new Error("The recording saved, but its stem is missing");
+    onProgress("finishing", 1);
+    return { stemId: stem.id, trackId: track.id };
+  } catch (err) {
+    // A half-saved take shouldn't sit in the library as a broken track.
+    void fetch(`/api/tracks/${track.id}`, { method: "DELETE" }).catch(() => {});
+    throw err;
   }
-  const info = await fetch(`/api/tracks/${track.id}`).then((res) => res.json());
-  const stem = (info.stems as { id: string; kind: string }[]).find((s) => s.kind === "vocals");
-  if (!stem) throw new Error("The recording saved, but its stem is missing");
-  return { stemId: stem.id, trackId: track.id };
 }

@@ -19,10 +19,16 @@ export type Mp3Request = {
 const MP3_DELAY = 576 + 529;
 const CHUNK = 1152 * 64;
 
-/** Encodes stereo PCM to an MP3 file. Runs in a worker or on the page. `onProgress` gets 0–1. */
+/**
+ * Encodes stereo PCM to an MP3 file. Runs in a worker or on the page.
+ * `onProgress` gets 0–1. `breathe`: on the page, hand the thread back
+ * between pieces, so the screen keeps drawing (and the progress shows)
+ * instead of freezing until it's done.
+ */
 export async function encodePcmToMp3(
   { left, right, sampleRate, bitrate, trimDelay }: Mp3Request,
-  onProgress?: (fraction: number) => void
+  onProgress?: (fraction: number) => void,
+  { breathe = false, signal }: { breathe?: boolean; signal?: AbortSignal } = {}
 ) {
   const encoder = await createMp3Encoder();
   encoder.configure({ sampleRate, channels: 2, bitrate });
@@ -33,6 +39,10 @@ export async function encodePcmToMp3(
     // The encoder owns the returned buffer, hence the copy.
     parts.push(encoder.encode([left.subarray(start, end), right.subarray(start, end)]).slice());
     onProgress?.(end / left.length);
+    if (breathe) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      signal?.throwIfAborted();
+    }
   }
   parts.push(encoder.finalize().slice());
   return join(parts);

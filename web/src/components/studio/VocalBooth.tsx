@@ -19,7 +19,15 @@ import {
 } from "lucide-react";
 import Waveform from "../Waveform";
 import { audioEngine } from "@/lib/client/audioEngine";
-import { listInputs, prepareRecording, startRecording, uploadTake, type Recording, type Take } from "@/lib/client/recorder";
+import {
+  listInputs,
+  prepareRecording,
+  startRecording,
+  uploadTake,
+  type Recording,
+  type SaveStep,
+  type Take,
+} from "@/lib/client/recorder";
 import { activeSheet, useLyrics } from "@/lib/client/lyricsStore";
 import { useStudioStore } from "@/lib/client/studioStore";
 import { useStudioView } from "@/lib/client/studioView";
@@ -160,6 +168,19 @@ function TakeBadges({ take }: { take: Take }) {
   );
 }
 
+const SAVE_STEPS: Record<SaveStep, string> = {
+  encoding: "Getting the take ready…",
+  creating: "Saving the take…",
+  uploading: "Uploading the take…",
+  finishing: "Adding it to the mix…",
+};
+
+/** The whole save as one bar: the upload is most of the wait, getting it ready a little of it. */
+function overallSave(step: SaveStep, fraction: number) {
+  const [from, to] = { encoding: [0, 0.15], creating: [0.15, 0.2], uploading: [0.2, 0.95], finishing: [0.95, 1] }[step];
+  return from + (to - from) * Math.min(1, Math.max(0, fraction));
+}
+
 /** The record half of the booth. */
 function RecordTab({ signedIn }: { signedIn: boolean }) {
   const addStem = useStudioStore((s) => s.addStem);
@@ -170,7 +191,8 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
   const [state, setState] = useState<"idle" | "starting" | "recording" | "review" | "saving">("idle");
   const [error, setError] = useState<string | null>(null);
   const [take, setTake] = useState<Take | null>(null);
-  const [progress, setProgress] = useState(0);
+  const [progress, setProgress] = useState<{ step: SaveStep; fraction: number }>({ step: "encoding", fraction: 0 });
+  const saving = useRef<AbortController | null>(null);
   const [takeNumber, setTakeNumber] = useState(1);
   const [prefs, setPrefsState] = useState<RecordPrefs>(readPrefs);
   const [inputs, setInputs] = useState<{ id: string; label: string }[]>([]);
@@ -320,10 +342,23 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
     if (!take) return;
     stopPreview();
     setState("saving");
-    setProgress(0);
+    setError(null);
+    setProgress({ step: "encoding", fraction: 0 });
+    saving.current?.abort();
+    const controller = new AbortController();
+    saving.current = controller;
     try {
       const title = `Studio vocal — take ${takeNumber} (${new Date().toLocaleDateString()})`;
-      const { stemId } = await uploadTake(take, title, projectBpm, setProgress);
+      const { stemId } = await uploadTake(
+        take,
+        title,
+        projectBpm,
+        (step, fraction) => {
+          if (!controller.signal.aborted) setProgress({ step, fraction });
+        },
+        controller.signal
+      );
+      if (controller.signal.aborted) return;
       const laneId = addStem({
         id: stemId,
         kind: "vocals",
@@ -339,9 +374,20 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
       setTakeNumber((n) => n + 1);
       setState("idle");
     } catch (err) {
+      // Cancelled: cancelSave has already put the take back up for review.
+      if (controller.signal.aborted) return;
       setError(err instanceof Error ? err.message : "Couldn't save the take");
       setState("review");
+    } finally {
+      if (saving.current === controller) saving.current = null;
     }
+  }
+
+  /** Stops a save that's taking too long; the take stays, to try again. */
+  function cancelSave() {
+    saving.current?.abort();
+    saving.current = null;
+    setState("review");
   }
 
   function reset() {
@@ -459,9 +505,20 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
         <TakeBadges take={take} />
         {state === "saving" ? (
           <div className="flex flex-col gap-1.5">
-            <span className="text-xs text-muted">Saving the take… {Math.round(progress * 100)}%</span>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-muted" aria-live="polite">
+                {SAVE_STEPS[progress.step]}
+                {progress.fraction > 0 && progress.fraction < 1 ? ` ${Math.round(progress.fraction * 100)}%` : ""}
+              </span>
+              <button onClick={cancelSave} className="text-xs font-semibold text-muted hover:text-foreground">
+                Cancel
+              </button>
+            </div>
             <div className="h-2 overflow-hidden rounded-full bg-foreground/10">
-              <div className="h-full rounded-full bg-vocals transition-[width]" style={{ width: `${Math.round(progress * 100)}%` }} />
+              <div
+                className="h-full rounded-full bg-vocals transition-[width]"
+                style={{ width: `${Math.round(overallSave(progress.step, progress.fraction) * 100)}%` }}
+              />
             </div>
           </div>
         ) : (

@@ -10,10 +10,17 @@ function channels(buffer: AudioBuffer) {
 }
 
 /**
+ * A worker that hasn't said anything for this long is taken to be stuck
+ * (it reports progress every 2%, so a healthy one is never this quiet) —
+ * seen on phones as a save that sat at 0% for good.
+ */
+const WORKER_SILENCE_MS = 20_000;
+
+/**
  * Encodes an AudioBuffer as MP3 bytes, in a worker where possible.
  * `workerOnly`: fail rather than fall back to encoding on the page's own
- * thread, which freezes it for as long as that takes. `signal` stops the
- * worker. `onProgress` gets 0–1 as it goes.
+ * thread, which is slower and makes the page stutter. `signal` stops it.
+ * `onProgress` gets 0–1 as it goes.
  */
 export async function encodeMp3Bytes(
   buffer: AudioBuffer,
@@ -36,16 +43,27 @@ export async function encodeMp3Bytes(
     return await new Promise<Uint8Array>((resolve, reject) => {
       signal?.throwIfAborted();
       const worker = new Worker(new URL("./mp3.worker.ts", import.meta.url), { type: "module" });
+      let silence: ReturnType<typeof setTimeout> | undefined;
       const stop = () => {
-        worker.terminate();
+        finish();
         reject(signal?.reason ?? new Error("Stopped"));
       };
-      signal?.addEventListener("abort", stop, { once: true });
       const finish = () => {
+        clearTimeout(silence);
         worker.terminate();
         signal?.removeEventListener("abort", stop);
       };
+      const watch = () => {
+        clearTimeout(silence);
+        silence = setTimeout(() => {
+          finish();
+          reject(new Error("The MP3 worker stopped answering"));
+        }, WORKER_SILENCE_MS);
+      };
+      signal?.addEventListener("abort", stop, { once: true });
+      watch();
       worker.onmessage = (event: MessageEvent<Mp3Response>) => {
+        watch();
         if (event.data.ok === null) {
           onProgress?.(event.data.progress);
           return;
@@ -63,8 +81,9 @@ export async function encodeMp3Bytes(
     });
   } catch (err) {
     if (workerOnly || signal?.aborted) throw err;
-    // No worker (or it failed to start) — slower, but still works.
-    return encodePcmToMp3({ ...options, ...channels(buffer) }, onProgress);
+    // No worker (or it failed to start, or got stuck) — slower, but still works.
+    onProgress?.(0);
+    return encodePcmToMp3({ ...options, ...channels(buffer) }, onProgress, { breathe: true, signal });
   }
 }
 
