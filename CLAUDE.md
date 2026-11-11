@@ -10,7 +10,7 @@ Remixt is a browser DAW: upload a song, it's split into vocal and beat stems in 
   - `tests/` — tests run by `npm test`
 - `separation-service/` — old Python splitter. Not used; ignore it.
 - `storage/` — local stems and uploads (gitignored). Don't read it.
-- `graphify-out/` — knowledge graph of the repo. `GRAPH_REPORT.md` is tracked; the rest is local.
+- `graphify-out/` — knowledge graph of the repo. All of it is local and gitignored (the post-commit hook rebuilds it); never commit it.
 - `docker/`, `Dockerfile`, `DEPLOY.md`, `share.sh` — deployment and sharing.
 
 ## Finding code

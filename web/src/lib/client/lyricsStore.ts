@@ -17,6 +17,11 @@ export type LyricSheet = {
   text: string;
   source: "library" | "own" | "ai";
   updatedAt: number;
+  /**
+   * Found lyrics are timed to the original recording; once they've been
+   * lined up with this beat (or kept as they are) the hint stays gone.
+   */
+  aligned?: boolean;
 };
 
 const SHEETS_KEY = "remixt.lyrics.sheets";
@@ -24,6 +29,9 @@ const ACTIVE_KEY = "remixt.lyrics.active";
 const PREFS_KEY = "remixt.lyrics.prefs";
 const MAX_SHEETS = 60;
 const MAX_UNDO = 30;
+
+/** What the lyrics half of the booth shows: the open sheet, its editor, choosing a sheet, or the AI. */
+export type LyricsView = "sheet" | "edit" | "pick" | "ai";
 
 export type LyricsPrefs = { style: SingStyle; fontSize: number; barsPerLine: number };
 const DEFAULT_PREFS: LyricsPrefs = { style: "rap", fontSize: 18, barsPerLine: 1 };
@@ -64,6 +72,11 @@ type LyricsState = {
   setBoothOpen: (open: boolean) => void;
   /** Opens the booth on a tab. */
   openBooth: (tab: "record" | "lyrics") => void;
+  /** What the lyrics tab shows (see LyricsView). */
+  view: LyricsView;
+  setView: (view: LyricsView) => void;
+  /** The booth open on its lyrics, showing `view` — e.g. "Change" from the recorder opens the picker. */
+  openLyrics: (view: LyricsView) => void;
   /**
    * Where the take is: a take keeps going (and a recorded one waits to be
    * kept) with the booth closed or on its lyrics, so the launcher shows it.
@@ -73,7 +86,7 @@ type LyricsState = {
   load: () => void;
   select: (id: string | null) => void;
   /** A new sheet, opened. */
-  create: (sheet: Pick<LyricSheet, "title" | "artist" | "text" | "source">) => string;
+  create: (sheet: Pick<LyricSheet, "title" | "artist" | "text" | "source" | "aligned">) => string;
   /** The open sheet's title or artist. */
   rename: (patch: Partial<Pick<LyricSheet, "title" | "artist">>) => void;
   /** The open sheet's text as typed (no undo step for every key). */
@@ -83,7 +96,13 @@ type LyricsState = {
   /** The open sheet's lines, changed by a tool — one undo step. */
   setLines: (lines: LyricLine[]) => void;
   undo: () => void;
+  /** Marks the open sheet as lined up with the beat (see LyricSheet.aligned). */
+  markAligned: () => void;
+  /** Deletes a sheet; the last one deleted can be brought back with restore(). */
   remove: (id: string) => void;
+  /** The sheet last deleted, and whether it was the open one — for Undo. */
+  removed: { sheet: LyricSheet; wasActive: boolean } | null;
+  restore: () => void;
   setPrefs: (prefs: Partial<LyricsPrefs>) => void;
 };
 
@@ -114,6 +133,9 @@ export const useLyrics = create<LyricsState>((set, get) => {
     boothTab: "record",
     setBoothOpen: (boothOpen) => set({ boothOpen }),
     openBooth: (boothTab) => set({ boothOpen: true, boothTab }),
+    view: "sheet",
+    setView: (view) => set({ view }),
+    openLyrics: (view) => set({ boothOpen: true, boothTab: "lyrics", view }),
     take: "idle",
     setTake: (take) => set({ take }),
     load: () => {
@@ -165,11 +187,36 @@ export const useLyrics = create<LyricsState>((set, get) => {
       persist(next, activeId);
       set({ sheets: next, lines: parseLyrics(previous), past: past.slice(0, -1) });
     },
+    markAligned: () => {
+      const { sheets, activeId } = get();
+      if (!sheets.some((s) => s.id === activeId && !s.aligned)) return;
+      const next = sheets.map((s) => (s.id === activeId ? { ...s, aligned: true } : s));
+      persist(next, activeId);
+      set({ sheets: next });
+    },
+    removed: null,
     remove: (id) => {
+      const sheet = get().sheets.find((s) => s.id === id);
+      if (!sheet) return;
+      const wasActive = get().activeId === id;
       const sheets = get().sheets.filter((s) => s.id !== id);
-      const activeId = get().activeId === id ? null : get().activeId;
+      const activeId = wasActive ? null : get().activeId;
       persist(sheets, activeId);
-      set({ sheets, activeId, ...(activeId ? {} : { lines: [], past: [] }) });
+      set({ sheets, activeId, removed: { sheet, wasActive }, ...(wasActive ? { lines: [], past: [] } : {}) });
+    },
+    restore: () => {
+      const { removed, sheets, activeId } = get();
+      if (!removed) return;
+      // Back where it was in the list (newest first), and open again if it was.
+      const next = [...sheets, removed.sheet].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_SHEETS);
+      const active = removed.wasActive ? removed.sheet.id : activeId;
+      persist(next, active);
+      set({
+        sheets: next,
+        activeId: active,
+        removed: null,
+        ...(removed.wasActive ? { lines: parseLyrics(removed.sheet.text), past: [] } : {}),
+      });
     },
     setPrefs: (prefs) => {
       const next = { ...get().prefs, ...prefs };

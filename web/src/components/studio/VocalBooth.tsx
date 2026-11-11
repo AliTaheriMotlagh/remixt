@@ -29,6 +29,7 @@ import {
   type Take,
 } from "@/lib/client/recorder";
 import { activeSheet, useLyrics } from "@/lib/client/lyricsStore";
+import { beatSeconds } from "@/lib/lyrics";
 import { useStudioStore } from "@/lib/client/studioStore";
 import { useStudioView } from "@/lib/client/studioView";
 import { useKeepScreenOn } from "@/lib/client/wakeLock";
@@ -47,10 +48,13 @@ import { LyricsCue, LyricsTools } from "./LyricsPanel";
 const PREFS_KEY = "remixt.record.prefs";
 const OLD_COUNT_IN_KEY = "remixt.record.countIn";
 
-type RecordPrefs = { countIn: boolean; speakers: boolean; deviceId: string };
+/** Where a take starts: the playhead, the top of the song, or a couple of bars before the lyrics' first line. */
+type StartFrom = "here" | "start" | "lyrics";
+
+type RecordPrefs = { countIn: boolean; speakers: boolean; deviceId: string; from: StartFrom };
 
 function readPrefs(): RecordPrefs {
-  const fallback: RecordPrefs = { countIn: true, speakers: false, deviceId: "" };
+  const fallback: RecordPrefs = { countIn: true, speakers: false, deviceId: "", from: "here" };
   try {
     const raw = localStorage.getItem(PREFS_KEY);
     if (raw) return { ...fallback, ...(JSON.parse(raw) as Partial<RecordPrefs>) };
@@ -114,6 +118,12 @@ function ElapsedTime({ start }: { start: number }) {
 function PlayheadTime() {
   const playhead = useStudioStore((s) => s.playhead);
   return <>{formatTime(playhead)}</>;
+}
+
+/** Two bars before the open lyrics' first timed line — room to breathe in — or null with no timed lyrics. */
+function lyricsStart(bpm: number): number | null {
+  const first = useLyrics.getState().lines.find((l) => l.time !== null && l.text)?.time;
+  return first === undefined || first === null ? null : Math.max(0, first - beatSeconds(bpm) * 8);
 }
 
 /** A setting as a pill that's lit when on. */
@@ -188,6 +198,11 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
   const projectBpm = useStudioStore((s) => s.projectBpm);
   const hasMix = useStudioStore((s) => s.lanes.length > 0);
   const setTakeState = useLyrics((s) => s.setTake);
+  const sheet = useLyrics(activeSheet);
+  const lyricsAt = useLyrics((s) => {
+    const first = s.lines.find((l) => l.time !== null && l.text)?.time;
+    return first === undefined ? null : first;
+  });
   const [state, setState] = useState<"idle" | "starting" | "recording" | "review" | "saving">("idle");
   const [error, setError] = useState<string | null>(null);
   const [take, setTake] = useState<Take | null>(null);
@@ -228,7 +243,8 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
 
   const onBleed = useCallback(() => setBleeding(true), []);
 
-  async function begin() {
+  /** `fromHere`: start at the playhead whatever the start setting (a retake, from where the last one began). */
+  async function begin(fromHere = false) {
     if (!hasMix) {
       setError("Add a beat first — the take is recorded over the mix");
       return;
@@ -239,6 +255,11 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
     setState("starting");
     // Inside the tap: audio has to be unlocked before anything is awaited.
     const ctx = prepareRecording();
+    if (!fromHere && prefs.from === "start") audioEngine.seek(0);
+    if (!fromHere && prefs.from === "lyrics") {
+      const at = lyricsStart(projectBpm);
+      if (at !== null) audioEngine.seek(at);
+    }
     try {
       const rec = await startRecording(ctx, {
         countIn: prefs.countIn ? { bpm: projectBpm, onBeat: setCountBeat } : undefined,
@@ -348,7 +369,10 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
     const controller = new AbortController();
     saving.current = controller;
     try {
-      const title = `Studio vocal — take ${takeNumber} (${new Date().toLocaleDateString()})`;
+      // Named for the lyrics sung, so the take is easy to find in the song list later.
+      const title = sheet?.title
+        ? `${sheet.title} — take ${takeNumber}`.slice(0, 200)
+        : `Studio vocal — take ${takeNumber} (${new Date().toLocaleDateString()})`;
       const { stemId } = await uploadTake(
         take,
         title,
@@ -406,7 +430,7 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
     const from = take?.start;
     reset();
     if (from !== undefined) audioEngine.seek(Math.max(0, from - 0.05));
-    void begin();
+    void begin(from !== undefined);
   }
 
   if (!signedIn) {
@@ -586,7 +610,17 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
         </button>
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold">
-            Record from <span className="tabular-nums text-vocals"><PlayheadTime /></span>
+            {prefs.from === "start" ? (
+              "Record from the top"
+            ) : prefs.from === "lyrics" && lyricsAt !== null ? (
+              <>
+                Record from <span className="tabular-nums text-vocals">{formatTime(lyricsStart(projectBpm) ?? 0)}</span> — 2 bars before the words
+              </>
+            ) : (
+              <>
+                Record from <span className="tabular-nums text-vocals"><PlayheadTime /></span>
+              </>
+            )}
           </p>
           <p className="text-xs text-muted">
             {prefs.speakers
@@ -597,6 +631,29 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex rounded-full border border-border p-0.5" role="radiogroup" aria-label="Where the take starts">
+          {(
+            [
+              ["here", "Playhead", "Start where the playhead is"],
+              ["start", "Top", "Start from the beginning of the song"],
+              ["lyrics", "Lyrics", "Start two bars before the first line of your lyrics"],
+            ] as const
+          ).map(([from, label, title]) => (
+            <button
+              key={from}
+              role="radio"
+              aria-checked={prefs.from === from}
+              disabled={from === "lyrics" && lyricsAt === null}
+              onClick={() => setPrefs({ from })}
+              title={from === "lyrics" && lyricsAt === null ? "Time your lyrics first, and the take can start just before them" : title}
+              className={`flex h-8 items-center rounded-full px-2.5 text-xs font-semibold transition-colors disabled:opacity-40 max-lg:h-9 ${
+                prefs.from === from ? "bg-vocals text-white" : "text-muted hover:text-foreground"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <Toggle
           on={prefs.countIn}
           onClick={() => setPrefs({ countIn: !prefs.countIn })}

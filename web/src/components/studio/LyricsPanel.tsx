@@ -2,6 +2,7 @@
 
 import { memo, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import {
+  ArrowLeft,
   Check,
   ChevronDown,
   ClipboardPaste,
@@ -17,12 +18,11 @@ import {
   Play,
   Plus,
   PenLine,
+  Repeat2,
   Rows3,
   ScrollText,
-  Search,
   Sparkles,
   Timer,
-  Trash2,
   Undo2,
   X,
 } from "lucide-react";
@@ -31,6 +31,7 @@ import { browserKey, savedModelChoice, savedProvider } from "@/lib/client/coprod
 import { activeSheet, useLyrics } from "@/lib/client/lyricsStore";
 import { useStudioStore } from "@/lib/client/studioStore";
 import { useStudioView } from "@/lib/client/studioView";
+import LyricsPicker from "./LyricsPicker";
 import {
   barAt,
   beatSeconds,
@@ -43,32 +44,23 @@ import {
   plainText,
   shiftLines,
   snapLines,
-  songNameOf,
   spreadOverBars,
   startAt,
   syllableTarget,
   type LineFit,
   type LyricLine,
-  type LyricsResult,
 } from "@/lib/lyrics";
 
-// The words half of the vocal booth: find a song's lyrics (by the song's
-// name — never the uploader's), or paste and write them with the AI, then
-// have them follow the playhead while the beat plays and fit them to it —
-// time each line by tapping along, move or snap them onto the beat, and
-// see which lines are too crammed or too roomy. The recorder sings from
+// The words half of the vocal booth: the open sheet following the playhead
+// while the beat plays, and the tools to fit it to the beat — time each
+// line by tapping along, move or snap them onto the beat, and see which
+// lines are too crammed or too roomy. Choosing a sheet (find, paste,
+// write, AI, or one used before) is LyricsPicker. The recorder sings from
 // the same sheet (LyricsCue).
-
-type Tab = "sing" | "edit" | "find" | "ai";
-
-/** Found sheets already lined up with this beat (or kept as they are), so the hint stays gone for the visit. */
-const alignedSheets = new Set<string>();
 
 /** A moment it takes to react to a line: taken off a tap so it lands where the line was sung. */
 const TAP_REACTION = 0.08;
 
-const CHIP =
-  "rounded-full border border-border px-2.5 py-0.5 text-[11px] text-muted transition-colors hover:border-vocals hover:text-foreground";
 const GHOST =
   "flex items-center justify-center gap-1.5 rounded-lg border border-border text-muted transition-colors hover:border-vocals hover:text-foreground disabled:opacity-40 max-lg:h-10 max-lg:w-10";
 
@@ -357,11 +349,7 @@ function FitTools({ lines }: { lines: LyricLine[] }) {
 function SingTab({ lines, onEdit, onRecord }: { lines: LyricLine[]; onEdit: () => void; onRecord?: () => void }) {
   const setLines = useLyrics((s) => s.setLines);
   const sheet = useLyrics(activeSheet);
-  const [, setAligned] = useState(0);
-  const markAligned = () => {
-    if (sheet) alignedSheets.add(sheet.id);
-    setAligned((n) => n + 1);
-  };
+  const markAligned = useLyrics((s) => s.markAligned);
   const past = useLyrics((s) => s.past);
   const undo = useLyrics((s) => s.undo);
   const prefs = useLyrics((s) => s.prefs);
@@ -419,7 +407,7 @@ function SingTab({ lines, onEdit, onRecord }: { lines: LyricLine[]; onEdit: () =
   const synced = isSynced(lines);
   const target = syllableTarget(bpm, prefs.style, prefs.barsPerLine);
   // Found lyrics are timed to the original recording; on another beat they need lining up once.
-  const fromOriginal = synced && sheet?.source === "library" && !alignedSheets.has(sheet.id);
+  const fromOriginal = synced && sheet?.source === "library" && !sheet.aligned;
 
   return (
     <div className="flex flex-col gap-2.5">
@@ -702,168 +690,6 @@ function EditTab({ onDone }: { onDone: () => void }) {
   );
 }
 
-function FindTab({ onUse }: { onUse: () => void }) {
-  const lanes = useStudioStore((s) => s.lanes);
-  const create = useLyrics((s) => s.create);
-  const [query, setQuery] = useState("");
-  const [touched, setTouched] = useState(false);
-  const [searching, setSearching] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [results, setResults] = useState<LyricsResult[] | null>(null);
-  const [open, setOpen] = useState<number | null>(null);
-
-  // The songs in the mix, by name only — a lane's "artist" is whoever
-  // uploaded it, not the song's artist, so the search never sees it.
-  const suggestions = useMemo(() => {
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const lane of lanes) {
-      if (lane.artistName === "You" || /^studio vocal/i.test(lane.trackTitle)) continue;
-      const title = songNameOf(lane.trackTitle);
-      if (!title) continue;
-      const key = title.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(title);
-    }
-    return out.slice(0, 4);
-  }, [lanes]);
-
-  // The search box starts on the mix's song, ready to look up.
-  const shownQuery = touched ? query : query || suggestions[0] || "";
-
-  /** `byName` searches the library by the song's name (a mix lane); otherwise a free search. */
-  async function search(text: string, byName = false) {
-    const q = text.trim();
-    if (!q) return;
-    setQuery(q);
-    setSearching(true);
-    setError(null);
-    setOpen(null);
-    try {
-      const url = byName ? `/api/lyrics/search?track=${encodeURIComponent(q)}` : `/api/lyrics/search?q=${encodeURIComponent(q)}`;
-      const res = await fetch(url);
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? "Couldn't search");
-      setResults(data.results as LyricsResult[]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't search");
-      setResults(null);
-    } finally {
-      setSearching(false);
-    }
-  }
-
-  function applyResult(result: LyricsResult) {
-    create({ title: result.title, artist: result.artist, text: result.synced ?? result.plain ?? "", source: "library" });
-    onUse();
-  }
-
-  return (
-    <div className="flex flex-col gap-2">
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          void search(shownQuery, !touched && shownQuery === suggestions[0]);
-        }}
-        className="flex gap-2"
-      >
-        <div className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
-          <input
-            value={shownQuery}
-            onChange={(e) => {
-              setTouched(true);
-              setQuery(e.target.value);
-            }}
-            placeholder="Song name"
-            dir="auto"
-            type="search"
-            enterKeyHint="search"
-            aria-label="Search lyrics by song name"
-            className="h-11 w-full rounded-xl border border-border bg-background pl-9 pr-3 text-sm max-lg:text-base"
-          />
-        </div>
-        <button
-          type="submit"
-          disabled={searching || !shownQuery.trim()}
-          className="flex h-11 items-center gap-1.5 rounded-xl bg-vocals px-4 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
-        >
-          {searching ? "Looking…" : "Find"}
-        </button>
-      </form>
-      <p className="text-[11px] text-muted">Just the song&apos;s name — no artist or uploader needed.</p>
-      {suggestions.length > 0 && !results && (
-        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
-          From your mix:
-          {suggestions.map((title) => (
-            <button
-              key={title}
-              onClick={() => {
-                setTouched(true);
-                void search(title, true);
-              }}
-              className={`max-w-[16rem] truncate ${CHIP} max-lg:py-1.5`}
-              dir="auto"
-              title={`Find lyrics for “${title}”`}
-            >
-              {title}
-            </button>
-          ))}
-        </div>
-      )}
-      {error && <p className="text-xs text-danger">{error}</p>}
-      {results && results.length === 0 && <p className="py-3 text-center text-xs text-muted">No lyrics found — try fewer words, or paste them in yourself.</p>}
-      {results && results.length > 0 && (
-        <ul className="flex max-h-[22rem] flex-col gap-1.5 overflow-y-auto overscroll-contain">
-          {results.map((r) => (
-            <li key={r.id} className="rounded-xl border border-border bg-background/50 p-2 transition-colors hover:border-vocals/50">
-              <div className="flex items-center gap-2">
-                <button onClick={() => setOpen(open === r.id ? null : r.id)} className="min-w-0 flex-1 text-left">
-                  <p dir="auto" className="truncate text-sm font-medium">
-                    {r.title}
-                  </p>
-                  <p dir="auto" className="truncate text-[11px] text-muted">
-                    {[r.artist, r.album, r.duration ? formatClock(r.duration) : ""].filter(Boolean).join(" · ")}
-                  </p>
-                </button>
-                {r.synced ? (
-                  <span className="flex shrink-0 items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-[10px] font-semibold text-success" title="Every line has its time — they'll follow the song">
-                    <Clock className="h-3 w-3" /> Timed
-                  </span>
-                ) : r.instrumental ? (
-                  <span className="shrink-0 text-[10px] text-muted">Instrumental</span>
-                ) : null}
-                <button
-                  onClick={() => setOpen(open === r.id ? null : r.id)}
-                  className="h-8 w-8 shrink-0 rounded-lg text-muted hover:text-foreground"
-                  aria-label={open === r.id ? "Hide a preview of the words" : "Preview the words"}
-                  aria-expanded={open === r.id}
-                >
-                  <ChevronDown className={`mx-auto transition-transform ${open === r.id ? "rotate-180" : ""}`} />
-                </button>
-                <button
-                  onClick={() => applyResult(r)}
-                  disabled={r.instrumental && !r.plain && !r.synced}
-                  className="h-9 shrink-0 rounded-lg bg-vocals px-3 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
-                >
-                  Use
-                </button>
-              </div>
-              {open === r.id && (
-                <pre dir="auto" className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap border-t border-border pt-2 font-sans text-xs text-muted">
-                  {(r.plain ?? r.synced ?? "").slice(0, 1500)}
-                </pre>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-      <p className="text-[11px] text-muted/80">Lyrics from LRCLIB, an open lyrics library.</p>
-    </div>
-  );
-}
-
 type AiMode = "complete" | "fit" | "write";
 
 function AiTabView({ lines, onDone }: { lines: LyricLine[]; onDone: () => void }) {
@@ -1041,204 +867,110 @@ function AiTabView({ lines, onDone }: { lines: LyricLine[]; onDone: () => void }
   );
 }
 
-/** A big, tappable way to start a sheet. */
-function StartCard({
-  icon: Icon,
-  title,
-  text,
-  onClick,
-  tone,
-}: {
-  icon: ComponentType<{ className?: string }>;
-  title: string;
-  text: string;
-  onClick: () => void;
-  tone: "vocals" | "brand" | "beat";
-}) {
-  const tones = {
-    vocals: "bg-vocals/15 text-vocals",
-    brand: "bg-brand/15 text-brand-strong",
-    beat: "bg-beat/15 text-beat",
-  } as const;
+/** A small back row over a tool that has its own screen. */
+function BackRow({ label, onBack }: { label: string; onBack: () => void }) {
   return (
-    <button
-      onClick={onClick}
-      className="flex items-center gap-3 rounded-xl border border-border bg-background/50 p-3 text-left transition-colors hover:border-vocals/60 hover:bg-surface-raised sm:flex-col sm:items-start"
-    >
-      <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${tones[tone]}`}>
-        <Icon />
-      </span>
-      <span className="min-w-0">
-        <span className="block text-sm font-semibold">{title}</span>
-        <span className="block text-[11px] leading-snug text-muted">{text}</span>
-      </span>
+    <button onClick={onBack} className="flex h-10 items-center gap-1.5 self-start rounded-full pe-3 text-xs font-semibold text-muted hover:text-foreground">
+      <ArrowLeft className="rtl:rotate-180" /> {label}
     </button>
   );
 }
 
 /**
- * The words half of the vocal booth: the open sheet and the four tools
- * (read along, write and paste, find a song, write with the AI). With no
- * sheet open, three big ways to get one. The recorder shows its cue
- * beside the take.
+ * The words half of the vocal booth: the open sheet, as a card with what
+ * can be done to it (change it, edit it, the AI, put it away), over the
+ * words following the beat. With no sheet open, the picker.
  */
 export function LyricsTools({ onSing }: { onSing?: () => void }) {
   const load = useLyrics((s) => s.load);
-  const sheets = useLyrics((s) => s.sheets);
-  const activeId = useLyrics((s) => s.activeId);
   const lines = useLyrics((s) => s.lines);
   const select = useLyrics((s) => s.select);
   const create = useLyrics((s) => s.create);
-  const remove = useLyrics((s) => s.remove);
   const sheet = useLyrics(activeSheet);
-  const [tab, setTab] = useState<Tab>("sing");
+  const view = useLyrics((s) => s.view);
+  const setView = useLyrics((s) => s.setView);
 
   useEffect(() => load(), [load]);
 
   const newSheet = () => {
     create({ title: "My lyrics", artist: "", text: "", source: "own" });
-    setTab("edit");
+    setView("edit");
   };
 
-  // Nothing open: pick how to start (or an earlier sheet), unless already finding or writing.
-  if (!sheet && tab !== "find" && tab !== "ai") {
+  // Nothing open: choosing one is all there is to do (or the AI, which makes one).
+  const shown = !sheet && (view === "sheet" || view === "edit") ? "pick" : view;
+
+  if (shown === "pick") {
+    return <LyricsPicker onPicked={() => setView("sheet")} onWrite={newSheet} onAi={() => setView("ai")} onBack={sheet ? () => setView("sheet") : undefined} />;
+  }
+  if (shown === "ai") {
     return (
-      <div className="flex flex-col gap-3">
-        <div className="text-center">
-          <p className="text-sm font-semibold">Lyrics to sing from</p>
-          <p className="text-xs text-muted">They follow the beat as it plays, and sit beside you while you record.</p>
-        </div>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-          <StartCard icon={Search} tone="vocals" title="Find a song" text="By its name — timed lyrics follow along" onClick={() => setTab("find")} />
-          <StartCard icon={ClipboardPaste} tone="beat" title="Write or paste" text="Your own words, then tap them in time" onClick={newSheet} />
-          <StartCard icon={Sparkles} tone="brand" title="Write with AI" text="From an idea, sized to the beat" onClick={() => setTab("ai")} />
-        </div>
-        {sheets.length > 0 && (
-          <label className="flex items-center gap-2 text-xs text-muted">
-            Or open one you have:
-            <select
-              value=""
-              onChange={(e) => {
-                if (!e.target.value) return;
-                select(e.target.value);
-                setTab("sing");
-              }}
-              aria-label="Open a lyric sheet"
-              className="h-9 min-w-0 flex-1 rounded-lg border border-border bg-background px-2 text-xs text-foreground"
-            >
-              <option value="">{sheets.length} saved</option>
-              {sheets.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.title}
-                  {s.artist ? ` — ${s.artist}` : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
+      <div className="flex flex-col gap-2">
+        <BackRow label={sheet ? "Back to the lyrics" : "Back"} onBack={() => setView(sheet ? "sheet" : "pick")} />
+        <AiTabView lines={lines} onDone={() => setView("sheet")} />
       </div>
     );
   }
+  if (!sheet) return null;
 
-  const shownTab: Tab = !sheet && (tab === "sing" || tab === "edit") ? "find" : tab;
-  const tabs: [Tab, ComponentType<{ className?: string }>, string][] = [
-    ["sing", ScrollText, "Read"],
-    ["edit", PenLine, "Write"],
-    ["find", Search, "Find"],
-    ["ai", Sparkles, "AI"],
-  ];
   const timed = isSynced(lines);
   const lineCount = lines.filter((l) => l.text).length;
+  const editing = shown === "edit";
+  const icon = `h-10 w-10 ${GHOST}`;
 
   return (
     <div className="flex flex-col gap-3">
-      {/* The open sheet, as a card: what it is, whether it's timed, and switching. */}
+      {/* The open sheet: what it is, and everything that changes which one it is. */}
       <div className="flex items-center gap-2 rounded-xl border border-border bg-background/50 p-2">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-vocals/15 text-vocals">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-vocals/15 text-vocals max-sm:hidden">
           <ScrollText />
         </span>
-        <div className="relative min-w-0 flex-1">
-          {sheet ? (
-            <>
-              <p dir="auto" className="truncate text-sm font-semibold leading-tight">
-                {sheet.title || "Untitled"}
-              </p>
-              <p className="flex items-center gap-1.5 truncate text-[11px] text-muted">
-                {sheet.artist && (
-                  <span dir="auto" className="truncate">
-                    {sheet.artist} ·
-                  </span>
-                )}
-                <span>{lineCount} lines</span>
-                {lineCount > 0 && (
-                  <span className={`rounded-full px-1.5 font-semibold ${timed ? "bg-success/15 text-success" : "bg-foreground/10"}`}>{timed ? "Timed" : "Not timed"}</span>
-                )}
-              </p>
-            </>
-          ) : (
-            <p className="text-sm text-muted">No sheet open</p>
-          )}
-          {/* The whole title is the switcher: a native picker, easy on a phone. */}
-          {sheets.length > 1 && (
-            <select
-              value={activeId ?? ""}
-              onChange={(e) => {
-                select(e.target.value || null);
-                setTab("sing");
-              }}
-              aria-label="Switch lyric sheet"
-              className="absolute inset-0 cursor-pointer opacity-0"
-            >
-              {!sheet && <option value="">No sheet open</option>}
-              {sheets.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.title}
-                  {s.artist ? ` — ${s.artist}` : ""}
-                </option>
-              ))}
-            </select>
-          )}
+        <div className="min-w-0 flex-1">
+          <p dir="auto" className="truncate text-sm font-semibold leading-tight">
+            {sheet.title || "Untitled"}
+          </p>
+          <p className="flex items-center gap-1.5 truncate text-[11px] text-muted">
+            {sheet.artist && (
+              <span dir="auto" className="truncate">
+                {sheet.artist} ·
+              </span>
+            )}
+            <span className="shrink-0">{lineCount} lines</span>
+            {lineCount > 0 && (
+              <span className={`shrink-0 rounded-full px-1.5 font-semibold ${timed ? "bg-success/15 text-success" : "bg-foreground/10"}`}>{timed ? "Timed" : "Not timed"}</span>
+            )}
+          </p>
         </div>
-        {sheets.length > 1 && <ChevronDown className="pointer-events-none shrink-0 text-muted" aria-hidden />}
-        <button onClick={newSheet} className={`h-9 w-9 ${GHOST}`} title="A new, empty sheet to write or paste into" aria-label="New lyric sheet">
-          <Plus />
+        <button
+          onClick={() => setView("pick")}
+          className="flex h-10 shrink-0 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-semibold text-foreground transition-colors hover:border-vocals"
+          title="Find other lyrics, or switch to ones you've used"
+        >
+          <Repeat2 /> Change
         </button>
-        {sheet && (
-          <button
-            onClick={() => window.confirm(`Delete the lyrics “${sheet.title}”?`) && remove(sheet.id)}
-            className={`h-9 w-9 ${GHOST} hover:!border-danger/50 hover:!text-danger`}
-            aria-label="Delete this lyric sheet"
-            title="Delete this lyric sheet"
-          >
-            <Trash2 />
-          </button>
-        )}
+        <button
+          onClick={() => setView(editing ? "sheet" : "edit")}
+          aria-pressed={editing}
+          className={`${icon} ${editing ? "!border-vocals !text-vocals" : ""}`}
+          title={editing ? "Done editing" : "Edit the words"}
+          aria-label={editing ? "Done editing" : "Edit the words"}
+        >
+          {editing ? <Check /> : <PenLine />}
+        </button>
+        <button onClick={() => setView("ai")} className={`${icon} max-sm:hidden`} title="Write or rework lines with AI" aria-label="Write with AI">
+          <Sparkles />
+        </button>
+        <button
+          onClick={() => select(null)}
+          className={icon}
+          title="Put these lyrics away (they stay saved)"
+          aria-label="Close these lyrics"
+        >
+          <X />
+        </button>
       </div>
 
-      {/* The tools, as tabs under the card. */}
-      <div className="flex border-b border-border" role="tablist" aria-label="Lyrics tools">
-        {tabs.map(([id, Icon, label]) => (
-          <button
-            key={id}
-            role="tab"
-            aria-selected={shownTab === id}
-            disabled={!sheet && (id === "sing" || id === "edit")}
-            onClick={() => setTab(id)}
-            className={`-mb-px flex h-10 flex-1 items-center justify-center gap-1.5 border-b-2 text-xs font-semibold transition-colors disabled:opacity-40 ${
-              shownTab === id ? "border-vocals text-foreground" : "border-transparent text-muted hover:text-foreground"
-            }`}
-          >
-            <Icon className={shownTab === id ? "text-vocals" : ""} /> {label}
-          </button>
-        ))}
-      </div>
-
-      <div>
-        {shownTab === "sing" && <SingTab lines={lines} onEdit={() => setTab("edit")} onRecord={onSing} />}
-        {shownTab === "edit" && <EditTab onDone={() => setTab("sing")} />}
-        {shownTab === "find" && <FindTab onUse={() => setTab("sing")} />}
-        {shownTab === "ai" && <AiTabView lines={lines} onDone={() => setTab("sing")} />}
-      </div>
+      {editing ? <EditTab onDone={() => setView("sheet")} /> : <SingTab lines={lines} onEdit={() => setView("edit")} onRecord={onSing} />}
     </div>
   );
 }
@@ -1254,27 +986,42 @@ export function LyricsCue({ big = false }: { big?: boolean }) {
   const baseSize = useLyrics((s) => s.prefs.fontSize);
   // Mid-take the words are read at a glance from a step back.
   const fontSize = big ? Math.max(baseSize, 20) * 1.15 : baseSize;
-  const openLyrics = () => useLyrics.getState().openBooth("lyrics");
+  const openLyrics = useLyrics((s) => s.openLyrics);
   const current = useCurrentLine(lines);
   useEffect(() => load(), [load]);
 
   if (!sheet || !lines.some((l) => l.text)) {
     return (
       <button
-        onClick={openLyrics}
+        onClick={() => openLyrics(sheet ? "edit" : "pick")}
         className="flex items-center gap-2 rounded-xl border border-dashed border-border px-3 py-2.5 text-left text-xs text-muted transition-colors hover:border-vocals hover:text-foreground"
       >
         <ScrollText className="shrink-0 text-vocals" />
         <span>
-          <b className="text-foreground">Add lyrics to sing from</b> — find a song by name, paste your own, or write with AI.
+          <b className="text-foreground">{sheet ? "This sheet has no words yet" : "Add lyrics to sing from"}</b> —{" "}
+          {sheet ? "write or paste them in." : "find a song (Persian or English), paste your own, or write with AI."}
         </span>
       </button>
     );
   }
 
+  // Which lyrics these are, with one tap to swap them — not while singing, when only the words matter.
+  const heading = !big && (
+    <div className="mb-1.5 flex items-center gap-2 border-b border-border/60 pb-1.5">
+      <ScrollText className="shrink-0 text-vocals" />
+      <span dir="auto" className="min-w-0 flex-1 truncate text-[11px] font-semibold text-muted">
+        {sheet.title}
+      </span>
+      <button onClick={() => openLyrics("pick")} className="flex h-8 shrink-0 items-center gap-1 rounded-lg px-2 text-[11px] font-semibold text-vocals hover:bg-vocals/10">
+        <Repeat2 /> Change
+      </button>
+    </div>
+  );
+
   if (!isSynced(lines)) {
     return (
       <div className="rounded-xl border border-border/60 bg-background/60 px-3 py-2" aria-label="Lyrics">
+        {heading}
         <div className={`${big ? "max-h-64" : "max-h-36"} overflow-y-auto overscroll-contain`} dir="auto">
           {lines.map((line, i) =>
             line.text ? (
@@ -1286,7 +1033,7 @@ export function LyricsCue({ big = false }: { big?: boolean }) {
             )
           )}
         </div>
-        <button onClick={openLyrics} className="mt-1 text-[11px] text-vocals hover:underline">
+        <button onClick={() => openLyrics("sheet")} className="mt-1 text-[11px] text-vocals hover:underline">
           Not timed yet — tap to time them, and they&apos;ll follow the beat
         </button>
       </div>
@@ -1298,6 +1045,7 @@ export function LyricsCue({ big = false }: { big?: boolean }) {
   const previous = current > 0 ? [...lines.slice(0, current)].reverse().find((l) => l.text) : undefined;
   return (
     <div className={`rounded-xl border border-border/60 bg-background/60 px-3 ${big ? "py-4" : "py-2.5"}`} aria-label="Lyrics" aria-live="polite">
+      {heading}
       {previous && (
         <p dir="auto" className="truncate text-xs text-muted/50">
           {previous.text}

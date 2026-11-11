@@ -189,15 +189,27 @@ export default function LibraryBrowser({
 
                 {(stem.track_tags?.length ?? 0) > 0 && (
                   <p className="mt-1 flex flex-wrap gap-1">
-                    {stem.track_tags!.slice(0, 5).map((t) => (
-                      <button
-                        key={t}
-                        onClick={() => setTag(t)}
-                        className="text-[11px] text-brand-strong hover:underline"
-                      >
-                        #{t}
-                      </button>
-                    ))}
+                    {stem.track_tags!.slice(0, 5).map((t) =>
+                      t === "studio recording" ? (
+                        // A vocal recorded in the Studio's booth: a badge, not just another tag.
+                        <button
+                          key={t}
+                          onClick={() => setTag(t)}
+                          className="rounded-full bg-vocals/15 px-1.5 text-[11px] font-semibold text-vocals hover:underline"
+                          title="Recorded in the Studio — show every studio take"
+                        >
+                          🎤 Studio take
+                        </button>
+                      ) : (
+                        <button
+                          key={t}
+                          onClick={() => setTag(t)}
+                          className="text-[11px] text-brand-strong hover:underline"
+                        >
+                          #{t}
+                        </button>
+                      )
+                    )}
                   </p>
                 )}
 

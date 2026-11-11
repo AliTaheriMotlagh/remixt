@@ -24,31 +24,53 @@ export type LyricLine = {
 };
 
 /**
- * The song's name from a track title, for looking its lyrics up. Titles
- * come from file names and video titles, so they carry noise the lyrics
- * library doesn't know: "(Official Video)", "[HD]", "feat. …", ".mp3", and
- * often the artist in front ("Artist - Song"). Only the song's name is
- * kept — never an artist, and never the person who uploaded it.
+ * The song's name — and the artist, when the title names one — from a
+ * track title, for looking its lyrics up. Titles come from file names and
+ * video titles, so they carry noise the lyrics library doesn't know:
+ * "(Official Video)", "[HD]", "feat. …", ".mp3", a download site's name
+ * and bitrate ("Music-Fa.com", "320"), and often the artist in front
+ * ("Artist - Song"). The artist only ever comes from the title itself,
+ * never from whoever uploaded it.
  */
-export function songNameOf(trackTitle: string): string {
+export function splitSongTitle(trackTitle: string): { song: string; artist: string } {
   let title = trackTitle
     .replace(/\.(mp3|wav|m4a|aac|flac|ogg|opus|webm|mp4)$/i, "")
     .replace(/_/g, " ")
-    // Bracketed extras: (Official Video), [Lyrics], {HD}, (feat. X).
+    // Bracketed extras: (Official Video), [Lyrics], {HD}, (feat. X), (320).
     .replace(/\s*[[({][^\])}]*[\])}]/g, " ")
+    // Download sites and channels: www.site.com, Site.ir, @channel.
+    .replace(/(^|\s)(www\.)?[\w-]+\.(com|ir|net|org|io|co|me)(?=\s|$)/gi, " ")
+    .replace(/(^|\s)@[\w.]+/g, " ")
+    // A bitrate left at the end: "Song 320", "Song 128kbps".
+    .replace(/\s+(64|96|128|192|256|320)\s?(kbps|k)?$/i, "")
+    // Persian download-page words: "آهنگ", "دانلود", "جدید".
+    .replace(/(^|\s)(دانلود|آهنگ|جدید|با متن|موزیک)(?=\s|$)/g, " ")
     // Featured artists left outside brackets.
     .replace(/\s+(feat\.?|ft\.?|featuring)\s.*$/i, "")
     .replace(/\s+/g, " ")
     .trim();
   // A trailing " - Official Video" / " - Remastered 2011" / " - Live" goes.
   title = title.replace(/\s+[-–—|]\s+(official|lyrics?|audio|video|visuali[sz]er|remaster(ed)?|hd|hq|4k|live|radio edit|explicit|clean)\b.*$/i, "");
-  // "Artist - Song": the song is the last part.
+  // "Artist - Song": the song is the last part, the artist the first.
   const parts = title.split(/\s+[-–—|]\s+/).map((p) => p.trim()).filter(Boolean);
-  if (parts.length > 1) title = parts[parts.length - 1];
+  let artist = "";
+  if (parts.length > 1) {
+    title = parts[parts.length - 1];
+    artist = parts[0];
+  }
   // Quotes around the name, as video titles do: Artist "Song".
-  const quoted = title.match(/["“”«»]([^"“”«»]{2,})["“”«»]/);
-  if (quoted) title = quoted[1];
-  return title.replace(/^["'“”‘’]+|["'“”‘’]+$/g, "").trim();
+  const quoted = title.match(/^(.*?)["“”«»]([^"“”«»]{2,})["“”«»]/);
+  if (quoted) {
+    title = quoted[2];
+    if (!artist && quoted[1].trim()) artist = quoted[1].trim();
+  }
+  const unquote = (s: string) => s.replace(/^["'“”‘’]+|["'“”‘’]+$/g, "").trim();
+  return { song: unquote(title), artist: unquote(artist) };
+}
+
+/** Just the song's name from a track title (see splitSongTitle). */
+export function songNameOf(trackTitle: string): string {
+  return splitSongTitle(trackTitle).song;
 }
 
 const STAMP = /^\[(\d{1,3}):(\d{1,2}(?:[.:]\d{1,3})?)\]/;
@@ -143,6 +165,15 @@ export function lineAt(lines: LyricLine[], seconds: number): number {
 /** Every timed line moved by `delta` seconds (none before the start). */
 export function shiftLines(lines: LyricLine[], delta: number): LyricLine[] {
   return lines.map((l) => (l.time === null ? l : { ...l, time: Math.max(0, round(l.time + delta)) }));
+}
+
+/**
+ * Lyrics timed to a recording, put where that recording plays in the mix:
+ * a lane starting at `offset` seconds, sped up by `tempo` (1 = as recorded).
+ */
+export function placeOnLane(lines: LyricLine[], offset: number, tempo = 1): LyricLine[] {
+  const speed = tempo > 0 ? tempo : 1;
+  return lines.map((l) => (l.time === null ? l : { ...l, time: round(Math.max(0, offset + l.time / speed)) }));
 }
 
 /** The whole sheet moved so its first timed line starts at `seconds`. */

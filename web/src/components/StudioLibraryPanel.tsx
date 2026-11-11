@@ -73,6 +73,24 @@ const TAB_LABEL: Record<LibraryTab, string> = {
   other: KIND_INFO.other.plural,
 };
 
+/** The tag every vocal recorded in the Studio's booth is saved with (see recorder.ts). */
+const TAKE_TAG = "studio recording";
+
+const isTake = (tags: readonly string[] | null | undefined) => !!tags?.includes(TAKE_TAG);
+
+/** Marks a vocal you recorded in the booth, so it stands out from songs in the list. */
+function TakeBadge() {
+  return (
+    <span
+      className="flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-px text-[10px] font-semibold"
+      style={{ color: KIND_INFO.vocals.color, background: `color-mix(in srgb, ${KIND_INFO.vocals.color} 16%, transparent)` }}
+      title="A vocal you recorded in the Studio"
+    >
+      <Mic className="h-3 w-3" /> Your take
+    </span>
+  );
+}
+
 /** A whole song: preview it, add every line in one tap, or pick lines one by one. */
 function SongRow({ song, inMix, previewing, playing, progress }: { song: Song & { peaks: number[] }; inMix: Set<string>; previewing: boolean; playing: boolean; progress: number }) {
   const kinds = kindsOf(song);
@@ -95,7 +113,12 @@ function SongRow({ song, inMix, previewing, playing, progress }: { song: Song & 
           </button>
         )}
         <div className="min-w-0 flex-1">
-          <p className="truncate text-xs font-semibold">{song.title}</p>
+          <p className="flex items-center gap-1.5">
+            <span dir="auto" className="truncate text-xs font-semibold">
+              {song.title}
+            </span>
+            {isTake(song.tags) && <TakeBadge />}
+          </p>
           <p className="truncate text-[11px] text-muted">
             {song.artist}
             {song.bpm ? ` · ${song.bpm.toFixed(0)} BPM` : ""}
@@ -157,6 +180,8 @@ export default function StudioLibraryPanel() {
   const [tab, setTab] = useState<LibraryTab>("songs");
   const [all, setAll] = useState<ListedStem[] | null>(() => listCache);
   const [query, setQuery] = useState("");
+  /** Just the vocals recorded in the booth (songs and vocals tabs). */
+  const [takesOnly, setTakesOnly] = useState(false);
   const lanes = useStudioStore((s) => s.lanes);
   const preview = usePreviewState();
 
@@ -206,8 +231,12 @@ export default function StudioLibraryPanel() {
       }),
     [all]
   );
-  const shownSongs = songs.filter((song) => matches({ track_title: song.title, artist_name: song.artist, track_tags: song.tags }));
-  const stems = tab === "songs" ? [] : (all ?? []).filter((s) => s.kind === tab && matches(s));
+  const takeCount = songs.filter((song) => isTake(song.tags)).length;
+  const onlyTakes = takesOnly && takeCount > 0 && (tab === "songs" || tab === "vocals");
+  const shownSongs = songs.filter(
+    (song) => (!onlyTakes || isTake(song.tags)) && matches({ track_title: song.title, artist_name: song.artist, track_tags: song.tags })
+  );
+  const stems = tab === "songs" ? [] : (all ?? []).filter((s) => s.kind === tab && (!onlyTakes || isTake(s.track_tags)) && matches(s));
   const accent = tab === "songs" ? "var(--brand)" : KIND_INFO[tab].color;
   const addedStemIds = new Set(lanes.map((l) => l.stemId));
   const empty = tab === "songs" ? shownSongs.length === 0 : stems.length === 0;
@@ -243,7 +272,30 @@ export default function StudioLibraryPanel() {
           aria-label="Search stems"
           className="input mt-2 !py-1.5 text-xs"
         />
-        {tab === "songs" && (
+        {takeCount > 0 && (tab === "songs" || tab === "vocals") && (
+          <div className="mt-2 flex gap-1.5" role="radiogroup" aria-label="Which to show">
+            {(
+              [
+                [false, "Everything"],
+                [true, `Your takes · ${takeCount}`],
+              ] as const
+            ).map(([only, label]) => (
+              <button
+                key={label}
+                role="radio"
+                aria-checked={takesOnly === only}
+                onClick={() => setTakesOnly(only)}
+                className={`flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors pointer-coarse:py-1.5 ${
+                  takesOnly === only ? "border-vocals bg-vocals/10 text-foreground" : "border-border text-muted hover:text-foreground"
+                }`}
+              >
+                {only && <Mic className="h-3 w-3" style={{ color: KIND_INFO.vocals.color }} />}
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+        {tab === "songs" && !onlyTakes && (
           <p className="mt-1.5 text-[10.5px] leading-snug text-muted">
             Every song comes in lines — vocals, drums, bass and melody. Add them all and remix each one, or pick the lines you want.
           </p>
@@ -290,9 +342,10 @@ export default function StudioLibraryPanel() {
                   >
                     {previewing && preview.playing ? <Pause className="fill-current" /> : <Play className="fill-current" />}
                   </button>
-                  <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                  <span dir="auto" className="min-w-0 flex-1 truncate text-xs font-medium">
                     {stem.track_title}
                   </span>
+                  {isTake(stem.track_tags) && <TakeBadge />}
                   <button
                     onClick={() => (added ? takeOut([stem.id], stem.track_title) : add([stem]))}
                     title={added ? "Take it back out of the mix" : undefined}
