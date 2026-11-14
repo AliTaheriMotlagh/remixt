@@ -70,12 +70,41 @@ export async function fetchStem(stemId: string): Promise<ArrayBuffer> {
   return bytes;
 }
 
+/** Set once the store's CDN has proved unreachable from this page: files come through this app from then on. */
+let viaApp = false;
+
+/** The same file, served through this app rather than by a redirect to the store's CDN. */
+function throughApp(url: string): string | null {
+  if (!url.startsWith("/api/") || /[?&]via=app/.test(url)) return null;
+  return `${url}${url.includes("?") ? "&" : "?"}via=app`;
+}
+
 /**
  * Any file served like a stem (e.g. a song imported from a link), a slice
  * at a time, several at once. A slice that fails is asked for again
- * rather than failing the whole download.
+ * rather than failing the whole download. A file the app redirects to the
+ * store's CDN, where that CDN can't be reached (it's blocked in some
+ * countries), comes through the app instead.
  */
 export async function fetchInSlices(
+  url: string,
+  onProgress?: (loaded: number, total: number) => void
+): Promise<ArrayBuffer> {
+  const fallback = throughApp(url);
+  if (fallback && viaApp) return fetchSlices(fallback, onProgress);
+  try {
+    return await fetchSlices(url, onProgress);
+  } catch (err) {
+    if (!fallback) throw err;
+    const bytes = await fetchSlices(fallback, onProgress).catch(() => {
+      throw err;
+    });
+    viaApp = true;
+    return bytes;
+  }
+}
+
+async function fetchSlices(
   url: string,
   onProgress?: (loaded: number, total: number) => void
 ): Promise<ArrayBuffer> {

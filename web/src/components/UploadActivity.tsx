@@ -20,6 +20,7 @@ function doneText(item: UploadItem) {
 function UploadRow({ item }: { item: UploadItem }) {
   const splitterState = useSplitter();
   const { label, progress } = describeStage(item.stage, splitterState);
+  const retrying = item.stage?.stage === "retrying";
   return (
     <li
       className={`rounded-xl border p-3.5 text-sm ${
@@ -47,7 +48,19 @@ function UploadRow({ item }: { item: UploadItem }) {
               Try again
             </button>
           )}
-          {item.status !== "working" && (
+          {item.status === "working" ? (
+            <button
+              onClick={() => {
+                if (window.confirm(`Stop adding “${item.name}”? What's been done so far is thrown away.`)) {
+                  uploads.cancel(item.id);
+                }
+              }}
+              className="rounded-md border border-border px-2 py-1 text-muted hover:border-danger/50 hover:text-danger"
+              aria-label={`Cancel ${item.name}`}
+            >
+              Cancel
+            </button>
+          ) : (
             <button
               onClick={() => uploads.remove(item.id)}
               className="rounded-md px-1.5 py-1 text-muted hover:text-foreground"
@@ -58,16 +71,19 @@ function UploadRow({ item }: { item: UploadItem }) {
           )}
         </div>
       </div>
-      {item.status === "working" && <ProgressBar progress={progress} />}
-      <p className={`mt-1.5 text-xs ${item.status === "failed" ? "text-danger" : "text-muted"}`}>
+      {item.status === "working" && <ProgressBar progress={retrying ? null : progress} />}
+      <p
+        className={`mt-1.5 text-xs ${item.status === "failed" ? "text-danger" : retrying ? "text-brand-strong" : "text-muted"}`}
+      >
         {item.status === "waiting"
           ? "In line — starts when the song before it is done"
           : item.status === "working"
             ? `${label}…`
             : item.status === "done"
-              ? doneText(item)
+              ? (item.note ?? doneText(item))
               : item.error}
       </p>
+      {item.note && item.status !== "done" && <p className="mt-1 text-[11px] text-muted">{item.note}</p>}
     </li>
   );
 }
@@ -115,7 +131,7 @@ export function UploadList() {
         <p className="mt-2 text-xs text-muted">
           {queue
             ? "You can use the rest of the site meanwhile. If your screen turns off, sending pauses and carries on when you’re back — just don’t close Remixt."
-            : "This carries on in the background — feel free to use the rest of the site. Just don’t close the tab."}
+            : "This carries on in the background — feel free to use the rest of the site. Please don’t close or reload the tab: the song is kept and picks up again next visit, but splitting would start over."}
         </p>
       )}
     </section>
@@ -131,7 +147,7 @@ const SHOW_DONE_MS = 8000;
  * user's own songs being added, and songs being split for others — in the
  * corner, on every page but Upload (which lists it all already).
  */
-export function BackgroundActivity({ signedIn }: { signedIn: boolean }) {
+export function BackgroundActivity({ signedIn, userId }: { signedIn: boolean; userId: string | null }) {
   const helper = useSplitHelper();
   const items = useUploads();
   const splitterState = useSplitter();
@@ -142,6 +158,12 @@ export function BackgroundActivity({ signedIn }: { signedIn: boolean }) {
   useEffect(() => {
     if (signedIn) splitHelper.restore();
   }, [signedIn]);
+
+  // Songs this account was adding when the page last went away (a reload,
+  // a crash, the tab closed) carry on from here.
+  useEffect(() => {
+    void uploads.restore(userId);
+  }, [userId]);
 
   // Where audio is the point of the page, splitting (all GPU or CPU)
   // would make it stutter — so no new songs for others start there.

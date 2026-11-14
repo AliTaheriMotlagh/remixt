@@ -33,6 +33,7 @@ import { beatSeconds } from "@/lib/lyrics";
 import { useStudioStore } from "@/lib/client/studioStore";
 import { useStudioView } from "@/lib/client/studioView";
 import { useKeepScreenOn } from "@/lib/client/wakeLock";
+import { guardLeaving } from "@/lib/client/leaveGuard";
 import { LyricsCue, LyricsTools } from "./LyricsPanel";
 
 // The vocal booth: one panel for the take and its words. Recording starts
@@ -220,6 +221,11 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
   const preview = useRef<AudioBufferSourceNode | null>(null);
   // Getting ready, singing and saving the take: a locked phone would cut any of them off.
   useKeepScreenOn("recording", state === "starting" || state === "recording" || state === "saving");
+  // Closing or reloading the tab now would lose the take.
+  useEffect(() => {
+    guardLeaving("take", state === "recording" || state === "review" || state === "saving");
+    return () => guardLeaving("take", false);
+  }, [state]);
 
   useEffect(() => {
     setTakeState(state === "starting" || state === "recording" ? "recording" : state === "review" || state === "saving" ? "review" : "idle");

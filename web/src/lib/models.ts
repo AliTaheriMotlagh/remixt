@@ -2,6 +2,7 @@ import { cache } from "react";
 import sql from "./db";
 import type { StemKind } from "./stemKinds";
 import { ensureSchema } from "./schema";
+import { visibleTo } from "./trackAccess";
 
 export type TrackRow = {
   id: string;
@@ -16,6 +17,8 @@ export type TrackRow = {
   created_at: Date;
   /** Added by lib/schema.ts; missing on a database that predates it. */
   tags?: string[];
+  /** "private": a take only its owner (and whom they share it with) sees. */
+  visibility?: "public" | "private";
 };
 
 export type StemRow = {
@@ -33,6 +36,10 @@ export type StemWithTrack = StemRow & {
   track_bpm: number | null;
   artist_name: string;
   artist_id: string;
+  /** Only its owner and the people they shared it with see it. */
+  track_private?: boolean;
+  /** The viewer's own. */
+  track_mine?: boolean;
 };
 
 export async function getTrackById(id: string): Promise<TrackRow | undefined> {
@@ -40,7 +47,13 @@ export async function getTrackById(id: string): Promise<TrackRow | undefined> {
   return rows[0];
 }
 
-export async function getTracksByOwner(ownerId: string): Promise<TrackRow[]> {
+/**
+ * An artist's tracks; their private takes only when `viewerId` is them,
+ * or someone they shared the take with. Leave `viewerId` out for the
+ * owner's own list.
+ */
+export async function getTracksByOwner(ownerId: string, viewerId: string | null = ownerId): Promise<TrackRow[]> {
+  await ensureSchema();
   // A track sits in 'processing' from the moment the browser creates it
   // until both stems are uploaded (POST /api/tracks → .../complete). If the
   // tab is closed half-way, nothing is left to flip it, so sweep those out
@@ -53,7 +66,7 @@ export async function getTracksByOwner(ownerId: string): Promise<TrackRow[]> {
       AND created_at < now() - interval '20 minutes'
   `;
   return sql<TrackRow[]>`
-    SELECT * FROM tracks WHERE owner_id = ${ownerId} ORDER BY created_at DESC
+    SELECT * FROM tracks WHERE owner_id = ${ownerId} AND ${visibleTo(viewerId)} ORDER BY created_at DESC
   `;
 }
 
@@ -61,32 +74,39 @@ export async function getStemsByTrack(trackId: string): Promise<StemRow[]> {
   return sql<StemRow[]>`SELECT * FROM stems WHERE track_id = ${trackId}`;
 }
 
+/** Every ready stem of one kind that `viewerId` can see (see lib/trackAccess.ts). */
 export async function getStemsByKindWithArtist(
-  kind: StemKind
+  kind: StemKind,
+  viewerId: string | null
 ): Promise<StemWithTrack[]> {
   await ensureSchema();
   return sql<StemWithTrack[]>`
     SELECT stems.*, tracks.title as track_title, tracks.tags as track_tags, tracks.duration as track_duration,
-           tracks.bpm as track_bpm, users.artist_name, users.id as artist_id
+           tracks.bpm as track_bpm, users.artist_name, users.id as artist_id,
+           tracks.visibility <> 'public' AS track_private, tracks.owner_id = ${viewerId ?? ""} AS track_mine
     FROM stems
     JOIN tracks ON tracks.id = stems.track_id
     JOIN users ON users.id = tracks.owner_id
-    WHERE stems.kind = ${kind} AND tracks.status = 'ready'
+    WHERE stems.kind = ${kind} AND tracks.status = 'ready' AND ${visibleTo(viewerId)}
     ORDER BY tracks.created_at DESC
   `;
 }
 
-/** Every stem of every ready song, for the Library. */
-export async function getLibraryStems(): Promise<StemWithTrack[]> {
+/**
+ * Every stem of every ready song `viewerId` can see, for the Library:
+ * everyone's songs, plus their own takes and takes shared with them.
+ */
+export async function getLibraryStems(viewerId: string | null): Promise<StemWithTrack[]> {
   await ensureSchema();
   return sql<StemWithTrack[]>`
     SELECT stems.*, tracks.title as track_title, tracks.tags as track_tags, tracks.duration as track_duration,
            tracks.bpm as track_bpm, users.artist_name, users.id as artist_id,
-           tracks.featured_example AS track_featured, tracks.example_credit AS track_credit
+           tracks.featured_example AS track_featured, tracks.example_credit AS track_credit,
+           tracks.visibility <> 'public' AS track_private, tracks.owner_id = ${viewerId ?? ""} AS track_mine
     FROM stems
     JOIN tracks ON tracks.id = stems.track_id
     JOIN users ON users.id = tracks.owner_id
-    WHERE tracks.status = 'ready'
+    WHERE tracks.status = 'ready' AND ${visibleTo(viewerId)}
     ORDER BY tracks.created_at DESC
   `;
 }

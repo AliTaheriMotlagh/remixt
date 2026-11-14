@@ -327,3 +327,36 @@ CREATE TABLE IF NOT EXISTS ai_shared_usage (
   requests INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (user_id, day)
 );
+
+-- Who can see a track: takes recorded in the Studio's booth are private to
+-- whoever sang them until they share them (see src/lib/trackAccess.ts);
+-- each song's fingerprint, so the same file is never split twice.
+-- Takes recorded before takes were private become private, once: only
+-- when the column is first added.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'tracks' AND column_name = 'visibility') THEN
+    ALTER TABLE tracks ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public';
+    UPDATE tracks SET visibility = 'private' WHERE 'studio recording' = ANY(tags);
+  END IF;
+END $$;
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS source_hash TEXT;
+CREATE INDEX IF NOT EXISTS idx_tracks_source_hash ON tracks(source_hash) WHERE source_hash IS NOT NULL;
+CREATE TABLE IF NOT EXISTS track_shares (
+  track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (track_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_track_shares_user ON track_shares(user_id);
+
+-- Visits: one row per browser per day, with its page views (src/lib/presence.ts).
+CREATE TABLE IF NOT EXISTS site_visits (
+  day DATE NOT NULL,
+  visitor TEXT NOT NULL,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  views INTEGER NOT NULL DEFAULT 1,
+  first_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (day, visitor)
+);

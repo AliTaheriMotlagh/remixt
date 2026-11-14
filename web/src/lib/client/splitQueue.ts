@@ -124,8 +124,14 @@ async function postRetrying(url: string, init: RequestInit = {}): Promise<Respon
 }
 
 /** Sends a song from this device to the queue, for a helper's computer to split. */
-export async function queueFile(original: File, tags: string[], onStage: (stage: UploadStage) => void) {
+export async function queueFile(
+  original: File,
+  tags: string[],
+  onStage: (stage: UploadStage) => void,
+  signal?: AbortSignal
+) {
   const file = await shrinkForQueue(original, onStage);
+  signal?.throwIfAborted();
   onStage({ stage: "queueing", progress: 0 });
   const created = await json<{ id: string; upload: UploadTarget }>(
     await postRetrying("/api/split-jobs", {
@@ -144,8 +150,12 @@ export async function queueFile(original: File, tags: string[], onStage: (stage:
   try {
     // The file itself, not its bytes: it's read from disk as it's sent,
     // so even a big WAV never has to fit in the phone's memory.
-    await upload(created.upload, file, (sent) =>
-      onStage({ stage: "queueing", progress: Math.min(1, sent / Math.max(1, file.size)) })
+    await upload(
+      created.upload,
+      file,
+      (sent) => onStage({ stage: "queueing", progress: Math.min(1, sent / Math.max(1, file.size)) }),
+      undefined,
+      signal
     );
     await json(await postRetrying(`/api/split-jobs/${created.id}/queued`), "Couldn't queue the song");
   } catch (err) {

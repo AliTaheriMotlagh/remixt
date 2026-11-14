@@ -3,6 +3,7 @@
 import { useSyncExternalStore } from "react";
 import { upload, type Send, type UploadTarget } from "./directUpload";
 import { fetchInSlices } from "./stemFetch";
+import { SPLITTER_MODEL_URL } from "../modelMirror";
 import { isConstrainedDevice } from "./device";
 import {
   STEM_BITRATES,
@@ -19,9 +20,7 @@ import {
 // ready track in the library.
 
 /** Model weights: htdemucs exported to ONNX (see demucs-web). ~172 MB. */
-export const MODEL_URL =
-  process.env.NEXT_PUBLIC_DEMUCS_MODEL_URL ||
-  "https://huggingface.co/timcsy/demucs-web-onnx/resolve/main/htdemucs_embedded.onnx";
+export const MODEL_URL = SPLITTER_MODEL_URL;
 /**
  * ONNX Runtime Web's files. Served from this app by default (copied into
  * public/ort by scripts/copy-ort.mjs); can point at a CDN instead, e.g.
@@ -310,6 +309,10 @@ export function useSplitter(): SplitterState {
 // --- Upload pipeline ------------------------------------------------------------
 
 export type UploadStage =
+  /** Checking whether this exact song is already in the library. */
+  | { stage: "checking" }
+  /** A link's song wouldn't come; trying again in a moment. */
+  | { stage: "retrying"; reason: string; inSeconds: number }
   | { stage: "fetching-link" }
   | { stage: "downloading"; progress: number }
   | { stage: "decoding" }
@@ -412,7 +415,8 @@ export async function uploadStems(
   uploads: Record<string, UploadTarget>,
   result: SplitResult,
   onStage: (stage: UploadStage) => void,
-  send?: Send
+  send?: Send,
+  signal?: AbortSignal
 ) {
   const files = (Object.entries(uploads) as [SplitOutput, UploadTarget][])
     .map(([kind, target]) => ({ kind, target, bytes: result.mp3[kind] }))
@@ -440,7 +444,8 @@ export async function uploadStems(
           sent[f.kind] = Math.min(n, f.bytes.length);
           report();
         },
-        send
+        send,
+        signal
       );
     } catch (err) {
       failed = true;
@@ -451,46 +456,153 @@ export async function uploadStems(
   await Promise.all(Array.from({ length: Math.min(STEMS_AT_ONCE, files.length) }, next));
 }
 
+/** A call to this app's API that gives up after this long, rather than hang (the old "frozen after the split"). */
+const API_LIMIT_MS = 30_000;
+
+/**
+ * `fetch` with a time limit, stopped early by `signal`, sent up to
+ * `attempts` times when the connection drops or the server hiccups (5xx).
+ * Only for requests that are safe to send twice.
+ */
+async function callApi(
+  url: string,
+  init: RequestInit,
+  { signal, attempts = 1, what }: { signal?: AbortSignal; attempts?: number; what: string }
+): Promise<Response> {
+  for (let attempt = 1; ; attempt++) {
+    signal?.throwIfAborted();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), API_LIMIT_MS);
+    const stop = () => controller.abort();
+    signal?.addEventListener("abort", stop, { once: true });
+    try {
+      const res = await fetch(url, { ...init, signal: controller.signal });
+      if (res.status >= 500 && attempt < attempts) throw new Error(`HTTP ${res.status}`);
+      return res;
+    } catch (err) {
+      signal?.throwIfAborted();
+      if (attempt >= attempts) throw new TransientError(`${what} — check your connection`, { cause: err });
+      await new Promise((resolve) => setTimeout(resolve, 1500 * attempt));
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", stop);
+    }
+  }
+}
+
+/** A song that was already in the library: nothing was split or uploaded. */
+export type AlreadyThere = { id: string; title: string; artist_name: string; mine: boolean };
+
+/**
+ * The song's fingerprint (SHA-256 of the file), or null where the browser
+ * can't work one out (no WebCrypto outside a secure context).
+ */
+export async function fingerprint(file: Blob): Promise<string | null> {
+  if (typeof crypto === "undefined" || !crypto.subtle) return null;
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+    return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return null;
+  }
+}
+
+/** The ready track that is this exact file, if the library has one this user can see. */
+async function alreadyThere(hash: string, signal?: AbortSignal): Promise<AlreadyThere | null> {
+  try {
+    const res = await fetch("/api/tracks/lookup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hash }),
+      signal,
+    });
+    if (!res.ok) return null;
+    return ((await res.json()) as { track: AlreadyThere | null }).track;
+  } catch {
+    signal?.throwIfAborted();
+    // Only a shortcut: without an answer, the song is split as usual.
+    return null;
+  }
+}
+
 /**
  * Decodes, splits, encodes and uploads one song; resolves with the new
- * track's id once it's ready in the library.
+ * track's id once it's ready in the library — or, when this exact file is
+ * in the library already (uploaded before, by this user or anyone),
+ * with that track, at once, without splitting it again. `signal` cancels
+ * it at any point; a track already created for it is dropped.
  */
 export async function uploadSong(
   file: File,
   onStage: (stage: UploadStage) => void,
-  { tags = [] }: { tags?: string[] } = {}
-): Promise<string> {
-  const { result, duration } = await splitSong(file, onStage);
+  { tags = [], signal }: { tags?: string[]; signal?: AbortSignal } = {}
+): Promise<{ id: string; existing: AlreadyThere | null }> {
+  onStage({ stage: "checking" });
+  const sourceHash = await fingerprint(file);
+  signal?.throwIfAborted();
+  const existing = sourceHash ? await alreadyThere(sourceHash, signal) : null;
+  if (existing) return { id: existing.id, existing };
 
+  const { result, duration } = await splitSong(file, onStage, { signal });
+  signal?.throwIfAborted();
+
+  // Sent again if it doesn't arrive: a second, unfinished copy of the
+  // track (its answer lost on the way) is dropped by the server, by the
+  // song's fingerprint, when the next one is made.
   onStage({ stage: "saving" });
-  const created = await fetch("/api/tracks", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      ...splitTrackPayload(file, result, duration, tags),
-      // The upload form doesn't start without the box ticked.
-      rightsConfirmed: true,
-    }),
-  });
+  const created = await callApi(
+    "/api/tracks",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...splitTrackPayload(file, result, duration, tags),
+        ...(sourceHash ? { sourceHash } : {}),
+        // The upload form doesn't start without the box ticked.
+        rightsConfirmed: true,
+      }),
+    },
+    { signal, attempts: sourceHash ? 3 : 1, what: "Couldn't reach the server to save the song" }
+  );
   const track = await created.json().catch(() => null);
   if (!created.ok || !track?.id) {
-    throw new Error(track?.error ?? "Couldn't save the track");
+    const message = track?.error ?? "Couldn't save the track";
+    throw created.status >= 500 ? new TransientError(message) : new Error(message);
   }
 
   try {
-    await uploadStems(track.uploads, result, onStage);
+    await uploadStems(track.uploads, result, onStage, undefined, signal);
 
     onStage({ stage: "saving" });
-    const done = await fetch(`/api/tracks/${track.id}/complete`, { method: "POST" });
-    if (!done.ok) {
-      const data = await done.json().catch(() => null);
-      throw new Error(data?.error ?? "Couldn't finish saving the track");
-    }
+    await finishTrack(track.id, signal);
   } catch (err) {
     dropUnfinished(track.id);
     throw err;
   }
-  return track.id as string;
+  return { id: track.id as string, existing: null };
+}
+
+/**
+ * Flips an uploaded track to ready. Asked again a few times: a stem the
+ * store has only just taken can take a moment to show up (409), and the
+ * answer can be lost on a bad connection — asking twice is harmless.
+ */
+async function finishTrack(trackId: string, signal?: AbortSignal) {
+  for (let attempt = 1; ; attempt++) {
+    const done = await callApi(
+      `/api/tracks/${trackId}/complete`,
+      { method: "POST" },
+      { signal, attempts: 3, what: "Couldn't reach the server to finish saving the song" }
+    );
+    if (done.ok) return;
+    const data = await done.json().catch(() => null);
+    if (done.status === 409 && attempt < 4) {
+      await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+      continue;
+    }
+    const message = data?.error ?? "Couldn't finish saving the track";
+    throw done.status >= 500 ? new TransientError(message) : new Error(message);
+  }
 }
 
 /**
@@ -498,7 +610,7 @@ export async function uploadSong(
  * rather than leaving it "Uploading…" until the server's 20-minute sweep.
  */
 export function dropUnfinished(trackId: string) {
-  void fetch(`/api/tracks/${trackId}`, { method: "DELETE" }).catch(() => {});
+  void fetch(`/api/tracks/${trackId}?unfinished=1`, { method: "DELETE" }).catch(() => {});
 }
 
 /**
@@ -507,18 +619,36 @@ export function dropUnfinished(trackId: string) {
  * read those sites — and parks it briefly; it's deleted as soon as it's
  * here.
  */
+/** Songs fetchSongFromLink found by searching for the song a link named, rather than at the link itself. */
+export const foundBySearch = new WeakSet<File>();
+
+/** A failure worth trying again by itself: the connection, or the server, not the song. */
+export class TransientError extends Error {}
+
 export async function fetchSongFromLink(
   link: string,
-  onStage: (stage: UploadStage) => void
+  onStage: (stage: UploadStage) => void,
+  signal?: AbortSignal
 ): Promise<File> {
   onStage({ stage: "fetching-link" });
-  const res = await fetch("/api/import", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: link }),
-  });
+  let res: Response;
+  try {
+    res = await fetch("/api/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: link }),
+      signal,
+    });
+  } catch (err) {
+    signal?.throwIfAborted();
+    throw new TransientError("Couldn't reach the server — check your connection", { cause: err });
+  }
   const data = await res.json().catch(() => null);
-  if (!res.ok || !data?.id) throw new Error(data?.error ?? "Couldn't get a song from that link");
+  if (!res.ok || !data?.id) {
+    const message = data?.error ?? "Couldn't get a song from that link";
+    // 422: the link itself (private, unsupported, too long) — asking again won't help.
+    throw res.status >= 500 || res.status === 429 || res.status === 408 ? new TransientError(message) : new Error(message);
+  }
 
   const url = `/api/import/${data.id}`;
   onStage({ stage: "downloading", progress: 0 });
@@ -527,7 +657,10 @@ export async function fetchSongFromLink(
       onStage({ stage: "downloading", progress: loaded / Math.max(1, total) })
     );
     const ext = String(data.id).split(".").pop();
-    return new File([bytes], `${data.title}.${ext}`);
+    const file = new File([bytes], `${data.title}.${ext}`);
+    // Looked up by name (a streaming service's link, or YouTube's): say so.
+    if (data.foundBySearch) foundBySearch.add(file);
+    return file;
   } finally {
     void fetch(url, { method: "DELETE" }).catch(() => {});
   }

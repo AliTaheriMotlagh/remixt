@@ -30,6 +30,11 @@ export const splitTrackSchema = z.object({
     .object({ drums: peaksSchema.optional(), bass: peaksSchema.optional(), other: peaksSchema.optional() })
     .default({}),
   tags: z.array(z.string().max(40)).max(20).default([]),
+  /** SHA-256 of the song's file, so the same file is never split twice (see /api/tracks/lookup). */
+  sourceHash: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .optional(),
 });
 
 export type SplitTrack = z.infer<typeof splitTrackSchema>;
@@ -52,13 +57,23 @@ export async function createTrackForUpload(
     : { vocals: data.vocalsPeaks, beat: data.beatPeaks, ...data.partPeaks };
   const kinds = STEM_KINDS.filter((kind) => peaks[kind]);
 
+  // The same song from the same person, still unfinished: an earlier try
+  // that was interrupted (a reload, a lost answer). This one replaces it.
+  if (data.sourceHash) {
+    const stale = await sql<{ id: string }[]>`
+      SELECT id FROM tracks WHERE owner_id = ${ownerId} AND source_hash = ${data.sourceHash} AND status = 'processing'
+    `;
+    for (const { id } of stale) await dropUnfinishedTrack(id);
+  }
+
   await sql.begin(async (tx) => {
     // original_url stays empty: the original isn't kept.
+    // A take recorded in the booth is private to its singer until they share it.
     await tx`
       INSERT INTO tracks (id, owner_id, title, original_filename, status, duration, bpm, original_url,
-                          tags, rights_confirmed_at)
+                          tags, rights_confirmed_at, visibility, source_hash)
       VALUES (${trackId}, ${ownerId}, ${data.title}, ${data.filename}, 'processing', ${data.duration}, ${data.bpm}, '',
-              ${tags}, now())
+              ${tags}, now(), ${data.recording ? "private" : "public"}, ${data.sourceHash ?? null})
     `;
     for (const kind of kinds) {
       await tx`

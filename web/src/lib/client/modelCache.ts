@@ -2,6 +2,13 @@
 // ~172 MB htdemucs, the beat tracker's ~10 MB, ONNX Runtime's WebAssembly)
 // once, and keeping them in Cache Storage, so every visit after the first
 // loads them from disk. Shared by the workers that run the models.
+//
+// A model normally comes straight from where it's published (Hugging Face,
+// GitHub). Where that's out of reach — Hugging Face refuses visitors from
+// Iran, say — it comes from this app's own copy instead (see
+// lib/modelMirror.ts), and the browser remembers to go there first.
+
+import { MIRROR_SLICE_BYTES, MODEL_SIZE_HEADER, mirrorFor } from "../modelMirror";
 
 /** On each cached file: its size in bytes. */
 export const SIZE_HEADER = "X-Remixt-Bytes";
@@ -35,7 +42,24 @@ export async function cachedDownload(
     return buffer;
   }
 
-  const bytes = await resumableDownload(url, (loaded, total) => onBytes(loaded, total, false));
+  const report = (loaded: number, total: number | null) => onBytes(loaded, total, false);
+  const origin = typeof self !== "undefined" && self.location ? self.location.origin : "";
+  const mirror = origin ? mirrorFor(url, origin) : null;
+  let bytes: Uint8Array<ArrayBuffer>;
+  if (!mirror) {
+    bytes = await resumableDownload(url, report);
+  } else if (await prefersMirror(cache)) {
+    bytes = await slicedDownload(mirror, report).catch(() => resumableDownload(url, report));
+  } else {
+    try {
+      // A few quick tries: a blocked host fails the same way every time.
+      bytes = await resumableDownload(url, report, { attempts: 3 });
+    } catch {
+      report(0, null);
+      bytes = await slicedDownload(mirror, report);
+      await rememberMirror(cache);
+    }
+  }
   try {
     // The size alongside, so the storage page can say how big it is without reading it.
     await cache?.put(
@@ -51,6 +75,72 @@ export async function cachedDownload(
 const STALL_MS = 20_000;
 const MAX_ATTEMPTS = 8;
 
+/** Marks (in the models' cache) that this browser can't reach where models come from. */
+const PREFER_MIRROR = "/__remixt-prefer-model-mirror";
+
+async function prefersMirror(cache: Cache | null): Promise<boolean> {
+  return !!(await cache?.match(PREFER_MIRROR).catch(() => undefined));
+}
+
+async function rememberMirror(cache: Cache | null) {
+  await cache?.put(PREFER_MIRROR, new Response("1")).catch(() => {});
+}
+
+/** Slices fetched at once from this app's mirror. */
+const SLICES_AT_ONCE = 3;
+
+/**
+ * Downloads a model from this app's mirror, a slice (?part=N) at a time,
+ * several at once, each retried on its own — so a dropped connection costs
+ * one 4 MB slice.
+ */
+export async function slicedDownload(
+  url: string,
+  onBytes: (loaded: number, total: number | null) => void,
+  fetchSlice: (url: string) => Promise<Response> = (u) => fetch(u)
+): Promise<Uint8Array<ArrayBuffer>> {
+  const getSlice = async (part: number): Promise<{ bytes: Uint8Array; total: number }> => {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const res = await fetchSlice(`${url}?part=${part}`);
+        if (!res.ok) throw new Error(`Couldn't download the model (HTTP ${res.status})`);
+        const total = Number(res.headers.get(MODEL_SIZE_HEADER));
+        if (!total) throw new Error("Couldn't download the model");
+        return { bytes: new Uint8Array(await res.arrayBuffer()), total };
+      } catch (err) {
+        if (attempt >= MAX_ATTEMPTS) {
+          throw err instanceof Error ? err : new Error("The download keeps failing — check your connection and try again");
+        }
+        await new Promise((resolve) => setTimeout(resolve, Math.min(8000, 1000 * attempt)));
+      }
+    }
+  };
+
+  const first = await getSlice(0);
+  const total = first.total;
+  const whole = new Uint8Array(total);
+  whole.set(first.bytes, 0);
+  let loaded = first.bytes.length;
+  onBytes(loaded, total);
+
+  const parts = Math.ceil(total / MIRROR_SLICE_BYTES);
+  const waiting = Array.from({ length: parts - 1 }, (_, i) => i + 1);
+  const next = async (): Promise<void> => {
+    const part = waiting.shift();
+    if (part === undefined) return;
+    const { bytes } = await getSlice(part);
+    const offset = part * MIRROR_SLICE_BYTES;
+    if (offset + bytes.length > total) throw new Error("the download is bigger than announced");
+    whole.set(bytes, offset);
+    loaded += bytes.length;
+    onBytes(loaded, total);
+    return next();
+  };
+  await Promise.all(Array.from({ length: Math.min(SLICES_AT_ONCE, waiting.length) }, next));
+  if (loaded !== total) throw new Error("The download came out the wrong size — try again");
+  return whole;
+}
+
 /**
  * Downloads a large file, surviving flaky connections: if no bytes arrive
  * for STALL_MS the request is dropped and picked up again from where it
@@ -65,7 +155,8 @@ const MAX_ATTEMPTS = 8;
  */
 export async function resumableDownload(
   url: string,
-  onBytes: (loaded: number, total: number | null) => void
+  onBytes: (loaded: number, total: number | null) => void,
+  { attempts = MAX_ATTEMPTS }: { attempts?: number } = {}
 ): Promise<Uint8Array<ArrayBuffer>> {
   let chunks: Uint8Array[] = [];
   let whole: Uint8Array<ArrayBuffer> | null = null;
@@ -114,7 +205,7 @@ export async function resumableDownload(
       break;
     } catch (err) {
       clearTimeout(stall);
-      if (attempt >= MAX_ATTEMPTS) {
+      if (attempt >= attempts) {
         throw err instanceof Error && err.name !== "AbortError"
           ? err
           : new Error("The download keeps stalling — check your connection and try again");

@@ -16,8 +16,14 @@ export default function PresenceHeartbeat() {
     // An embedded player sits on someone else's site: not a visit here.
     if (pathname.startsWith("/embed/")) return;
 
+    // The page's first beat once it's on screen counts as a view (and
+    // the day's first, as a visit) — a tab opened in the background
+    // counts when it's first looked at.
+    let viewed = false;
     const beat = () => {
-      if (document.visibilityState === "visible") void sendHeartbeat(pathname);
+      if (document.visibilityState !== "visible") return;
+      void sendHeartbeat(pathname, !viewed);
+      viewed = true;
     };
     beat();
     const timer = setInterval(beat, HEARTBEAT_MS);

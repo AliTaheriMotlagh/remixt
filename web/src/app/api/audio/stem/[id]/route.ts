@@ -1,6 +1,8 @@
 import { NextRequest } from "next/server";
+import { getCurrentUser } from "@/lib/auth";
 import { getStemById } from "@/lib/models";
-import { publicUrl, serveBlobRange, servesThroughApp, serveStorageFile } from "@/lib/storage";
+import { canHearStem } from "@/lib/trackAccess";
+import { publicUrl, serveBlobRange, servesThroughApp, serveStorageFile, serveThroughApp } from "@/lib/storage";
 
 // Plays a stem. Stems with a public URL (a public Blob store, R2, rows from
 // older builds) redirect there, so the audio streams from the CDN rather
@@ -30,7 +32,17 @@ export async function GET(
   const { id } = await params;
   const stem = await getStemById(id);
   if (!stem) return Response.json({ error: "Not found" }, { status: 404 });
+  // A private take plays for its owner, whoever they shared it with, and
+  // wherever they put it to be heard (a remix, a shared project).
+  if (!(await canHearStem(id, await getCurrentUser()))) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
 
+  // ?via=app: a browser that couldn't reach the store's CDN (blocked in
+  // some countries) gets the stem through this app instead.
+  if (req.nextUrl.searchParams.get("via") === "app") {
+    return kept(await serveThroughApp(stem.file_url, req.headers.get("range")));
+  }
   if (/^https?:\/\//.test(stem.file_url)) return redirect(stem.file_url);
   const remote = publicUrl(stem.file_url);
   if (remote) return redirect(remote);

@@ -54,13 +54,13 @@ export function visitorId(): string {
   }
 }
 
-/** Tells the server this visitor is here, on `path`. */
-export async function sendHeartbeat(path: string) {
+/** Tells the server this visitor is here, on `path` — `view` when the page was just opened. */
+export async function sendHeartbeat(path: string, view = false) {
   try {
     const res = await fetch("/api/presence", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sid: visitorId(), path }),
+      body: JSON.stringify({ sid: visitorId(), path, view }),
     });
     if (res.ok) setPresence(await res.json());
   } catch {

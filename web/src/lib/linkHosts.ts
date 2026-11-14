@@ -16,7 +16,7 @@ export function isYouTubeLink(link: string): boolean {
  * YTDLP_PROXY / YTDLP_COOKIES in DEPLOY.md.
  */
 export const YOUTUBE_UNAVAILABLE =
-  "YouTube links don't work yet — YouTube blocks downloads from our server. " +
+  "Couldn't get that YouTube video — YouTube blocks downloads from our server, and the same song wasn't found elsewhere. " +
   "Download the song another way and upload the file, or paste a link from SoundCloud, Bandcamp or another site.";
 
 /**

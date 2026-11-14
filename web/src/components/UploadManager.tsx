@@ -6,12 +6,13 @@ import { Music } from "lucide-react";
 import Waveform from "./Waveform";
 import TagInput from "./TagInput";
 import { KIND_INFO, STEM_KINDS, type StemKind } from "@/lib/stemKinds";
-import { isConstrainedDevice, useSplitter } from "@/lib/client/splitter";
+import { isConstrainedDevice, splitter, useSplitter } from "@/lib/client/splitter";
 import { useStudioStore } from "@/lib/client/studioStore";
-import { isYouTubeLink, splitLinks, YOUTUBE_UNAVAILABLE } from "@/lib/linkHosts";
+import { splitLinks } from "@/lib/linkHosts";
 import { filesFromDrop, uploads, useUploadsFinished, type AddResult } from "@/lib/client/uploads";
 import { HelperPanel, QueuedSongs, QueueNotice } from "./SplitQueue";
 import { UploadList } from "./UploadActivity";
+import { TakeShareButton } from "./TakeSharing";
 
 type Stem = {
   id: string;
@@ -29,7 +30,14 @@ type Track = {
   created_at: string;
   stems: Stem[];
   tags?: string[];
+  visibility?: "public" | "private";
+  /** Remixes using its stems (deleting it takes those lanes out). */
+  remixes?: number;
+  /** People a private take is shared with. */
+  shared_with?: number;
 };
+
+const TAKE_TAG = "studio recording";
 
 const noSubscription = () => () => {};
 
@@ -73,11 +81,10 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
   const [tryAnyway, setTryAnyway] = useState(false);
   // …and so their songs go to the split queue, for a computer to split.
   const queueMode = onPhone && !tryAnyway;
-  // Several links can be pasted at once; YouTube ones are left out where
-  // YouTube can't be reached.
+  // Several links can be pasted at once. Any site works: where a site
+  // can't be downloaded from (Spotify, Apple Music — or YouTube, which
+  // blocks the server), the same song is found elsewhere (lib/linkImport.ts).
   const links = useMemo(() => splitLinks(link), [link]);
-  const youtubeLinks = youtubeImport ? [] : links.filter(isYouTubeLink);
-  const youtubeBlocked = links.length > 0 && youtubeLinks.length === links.length;
 
   const fetchTracks = useCallback(async () => {
     const res = await fetch("/api/tracks").catch(() => null);
@@ -130,16 +137,13 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
 
   function handleLink(e: React.FormEvent) {
     e.preventDefault();
-    if (!link.trim() || youtubeBlocked || !confirmRights()) return;
+    if (!link.trim() || !confirmRights()) return;
     if (links.length === 0) {
       setUploadError("That doesn't look like a link — paste the song's whole address, starting with https://");
       return;
     }
     setUploadError(null);
-    uploads.addLinks(
-      links.filter((l) => !youtubeLinks.includes(l)),
-      { tags: newTags, mode: queueMode ? "queue" : "split" }
-    );
+    uploads.addLinks(links, { tags: newTags, mode: queueMode ? "queue" : "split" });
     setLink("");
   }
 
@@ -166,6 +170,10 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
           onChange={(e) => {
             setRights(e.target.checked);
             setUploadError(null);
+            // About to add a song: on a computer, start fetching the
+            // splitter now (a one-time ~200 MB download, then from disk),
+            // so it's ready — or nearly — by the time a song is picked.
+            if (e.target.checked && !queueMode) void splitter.load().catch(() => {});
           }}
           className="mt-0.5 h-4 w-4 shrink-0 accent-brand"
         />
@@ -248,38 +256,29 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
           autoCorrect="off"
           spellCheck={false}
           enterKeyHint="go"
-          placeholder={
-            youtubeImport ? "…or paste links (YouTube, SoundCloud…)" : "…or paste links (SoundCloud, Bandcamp…)"
-          }
+          placeholder="…or paste links (YouTube, SoundCloud, Spotify…)"
           value={link}
           onChange={(e) => setLink(e.target.value)}
           className="input min-w-0 flex-1"
         />
         <button
           type="submit"
-          disabled={!link.trim() || youtubeBlocked}
+          disabled={!link.trim()}
           className="shrink-0 rounded-lg bg-brand px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-strong disabled:opacity-40"
         >
           {links.length > 1
-            ? `${queueMode ? "Queue" : "Get"} ${links.length - youtubeLinks.length} songs`
+            ? `${queueMode ? "Queue" : "Get"} ${links.length} songs`
             : queueMode
               ? "Queue it"
               : "Get song"}
         </button>
       </form>
-      {youtubeLinks.length > 0 ? (
-        <p className="mt-2 text-sm text-danger">
-          {youtubeBlocked ? "" : `${youtubeLinks.length} of these ${youtubeLinks.length === 1 ? "is a YouTube link" : "are YouTube links"} and will be left out. `}
-          {YOUTUBE_UNAVAILABLE}
-        </p>
-      ) : (
-        !youtubeImport && (
-          <p className="mt-2 text-xs text-muted">
-            Paste one link or several at once. Works with SoundCloud, Bandcamp, Vimeo, direct MP3 links and many
-            more sites. YouTube isn&apos;t supported yet.
-          </p>
-        )
-      )}
+      <p className="mt-2 text-xs text-muted">
+        Paste one link or several at once — SoundCloud, Bandcamp, Vimeo, direct MP3 links and many more sites.
+        {youtubeImport
+          ? " YouTube works too."
+          : " For YouTube, Spotify, Apple Music and other streaming links, the same song is looked up on SoundCloud — check it's the right one."}
+      </p>
       {uploadError && <p className="mt-3 text-sm text-danger">{uploadError}</p>}
 
       <UploadList />
@@ -323,6 +322,34 @@ function TrackRow({
 }) {
   const [editingTags, setEditingTags] = useState<string[] | null>(null);
   const [savingTags, setSavingTags] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const isTake = !!track.tags?.includes(TAKE_TAG);
+
+  async function deleteTrack() {
+    const used = track.remixes ?? 0;
+    const what = isTake ? "this take" : "this song";
+    const question =
+      track.status === "ready"
+        ? `Delete “${track.title}”? ${what[0].toUpperCase()}${what.slice(1)} and its stems are removed from the library${
+            used ? `, and from the ${used} ${used === 1 ? "remix" : "remixes"} that use${used === 1 ? "s" : ""} them` : ""
+          }. This can't be undone.`
+        : `Remove “${track.title}” from your uploads?`;
+    if (!window.confirm(question)) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await fetch(`/api/tracks/${track.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error ?? "Couldn't delete it — try again");
+      }
+      onChanged();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Couldn't delete it — try again");
+      setDeleting(false);
+    }
+  }
 
   async function saveTags() {
     if (!editingTags) return;
@@ -352,14 +379,38 @@ function TrackRow({
             <span className="ml-2 text-xs font-normal text-muted">{track.bpm} BPM</span>
           )}
         </h3>
-        <div className="shrink-0">
+        <div className="flex shrink-0 items-center gap-2">
+          {isTake && track.status === "ready" && (
+            <TakeShareButton
+              trackId={track.id}
+              title={track.title}
+              visibility={track.visibility}
+              sharedWith={track.shared_with ?? 0}
+            />
+          )}
           <StatusBadge status={track.status} />
+          <button
+            onClick={deleteTrack}
+            disabled={deleting}
+            className="rounded-md px-1.5 py-1 text-xs text-muted hover:text-danger disabled:opacity-50"
+            aria-label={`Delete ${track.title}`}
+            title="Delete"
+          >
+            {deleting ? "Deleting…" : "Delete"}
+          </button>
         </div>
       </div>
 
       {track.status === "failed" && track.error && (
         <p className="mt-2 text-xs text-danger">{track.error}</p>
       )}
+      {track.status === "processing" && (
+        <p className="mt-2 text-xs text-muted">
+          Still being saved. If you closed or reloaded the page while it was uploading, it picks up again by itself
+          (see above) — or delete it and add it again.
+        </p>
+      )}
+      {deleteError && <p className="mt-2 text-xs text-danger">{deleteError}</p>}
 
       {track.status === "ready" &&
         (editingTags ? (

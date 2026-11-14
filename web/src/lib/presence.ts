@@ -60,6 +60,73 @@ export async function heartbeat(sessionId: string, userId: string | null, area: 
   if (Math.random() < 0.02) await sql`DELETE FROM presence WHERE last_seen < now() - interval '1 hour'`;
 }
 
+// --- Visits ------------------------------------------------------------------------
+//
+// A visit is one browser on one day (its visitor id, the same one presence
+// uses); a page view is each page it opens. Kept per day, so the numbers
+// can be read as today / this week / all time.
+
+/** Counts a page view (and, the first time today, a visit) for this browser. */
+export async function recordVisit(visitor: string, userId: string | null) {
+  await ensureSchema();
+  await sql`
+    INSERT INTO site_visits (day, visitor, user_id, views)
+    VALUES (CURRENT_DATE, ${visitor}, ${userId}, 1)
+    ON CONFLICT (day, visitor) DO UPDATE
+      SET views = site_visits.views + 1, last_at = now(), user_id = COALESCE(EXCLUDED.user_id, site_visits.user_id)
+  `;
+  visitsCache = null;
+}
+
+export type VisitTotals = { today: number; total: number };
+
+let visitsCache: { at: number; value: Promise<VisitTotals> } | null = null;
+const VISITS_FRESH_MS = 30_000;
+
+/** Visits today and all time (kept for half a minute: every heartbeat asks). */
+export function visitTotals(): Promise<VisitTotals> {
+  if (visitsCache && Date.now() - visitsCache.at < VISITS_FRESH_MS) return visitsCache.value;
+  const value = (async () => {
+    await ensureSchema();
+    const [row] = await sql<VisitTotals[]>`
+      SELECT COUNT(*) FILTER (WHERE day = CURRENT_DATE)::int AS today, COUNT(*)::int AS total FROM site_visits
+    `;
+    return row ?? { today: 0, total: 0 };
+  })();
+  value.catch(() => (visitsCache = null));
+  visitsCache = { at: Date.now(), value };
+  return value;
+}
+
+export type VisitStats = {
+  visits_today: number;
+  visits_week: number;
+  visits_month: number;
+  visits_total: number;
+  visitors_month: number;
+  views_today: number;
+  views_total: number;
+  members_today: number;
+};
+
+/** The admin's numbers. */
+export async function visitStats(): Promise<VisitStats> {
+  await ensureSchema();
+  const [row] = await sql<VisitStats[]>`
+    SELECT
+      COUNT(*) FILTER (WHERE day = CURRENT_DATE)::int AS visits_today,
+      COUNT(*) FILTER (WHERE day > CURRENT_DATE - 7)::int AS visits_week,
+      COUNT(*) FILTER (WHERE day > CURRENT_DATE - 30)::int AS visits_month,
+      COUNT(*)::int AS visits_total,
+      COUNT(DISTINCT visitor) FILTER (WHERE day > CURRENT_DATE - 30)::int AS visitors_month,
+      COALESCE(SUM(views) FILTER (WHERE day = CURRENT_DATE), 0)::int AS views_today,
+      COALESCE(SUM(views), 0)::int AS views_total,
+      COUNT(DISTINCT user_id) FILTER (WHERE day = CURRENT_DATE)::int AS members_today
+    FROM site_visits
+  `;
+  return row;
+}
+
 export type OnlineArtist = { id: string; artist_name: string; avatar_color: string; area: Area };
 
 export type PresenceSnapshot = {
@@ -71,13 +138,15 @@ export type PresenceSnapshot = {
   artists: OnlineArtist[];
   /** How many signed-in artists are online in all (`artists` is capped). */
   artistCount: number;
+  /** Visits to the site: today and all time. */
+  visits?: VisitTotals;
 };
 
 export async function presenceSnapshot(limit = 16): Promise<PresenceSnapshot> {
   await ensurePresenceSchema();
   const since = sql`now() - make_interval(secs => ${ONLINE_SECONDS})`;
   // One row per person: a signed-in artist's latest tab, or a guest's id.
-  const [areaRows, artists] = await Promise.all([
+  const [areaRows, artists, visits] = await Promise.all([
     sql<{ area: Area; n: number }[]>`
       SELECT area, COUNT(*)::int AS n FROM (
         SELECT DISTINCT ON (COALESCE(user_id, session_id)) area
@@ -97,6 +166,8 @@ export async function presenceSnapshot(limit = 16): Promise<PresenceSnapshot> {
       ORDER BY latest.last_seen DESC
       LIMIT ${limit}
     `,
+    // A count that can't be read never takes the live numbers down with it.
+    visitTotals().catch(() => undefined),
   ]);
   const areas: PresenceSnapshot["areas"] = {};
   for (const row of areaRows) areas[row.area] = row.n;
@@ -105,6 +176,7 @@ export async function presenceSnapshot(limit = 16): Promise<PresenceSnapshot> {
     areas,
     artists: artists.map((a) => ({ id: a.id, artist_name: a.artist_name, avatar_color: a.avatar_color, area: a.area })),
     artistCount: artists[0]?.total ?? 0,
+    visits,
   };
 }
 
@@ -142,7 +214,7 @@ export async function recentActivity(limit = 14): Promise<Activity[]> {
       UNION ALL
       (SELECT 'track', t.created_at, u.id, u.artist_name, u.avatar_color, NULL, t.title, NULL, NULL
        FROM tracks t JOIN users u ON u.id = t.owner_id
-       WHERE t.status = 'ready' ORDER BY t.created_at DESC LIMIT ${limit})
+       WHERE t.status = 'ready' AND t.visibility = 'public' ORDER BY t.created_at DESC LIMIT ${limit})
       UNION ALL
       (SELECT 'like', l.created_at, u.id, u.artist_name, u.avatar_color, r.id, r.title, o.id, o.artist_name
        FROM remix_likes l JOIN users u ON u.id = l.user_id

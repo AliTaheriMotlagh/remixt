@@ -1,5 +1,5 @@
 import { createReadStream } from "fs";
-import { mkdir, readdir, rm, stat, writeFile } from "fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "fs/promises";
 import path from "path";
 import { Readable } from "stream";
 import { AwsClient } from "aws4fetch";
@@ -126,9 +126,15 @@ function objectUrl(key: string) {
   return `${r2!.endpoint}/${r2!.bucket}/${key.split("/").map(encodeURIComponent).join("/")}`;
 }
 
-export type UploadTarget =
+/**
+ * `relay`, when there: a route on this app that takes the same file a
+ * slice at a time (see lib/uploadRelay.ts) — for a browser that can't
+ * reach the store itself (it's blocked in the user's country, say).
+ */
+export type UploadTarget = (
   | { type: "put"; url: string; headers: Record<string, string> }
-  | { type: "blob"; pathname: string; token: string; contentType: string; access: BlobAccess };
+  | { type: "blob"; pathname: string; token: string; contentType: string; access: BlobAccess }
+) & { relay?: string };
 
 /**
  * How the browser should upload the file for `key`. With Blob that's a
@@ -158,7 +164,7 @@ export async function createUploadTarget(
       // exists", and the stem (or queued song) can never be uploaded.
       allowOverwrite: true,
     });
-    return { type: "blob", pathname: key, token, contentType, access: await blobAccess() };
+    return { type: "blob", pathname: key, token, contentType, access: await blobAccess(), relay: localPath };
   }
   const headers = { "Content-Type": contentType };
   if (!r2) return { type: "put", url: localPath, headers };
@@ -167,7 +173,7 @@ export async function createUploadTarget(
   const signed = await r2.client.sign(new Request(url, { method: "PUT" }), {
     aws: { signQuery: true },
   });
-  return { type: "put", url: signed.url, headers };
+  return { type: "put", url: signed.url, headers, relay: localPath };
 }
 
 /**
@@ -238,8 +244,10 @@ export async function serveBlobRange(key: string, rangeHeader: string | null): P
   }
   const end = Math.min(wanted, size - 1, start + MAX_SLICE - 1);
 
+  const isPrivate = (await blobAccess()) === "private";
   const upstream = await fetch(blob.url, {
-    headers: { Authorization: `Bearer ${blobToken}`, Range: `bytes=${start}-${end}` },
+    headers: { ...(isPrivate ? { Authorization: `Bearer ${blobToken}` } : {}), Range: `bytes=${start}-${end}` },
+    cache: "no-store",
   });
   if (!upstream.ok || !upstream.body) {
     return new Response("Couldn't read the stem", { status: 502 });
@@ -254,6 +262,42 @@ export async function serveBlobRange(key: string, rangeHeader: string | null): P
       "Cache-Control": "private, max-age=86400",
     },
   });
+}
+
+/**
+ * Serves a stored object through this app, a slice at a time, even where
+ * it'd normally be a redirect to the store's CDN — for browsers that can't
+ * reach the CDN (it's blocked in some countries). `fileUrl` is a storage
+ * key or a stored object's URL.
+ */
+export async function serveThroughApp(fileUrl: string, rangeHeader: string | null): Promise<Response> {
+  if (blobToken) return serveBlobRange(fileUrl, rangeHeader);
+  if (r2) {
+    const base = r2.publicUrl;
+    const key = /^https?:\/\//.test(fileUrl)
+      ? base && fileUrl.startsWith(`${base}/`)
+        ? fileUrl.slice(base.length + 1).split("/").map(decodeURIComponent).join("/")
+        : null
+      : fileUrl;
+    if (!key) return new Response("Not found", { status: 404 });
+    const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader ?? "bytes=0-");
+    const start = match?.[1] ? parseInt(match[1], 10) : 0;
+    const wanted = match?.[2] ? parseInt(match[2], 10) : Number.MAX_SAFE_INTEGER;
+    const end = Math.min(wanted, start + MAX_SLICE - 1);
+    const upstream = await r2.client.fetch(objectUrl(key), { headers: { Range: `bytes=${start}-${end}` } });
+    if (!upstream.ok || !upstream.body) return new Response("Not found", { status: upstream.status === 416 ? 416 : 404 });
+    const headers = new Headers({
+      "Content-Type": upstream.headers.get("content-type") ?? contentTypeFor(key),
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "private, max-age=86400",
+    });
+    for (const name of ["content-length", "content-range"]) {
+      const value = upstream.headers.get(name);
+      if (value) headers.set(name, value);
+    }
+    return new Response(upstream.body, { status: upstream.status, headers });
+  }
+  return serveStorageFile(fileUrl, rangeHeader);
 }
 
 /** Public URL for a stored object when the backend has one (R2). */
@@ -389,6 +433,34 @@ export async function putObject(key: string, body: Buffer): Promise<void> {
   await writeFile(/* turbopackIgnore: true */ full, body);
 }
 
+/** A stored object's bytes, from whichever backend is in use; null if it isn't there. */
+export async function readObject(key: string): Promise<Buffer | null> {
+  if (blobToken) {
+    let blob;
+    try {
+      blob = await head(key, { token: blobToken });
+    } catch {
+      return null;
+    }
+    const isPrivate = (await blobAccess()) === "private";
+    const res = await fetch(blob.url, {
+      headers: isPrivate ? { Authorization: `Bearer ${blobToken}` } : {},
+      cache: "no-store",
+    });
+    if (!res.ok) throw new Error(`storage GET failed (HTTP ${res.status})`);
+    return Buffer.from(await res.arrayBuffer());
+  }
+  if (r2) {
+    const res = await r2.client.fetch(objectUrl(key));
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`storage GET failed (HTTP ${res.status})`);
+    return Buffer.from(await res.arrayBuffer());
+  }
+  const full = resolveKey(key);
+  if (!full) return null;
+  return readFile(/* turbopackIgnore: true */ full).catch(() => null);
+}
+
 export async function deleteObject(key: string): Promise<void> {
   if (blobToken) return del(key, { token: blobToken });
   if (r2) {
@@ -404,7 +476,12 @@ export async function deleteObject(key: string): Promise<void> {
  * CDN for R2 and a public Blob store (straight there, at full speed), in
  * slices through this app for a private Blob store, or from disk.
  */
-export async function serveObject(key: string, rangeHeader: string | null): Promise<Response> {
+export async function serveObject(
+  key: string,
+  rangeHeader: string | null,
+  { throughApp = false }: { throughApp?: boolean } = {}
+): Promise<Response> {
+  if (throughApp) return serveThroughApp(key, rangeHeader);
   if (blobToken) {
     if ((await blobAccess()) === "public") {
       const stored = await storedObject(key);

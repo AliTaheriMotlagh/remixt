@@ -10,6 +10,7 @@ import { useStudioView, type LibraryTab } from "@/lib/client/studioView";
 import { fetchStemRows, keptStemRows } from "@/lib/client/stemList";
 import { addLines, allLines, groupSongs, hasParts, kindsOf, type Song, type SongStem } from "@/lib/client/songLines";
 import { KIND_INFO, STEM_KINDS, type StemKind } from "@/lib/stemKinds";
+import { TakeShareButton } from "./TakeSharing";
 
 type StemWithTrack = SongStem & {
   peaks_json: string;
@@ -78,15 +79,15 @@ const TAKE_TAG = "studio recording";
 
 const isTake = (tags: readonly string[] | null | undefined) => !!tags?.includes(TAKE_TAG);
 
-/** Marks a vocal you recorded in the booth, so it stands out from songs in the list. */
-function TakeBadge() {
+/** Marks a vocal recorded in the booth (yours, or one shared with you), so it stands out from songs in the list. */
+function TakeBadge({ mine }: { mine: boolean }) {
   return (
     <span
       className="flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-px text-[10px] font-semibold"
       style={{ color: KIND_INFO.vocals.color, background: `color-mix(in srgb, ${KIND_INFO.vocals.color} 16%, transparent)` }}
-      title="A vocal you recorded in the Studio"
+      title={mine ? "A vocal you recorded in the Studio" : "A vocal recorded in the Studio"}
     >
-      <Mic className="h-3 w-3" /> Your take
+      <Mic className="h-3 w-3" /> {mine ? "Your take" : "Take"}
     </span>
   );
 }
@@ -117,7 +118,15 @@ function SongRow({ song, inMix, previewing, playing, progress }: { song: Song & 
             <span dir="auto" className="truncate text-xs font-semibold">
               {song.title}
             </span>
-            {isTake(song.tags) && <TakeBadge />}
+            {isTake(song.tags) && <TakeBadge mine={song.mine} />}
+            {isTake(song.tags) && song.mine && (
+              <TakeShareButton trackId={song.trackId} title={song.title} visibility={song.private ? "private" : "public"} compact />
+            )}
+            {isTake(song.tags) && !song.mine && song.private && (
+              <span className="shrink-0 rounded-full bg-surface px-1.5 py-px text-[10px] text-muted" title="Its singer shared it with you">
+                Shared with you
+              </span>
+            )}
           </p>
           <p className="truncate text-[11px] text-muted">
             {song.artist}
@@ -345,7 +354,7 @@ export default function StudioLibraryPanel() {
                   <span dir="auto" className="min-w-0 flex-1 truncate text-xs font-medium">
                     {stem.track_title}
                   </span>
-                  {isTake(stem.track_tags) && <TakeBadge />}
+                  {isTake(stem.track_tags) && <TakeBadge mine={!!stem.track_mine} />}
                   <button
                     onClick={() => (added ? takeOut([stem.id], stem.track_title) : add([stem]))}
                     title={added ? "Take it back out of the mix" : undefined}

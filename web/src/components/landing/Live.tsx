@@ -81,6 +81,11 @@ function LiveDot() {
   );
 }
 
+/** 1234 → "1.2K", 3400000 → "3.4M", the way X shows views. */
+export function compactCount(n: number): string {
+  return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(n);
+}
+
 /** "● 23 online now · 4 in the Studio" — the hero's live pill. */
 export function OnlineBadge({ initial }: { initial: PresenceSnapshot }) {
   const presence = usePresence(initial);
@@ -256,6 +261,14 @@ export function LivePanel({ initialPresence, initialActivity }: { initialPresenc
             {online === 1 ? "person" : "people"} on Remixt right now
           </span>
         </p>
+        {presence.visits && presence.visits.total > 0 && (
+          <p className="mt-2 flex items-center gap-1.5 text-sm text-muted" title={`${presence.visits.total.toLocaleString("en-US")} visits in all`}>
+            <Eye className="h-4 w-4" />
+            <span className="font-semibold tabular-nums text-foreground">{compactCount(presence.visits.total)}</span> visits
+            <span aria-hidden>·</span>
+            <span className="font-semibold tabular-nums text-foreground">{compactCount(presence.visits.today)}</span> today
+          </p>
+        )}
         {areas.length > 0 && (
           <div className="mt-4 flex flex-wrap gap-1.5">
             {areas.map(([area, n]) => (

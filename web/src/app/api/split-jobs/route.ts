@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
-import { checkLink, downloadSong, ImportError } from "@/lib/linkImport";
+import { ImportError, importSong } from "@/lib/linkImport";
 import {
   cancelJob,
   createJob,
@@ -65,7 +65,7 @@ export async function POST(req: NextRequest) {
   if ("link" in body) {
     let song;
     try {
-      song = await downloadSong(await checkLink(body.link), AbortSignal.timeout((maxDuration - 30) * 1000));
+      song = await importSong(body.link, AbortSignal.timeout((maxDuration - 30) * 1000));
     } catch (err) {
       if (err instanceof ImportError) return NextResponse.json({ error: err.message }, { status: 422 });
       console.error("queue link import failed", err);

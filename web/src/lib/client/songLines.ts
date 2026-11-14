@@ -13,7 +13,14 @@ import { STEM_KINDS, kindLabel, type StemKind } from "@/lib/stemKinds";
 // that's already in the mix apart into its drums, bass and melody.
 
 /** A library stem, with the song (track) it was split from. */
-export type SongStem = LoadableStem & { track_id: string; track_tags?: string[] | null };
+export type SongStem = LoadableStem & {
+  track_id: string;
+  track_tags?: string[] | null;
+  /** A take only its owner (and whom they shared it with) sees. */
+  track_private?: boolean;
+  /** The viewer's own. */
+  track_mine?: boolean;
+};
 
 export type Song = {
   trackId: string;
@@ -22,6 +29,10 @@ export type Song = {
   bpm: number | null;
   duration: number | null;
   tags: string[];
+  /** Private to its owner and whom they shared it with (a take). */
+  private: boolean;
+  /** The viewer's own. */
+  mine: boolean;
   /** Its stems, one per kind. */
   stems: Partial<Record<StemKind, SongStem>>;
 };
@@ -40,6 +51,8 @@ export function groupSongs(stems: SongStem[]): Song[] {
         bpm: stem.track_bpm ?? null,
         duration: stem.track_duration,
         tags: stem.track_tags ?? [],
+        private: !!stem.track_private,
+        mine: !!stem.track_mine,
         stems: {},
       };
       songs.set(stem.track_id, song);

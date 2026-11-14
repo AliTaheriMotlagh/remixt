@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { areaFor, heartbeat, presenceSnapshot, recentActivity } from "@/lib/presence";
+import { areaFor, heartbeat, presenceSnapshot, recentActivity, recordVisit } from "@/lib/presence";
 
 // Live presence for the home page (lib/presence.ts).
 //
-// POST {sid, path}: a tab's heartbeat — this visitor is here, on that page.
+// POST {sid, path, view}: a tab's heartbeat — this visitor is here, on that
+// page; `view` when it's just opened the page (counted as a page view, and
+// the day's first as a visit).
 // Answers with who's online, so the tab doesn't have to ask separately.
 // GET: who's online; with ?activity=1, the latest activity feed too.
 
@@ -17,6 +19,7 @@ export async function POST(req: NextRequest) {
   if (!SESSION_ID.test(sid)) return NextResponse.json({ error: "Bad session id" }, { status: 400 });
   const user = await getCurrentUser();
   await heartbeat(sid, user?.id ?? null, areaFor(path));
+  if (body?.view === true) await recordVisit(sid, user?.id ?? null).catch(() => {});
   return NextResponse.json(await presenceSnapshot(), { headers: { "Cache-Control": "no-store" } });
 }
 

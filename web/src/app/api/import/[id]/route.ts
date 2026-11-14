@@ -13,7 +13,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   if (!user) return NextResponse.json({ error: "Sign in required" }, { status: 401 });
   const key = keyFor(user.id, (await params).id);
   if (!key) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  return serveObject(key, req.headers.get("range"));
+  return serveObject(key, req.headers.get("range"), { throughApp: req.nextUrl.searchParams.get("via") === "app" });
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {

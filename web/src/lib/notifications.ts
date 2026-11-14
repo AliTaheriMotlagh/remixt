@@ -7,7 +7,7 @@ import { ensureLiveSchema } from "./live";
 // read from the bell in the nav bar. Nobody is told about their own
 // actions, and toggling a like on and off doesn't send a pile of them.
 
-export type NotificationType = "like" | "comment" | "follow" | "remix" | "challenge" | "split" | "live";
+export type NotificationType = "like" | "comment" | "follow" | "remix" | "challenge" | "split" | "live" | "share";
 
 export type Notification = {
   id: string;

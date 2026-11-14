@@ -68,7 +68,8 @@ export default async function ArtistPage({
     getArtistProgress(artist.id),
   ]);
 
-  const ownedTracks = await getTracksByOwner(artist.id);
+  // Their private takes only for them (and whoever they shared one with).
+  const ownedTracks = await getTracksByOwner(artist.id, currentUser?.id ?? null);
   const tracks = await Promise.all(
     ownedTracks.map(async (t) => ({
       ...t,

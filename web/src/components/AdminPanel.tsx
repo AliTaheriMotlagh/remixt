@@ -14,6 +14,16 @@ type Overview = {
   published_remixes: number;
   plays: number;
   likes: number;
+  visits: {
+    visits_today: number;
+    visits_week: number;
+    visits_month: number;
+    visits_total: number;
+    visitors_month: number;
+    views_today: number;
+    views_total: number;
+    members_today: number;
+  } | null;
 };
 
 type AdminUser = {
@@ -155,6 +165,24 @@ export default function AdminPanel({ adminId }: { adminId: string }) {
           detail={overview ? `${overview.published_remixes} published` : undefined}
         />
         <Stat label="Plays" value={overview?.plays} detail={overview ? `${overview.likes} likes` : undefined} />
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat
+          label="Visits today"
+          value={overview?.visits?.visits_today}
+          detail={overview?.visits ? `${overview.visits.members_today} signed in · ${overview.visits.views_today} page views` : undefined}
+        />
+        <Stat label="Visits this week" value={overview?.visits?.visits_week} />
+        <Stat
+          label="Visits, 30 days"
+          value={overview?.visits?.visits_month}
+          detail={overview?.visits ? `${overview.visits.visitors_month} different visitors` : undefined}
+        />
+        <Stat
+          label="Visits, all time"
+          value={overview?.visits?.visits_total}
+          detail={overview?.visits ? `${overview.visits.views_total} page views` : undefined}
+        />
       </div>
 
       <div className="mt-6 flex gap-1 overflow-x-auto rounded-xl border border-border bg-surface p-1">

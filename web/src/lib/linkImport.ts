@@ -109,10 +109,13 @@ export async function checkLink(raw: string): Promise<string> {
   if (url.protocol !== "https:" && url.protocol !== "http:") {
     throw new ImportError("Only http and https links work");
   }
-  // Say so straight away rather than after yt-dlp spends half a minute
-  // being refused.
-  if (isYouTubeLink(url.href) && !youtubeImportEnabled()) throw new ImportError(YOUTUBE_UNAVAILABLE);
-  const host = url.hostname.replace(/^\[|\]$/g, "");
+  await checkHost(url.hostname);
+  return url.href;
+}
+
+/** Refuses a host on this machine or a private network (see checkLink). */
+async function checkHost(hostname: string) {
+  const host = hostname.replace(/^\[|\]$/g, "");
   const addresses = isIP(host)
     ? [host]
     : await lookup(host, { all: true }).then(
@@ -124,7 +127,6 @@ export async function checkLink(raw: string): Promise<string> {
   if (addresses.length === 0 || addresses.some(isPrivateAddress)) {
     throw new ImportError("That link points somewhere this server can't fetch from");
   }
-  return url.href;
 }
 
 /** Turns yt-dlp's last error into something worth showing a person. */
@@ -146,6 +148,164 @@ function explain(stderr: string): string {
   if (/larger than max-filesize/i.test(line)) return "That file is too big to import";
   const detail = line.replace(/^ERROR:\s*(\[[^\]]*\]\s*)?([\w-]+:\s*)?/, "").trim();
   return detail ? `Couldn't get the song: ${detail.slice(0, 200)}` : "Couldn't get a song from that link";
+}
+
+// --- Streaming services ----------------------------------------------------------
+//
+// Spotify, Apple Music, Deezer, Tidal and the like don't let anything
+// download their audio (it's DRM-protected). Their pages do say which song
+// it is, though — so for those, the song's name and artist are read from
+// the page and the same song is found where it can be downloaded
+// (YouTube where this server can reach it, else SoundCloud).
+
+const STREAMING_HOST =
+  /(^|\.)(spotify\.com|music\.apple\.com|itunes\.apple\.com|deezer\.com|deezer\.page\.link|tidal\.com|music\.amazon\.[a-z.]+|amazon\.[a-z.]+\/music|music\.yandex\.[a-z]+|anghami\.com|shazam\.com)$/i;
+
+export function isStreamingLink(link: string): boolean {
+  try {
+    return STREAMING_HOST.test(new URL(link).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function decodeEntities(text: string): string {
+  return text
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+function meta(html: string, property: string): string | null {
+  const tag = new RegExp(`<meta[^>]+(?:property|name)=["']${property}["'][^>]*>`, "i").exec(html)?.[0];
+  const content = tag && /content=["']([^"']*)["']/i.exec(tag)?.[1];
+  return content ? decodeEntities(content).trim() : null;
+}
+
+/**
+ * "Artist Song" for a streaming service's track page, from what the page
+ * tells link previews (Open Graph), or null when it isn't a song page.
+ * Exported for the tests.
+ */
+export function songQueryFromPage(html: string, host: string): string | null {
+  let title = meta(html, "og:title") ?? meta(html, "twitter:title");
+  const description = meta(html, "og:description") ?? meta(html, "description") ?? "";
+  if (!title) return null;
+  let artist = meta(html, "music:musician_description") ?? "";
+  title = title.replace(/^\u200e/, "");
+  if (/spotify/i.test(host)) {
+    // og:description: "Artist · Album · Song · 2020"
+    artist ||= description.split(" · ")[0] ?? "";
+    title = title.replace(/\s*[-|]\s*song.*$/i, "");
+  } else if (/apple/i.test(host)) {
+    // "Song - Song by Artist - Apple Music", or "Song by Artist on Apple Music"
+    const m = /^(.*?)\s+[-–]\s+(?:Song|Single|EP|Album) by (.*?)(?:\s+[-–]\s+Apple Music)?$/i.exec(title) ?? /^(.*?)\s+by\s+(.*?)\s+on Apple Music$/i.exec(title);
+    if (m) [title, artist] = [m[1], m[2]];
+  } else {
+    // Deezer, Tidal, Anghami…: "Song - Artist", "Song by Artist"
+    const m = /^(.*?)\s+(?:[-–]|by)\s+(.*?)(?:\s+[-–|].*)?$/i.exec(title);
+    if (m) [title, artist] = [m[1], m[2]];
+  }
+  const clean = (t: string) =>
+    t
+      .replace(/\b(on|\|)\s*(Spotify|Apple Music|Deezer|TIDAL|Amazon Music|Anghami|Shazam)\b.*$/i, "")
+      .replace(/^Listen to\s+/i, "")
+      .trim();
+  const query = `${clean(artist)} ${clean(title)}`.replace(/\s+/g, " ").trim();
+  return query.length >= 2 ? query.slice(0, 150) : null;
+}
+
+/**
+ * "Channel Title" for a YouTube video, from YouTube's oEmbed (which
+ * answers servers that YouTube otherwise blocks), cleaned of the usual
+ * "(Official Video)" noise. Null when YouTube doesn't know it.
+ */
+async function youtubeQuery(link: string, signal?: AbortSignal): Promise<string | null> {
+  try {
+    const res = await fetch(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(link)}`, {
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { title?: string; author_name?: string };
+    return youtubeSearchText(data.title ?? "", data.author_name ?? "");
+  } catch {
+    return null;
+  }
+}
+
+/** Exported for the tests. */
+export function youtubeSearchText(title: string, channel: string): string | null {
+  const cleanTitle = title
+    .replace(/[([](official|lyric|lyrics|audio|video|music video|hd|hq|4k|visualizer|live)[^)\]]*[)\]]/gi, "")
+    .replace(/\b(official (music )?video|lyrics? video|official audio)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const artist = channel.replace(/\s*-\s*Topic$/i, "").replace(/VEVO$/i, "").trim();
+  // A title that already names the artist ("Artist - Song") needs nothing more.
+  const query = cleanTitle.toLowerCase().includes(artist.toLowerCase()) || !artist ? cleanTitle : `${artist} ${cleanTitle}`;
+  return query.length >= 2 ? query.slice(0, 150) : null;
+}
+
+/** What to hand yt-dlp for a streaming service's page: a search for the same song. */
+async function searchFor(link: string, signal?: AbortSignal): Promise<string> {
+  let html = "";
+  try {
+    const res = await fetch(link, {
+      redirect: "follow",
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
+      headers: {
+        // The plain HTML pages link previews get, with their Open Graph tags.
+        "User-Agent": "Mozilla/5.0 (compatible; Remixt link preview)",
+        "Accept-Language": "en",
+      },
+    });
+    // Redirects (short links) may only land on public hosts.
+    await checkHost(new URL(res.url || link).hostname);
+    if (res.ok) html = (await res.text()).slice(0, 500_000);
+  } catch (err) {
+    if (err instanceof ImportError) throw err;
+  }
+  const query = songQueryFromPage(html, new URL(link).hostname);
+  if (!query) {
+    throw new ImportError(
+      "Couldn't tell which song that link is. Streaming services (Spotify, Apple Music…) can't be downloaded from — paste the song's name with a link from SoundCloud or YouTube instead, or upload the file."
+    );
+  }
+  return `${youtubeImportEnabled() ? "ytsearch1" : "scsearch1"}:${query}`;
+}
+
+/**
+ * Everything from a pasted link to the song's audio: checks the link,
+ * finds a streaming service's song where it can be downloaded, downloads
+ * it, and tries once more if the site hiccuped. Throws an ImportError
+ * with a readable message when it can't.
+ */
+export async function importSong(raw: string, signal?: AbortSignal): Promise<ImportedSong & { foundBySearch: boolean }> {
+  const link = await checkLink(raw);
+  let target = link;
+  if (isStreamingLink(link)) {
+    target = await searchFor(link, signal);
+  } else if (isYouTubeLink(link) && !youtubeImportEnabled()) {
+    // YouTube refuses this server; the same song on SoundCloud usually isn't far.
+    const query = await youtubeQuery(link, signal);
+    if (!query) throw new ImportError(YOUTUBE_UNAVAILABLE);
+    target = `scsearch1:${query}`;
+  }
+  const foundBySearch = target !== link;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return { ...(await downloadSong(target, signal)), foundBySearch };
+    } catch (err) {
+      const transient =
+        err instanceof ImportError && /timed out|took too long|temporar|reset|HTTP Error 5\d\d|Unable to download|Connection/i.test(err.message);
+      if (!transient || attempt >= 2 || signal?.aborted) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
 }
 
 export type ImportedSong = {
@@ -171,7 +331,10 @@ export async function downloadSong(link: string, signal?: AbortSignal): Promise<
       "--no-mtime",
       "--no-part",
       "--socket-timeout", "20",
-      "--retries", "3",
+      "--retries", "5",
+      "--extractor-retries", "3",
+      "--fragment-retries", "5",
+      "--retry-sleep", "linear=1::2",
       "-f", FORMAT,
       "--max-filesize", String(MAX_IMPORT_BYTES),
       "--match-filter", `!is_live & duration <=? ${MAX_IMPORT_SECONDS}`,

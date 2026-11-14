@@ -15,7 +15,8 @@ export default async function LibraryPage({
 }: {
   searchParams: Promise<{ q?: string; tag?: string; kind?: string }>;
 }) {
-  const [stems, user, params] = await Promise.all([getLibraryStems(), getCurrentUser(), searchParams]);
+  const [user, params] = await Promise.all([getCurrentUser(), searchParams]);
+  const stems = await getLibraryStems(user?.id ?? null);
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-12">

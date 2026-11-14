@@ -28,6 +28,7 @@ export function ensureSchema(): Promise<void> {
         PRIMARY KEY (stem_id, kind, version)
       )
     `;
+    await ensurePrivacyAndVisits();
     // Already set up (the usual case): one quick look instead of twenty
     // statements on every cold start. project_members is created last.
     const [ready] = await sql<{ ok: boolean }[]>`SELECT to_regclass('project_members') IS NOT NULL AS ok`;
@@ -118,4 +119,49 @@ export function ensureSchema(): Promise<void> {
   })();
   applied.catch(() => (applied = null));
   return applied;
+}
+
+/** The tag every vocal recorded in the Studio's booth is saved with. */
+export const TAKE_TAG = "studio recording";
+
+/**
+ * Who can see a track (takes recorded in the booth are private to whoever
+ * sang them until they share them), whom it's shared with, each song's
+ * fingerprint (so the same file is never split twice), and the site's
+ * daily visits. site_visits is created last, so its existence means the
+ * rest is there.
+ */
+async function ensurePrivacyAndVisits() {
+  const [ready] = await sql<{ ok: boolean }[]>`SELECT to_regclass('site_visits') IS NOT NULL AS ok`;
+  if (ready?.ok) return;
+  const [had] = await sql<{ ok: boolean }[]>`
+    SELECT EXISTS (
+      SELECT 1 FROM information_schema.columns WHERE table_name = 'tracks' AND column_name = 'visibility'
+    ) AS ok
+  `;
+  await sql`ALTER TABLE tracks ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'public'`;
+  // Takes recorded before takes were private: private now, like every new one.
+  if (!had?.ok) await sql`UPDATE tracks SET visibility = 'private' WHERE ${TAKE_TAG} = ANY(tags)`;
+  await sql`ALTER TABLE tracks ADD COLUMN IF NOT EXISTS source_hash TEXT`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_tracks_source_hash ON tracks(source_hash) WHERE source_hash IS NOT NULL`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS track_shares (
+      track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (track_id, user_id)
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_track_shares_user ON track_shares(user_id)`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS site_visits (
+      day DATE NOT NULL,
+      visitor TEXT NOT NULL,
+      user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      views INTEGER NOT NULL DEFAULT 1,
+      first_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (day, visitor)
+    )
+  `;
 }

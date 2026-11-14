@@ -21,12 +21,18 @@
 // These are the same requests the library itself sends from Safari (XHR,
 // same headers, same API version).
 //
+// Where the store can't be reached at all — Vercel's and Cloudflare's hosts
+// are blocked in some countries (Iran among them) while this site isn't —
+// or it refuses outright, the file goes through this app instead, a slice
+// at a time, when the server offered a `relay` (see lib/uploadRelay.ts).
+// Once the store has proved unreachable, later files go that way first.
+//
 // The screen is allowed to turn off meanwhile. A phone pauses the page when
 // it does, and whatever was in flight is lost — so a request that failed
 // because of that isn't held against the upload: it waits for the page to
 // be back, then carries on from the part it had reached.
 
-export type UploadTarget =
+export type UploadTarget = (
   | { type: "put"; url: string; headers: Record<string, string> }
   | {
       type: "blob";
@@ -34,7 +40,11 @@ export type UploadTarget =
       token: string;
       contentType: string;
       access: "public" | "private";
-    };
+    }
+) & {
+  /** A route on this app that takes the file a slice at a time instead. */
+  relay?: string;
+};
 
 type BlobTarget = Extract<UploadTarget, { type: "blob" }>;
 
@@ -106,6 +116,8 @@ export type SendRequest = {
   url: string;
   headers: Record<string, string>;
   body: Blob | string | null;
+  /** Stops the request (the upload was cancelled). */
+  signal?: AbortSignal;
 };
 export type SendResponse = { status: number; text: string };
 /**
@@ -116,6 +128,14 @@ export type Send = (request: SendRequest, onProgress: (loaded: number) => void) 
 
 /** A request that never got an answer (offline, dropped, stalled). */
 export class NetworkError extends Error {}
+
+/** The user cancelled the upload. Final, so no loop tries it again. */
+export class UploadCancelled extends FinalUploadError {
+  constructor() {
+    super("Cancelled");
+    this.name = "AbortError";
+  }
+}
 
 const xhrSend: Send = (request, onProgress) =>
   new Promise((resolve, reject) => {
@@ -159,6 +179,7 @@ const xhrSend: Send = (request, onProgress) =>
     xhr.onerror = fail("Upload failed — check your connection");
     xhr.ontimeout = fail("The upload took too long — check your connection");
     xhr.onabort = fail("The upload stalled — check your connection");
+    request.signal?.addEventListener("abort", () => xhr.abort(), { once: true });
     xhr.send(request.body);
   });
 
@@ -374,20 +395,186 @@ async function putToBlob(target: BlobTarget, body: Blob, onProgress: (loaded: nu
   }
 }
 
+// --- Through this app ---------------------------------------------------------
+
+/** The store never answered at all: no use trying it again. */
+class StoreUnreachable extends FinalUploadError {}
+
+/** No answer from the store, and nothing sent, for this long on the first request: it's unreachable. */
+const FIRST_CONTACT_MS = 20_000;
+
+/** Set once the store has proved unreachable from this page: later files go through the relay first. */
+let relayFirst = false;
+
+/** Relayed slices, at most (under Vercel's 4.5 MB request cap; lib/uploadRelay.ts RELAY_PART_BYTES). */
+export const RELAY_PART_BYTES = 3 * 1024 * 1024;
+const RELAY_AT_ONCE = 3;
+
+function sessionId(): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** One request, tried again after a dropped connection or a server hiccup; resolves on a 2xx. */
+async function sendRetrying(
+  request: SendRequest,
+  onProgress: (loaded: number) => void,
+  send: Send,
+  attempts: number
+): Promise<SendResponse> {
+  for (let attempt = 1; ; attempt++) {
+    const mark = hides;
+    try {
+      const res = await send(request, onProgress);
+      if (res.status >= 200 && res.status < 300) return res;
+      let message = `Upload failed (HTTP ${res.status})`;
+      try {
+        const error = JSON.parse(res.text)?.error;
+        if (typeof error === "string") message = error;
+      } catch {
+        // Not JSON.
+      }
+      throw isFinalStatus(res.status) ? new FinalUploadError(message) : new Error(message);
+    } catch (err) {
+      if (err instanceof NetworkError && pausedSince(mark)) {
+        attempt--;
+        onProgress(0);
+        await untilVisible();
+        continue;
+      }
+      if (attempt >= attempts || err instanceof FinalUploadError) throw err;
+      onProgress(0);
+      await retryWait(attempt);
+    }
+  }
+}
+
+/** Sends `body` to this app's relay a slice at a time (several at once), then has it joined. */
+async function relayUpload(relay: string, body: Blob, onProgress: (loaded: number) => void, send: Send) {
+  const session = sessionId();
+  const join = relay.includes("?") ? "&" : "?";
+  const count = Math.max(1, Math.ceil(body.size / RELAY_PART_BYTES));
+  const waiting = Array.from({ length: count }, (_, i) => i);
+  const sent = new Array<number>(count).fill(0);
+  const report = () => onProgress(sent.reduce((a, b) => a + b, 0));
+  let failed = false;
+  const next = async (): Promise<void> => {
+    const part = waiting.shift();
+    if (part === undefined || failed) return;
+    const slice = body.slice(part * RELAY_PART_BYTES, Math.min(body.size, (part + 1) * RELAY_PART_BYTES));
+    try {
+      await sendRetrying(
+        {
+          method: "PUT",
+          url: `${relay}${join}relay=${session}&part=${part}`,
+          headers: { "Content-Type": "application/octet-stream" },
+          body: slice,
+        },
+        (loaded) => ((sent[part] = Math.min(loaded, slice.size)), report()),
+        send,
+        PART_ATTEMPTS
+      );
+    } catch (err) {
+      failed = true;
+      throw err;
+    }
+    sent[part] = slice.size;
+    report();
+    return next();
+  };
+  await Promise.all(Array.from({ length: Math.min(RELAY_AT_ONCE, count) }, next));
+  await sendRetrying(
+    { method: "POST", url: `${relay}${join}relay=${session}&parts=${count}`, headers: {}, body: null },
+    () => {},
+    send,
+    ATTEMPTS
+  );
+}
+
 /**
  * Uploads `body` to `target`. `onProgress` gets the bytes sent so far
  * (it can go back down when a request is tried again), and the whole size
  * at the end. Pass a File or Blob where there is one: it's read from disk
  * as it's sent, never held in memory whole.
+ *
+ * With a `relay`, a store that can't be reached (or that refuses) is
+ * given up on at once and the file goes through this app instead.
  */
+/** `send`, stopped by `signal`: a cancelled request rejects at once with UploadCancelled. */
+function cancellable(send: Send, signal: AbortSignal): Send {
+  return (request, onProgress) => {
+    if (signal.aborted) return Promise.reject(new UploadCancelled());
+    return new Promise<SendResponse>((resolve, reject) => {
+      const stop = () => reject(new UploadCancelled());
+      signal.addEventListener("abort", stop, { once: true });
+      send({ ...request, signal }, onProgress)
+        .then(resolve, reject)
+        .finally(() => signal.removeEventListener("abort", stop));
+    });
+  };
+}
+
 export async function upload(
   target: UploadTarget,
   body: Blob | Uint8Array,
   onProgress: (loaded: number) => void = () => {},
-  send: Send = xhrSend
+  send: Send = xhrSend,
+  signal?: AbortSignal
 ) {
+  if (signal) {
+    signal.throwIfAborted();
+    send = cancellable(send, signal);
+  }
   const blob = body instanceof Blob ? body : new Blob([body as BlobPart]);
-  if (target.type === "blob") await putToBlob(target, blob, onProgress, send);
-  else await putWhole(target, blob, onProgress, send);
+  const relay = target.relay;
+  if (relay && relayFirst) {
+    await relayUpload(relay, blob, onProgress, send);
+    onProgress(blob.size);
+    return;
+  }
+  // With a relay to fall back on, a store that never answers isn't waited
+  // on through every retry: its first silence — no answer and not a byte
+  // taken in FIRST_CONTACT_MS — sends the file the other way. (A filtered
+  // connection often hangs rather than failing, which looked like the
+  // upload freezing after the split.)
+  let reached = false;
+  const direct: Send = relay
+    ? async (request, progress) => {
+        const mark = hides;
+        const contact = new AbortController();
+        const timer = reached ? null : setTimeout(() => contact.abort(), FIRST_CONTACT_MS);
+        const outer = request.signal;
+        const stop = () => contact.abort();
+        outer?.addEventListener("abort", stop, { once: true });
+        try {
+          const res = await send({ ...request, signal: contact.signal }, (loaded) => {
+            if (loaded > 0 && timer) clearTimeout(timer);
+            progress(loaded);
+          });
+          reached = true;
+          return res;
+        } catch (err) {
+          outer?.throwIfAborted();
+          if (err instanceof NetworkError && !reached && !pausedSince(mark)) throw new StoreUnreachable(err.message);
+          throw err;
+        } finally {
+          if (timer) clearTimeout(timer);
+          outer?.removeEventListener("abort", stop);
+        }
+      }
+    : send;
+  try {
+    if (target.type === "blob") await putToBlob(target, blob, onProgress, direct);
+    else await putWhole(target, blob, onProgress, direct);
+  } catch (err) {
+    if (!relay || err instanceof UploadCancelled) throw err;
+    if (err instanceof StoreUnreachable) relayFirst = true;
+    onProgress(0);
+    await relayUpload(relay, blob, onProgress, send);
+  }
   onProgress(blob.size);
+}
+
+/** For tests: forget that the store proved unreachable. */
+export function resetRelayPreference() {
+  relayFirst = false;
 }

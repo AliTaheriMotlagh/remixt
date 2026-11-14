@@ -15,7 +15,10 @@ export async function fetchStemRows<T>(): Promise<T[]> {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const text = await res.text();
   const { stems } = JSON.parse(text) as { stems: T[] };
-  void cachePut("list", KEY, stems, text.length);
+  // Private takes (the viewer's own, or shared with them) aren't kept on
+  // disk: whoever signs in on this device next sees the list at once too.
+  const shared = stems.filter((row) => !(row as { track_private?: boolean }).track_private);
+  void cachePut("list", KEY, shared, shared.length === stems.length ? text.length : JSON.stringify(shared).length);
   return stems;
 }
 

@@ -84,7 +84,7 @@ export default async function RootLayout({
         <InstallPrompt />
         <UpdatePrompt />
         <SplitterStatus signedIn={!!user} />
-        <BackgroundActivity signedIn={!!user} />
+        <BackgroundActivity signedIn={!!user} userId={user?.id ?? null} />
         <MobileTabBar user={user} isAdmin={isAdmin(user)} />
       </body>
     </html>

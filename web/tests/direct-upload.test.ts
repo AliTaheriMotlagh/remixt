@@ -13,6 +13,9 @@ import { after, before, beforeEach, describe, test } from "node:test";
 import {
   FinalUploadError,
   NetworkError,
+  RELAY_PART_BYTES,
+  resetRelayPreference,
+  UploadCancelled,
   untilVisible,
   upload,
   type Send,
@@ -27,6 +30,7 @@ let seen: Seen[] = [];
 /** What the fake store holds: pathname → bytes, and multipart uploads in progress. */
 let stored = new Map<string, Buffer>();
 let multipart = new Map<string, Map<number, Buffer>>();
+let relayParts = new Map<string, Buffer>();
 /** Lets a test make the store fail a request: return a status to answer with instead. */
 let sabotage: (request: Seen) => number | null = () => null;
 
@@ -44,6 +48,20 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   };
   const failWith = sabotage(request);
   if (failWith) return answer(failWith, { error: { code: failWith === 403 ? "forbidden" : "unknown_error" } });
+  // This app's relay (lib/uploadRelay.ts), played here: slices, then a join.
+  if (url.pathname === "/relay") {
+    const session = url.searchParams.get("relay")!;
+    if (req.method === "PUT") {
+      relayParts.set(`${session}/${url.searchParams.get("part")}`, body);
+      return answer(200, { ok: true });
+    }
+    const count = Number(url.searchParams.get("parts"));
+    const slices = Array.from({ length: count }, (_, i) => relayParts.get(`${session}/${i}`));
+    if (slices.some((s) => !s)) return answer(409, { error: "Part of the upload is missing — try again" });
+    stored.set("relayed", Buffer.concat(slices as Buffer[]));
+    return answer(200, { ok: true });
+  }
+
   // Blob's own auth, or a signed URL's (played by a header here).
   const signed = req.headers["x-signed"] === "yes";
   if (!signed && req.headers.authorization !== `Bearer ${TOKEN}`) return answer(403, { error: { code: "forbidden" } });
@@ -96,7 +114,9 @@ beforeEach(() => {
   seen = [];
   stored = new Map();
   multipart = new Map();
+  relayParts = new Map();
   sabotage = () => null;
+  resetRelayPreference();
 });
 
 /** A page that can be hidden and shown again, like a phone's when its screen turns off and on. */
@@ -230,5 +250,86 @@ describe("upload to a signed PUT URL", () => {
     await run(target, bytes);
     assert.ok(stored.get("local/stem.mp3")?.equals(bytes));
     assert.equal(seen.length, 2);
+  });
+});
+
+describe("through this app, when the store can't be reached", () => {
+  const relayed = (pathname: string): UploadTarget => ({ ...blobTarget(pathname), relay: `${base}/relay` });
+
+  test("a store that never answers sends the file through the relay, a slice at a time, and it arrives whole", async () => {
+    drop = (request) => request.url.includes("/api/blob");
+    const bytes = randomBytes(7 * MB + 3);
+    const progress = await run(relayed("stems/t9/vocals.mp3"), bytes);
+    assert.ok(stored.get("relayed")?.equals(bytes));
+    const slices = seen.filter((r) => r.path === "/relay" && r.method === "PUT");
+    assert.equal(slices.length, Math.ceil(bytes.length / RELAY_PART_BYTES));
+    assert.ok(slices.every((r) => r.size <= RELAY_PART_BYTES));
+    assert.equal(progress.at(-1), bytes.length);
+    // Never reached the store, so it wasn't tried again and again first.
+    assert.equal(seen.filter((r) => r.path.startsWith("/api/blob")).length, 0);
+
+    // The next file goes straight through the relay.
+    seen = [];
+    drop = () => false;
+    await run(relayed("stems/t9/beat.mp3"), randomBytes(1000));
+    assert.equal(seen.filter((r) => r.path.startsWith("/api/blob")).length, 0);
+    assert.equal(seen.filter((r) => r.path === "/relay").length, 2);
+  });
+
+  test("a store that refuses (403) is gone round through the relay too", async () => {
+    sabotage = (r) => (r.path.startsWith("/api/blob") ? 403 : null);
+    const bytes = randomBytes(2 * MB);
+    await run(relayed("stems/t10/vocals.mp3"), bytes);
+    assert.ok(stored.get("relayed")?.equals(bytes));
+  });
+
+  test("a store that answers is used as before, relay or not", async () => {
+    const bytes = randomBytes(MB);
+    await run(relayed("stems/t11/vocals.mp3"), bytes);
+    assert.ok(stored.get("stems/t11/vocals.mp3")?.equals(bytes));
+    assert.equal(seen.filter((r) => r.path === "/relay").length, 0);
+  });
+
+  test("a relay slice that fails is sent again on its own", async () => {
+    drop = (request) => request.url.includes("/api/blob");
+    let failed = false;
+    sabotage = (r) => {
+      if (r.path === "/relay" && r.method === "PUT" && !failed) {
+        failed = true;
+        return 503;
+      }
+      return null;
+    };
+    const bytes = randomBytes(4 * MB);
+    await run(relayed("stems/t12/vocals.mp3"), bytes);
+    assert.ok(stored.get("relayed")?.equals(bytes));
+  });
+});
+
+describe("cancelling", () => {
+  test("a cancelled upload stops at once and never goes round through the relay", async () => {
+    const controller = new AbortController();
+    // The store is slow to answer; the user cancels meanwhile.
+    const slow: Send = (request, onProgress) =>
+      new Promise((resolve, reject) => {
+        const timer = setTimeout(() => send(request, onProgress).then(resolve, reject), 2000);
+        request.signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(new NetworkError("aborted"));
+        });
+      });
+    const target: UploadTarget = { ...blobTarget("stems/t13/vocals.mp3"), relay: `${base}/relay` };
+    const started = upload(target, new Blob([randomBytes(1000) as BlobPart]), () => {}, slow, controller.signal);
+    setTimeout(() => controller.abort(), 50);
+    await assert.rejects(started, UploadCancelled);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(seen.length, 0, "nothing was sent anywhere");
+  });
+
+  test("an upload already cancelled doesn't start", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(upload(blobTarget("stems/t14/vocals.mp3"), new Uint8Array(10), () => {}, send, controller.signal));
+    assert.equal(seen.length, 0);
   });
 });

@@ -64,7 +64,7 @@ describe("dropping an unfinished upload", () => {
     assert.equal((await owner.fetch(`/api/tracks/${track.id}/complete`, { method: "POST" })).status, 409);
     assert.deepEqual((await myTracks(owner)).map((t) => [t.id, t.status]), [[track.id, "processing"]]);
 
-    const dropped = await owner.fetch(`/api/tracks/${track.id}`, { method: "DELETE" });
+    const dropped = await owner.fetch(`/api/tracks/${track.id}?unfinished=1`, { method: "DELETE" });
     assert.equal(dropped.status, 200);
     assert.deepEqual(await myTracks(owner), []);
     assert.equal((await owner.fetch(`/api/tracks/${track.id}`)).status, 404);
@@ -81,7 +81,22 @@ describe("dropping an unfinished upload", () => {
       assert.ok(put.ok, `stem upload: ${put.status}`);
     }
     assert.equal((await owner.fetch(`/api/tracks/${track.id}/complete`, { method: "POST" })).status, 200);
-    assert.equal((await owner.fetch(`/api/tracks/${track.id}`, { method: "DELETE" })).status, 409);
+    // The browser's clean-up after an upload it thought had failed (its
+    // answer lost on the way back) never takes a finished song.
+    assert.equal((await owner.fetch(`/api/tracks/${track.id}?unfinished=1`, { method: "DELETE" })).status, 409);
     assert.deepEqual((await myTracks(owner)).map((t) => [t.id, t.status]), [[track.id, "ready"]]);
+  });
+
+  test("the uploader can delete a finished song on purpose, and nobody else can", async () => {
+    const owner = await signUp("deleter");
+    const stranger = await signUp("stranger2");
+    const track = await createTrack(owner);
+    for (const target of Object.values(track.uploads)) {
+      await owner.fetch(target.url, { method: "PUT", headers: target.headers, body: new Uint8Array(1000) });
+    }
+    assert.equal((await owner.fetch(`/api/tracks/${track.id}/complete`, { method: "POST" })).status, 200);
+    assert.equal((await stranger.fetch(`/api/tracks/${track.id}`, { method: "DELETE" })).status, 404);
+    assert.equal((await owner.fetch(`/api/tracks/${track.id}`, { method: "DELETE" })).status, 200);
+    assert.deepEqual(await myTracks(owner), []);
   });
 });

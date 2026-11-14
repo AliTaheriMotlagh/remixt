@@ -514,7 +514,7 @@ export async function uploadTake(
     return { stemId: stem.id, trackId: track.id };
   } catch (err) {
     // A half-saved take shouldn't sit in the library as a broken track.
-    void fetch(`/api/tracks/${track.id}`, { method: "DELETE" }).catch(() => {});
+    void fetch(`/api/tracks/${track.id}?unfinished=1`, { method: "DELETE" }).catch(() => {});
     throw err;
   }
 }

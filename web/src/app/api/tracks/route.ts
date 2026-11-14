@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
+import sql from "@/lib/db";
 import { getTracksByOwner, getStemsByTrack } from "@/lib/models";
 import { storageProblem } from "@/lib/storage";
 import { createTrackForUpload, splitTrackSchema } from "@/lib/trackUpload";
@@ -10,9 +11,24 @@ export async function GET() {
   if (!user) return NextResponse.json({ error: "Sign in required" }, { status: 401 });
 
   const ownedTracks = await getTracksByOwner(user.id);
+  // How many remixes use each song (deleting it takes those lanes out),
+  // and how many people each private take is shared with.
+  const ids = ownedTracks.map((t) => t.id);
+  const counts = ids.length
+    ? await sql<{ id: string; remixes: number; shared_with: number }[]>`
+        SELECT tracks.id,
+               (SELECT COUNT(DISTINCT rl.remix_id) FROM remix_lanes rl JOIN stems s ON s.id = rl.stem_id
+                 WHERE s.track_id = tracks.id)::int AS remixes,
+               (SELECT COUNT(*) FROM track_shares ts WHERE ts.track_id = tracks.id)::int AS shared_with
+        FROM tracks WHERE tracks.id IN ${sql(ids)}
+      `
+    : [];
+  const byId = new Map(counts.map((c) => [c.id, c]));
   const tracks = await Promise.all(
     ownedTracks.map(async (t) => ({
       ...t,
+      remixes: byId.get(t.id)?.remixes ?? 0,
+      shared_with: byId.get(t.id)?.shared_with ?? 0,
       stems: t.status === "ready" ? await getStemsByTrack(t.id) : [],
     }))
   );

@@ -8,6 +8,8 @@
 // out of what it says. Pure — no Web Audio — so a worker can run it and the
 // tests can check it against the reference filterbank.
 
+import { BEAT_MODEL_URL } from "../modelMirror";
+
 export const BEAT_NET = {
   /**
    * The "small" model: 2.1M parameters, ~10 MB, MIT licence — the export
@@ -15,9 +17,7 @@ export const BEAT_NET = {
    * Hugging Face "songbird-models" repo is a broken export: it stops
    * hearing beats a few seconds into every window.)
    */
-  modelUrl:
-    process.env.NEXT_PUBLIC_BEAT_MODEL_URL ||
-    "https://raw.githubusercontent.com/danigb/beat-this-rs/089b509247e6fdcec666511c0dcf0d5f39c21e73/models/beat_this_small.onnx",
+  modelUrl: BEAT_MODEL_URL,
   modelBytes: 10_555_592,
   /** The network's input tensor. */
   inputName: "spectrogram",
