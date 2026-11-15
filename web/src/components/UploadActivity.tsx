@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Check, Music, Pickaxe, X } from "lucide-react";
 import { splitHelper, useSplitHelper } from "@/lib/client/splitQueue";
 import { useSplitter } from "@/lib/client/splitter";
-import { describeStage, uploads, useUploads, type UploadItem } from "@/lib/client/uploads";
+import { describeStage, timeLeftText, uploads, useUploads, useUploadSummary, type UploadItem } from "@/lib/client/uploads";
 import { ProgressBar } from "./SplitQueue";
 
 // The songs being added to the library: the list on the Upload page, and
@@ -17,10 +17,12 @@ function doneText(item: UploadItem) {
   return item.mode === "queue" ? "Sent to the split queue" : "In your library";
 }
 
-function UploadRow({ item }: { item: UploadItem }) {
+/** One song. Drawn again only when that song changes (the store keeps an unchanged song's object). */
+const UploadRow = memo(function UploadRow({ item }: { item: UploadItem }) {
   const splitterState = useSplitter();
   const { label, progress } = describeStage(item.stage, splitterState);
   const retrying = item.stage?.stage === "retrying";
+  const left = timeLeftText(item.secondsLeft);
   return (
     <li
       className={`rounded-xl border p-3.5 text-sm ${
@@ -78,7 +80,7 @@ function UploadRow({ item }: { item: UploadItem }) {
         {item.status === "waiting"
           ? "In line — starts when the song before it is done"
           : item.status === "working"
-            ? `${label}…`
+            ? `${label}…${left ? ` · ${left}` : ""}`
             : item.status === "done"
               ? (item.note ?? doneText(item))
               : item.error}
@@ -86,17 +88,14 @@ function UploadRow({ item }: { item: UploadItem }) {
       {item.note && item.status !== "done" && <p className="mt-1 text-[11px] text-muted">{item.note}</p>}
     </li>
   );
-}
+});
 
 /** The songs being added from this browser, on the Upload page. */
 export function UploadList() {
   const items = useUploads();
+  const { waiting, working, done, failed } = useUploadSummary();
   if (items.length === 0) return null;
-  const active = items.filter((i) => i.status === "working" || i.status === "waiting").length;
-  const done = items.filter((i) => i.status === "done").length;
-  const waiting = items.filter((i) => i.status === "waiting").length;
-  const failed = items.filter((i) => i.status === "failed").length;
-  const queue = items.some((i) => i.mode === "queue" && i.status !== "done");
+  const active = waiting + working;
   return (
     <section className="mt-6">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
@@ -129,9 +128,8 @@ export function UploadList() {
       </ul>
       {active > 0 && (
         <p className="mt-2 text-xs text-muted">
-          {queue
-            ? "You can use the rest of the site meanwhile. If your screen turns off, sending pauses and carries on when you’re back — just don’t close Remixt."
-            : "This carries on in the background — feel free to use the rest of the site. Please don’t close or reload the tab: the song is kept and picks up again next visit, but splitting would start over."}
+          The screen stays on until it&apos;s done, so the upload doesn&apos;t pause — keep Remixt open (you can use the rest of the site meanwhile).
+          Please don&apos;t close or reload the tab: the song is kept and picks up again next visit, but it would start over.
         </p>
       )}
     </section>
@@ -221,6 +219,7 @@ export function BackgroundActivity({ signedIn, userId }: { signedIn: boolean; us
             <ProgressBar progress={own.progress} />
             <p className="mt-1.5 truncate text-muted">
               {own.label}
+              {timeLeftText(current.secondsLeft) ? ` · ${timeLeftText(current.secondsLeft)}` : ""}
               {active.length > 1 ? ` · ${active.length - 1} more to go` : ""}
             </p>
           </div>

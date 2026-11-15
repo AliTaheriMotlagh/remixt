@@ -1,24 +1,20 @@
 "use client";
 
 import { useMemo, useState, type ComponentType } from "react";
-import { AudioLines, Drum, Headphones, Mic, Sparkles, Timer, Volume2, VolumeX } from "lucide-react";
+import { AudioLines, Drum, Headphones, Layers2, Mic, Minus, Music2, Plus, Sparkles, Timer } from "lucide-react";
 import { audioEngine } from "@/lib/client/audioEngine";
-import { isTakeLane } from "@/lib/client/lyricsSources";
-import { FX_PRESETS, laneName, useStudioStore, type LaneFx, type StudioLane } from "@/lib/client/studioStore";
-import { kindLabel } from "@/lib/stemKinds";
+import { projectKey } from "@/lib/client/lineStatus";
+import { keyLabel } from "@/lib/client/musicKey";
+import { startNewStep } from "@/lib/client/studioHistory";
+import { FX_PRESETS, useStudioStore, type LaneFx, type StudioLane } from "@/lib/client/studioStore";
+import { doubleTake, groupOf, type Group } from "@/lib/client/vocalLanes";
 import { Meter } from "../MixerConsole";
 
-// A singer's mix: three levels that matter while recording — the beat, the
-// original singer (a guide to sing along with, or off), and your own voice —
-// then each lane on its own, and the sound of your voice (presets, reverb,
-// echo) put on every take at once.
-
-type Group = "beat" | "guide" | "voice";
-
-export function groupOf(lane: StudioLane): Group {
-  if (isTakeLane(lane)) return "voice";
-  return lane.kind === "vocals" ? "guide" : "beat";
-}
+// A singer's mix: the sound of your voice (presets, reverb, echo) put on
+// every take at once and doubled for a fuller sound; the beat moved into
+// your range and ducked under your voice; and the three levels that matter
+// while recording — the beat, the original singer (a guide to sing along
+// with, or off), and your own voice. Each lane on its own is in Tracks.
 
 const GROUPS: { id: Group; label: string; hint: string; icon: ComponentType<{ className?: string }>; color: string }[] = [
   { id: "beat", label: "Beat", hint: "Everything that isn't a voice", icon: Drum, color: "var(--beat)" },
@@ -132,40 +128,6 @@ export function QuickLevels() {
   );
 }
 
-/** One lane: on/off, solo, its level and meter. Named with its part ("· Drums"), since a song's lines share its title. */
-function LaneRow({ lane, color }: { lane: StudioLane; color: string }) {
-  const name = isTakeLane(lane) ? laneName(lane) : `${laneName(lane)} · ${kindLabel(lane.kind)}`;
-  const setVolume = useStudioStore((s) => s.setVolume);
-  const toggleMute = useStudioStore((s) => s.toggleMute);
-  const toggleSolo = useStudioStore((s) => s.toggleSolo);
-  return (
-    <li className="flex items-center gap-2">
-      <button
-        onClick={() => toggleMute(lane.laneId)}
-        aria-pressed={lane.muted}
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-surface-raised hover:text-foreground max-lg:h-10 max-lg:w-10"
-        aria-label={lane.muted ? `Unmute ${name}` : `Mute ${name}`}
-      >
-        {lane.muted ? <VolumeX className="text-danger" /> : <Volume2 />}
-      </button>
-      <button
-        onClick={() => toggleSolo(lane.laneId)}
-        aria-pressed={lane.solo}
-        className={`h-7 w-7 shrink-0 rounded-md text-[10px] font-bold ${lane.solo ? "bg-beat text-white" : "border border-border text-muted hover:text-foreground"}`}
-        aria-label={`Solo ${name}`}
-        title="Solo"
-      >
-        S
-      </button>
-      <span dir="auto" className={`w-28 shrink-0 truncate text-xs sm:w-40 ${lane.muted ? "text-muted line-through" : ""}`} title={name}>
-        {name}
-      </span>
-      <Meter source={() => audioEngine.getLaneMeter(lane.laneId)} className="h-6 shrink-0" />
-      <Level value={lane.volume} onChange={(gain) => setVolume(lane.laneId, gain)} label={`${name} level`} color={color} />
-    </li>
-  );
-}
-
 const VOICE_PRESETS = FX_PRESETS.filter((p) => p.kind === "vocals" || p.id === "clean");
 
 /** Your voice's sound, on every take at once. */
@@ -223,32 +185,100 @@ function VoiceSound({ takes }: { takes: StudioLane[] }) {
   );
 }
 
+/** The beat (and guide) moved up or down together, to sit in the singer's range — the key shown before and after. */
+function BeatKey({ backing }: { backing: StudioLane[] }) {
+  const lanes = useStudioStore((s) => s.lanes);
+  const setPitch = useStudioStore((s) => s.setPitchSemitones);
+  const ref = useMemo(() => projectKey(lanes), [lanes]);
+  const shift = ref.pitch ?? 0;
+  const move = (delta: number) => {
+    startNewStep();
+    for (const lane of backing) setPitch(lane.laneId, Math.max(-12, Math.min(12, lane.pitchSemitones + delta)));
+  };
+  const step = "flex h-9 w-9 items-center justify-center rounded-lg border border-border text-muted hover:border-vocals hover:text-foreground disabled:opacity-40 max-lg:h-10 max-lg:w-10";
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <button onClick={() => move(-1)} disabled={shift <= -12} className={step} aria-label="Beat a semitone lower">
+        <Minus />
+      </button>
+      <div className="min-w-28 text-center">
+        <p className="text-sm font-bold tabular-nums">{ref.key ? keyLabel(ref.key) : "Key not known"}</p>
+        <p className="text-[11px] tabular-nums text-muted">{shift === 0 ? "as recorded" : `${shift > 0 ? "+" : ""}${shift} semitone${Math.abs(shift) === 1 ? "" : "s"}`}</p>
+      </div>
+      <button onClick={() => move(1)} disabled={shift >= 12} className={step} aria-label="Beat a semitone higher">
+        <Plus />
+      </button>
+      {shift !== 0 && (
+        <button onClick={() => move(-shift)} className="text-xs text-muted underline-offset-2 hover:text-foreground hover:underline">
+          back to the original key
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function VocalMixer() {
   const groups = useGroups();
+  const setFx = useStudioStore((s) => s.setFx);
+  const backing = useMemo(() => [...groups.beat, ...groups.guide], [groups]);
+  const duck = groups.beat.length ? Math.max(...groups.beat.map((l) => l.fx.duck)) : 0;
+  const playingTakes = groups.voice.filter((t) => !t.muted && !/· double$/.test(t.name ?? ""));
   return (
     <div className="flex flex-col gap-4">
-      <section aria-label="Levels" className="flex flex-col gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Levels</p>
-        <QuickLevels />
-      </section>
       <section aria-label="Your voice's sound" className="flex flex-col gap-2 rounded-xl border border-vocals/30 bg-vocals/5 p-3">
         <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-vocals">
           <Sparkles /> Your voice&apos;s sound · every take
         </p>
         <VoiceSound takes={groups.voice} />
+        {playingTakes.length > 0 && (
+          <button
+            onClick={() => playingTakes.forEach(doubleTake)}
+            className="mt-1 flex h-9 items-center gap-1.5 self-start rounded-lg border border-vocals/50 px-3 text-xs font-semibold text-vocals hover:bg-vocals/10 max-lg:h-10"
+            title="A copy of each take playing, a touch late and spread left and right — a fuller, wider voice. Undo takes it away."
+          >
+            <Layers2 /> Double my voice
+          </button>
+        )}
       </section>
-      {GROUPS.filter((g) => groups[g.id].length > 0).map((g) => (
-        <section key={g.id} aria-label={g.label} className="flex flex-col gap-1.5">
+
+      {backing.length > 0 && (
+        <section aria-label="The beat's key" className="flex flex-col gap-2 rounded-xl border border-border p-3">
           <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
-            <g.icon /> {g.label} · {groups[g.id].length}
+            <Music2 /> Fit the beat to your voice
           </p>
-          <ul className="flex flex-col gap-1">
-            {groups[g.id].map((lane) => (
-              <LaneRow key={lane.laneId} lane={lane} color={g.color} />
-            ))}
-          </ul>
+          <p className="text-xs text-muted">Too high or too low to sing? Move the beat (and the guide vocal) up or down — your takes stay as they are.</p>
+          <BeatKey backing={backing} />
         </section>
-      ))}
+      )}
+
+      {groups.beat.length > 0 && (
+        <section aria-label="Room for the voice" className="flex flex-col gap-2 rounded-xl border border-border p-3">
+          <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
+            <Drum /> Make room for the voice
+          </p>
+          <label className="flex items-center gap-2 text-xs">
+            <span className="w-16 shrink-0 text-muted">Duck</span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={duck}
+              onChange={(e) => groups.beat.forEach((l) => setFx(l.laneId, { duck: Number(e.target.value) }))}
+              className="h-2 min-w-0 flex-1 cursor-pointer"
+              style={{ accentColor: "var(--beat)" }}
+              aria-label="How far the beat dips under the vocals"
+            />
+            <span className="w-10 shrink-0 text-right tabular-nums text-muted">{duck ? `${Math.round(duck * 100)}%` : "Off"}</span>
+          </label>
+          <p className="text-[11px] text-muted">The beat dips a little while you sing, so every word comes through.</p>
+        </section>
+      )}
+
+      <section aria-label="Levels" className="flex flex-col gap-2">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Levels · every lane in Tracks</p>
+        <QuickLevels />
+      </section>
     </div>
   );
 }

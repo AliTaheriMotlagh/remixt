@@ -27,8 +27,10 @@
 // at a time, when the server offered a `relay` (see lib/uploadRelay.ts).
 // Once the store has proved unreachable, later files go that way first.
 //
-// The screen is allowed to turn off meanwhile. A phone pauses the page when
-// it does, and whatever was in flight is lost — so a request that failed
+// The uploads store keeps the screen on while a song goes up (see
+// uploads.ts), but it can still turn off — a browser without the Wake Lock
+// API, low-power mode, the user locking it. A phone pauses the page when it
+// does, and whatever was in flight is lost — so a request that failed
 // because of that isn't held against the upload: it waits for the page to
 // be back, then carries on from the part it had reached.
 
@@ -225,6 +227,21 @@ function blobApi(path: string, pathname: string) {
   return `${base}${path}?${new URLSearchParams({ pathname })}`;
 }
 
+/**
+ * Progress over parts sent side by side: each part's bytes, and their
+ * running total — so a progress event costs the same however many parts
+ * the file has (adding them all up on every event grew with the file).
+ */
+export function partProgress(parts: number, onProgress: (loaded: number) => void) {
+  const sent = new Array<number>(parts).fill(0);
+  let total = 0;
+  return (part: number, bytes: number) => {
+    total += bytes - sent[part];
+    sent[part] = bytes;
+    onProgress(total);
+  };
+}
+
 /** One request to the Blob API, tried again after a dropped connection or a server hiccup. */
 async function blobRequest<T>(
   target: BlobTarget,
@@ -298,25 +315,23 @@ async function blobMultipart(target: BlobTarget, body: Blob, onProgress: (loaded
   const ids = { "x-mpu-key": encodeURIComponent(key), "x-mpu-upload-id": uploadId };
 
   const count = Math.ceil(body.size / PART_BYTES);
-  const waiting = Array.from({ length: count }, (_, i) => i + 1);
-  const sent = new Array<number>(count + 1).fill(0);
-  const report = () => onProgress(sent.reduce((a, b) => a + b, 0));
+  const progress = partProgress(count + 1, onProgress);
   const done: { partNumber: number; etag: string }[] = [];
 
+  let nextPart = 1;
   let failed: unknown = null;
   const next = async (): Promise<void> => {
-    const partNumber = waiting.shift();
-    if (partNumber === undefined || failed) return;
+    const partNumber = nextPart++;
+    if (partNumber > count || failed) return;
     const part = body.slice((partNumber - 1) * PART_BYTES, Math.min(body.size, partNumber * PART_BYTES));
     try {
       const { etag } = await blobRequest<{ etag: string }>(
         target,
         { path: "/mpu", headers: { ...ids, "x-mpu-action": "upload", "x-mpu-part-number": String(partNumber) }, body: part },
-        (loaded) => ((sent[partNumber] = loaded), report()),
+        (loaded) => progress(partNumber, loaded),
         { send, attempts: PART_ATTEMPTS }
       );
-      sent[partNumber] = part.size;
-      report();
+      progress(partNumber, part.size);
       done.push({ partNumber, etag });
     } catch (err) {
       // The others stop taking new parts; the upload fails as a whole.
@@ -403,8 +418,34 @@ class StoreUnreachable extends FinalUploadError {}
 /** No answer from the store, and nothing sent, for this long on the first request: it's unreachable. */
 const FIRST_CONTACT_MS = 20_000;
 
-/** Set once the store has proved unreachable from this page: later files go through the relay first. */
-let relayFirst = false;
+/**
+ * Set once the store has proved unreachable: later files go through the
+ * relay first. Remembered in this browser for a while, so the next page
+ * (or visit) doesn't wait FIRST_CONTACT_MS on a store that's blocked from
+ * here before every upload — on a phone that wait came before every song.
+ */
+const RELAY_FIRST_KEY = "remixt.upload.relayFirst";
+const RELAY_FIRST_MS = 12 * 60 * 60 * 1000;
+let relayFirst = readRelayFirst();
+
+function readRelayFirst(): boolean {
+  try {
+    const until = Number(globalThis.localStorage?.getItem(RELAY_FIRST_KEY));
+    return Number.isFinite(until) && until > Date.now();
+  } catch {
+    return false;
+  }
+}
+
+function rememberRelayFirst(on: boolean) {
+  relayFirst = on;
+  try {
+    if (on) globalThis.localStorage?.setItem(RELAY_FIRST_KEY, String(Date.now() + RELAY_FIRST_MS));
+    else globalThis.localStorage?.removeItem(RELAY_FIRST_KEY);
+  } catch {
+    // Storage blocked: remembered for this page only.
+  }
+}
 
 /** Relayed slices, at most (under Vercel's 4.5 MB request cap; lib/uploadRelay.ts RELAY_PART_BYTES). */
 export const RELAY_PART_BYTES = 3 * 1024 * 1024;
@@ -453,13 +494,12 @@ async function relayUpload(relay: string, body: Blob, onProgress: (loaded: numbe
   const session = sessionId();
   const join = relay.includes("?") ? "&" : "?";
   const count = Math.max(1, Math.ceil(body.size / RELAY_PART_BYTES));
-  const waiting = Array.from({ length: count }, (_, i) => i);
-  const sent = new Array<number>(count).fill(0);
-  const report = () => onProgress(sent.reduce((a, b) => a + b, 0));
+  const setSent = partProgress(count, onProgress);
+  let nextPart = 0;
   let failed = false;
   const next = async (): Promise<void> => {
-    const part = waiting.shift();
-    if (part === undefined || failed) return;
+    const part = nextPart++;
+    if (part >= count || failed) return;
     const slice = body.slice(part * RELAY_PART_BYTES, Math.min(body.size, (part + 1) * RELAY_PART_BYTES));
     try {
       await sendRetrying(
@@ -469,7 +509,7 @@ async function relayUpload(relay: string, body: Blob, onProgress: (loaded: numbe
           headers: { "Content-Type": "application/octet-stream" },
           body: slice,
         },
-        (loaded) => ((sent[part] = Math.min(loaded, slice.size)), report()),
+        (loaded) => setSent(part, Math.min(loaded, slice.size)),
         send,
         PART_ATTEMPTS
       );
@@ -477,8 +517,7 @@ async function relayUpload(relay: string, body: Blob, onProgress: (loaded: numbe
       failed = true;
       throw err;
     }
-    sent[part] = slice.size;
-    report();
+    setSent(part, slice.size);
     return next();
   };
   await Promise.all(Array.from({ length: Math.min(RELAY_AT_ONCE, count) }, next));
@@ -527,9 +566,16 @@ export async function upload(
   const blob = body instanceof Blob ? body : new Blob([body as BlobPart]);
   const relay = target.relay;
   if (relay && relayFirst) {
-    await relayUpload(relay, blob, onProgress, send);
-    onProgress(blob.size);
-    return;
+    try {
+      await relayUpload(relay, blob, onProgress, send);
+      onProgress(blob.size);
+      return;
+    } catch (err) {
+      if (err instanceof UploadCancelled) throw err;
+      // The relay that worked before doesn't now: the store may be back — try it, and stop preferring the relay.
+      rememberRelayFirst(false);
+      onProgress(0);
+    }
   }
   // With a relay to fall back on, a store that never answers isn't waited
   // on through every retry: its first silence — no answer and not a byte
@@ -567,7 +613,7 @@ export async function upload(
     else await putWhole(target, blob, onProgress, direct);
   } catch (err) {
     if (!relay || err instanceof UploadCancelled) throw err;
-    if (err instanceof StoreUnreachable) relayFirst = true;
+    if (err instanceof StoreUnreachable) rememberRelayFirst(true);
     onProgress(0);
     await relayUpload(relay, blob, onProgress, send);
   }
@@ -576,5 +622,5 @@ export async function upload(
 
 /** For tests: forget that the store proved unreachable. */
 export function resetRelayPreference() {
-  relayFirst = false;
+  rememberRelayFirst(false);
 }

@@ -333,3 +333,18 @@ describe("cancelling", () => {
     assert.equal(seen.length, 0);
   });
 });
+
+describe("partProgress", () => {
+  test("adds each part's bytes to a running total, and takes a part sent again back down", async () => {
+    const { partProgress } = await import("../src/lib/client/directUpload");
+    const seen: number[] = [];
+    const progress = partProgress(3, (loaded) => seen.push(loaded));
+    progress(0, 100);
+    progress(1, 50);
+    progress(0, 300);
+    progress(2, 10);
+    // Part 1 dropped and started again from nothing.
+    progress(1, 0);
+    assert.deepEqual(seen, [100, 150, 350, 360, 310]);
+  });
+});

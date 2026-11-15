@@ -1,14 +1,17 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Check, Headphones, Mic, Pencil, Play, Trash2, Undo2, Volume2, VolumeX } from "lucide-react";
+import { Check, Clapperboard, Headphones, Layers2, Mic, Pencil, Play, Trash2, Undo2, Volume2, VolumeX } from "lucide-react";
 import Waveform from "../../Waveform";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { isTakeLane } from "@/lib/client/lyricsSources";
 import { laneName, useStudioStore, type StudioLane } from "@/lib/client/studioStore";
 import { undo } from "@/lib/client/studioHistory";
 import { useStudioView } from "@/lib/client/studioView";
+import { doubleTake } from "@/lib/client/vocalLanes";
+import { MAX_CLIP_SECONDS } from "@/lib/clipLyrics";
 import { formatClock } from "@/lib/lyrics";
+import { useCanMakeClips } from "../SocialClipButton";
 import { playFrom } from "../LyricsPanel";
 
 // Every take recorded over this beat, newest first: hear one against the
@@ -46,6 +49,7 @@ function TakeRow({ lane, number, solo }: { lane: StudioLane; number: number; sol
   const removeLane = useStudioStore((s) => s.removeLane);
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState("");
+  const canClip = useCanMakeClips();
   const [start, end] = spanOf(lane);
   const icon = "flex h-9 w-9 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-raised hover:text-foreground max-lg:h-10 max-lg:w-10";
   const dim = lane.muted || (solo && !lane.solo);
@@ -123,6 +127,19 @@ function TakeRow({ lane, number, solo }: { lane: StudioLane; number: number; sol
           <Check /> Use this
         </button>
         <span className="flex-1" />
+        <button onClick={() => doubleTake(lane)} className={icon} title="Double it: a copy a touch late, spread left and right — a fuller voice" aria-label={`Double ${laneName(lane)}`}>
+          <Layers2 />
+        </button>
+        {canClip && (
+          <button
+            onClick={() => useStudioView.getState().openClip({ start, end: Math.min(end, start + MAX_CLIP_SECONDS), label: laneName(lane) })}
+            className={icon}
+            title="Make a video clip of this take"
+            aria-label={`Make a clip of ${laneName(lane)}`}
+          >
+            <Clapperboard />
+          </button>
+        )}
         <button onClick={() => toggleMute(lane.laneId)} aria-pressed={lane.muted} className={icon} title={lane.muted ? "Unmute" : "Mute"} aria-label={lane.muted ? "Unmute" : "Mute"}>
           {lane.muted ? <VolumeX className="text-danger" /> : <Volume2 />}
         </button>

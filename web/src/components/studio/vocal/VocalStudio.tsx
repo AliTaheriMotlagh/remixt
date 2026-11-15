@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, type ComponentType } from "react";
-import { Check, Drum, Globe, Layers, Mic, ScrollText, SlidersVertical } from "lucide-react";
+import { AudioWaveform, Check, Drum, Globe, Layers, Mic, ScrollText, Sparkles } from "lucide-react";
 import { activeSheet, useLyrics } from "@/lib/client/lyricsStore";
 import { isTakeLane } from "@/lib/client/lyricsSources";
 import { useStudioStore } from "@/lib/client/studioStore";
@@ -13,18 +13,21 @@ import SongFinder from "./SongFinder";
 import TakesPanel from "./TakesPanel";
 import VocalMixer, { QuickLevels } from "./VocalMixer";
 import VocalStage from "./VocalStage";
+import VocalTracks from "./VocalTracks";
 
 // The Studio for singers and rappers. Everything is laid out around the
 // voice: the stage (the words big and in time, the song's waveform, its
 // parts to loop), the booth beside it (record, count-in, mic, levels), and
 // under the stage the work around a take — the lyrics and their timing,
-// the takes kept so far, and the vocal mix. The producer's timeline and
+// every track on a timeline with its controls, the takes kept so far, and
+// the voice's sound and the beat's key. The producer's timeline and
 // mixer are a switch away (Producer mode) for anything more.
 
 const TABS: { id: VocalTab; label: string; short: string; icon: ComponentType<{ className?: string }> }[] = [
   { id: "lyrics", label: "Lyrics & timing", short: "Lyrics", icon: ScrollText },
+  { id: "tracks", label: "Tracks", short: "Tracks", icon: AudioWaveform },
   { id: "takes", label: "Takes", short: "Takes", icon: Layers },
-  { id: "mix", label: "Vocal mix", short: "Mix", icon: SlidersVertical },
+  { id: "mix", label: "Voice & key", short: "Voice", icon: Sparkles },
   { id: "songs", label: "Find a song", short: "Songs", icon: Globe },
 ];
 
@@ -125,19 +128,20 @@ export default function VocalStudio({ signedIn }: { signedIn: boolean }) {
                 role="tab"
                 aria-selected={tab === t.id}
                 onClick={() => setTab(t.id)}
-                className={`flex h-9 flex-1 items-center justify-center gap-1.5 rounded-full px-2 text-xs font-semibold transition-colors sm:text-sm ${
+                className={`flex h-9 min-w-0 flex-1 items-center justify-center gap-1 rounded-full px-1.5 text-[11px] font-semibold transition-colors sm:gap-1.5 sm:px-2 sm:text-sm ${
                   tab === t.id ? "bg-vocals text-white shadow-sm" : "text-muted hover:text-foreground"
                 }`}
               >
-                <t.icon className="shrink-0" />
-                <span className="truncate max-sm:hidden">{t.label}</span>
-                <span className="sm:hidden">{t.short}</span>
+                <t.icon className="shrink-0 max-[380px]:hidden" />
+                <span className="truncate max-lg:hidden">{t.label}</span>
+                <span className="truncate lg:hidden">{t.short}</span>
                 {t.id === "takes" && takes > 0 && <span className={`rounded-full px-1.5 text-[10px] tabular-nums ${tab === t.id ? "bg-white/25" : "bg-foreground/10"}`}>{takes}</span>}
               </button>
             ))}
           </div>
           <div role="tabpanel">
             {tab === "lyrics" && <LyricsTools stage onSing={toBooth} />}
+            {tab === "tracks" && <VocalTracks />}
             {tab === "takes" && <TakesPanel onRecord={toBooth} />}
             {tab === "mix" && <VocalMixer />}
             {tab === "songs" && <SongFinder />}

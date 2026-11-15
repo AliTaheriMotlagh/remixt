@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Check } from "lucide-react";
 import { splitter, useSplitter } from "@/lib/client/splitter";
-import { useUploads } from "@/lib/client/uploads";
+import { useUploadSummary } from "@/lib/client/uploads";
 
 export function formatMB(bytes: number) {
   return `${Math.round(bytes / 1_000_000)} MB`;
@@ -22,7 +22,7 @@ export default function SplitterStatus({ signedIn }: { signedIn: boolean }) {
   const state = useSplitter();
   // A song being added shows the download in its own progress (on phones,
   // where there's only room for one card at the bottom of the screen).
-  const uploading = useUploads().some((i) => i.status === "working");
+  const uploading = useUploadSummary().working > 0;
   const [justFinished, setJustFinished] = useState(false);
 
   // After a real download (not a cache hit), say so briefly.

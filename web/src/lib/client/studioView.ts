@@ -20,8 +20,15 @@ export type StudioMode = "easy" | "vocal" | "pro";
 
 const MODES: readonly StudioMode[] = ["easy", "vocal", "pro"];
 
-/** The Vocalist studio's workspace under the stage: the words, the takes, the vocal mix, or finding a song to sing over. */
-export type VocalTab = "lyrics" | "takes" | "mix" | "songs";
+/**
+ * The Vocalist studio's workspace under the stage: the words, every lane
+ * on a timeline with its controls, the takes, the voice's sound, or
+ * finding a song to sing over.
+ */
+export type VocalTab = "lyrics" | "tracks" | "takes" | "mix" | "songs";
+
+/** A part of the song the clip dialog was opened on (a take, a section), if any. */
+export type ClipAsk = { id: number; part?: { start: number; end: number; label: string } };
 
 /** A producer's main view: the timeline, or the mixing console. */
 export type ProView = "arrange" | "mixer";
@@ -90,6 +97,10 @@ type ViewState = {
   /** The lane being split with Demucs (its dialog is open), if any. */
   splitLaneId: string | null;
   setSplitLane: (laneId: string | null) => void;
+  /** The social clip dialog is open (see SocialClipButton), on a part when one was asked for. */
+  clip: ClipAsk | null;
+  openClip: (part?: ClipAsk["part"]) => void;
+  closeClip: () => void;
   notice: { id: number; text: string; tone: "info" | "error" } | null;
   notify: (text: string, tone?: "info" | "error") => void;
 };
@@ -167,6 +178,9 @@ export const useStudioView = create<ViewState>((set) => ({
   askAi: (text) => set({ aiOpen: true, aiTab: { id: Date.now(), tab: "ask" }, aiQuestion: { id: Date.now(), text } }),
   splitLaneId: null,
   setSplitLane: (splitLaneId) => set({ splitLaneId }),
+  clip: null,
+  openClip: (part) => set({ clip: { id: Date.now(), part } }),
+  closeClip: () => set({ clip: null }),
   notice: null,
   notify: (text, tone = "info") => {
     if (noticeTimer) clearTimeout(noticeTimer);

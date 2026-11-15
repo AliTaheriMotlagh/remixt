@@ -51,6 +51,8 @@ export type UploadItem = {
   finishedAt: number | null;
   /** The track it became (or was already), once done — split here; a queued song has none yet. */
   trackId: string | null;
+  /** About how long the stage it's on has left, from how fast it's been going (null: can't tell yet). */
+  secondsLeft: number | null;
 };
 
 type Source = { kind: "file"; file: File } | { kind: "link"; url: string };
@@ -63,6 +65,8 @@ type Entry = UploadItem & {
   controller: AbortController | null;
   /** Tries that failed for the connection's sake, in a row. */
   transientFailures: number;
+  /** Timing the stage it's on, for `secondsLeft`. */
+  clock: { stage: string | null; fraction: number; at: number; rate: number } | null;
 };
 
 /** Set while a song is being split on a phone, so a reload mid-split can be explained. */
@@ -90,8 +94,10 @@ export function isAudioFile(file: File): boolean {
   return AUDIO_EXTENSIONS.includes(ext);
 }
 
-/** The same file picked twice (the same name, size and date) is only added once. */
-const fileKey = (file: File) => `${file.name}:${file.size}:${file.lastModified}`;
+/** The same file picked twice (the same name, size and date), or the same link, is only added once. */
+function keyOf(source: Source): string {
+  return source.kind === "file" ? `file:${source.file.name}:${source.file.size}:${source.file.lastModified}` : `link:${source.url}`;
+}
 
 /**
  * The files dropped on the page — including everything inside a dropped
@@ -190,49 +196,170 @@ function countdown(seconds: number, signal: AbortSignal, onTick: (left: number) 
   });
 }
 
+/** The status sets every entry is in exactly one of — counts and per-status walks without scanning the list. */
+type Status = UploadItem["status"];
+
+/** How much the newest speed reading counts against the ones before it (an exponential moving average). */
+const RATE_WEIGHT = 0.3;
+/** Readings closer together than this are too noisy to time with. */
+const RATE_MIN_MS = 400;
+
+/** The next frame (or a moment, when the page is hidden and frames don't come). */
+function nextFrame(run: () => void) {
+  if (typeof document !== "undefined" && !document.hidden && typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+  else setTimeout(run, 50);
+}
+
+/** How far along a stage is, when it says. */
+function fractionOf(stage: UploadStage | null): number | null {
+  return stage && "progress" in stage && typeof stage.progress === "number" ? stage.progress : null;
+}
+
+/**
+ * The songs being added, kept so that everything that happens to one song
+ * costs the same however many there are:
+ *
+ *   - entries by id in a Map (in the order added, which is the list's order)
+ *   - each status's ids in a Set — the counts, "try every failed one",
+ *     "remove every waiting one" never scan the rest
+ *   - the next song to start, per mode, is the first of an ordered Set
+ *   - a file or link already on its way is found by its key, not by search
+ *
+ * Progress arrives many times a second per song; it only marks the song
+ * changed. The list the page shows is rebuilt once a frame at most, and a
+ * song that didn't change keeps the same object, so its row isn't drawn
+ * again.
+ */
 class Uploads {
   private listeners = new Set<() => void>();
-  private entries: Entry[] = [];
+  private entries = new Map<string, Entry>();
+  private byStatus: Record<Status, Set<string>> = { waiting: new Set(), working: new Set(), done: new Set(), failed: new Set() };
+  /** Waiting songs per mode, oldest first: the next to start is the first. */
+  private line: Record<UploadMode, Set<string>> = { split: new Set(), queue: new Set() };
+  /** Songs on their way (not done or failed) by file key or link, to catch the same one added twice. */
+  private onTheirWay = new Map<string, string>();
+  /** Songs running now, per mode (each mode has its own limit, see pump). */
   private active: Record<UploadMode, number> = { split: 0, queue: 0 };
   private userId: string | null = null;
   private restored: string | null = null;
+  /** Rows to rebuild at the next frame, and whether one is coming. */
+  private changed = new Set<string>();
+  private flushing = false;
+  private views = new Map<string, UploadItem>();
   /** Bumped whenever a song lands in the library (or the queue), so lists can refresh. */
   finishedCount = 0;
   items: UploadItem[] = [];
+  /** How many songs are in each status — kept as they change. */
+  summary: Record<Status, number> = { waiting: 0, working: 0, done: 0, failed: 0 };
 
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   };
 
-  private emit() {
-    this.items = this.entries.map((e) => ({
-      id: e.id,
-      name: e.name,
-      mode: e.mode,
-      status: e.status,
-      stage: e.stage,
-      error: e.error,
-      note: e.note,
-      finishedAt: e.finishedAt,
-      trackId: e.trackId,
-    }));
-    const busy = (e: Entry) => e.status === "working" || e.status === "waiting";
-    // Splitting a song here needs the page awake: a phone that locks
-    // itself pauses the page and the split with it, and it would start over.
-    // Sending songs to the queue doesn't: the screen may turn off, and the
-    // upload carries on from where it was once it's back (see directUpload.ts).
-    keepScreenOn("uploads", this.entries.some((e) => e.mode === "split" && busy(e)));
-    // Closing or reloading the tab would throw away the work in progress
-    // (the songs themselves are kept, and picked up again next visit).
-    guardLeaving("uploads", this.entries.some(busy));
+  // --- Changes ---------------------------------------------------------------
+
+  /** Marks a song changed; the list follows at the next frame. */
+  private touch(id: string) {
+    this.changed.add(id);
+    if (this.flushing) return;
+    this.flushing = true;
+    nextFrame(() => this.flush());
+  }
+
+  private flush() {
+    this.flushing = false;
+    for (const id of this.changed) {
+      const e = this.entries.get(id);
+      if (!e) {
+        this.views.delete(id);
+        continue;
+      }
+      this.views.set(id, {
+        id: e.id,
+        name: e.name,
+        mode: e.mode,
+        status: e.status,
+        stage: e.stage,
+        error: e.error,
+        note: e.note,
+        finishedAt: e.finishedAt,
+        trackId: e.trackId,
+        secondsLeft: e.secondsLeft,
+      });
+    }
+    this.changed.clear();
+    // A new list (React needs one to see a change), but rows that didn't change keep their object.
+    this.items = Array.from(this.entries.keys(), (id) => this.views.get(id)!);
+    this.summary = {
+      waiting: this.byStatus.waiting.size,
+      working: this.byStatus.working.size,
+      done: this.byStatus.done.size,
+      failed: this.byStatus.failed.size,
+    };
     for (const listener of this.listeners) listener();
   }
 
-  private update(id: string, patch: Partial<Entry>) {
-    this.entries = this.entries.map((e) => (e.id === id ? { ...e, ...patch } : e));
-    this.emit();
+  /** What follows from how many songs are busy — checked on every status change, in constant time. */
+  private sideEffects() {
+    const busy = this.byStatus.waiting.size + this.byStatus.working.size;
+    // Any song on its way keeps the screen on — split here or sent to the
+    // queue. A phone whose screen turns off pauses the page, and the upload
+    // with it: on a slow mobile connection that's most of the wait. The
+    // screen follows the phone's own setting again the moment they're done.
+    keepScreenOn("uploads", busy > 0);
+    // Closing or reloading the tab would throw away the work in progress
+    // (the songs themselves are kept, and picked up again next visit).
+    guardLeaving("uploads", busy > 0);
   }
+
+  /** Moves a song to `status`, keeping every index in step. The only place a status changes. */
+  private setStatus(entry: Entry, status: Status) {
+    const was = entry.status;
+    if (was === status && this.byStatus[status].has(entry.id)) return;
+    this.byStatus[was].delete(entry.id);
+    this.byStatus[status].add(entry.id);
+    entry.status = status;
+    if (status === "waiting") this.line[entry.mode].add(entry.id);
+    else this.line[entry.mode].delete(entry.id);
+    const busy = status === "waiting" || status === "working";
+    const key = keyOf(entry.source);
+    if (busy) this.onTheirWay.set(key, entry.id);
+    else if (this.onTheirWay.get(key) === entry.id) this.onTheirWay.delete(key);
+    this.sideEffects();
+    this.touch(entry.id);
+  }
+
+  private update(id: string, patch: Partial<Omit<Entry, "status">>) {
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    Object.assign(entry, patch);
+    if ("stage" in patch) this.timeStage(entry);
+    this.touch(id);
+  }
+
+  /** How long a stage that reports progress has left, from how fast it's been going. */
+  private timeStage(entry: Entry) {
+    const fraction = fractionOf(entry.stage);
+    const kind = entry.stage?.stage ?? null;
+    const now = Date.now();
+    const clock = entry.clock;
+    // A new stage, or progress going back (a part sent again): start timing afresh.
+    if (fraction === null || !clock || clock.stage !== kind || fraction < clock.fraction) {
+      entry.clock = fraction === null ? null : { stage: kind, fraction, at: now, rate: 0 };
+      entry.secondsLeft = null;
+      return;
+    }
+    const ms = now - clock.at;
+    if (ms < RATE_MIN_MS) return;
+    const rate = (fraction - clock.fraction) / ms;
+    clock.rate = clock.rate ? clock.rate * (1 - RATE_WEIGHT) + rate * RATE_WEIGHT : rate;
+    clock.fraction = fraction;
+    clock.at = now;
+    entry.secondsLeft = clock.rate > 0 && fraction < 1 ? Math.round((1 - fraction) / clock.rate / 1000) : null;
+  }
+
+  // --- Adding ----------------------------------------------------------------
 
   /**
    * Songs from this device. Anything that isn't audio is left out, and so
@@ -240,18 +367,10 @@ class Uploads {
    */
   addFiles(files: File[], { tags, mode }: { tags: string[]; mode: UploadMode }): AddResult {
     const result: AddResult = { added: 0, notAudio: [], duplicates: [] };
-    const pending = new Set(
-      this.entries
-        .filter((e) => e.source.kind === "file" && e.status !== "done" && e.status !== "failed")
-        .map((e) => fileKey((e.source as { file: File }).file))
-    );
     for (const file of files) {
-      if (!isAudioFile(file)) {
-        result.notAudio.push(file.name);
-      } else if (pending.has(fileKey(file))) {
-        result.duplicates.push(file.name);
-      } else {
-        pending.add(fileKey(file));
+      if (!isAudioFile(file)) result.notAudio.push(file.name);
+      else if (this.onTheirWay.has(keyOf({ kind: "file", file }))) result.duplicates.push(file.name);
+      else {
         this.push({ kind: "file", file }, file.name, tags, mode);
         result.added++;
       }
@@ -266,8 +385,8 @@ class Uploads {
    * on its way, if the link is.
    */
   addLink(url: string, { tags, mode, keepPrivate = false }: { tags: string[]; mode: UploadMode; keepPrivate?: boolean }): string {
-    const pending = this.entries.find((e) => e.source.kind === "link" && e.source.url === url && e.status !== "failed");
-    if (pending) return pending.id;
+    const pending = this.onTheirWay.get(keyOf({ kind: "link", url }));
+    if (pending) return pending;
     const entry = this.push({ kind: "link", url }, url, tags, mode, newId(), true, keepPrivate);
     this.pump();
     return entry.id;
@@ -275,13 +394,9 @@ class Uploads {
 
   /** The songs behind some links (a link already on its way is left out). */
   addLinks(urls: string[], { tags, mode }: { tags: string[]; mode: UploadMode }): number {
-    const pending = new Set(
-      this.entries.filter((e) => e.source.kind === "link" && e.status !== "failed").map((e) => (e.source as { url: string }).url)
-    );
     let added = 0;
     for (const url of urls) {
-      if (pending.has(url)) continue;
-      pending.add(url);
+      if (this.onTheirWay.has(keyOf({ kind: "link", url }))) continue;
       this.push({ kind: "link", url }, url, tags, mode);
       added++;
     }
@@ -294,20 +409,23 @@ class Uploads {
       id,
       name,
       mode,
+      // Filed under "waiting" by setStatus just below.
       status: "waiting",
       stage: null,
       error: null,
       note: null,
       finishedAt: null,
       trackId: null,
+      secondsLeft: null,
+      clock: null,
       source,
       tags: [...tags],
       keepPrivate,
       controller: null,
       transientFailures: 0,
     };
-    this.entries = [...this.entries, entry];
-    this.emit();
+    this.entries.set(id, entry);
+    this.setStatus(entry, "waiting");
     if (keep && this.userId) {
       void keepUpload({
         id,
@@ -340,22 +458,18 @@ class Uploads {
     this.restored = userId;
     const crashed = this.takeCrashNote();
     const kept = await keptUploads(userId);
-    const known = new Set(this.entries.map((e) => e.id));
     for (const k of kept) {
-      if (known.has(k.id)) continue;
+      if (this.entries.has(k.id)) continue;
       const source: Source =
         k.source.kind === "file"
-          ? {
-              kind: "file",
-              file: new File([k.source.file], k.source.fileName, { lastModified: k.source.lastModified }),
-            }
+          ? { kind: "file", file: new File([k.source.file], k.source.fileName, { lastModified: k.source.lastModified }) }
           : k.source;
       const entry = this.push(source, k.name, k.tags, k.mode, k.id, false, !!k.keepPrivate);
       if (k.status === "failed") {
-        this.update(entry.id, { status: "failed", error: k.error, finishedAt: k.addedAt });
+        this.fail(entry, k.error ?? "Upload failed", k.addedAt);
       } else if (crashed && crashed === k.name) {
         const error = "Stopped when the page restarted (see above) — try again when you're ready.";
-        this.update(entry.id, { status: "failed", error, finishedAt: Date.now() });
+        this.fail(entry, error, Date.now());
         void markUpload(entry.id, { status: "failed", error });
       } else {
         this.update(entry.id, { note: "Picked up again after the page reloaded" });
@@ -364,23 +478,26 @@ class Uploads {
     this.pump();
   }
 
-  /** Tries a failed song again. */
+  // --- Acting on songs -------------------------------------------------------
+
+  /** Tries a failed song again (at the back of the line). */
   retry(id: string) {
-    const entry = this.entries.find((e) => e.id === id);
+    const entry = this.entries.get(id);
     if (entry?.status !== "failed") return;
-    this.update(id, { status: "waiting", stage: null, error: null, note: null, finishedAt: null, transientFailures: 0 });
+    Object.assign(entry, { stage: null, error: null, note: null, finishedAt: null, transientFailures: 0, secondsLeft: null, clock: null });
+    this.setStatus(entry, "waiting");
     void markUpload(id, { status: "waiting", error: null });
     this.pump();
   }
 
-  /** Tries every failed song again, in the order they were added. */
+  /** Tries every failed song again, in the order they failed. */
   retryFailed() {
-    for (const e of this.entries) if (e.status === "failed") this.retry(e.id);
+    for (const id of [...this.byStatus.failed]) this.retry(id);
   }
 
   /** Stops a song that's being added and forgets it. A track half-made for it is dropped. */
   cancel(id: string) {
-    const entry = this.entries.find((e) => e.id === id);
+    const entry = this.entries.get(id);
     if (!entry) return;
     entry.controller?.abort();
     this.forget(id);
@@ -388,7 +505,7 @@ class Uploads {
 
   /** Forgets every song that hasn't started yet. */
   removeWaiting() {
-    for (const e of this.entries) if (e.status === "waiting") this.forget(e.id);
+    for (const id of [...this.byStatus.waiting]) this.forget(id);
   }
 
   /** Forgets a song that's finished, failed or not started yet (a working one is cancelled). */
@@ -397,67 +514,89 @@ class Uploads {
   }
 
   clearFinished() {
-    this.entries = this.entries.filter((e) => e.status !== "done");
-    this.emit();
+    for (const id of [...this.byStatus.done]) this.drop(id);
+  }
+
+  /** Out of the list (and every index), not off the disk. */
+  private drop(id: string) {
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    this.byStatus[entry.status].delete(id);
+    this.line[entry.mode].delete(id);
+    const key = keyOf(entry.source);
+    if (this.onTheirWay.get(key) === id) this.onTheirWay.delete(key);
+    this.entries.delete(id);
+    this.sideEffects();
+    this.touch(id);
   }
 
   private forget(id: string) {
-    this.entries = this.entries.filter((e) => e.id !== id);
+    this.drop(id);
     void forgetUpload(id);
-    this.emit();
+  }
+
+  private fail(entry: Entry, error: string, at: number) {
+    Object.assign(entry, { stage: null, error, controller: null, finishedAt: at, secondsLeft: null, clock: null });
+    this.setStatus(entry, "failed");
   }
 
   /**
-   * Starts waiting songs, in order, while there's room. Songs split here:
-   * two at a time on a computer (one splitting while the other's stems
-   * upload), one on a phone, where memory is tight. Songs for the queue
-   * are only sent, so a few at once on any device.
+   * Starts waiting songs, oldest first, while there's room. Songs split
+   * here: two at a time on a computer (one splitting while the other's
+   * stems upload), one on a phone, where memory is tight. Songs for the
+   * queue are only sent, so a few at once on any device. Each start is
+   * the first of its mode's line: no searching.
    */
   private pump() {
     const limits: Record<UploadMode, number> = {
       split: isConstrainedDevice() ? 1 : 2,
       queue: QUEUE_SENDS_AT_ONCE,
     };
-    for (;;) {
-      const next = this.entries.find((e) => e.status === "waiting" && this.active[e.mode] < limits[e.mode]);
-      if (!next) return;
-      const { mode } = next;
-      this.active[mode]++;
-      const controller = new AbortController();
-      this.update(next.id, { status: "working", stage: null, controller });
-      void this.run(next.id, controller.signal).finally(() => {
-        this.active[mode]--;
-        this.pump();
-      });
+    for (const mode of ["split", "queue"] as const) {
+      while (this.active[mode] < limits[mode]) {
+        const next = this.line[mode].values().next();
+        if (next.done) break;
+        const entry = this.entries.get(next.value);
+        if (!entry) {
+          this.line[mode].delete(next.value);
+          continue;
+        }
+        this.active[mode]++;
+        const controller = new AbortController();
+        Object.assign(entry, { stage: null, controller });
+        this.setStatus(entry, "working");
+        void this.run(entry.id, controller.signal).finally(() => {
+          this.active[mode]--;
+          this.pump();
+        });
+      }
     }
   }
 
   /** One song, start to finish, trying again by itself while the connection is to blame. */
   private async run(id: string, signal: AbortSignal) {
     for (;;) {
-      const entry = this.entries.find((e) => e.id === id);
+      const entry = this.entries.get(id);
       if (!entry || signal.aborted) return;
       try {
         await this.attempt(entry, signal);
         return;
       } catch (err) {
         if (signal.aborted || isCancel(err)) return;
-        const current = this.entries.find((e) => e.id === id);
+        const current = this.entries.get(id);
         if (!current) return;
         const message = err instanceof Error ? err.message : "Upload failed";
         if (isTransient(err) && current.transientFailures < AUTO_RETRIES) {
           const wait = RETRY_DELAYS[current.transientFailures] ?? 30;
           this.update(id, { transientFailures: current.transientFailures + 1 });
           try {
-            await countdown(wait, signal, (left) =>
-              this.update(id, { stage: { stage: "retrying", reason: message, inSeconds: left } })
-            );
+            await countdown(wait, signal, (left) => this.update(id, { stage: { stage: "retrying", reason: message, inSeconds: left } }));
           } catch {
             return;
           }
           continue;
         }
-        this.update(id, { status: "failed", stage: null, error: message, controller: null, finishedAt: Date.now() });
+        this.fail(current, message, Date.now());
         void markUpload(id, { status: "failed", error: message, name: current.name });
         return;
       }
@@ -500,7 +639,8 @@ class Uploads {
       }
       signal.throwIfAborted();
       this.finishedCount++;
-      this.update(id, { status: "done", stage: null, name, note, trackId, controller: null, finishedAt: Date.now() });
+      Object.assign(entry, { stage: null, name, note, trackId, controller: null, finishedAt: Date.now(), secondsLeft: null, clock: null });
+      this.setStatus(entry, "done");
       void forgetUpload(id);
     } finally {
       if (mode === "split" && isConstrainedDevice()) rememberInFlight(null);
@@ -531,6 +671,21 @@ export const uploads = new Uploads();
 const empty: UploadItem[] = [];
 export function useUploads(): UploadItem[] {
   return useSyncExternalStore(uploads.subscribe, () => uploads.items, () => empty);
+}
+
+const noSummary: Uploads["summary"] = { waiting: 0, working: 0, done: 0, failed: 0 };
+/** How many songs are waiting, working, done and failed — without counting the list. */
+export function useUploadSummary(): Uploads["summary"] {
+  return useSyncExternalStore(uploads.subscribe, () => uploads.summary, () => noSummary);
+}
+
+/** "about 2 min left", "about 40 s left" — rounded so it doesn't flicker; null when it can't tell. */
+export function timeLeftText(seconds: number | null): string | null {
+  if (seconds === null || !Number.isFinite(seconds) || seconds <= 0) return null;
+  if (seconds < 10) return "a few seconds left";
+  if (seconds < 60) return `about ${Math.ceil(seconds / 10) * 10} s left`;
+  if (seconds < 3600) return `about ${Math.round(seconds / 60)} min left`;
+  return "over an hour left";
 }
 
 export function useUploadsFinished(): number {

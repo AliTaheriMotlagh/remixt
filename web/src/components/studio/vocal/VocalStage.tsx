@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ChevronsLeft, ChevronsRight, Maximize2, Repeat, Repeat2, ScrollText } from "lucide-react";
+import { ChevronsLeft, ChevronsRight, Clapperboard, Maximize2, Repeat, Repeat2, ScrollText } from "lucide-react";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { activeSheet, useLyrics } from "@/lib/client/lyricsStore";
 import { projectKey } from "@/lib/client/lineStatus";
@@ -23,6 +23,7 @@ import {
   type LyricSection,
 } from "@/lib/lyrics";
 import LyricsTimeline from "../LyricsTimeline";
+import { useCanMakeClips } from "../SocialClipButton";
 import { BigPrompter, GetTimes, LineTimingEditor, LoopLineButton, PlayButton, RippleToggle } from "../LyricsPanel";
 
 // The Vocalist studio's stage: the words to sing, big and in time with the
@@ -262,6 +263,7 @@ export default function VocalStage() {
   const zoom = useLyrics((s) => s.prefs.zoom);
   const setPrefs = useLyrics((s) => s.setPrefs);
   const [focus, setFocus] = useState(false);
+  const canClip = useCanMakeClips();
   const sections = useMemo(() => sectionsOf(lines), [lines]);
   const synced = isSynced(lines);
   const hasWords = lines.some(isSung);
@@ -302,6 +304,17 @@ export default function VocalStage() {
             {hasWords && <span className={`shrink-0 ${synced ? "font-semibold text-success" : ""}`}>{synced ? "Timed" : "Not timed"}</span>}
           </p>
         </div>
+        {canClip && hasMix && (
+          <button
+            onClick={() => useStudioView.getState().openClip()}
+            disabled={recording}
+            className={icon}
+            aria-label="Make a video clip"
+            title={synced ? "Make a video clip of a part of the song, with the lyrics on it" : "Make a video clip of a part of the song"}
+          >
+            <Clapperboard />
+          </button>
+        )}
         {hasWords && (
           <button onClick={() => setFocus(true)} className={icon} aria-label="Full screen lyrics" title="Full screen, to sing from across the room">
             <Maximize2 />

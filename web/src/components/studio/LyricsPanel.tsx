@@ -87,7 +87,8 @@ function isTyping(target: EventTarget | null) {
   return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
 }
 
-async function togglePlay() {
+/** Play or pause the mix (a notice when there is nothing to play). */
+export async function togglePlay() {
   const store = useStudioStore.getState();
   if (store.lanes.length === 0) {
     useStudioView.getState().notify("Add a beat to play first — the lyrics follow the mix", "error");

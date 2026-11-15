@@ -2,17 +2,23 @@
 
 import { renderMixdown } from "./mixdown";
 import { MARK_BARS, MARK_BAR_WIDTH, MARK_GRADIENT, MARK_TILE_RADIUS } from "@/lib/brand";
+import { clipLineAt, MAX_CLIP_SECONDS, type ClipLine } from "@/lib/clipLyrics";
 
 // A vertical (9:16) video of a stretch of the mix, for Reels, TikTok,
 // Shorts and Stories: the title and artist over the Remixt gradient, a
 // waveform that moves with the music, a progress bar and the link. Drawn
 // on a canvas and recorded in real time with MediaRecorder — so a 30 s
-// clip takes 30 s to make — with the rendered mix as its soundtrack.
+// clip takes 30 s to make — with the rendered mix as its soundtrack. With
+// timed lyrics, the words are sung across the middle, karaoke-style: the
+// line being sung fills in with colour (right to left for Persian), the
+// next one waits under it.
 
 const WIDTH = 1080;
 const HEIGHT = 1920;
 const FPS = 30;
-export const MAX_CLIP_SECONDS = 60;
+export { MAX_CLIP_SECONDS };
+const SANS = "system-ui, -apple-system, 'Segoe UI', Tahoma, 'Vazirmatn', sans-serif";
+const RTL = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufeff]/;
 
 /** The best video format this browser can record: MP4 where it can (posts everywhere), else WebM. */
 function pickMimeType() {
@@ -99,17 +105,101 @@ function drawMark(ctx: CanvasRenderingContext2D, x: number, y: number, size: num
   }
 }
 
-function drawFrame(
-  ctx: CanvasRenderingContext2D,
-  { title, artist, link, levels, frame, progress }: {
-    title: string;
-    artist: string;
-    link: string;
-    levels: Float32Array;
-    frame: number;
-    progress: number;
+export type ClipLook = {
+  title: string;
+  artist: string;
+  link: string;
+  /** The words to show, timed from the clip's start; none for the title-and-bars look. */
+  lyrics?: ClipLine[];
+};
+
+/** The words being sung, filling in with colour over `fill` (0..1) of their width, wrapped onto up to `maxLines`. */
+function drawSungLine(ctx: CanvasRenderingContext2D, text: string, y: number, size: number, fill: number, alpha: number) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.font = `bold ${size}px ${SANS}`;
+  const rtl = RTL.test(text);
+  ctx.direction = rtl ? "rtl" : "ltr";
+  ctx.textAlign = "center";
+  const rows = wrapText(ctx, text, WIDTH - 140, 3);
+  const widths = rows.map((r) => ctx.measureText(r).width);
+  const total = widths.reduce((a, b) => a + b, 0);
+  let left = total * Math.max(0, Math.min(1, fill));
+  const lineHeight = size * 1.18;
+  const top = y - ((rows.length - 1) * lineHeight) / 2;
+  rows.forEach((row, i) => {
+    const ry = top + i * lineHeight;
+    const w = widths[i];
+    ctx.shadowColor = "rgba(0,0,0,0.55)";
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.fillText(row, WIDTH / 2, ry);
+    ctx.shadowBlur = 0;
+    const filled = Math.min(w, left);
+    left -= filled;
+    if (filled <= 0) return;
+    // The sung part in colour, from where the line starts reading.
+    ctx.save();
+    ctx.beginPath();
+    const x0 = WIDTH / 2 - w / 2;
+    ctx.rect(rtl ? x0 + w - filled : x0, ry - size, filled, size * 1.4);
+    ctx.clip();
+    const sung = ctx.createLinearGradient(x0, 0, x0 + w, 0);
+    sung.addColorStop(0, "#f472b6");
+    sung.addColorStop(1, "#22d3ee");
+    ctx.fillStyle = sung;
+    ctx.fillText(row, WIDTH / 2, ry);
+    ctx.restore();
+  });
+  ctx.restore();
+  return rows.length * lineHeight;
+}
+
+/** The lyrics at `t` seconds into the clip: the line being sung, big, and the next under it. */
+function drawLyrics(ctx: CanvasRenderingContext2D, lyrics: ClipLine[], t: number) {
+  const { current, next } = clipLineAt(lyrics, t);
+  const mid = HEIGHT * 0.6;
+  if (current) {
+    const fadeIn = Math.min(1, (t - current.start + 0.2) / 0.25);
+    const fadeOut = Math.min(1, (current.end - t) / 0.3);
+    const fill = (t - current.start) / Math.max(0.3, current.wipe);
+    const height = drawSungLine(ctx, current.text, mid, 84, fill, Math.max(0, Math.min(fadeIn, fadeOut)));
+    if (next) drawNextLine(ctx, next.text, mid + height / 2 + 70, next.start - t);
+  } else if (next) {
+    // Before the first words (or in a gap): the next line, and a count of the seconds to it.
+    const wait = next.start - t;
+    if (wait < 6) {
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.fillStyle = "rgba(244,114,182,0.9)";
+      ctx.font = `bold 44px ${SANS}`;
+      ctx.fillText("●".repeat(Math.max(1, Math.min(4, Math.ceil(wait)))), WIDTH / 2, mid - 40);
+      ctx.restore();
+    }
+    drawNextLine(ctx, next.text, mid + 40, wait);
   }
+}
+
+function drawNextLine(ctx: CanvasRenderingContext2D, text: string, y: number, wait: number) {
+  if (wait > 8) return;
+  ctx.save();
+  ctx.globalAlpha = Math.min(0.6, Math.max(0, (8 - wait) / 2));
+  ctx.font = `600 54px ${SANS}`;
+  ctx.direction = RTL.test(text) ? "rtl" : "ltr";
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#e5e5f0";
+  const rows = wrapText(ctx, text, WIDTH - 180, 2);
+  rows.forEach((row, i) => ctx.fillText(row, WIDTH / 2, y + i * 64));
+  ctx.restore();
+}
+
+/** One frame of the clip, `t` seconds in. Exported to show a still preview before making it. */
+export function drawClipFrame(
+  ctx: CanvasRenderingContext2D,
+  { title, artist, link, lyrics, levels, t, progress }: ClipLook & { levels: Float32Array; t: number; progress: number }
 ) {
+  const frame = Math.floor(t * FPS);
+  const words = !!lyrics?.length;
   const bg = ctx.createLinearGradient(0, 0, WIDTH, HEIGHT);
   bg.addColorStop(0, "#1b0b24");
   bg.addColorStop(0.5, "#0a0a0f");
@@ -126,11 +216,12 @@ function drawFrame(
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
-  // Bars: the last couple of seconds of loudness, scrolling right to left.
+  // Bars: the last couple of seconds of loudness, scrolling right to left — smaller, higher up, with words to show.
   const bars = 48;
   const barWidth = 14;
   const gap = (WIDTH - 160 - bars * barWidth) / (bars - 1);
-  const mid = HEIGHT * 0.45;
+  const mid = words ? HEIGHT * 0.32 : HEIGHT * 0.45;
+  const reach = words ? 300 : 520;
   const bar = ctx.createLinearGradient(80, 0, WIDTH - 80, 0);
   bar.addColorStop(0, "#ec4899");
   bar.addColorStop(1, "#06b6d4");
@@ -138,20 +229,38 @@ function drawFrame(
   for (let i = 0; i < bars; i++) {
     const source = frame - (bars - 1 - i) * 2;
     const v = source >= 0 ? (levels[source] ?? 0) : 0;
-    const h = 24 + v * 520;
+    const h = 24 + v * reach;
     const x = 80 + i * (barWidth + gap);
     pill(ctx, x, mid - h / 2, barWidth, h, barWidth / 2);
   }
 
   ctx.textAlign = "center";
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 96px system-ui, -apple-system, Segoe UI, sans-serif";
-  const lines = wrapText(ctx, title, WIDTH - 160, 3);
-  lines.forEach((line, i) => ctx.fillText(line, WIDTH / 2, 1180 + i * 110));
-  ctx.fillStyle = "#c4c4d4";
-  ctx.font = "56px system-ui, -apple-system, Segoe UI, sans-serif";
-  ctx.fillText(`remix by ${artist}`, WIDTH / 2, 1180 + lines.length * 110 + 30);
+  if (words) {
+    // The song's name small under the brand; the words get the middle.
+    ctx.fillStyle = "#ffffff";
+    ctx.font = `bold 58px ${SANS}`;
+    ctx.direction = RTL.test(title) ? "rtl" : "ltr";
+    ctx.fillText(wrapText(ctx, title, WIDTH - 200, 1)[0] ?? "", WIDTH / 2, 430);
+    ctx.fillStyle = "#c4c4d4";
+    ctx.font = `40px ${SANS}`;
+    ctx.direction = RTL.test(artist) ? "rtl" : "ltr";
+    ctx.fillText(artist, WIDTH / 2, 490);
+    ctx.direction = "ltr";
+    drawLyrics(ctx, lyrics!, t);
+  } else {
+    ctx.fillStyle = "#ffffff";
+    ctx.font = `bold 96px ${SANS}`;
+    ctx.direction = RTL.test(title) ? "rtl" : "ltr";
+    const lines = wrapText(ctx, title, WIDTH - 160, 3);
+    lines.forEach((line, i) => ctx.fillText(line, WIDTH / 2, 1180 + i * 110));
+    ctx.fillStyle = "#c4c4d4";
+    ctx.font = `56px ${SANS}`;
+    ctx.direction = RTL.test(artist) ? "rtl" : "ltr";
+    ctx.fillText(`remix by ${artist}`, WIDTH / 2, 1180 + lines.length * 110 + 30);
+    ctx.direction = "ltr";
+  }
 
+  ctx.direction = "ltr";
   // Progress.
   ctx.fillStyle = "rgba(255,255,255,0.15)";
   pill(ctx, 120, 1620, WIDTH - 240, 12, 6);
@@ -184,15 +293,16 @@ export async function makeSocialClip({
   title,
   artist,
   link,
+  lyrics,
+  canvas: shown,
   onProgress,
   signal,
-}: {
+}: ClipLook & {
   audioContext: AudioContext;
   start: number;
   end: number;
-  title: string;
-  artist: string;
-  link: string;
+  /** Draw on this canvas (shown in the dialog, so the video can be watched as it's made); else one of its own. */
+  canvas?: HTMLCanvasElement;
   onProgress: (stage: string, fraction: number) => void;
   signal: AbortSignal;
 }): Promise<SocialClip> {
@@ -204,11 +314,12 @@ export async function makeSocialClip({
   if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
   const levels = frameLevels(mix);
 
-  const canvas = document.createElement("canvas");
+  const canvas = shown ?? document.createElement("canvas");
   canvas.width = WIDTH;
   canvas.height = HEIGHT;
   const draw = canvas.getContext("2d")!;
-  drawFrame(draw, { title, artist, link, levels, frame: 0, progress: 0 });
+  const look = { title, artist, link, lyrics, levels };
+  drawClipFrame(draw, { ...look, t: 0, progress: 0 });
 
   const destination = audioContext.createMediaStreamDestination();
   const source = audioContext.createBufferSource();
@@ -236,7 +347,7 @@ export async function makeSocialClip({
       }
       const elapsed = Math.max(0, audioContext.currentTime - startedAt);
       const progress = Math.min(1, elapsed / mix.duration);
-      drawFrame(draw, { title, artist, link, levels, frame: Math.floor(elapsed * FPS), progress });
+      drawClipFrame(draw, { ...look, t: elapsed, progress });
       onProgress("Recording the video…", progress);
       if (elapsed >= mix.duration) {
         resolve();
@@ -261,4 +372,13 @@ export async function makeSocialClip({
     extension: mimeType.startsWith("video/mp4") ? "mp4" : "webm",
     mimeType,
   };
+}
+
+/** A still of the clip at `t` seconds in, before it's made (flat bars: the mix isn't rendered yet). */
+export function drawClipPreview(canvas: HTMLCanvasElement, look: ClipLook, t: number, length: number) {
+  canvas.width = WIDTH;
+  canvas.height = HEIGHT;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  drawClipFrame(ctx, { ...look, levels: new Float32Array(0), t, progress: length > 0 ? Math.min(1, t / length) : 0 });
 }
