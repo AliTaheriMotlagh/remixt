@@ -17,6 +17,15 @@ export type LyricsResult = {
   synced: string | null;
 };
 
+/** A song's lyrics page elsewhere (Genius), to import the words from. */
+export type LyricsPage = {
+  title: string;
+  artist: string;
+  url: string;
+  image: string | null;
+  source: "genius";
+};
+
 export type LyricLine = {
   /** Where on the timeline the line is sung, in seconds; null when it isn't timed yet. */
   time: number | null;
@@ -74,7 +83,36 @@ export function songNameOf(trackTitle: string): string {
 }
 
 const STAMP = /^\[(\d{1,3}):(\d{1,2}(?:[.:]\d{1,3})?)\]/;
-const TAG = /^\[([a-z]+):(.*)\]\s*$/i;
+const TAG = /^\[([a-z#]+):(.*)\]\s*$/i;
+/** LRC's own header tags. Anything else in brackets — "[Chorus: Someone]" — is a section of the song. */
+const LRC_TAGS = new Set(["ar", "ti", "al", "au", "by", "offset", "length", "re", "ve", "tool", "la", "lang", "id", "lr", "kana", "#"]);
+/** Enhanced LRC's word-by-word times ("<00:12.34>word"): the words stay, the times go. */
+const WORD_STAMP = /<\d{1,3}:\d{1,2}(?:[.:]\d{1,3})?>\s?/g;
+const SECTION = /^\s*\[[^\]\n]{1,80}\]\s*$/;
+
+/**
+ * A section heading rather than words to sing — "[Chorus]", "[Verse 2:
+ * Artist]", "[Intro]" — as lyrics sites and writers mark a song's parts.
+ */
+export function isSection(text: string) {
+  return SECTION.test(text) && !STAMP.test(text.trim());
+}
+
+/** The heading's name without its brackets: "Chorus: Artist". */
+export function sectionName(text: string) {
+  return text.trim().replace(/^\[|\]$/g, "").trim();
+}
+
+/** A line with words to sing: not a blank break, not a section heading. */
+export function isSung(line: LyricLine) {
+  return !!line.text && !isSection(line.text);
+}
+
+/** The section heading line `index` falls under, if the sheet has headings. */
+export function sectionAt(lines: LyricLine[], index: number): string | null {
+  for (let i = Math.min(index, lines.length - 1); i >= 0; i--) if (lines[i].text && isSection(lines[i].text)) return sectionName(lines[i].text);
+  return null;
+}
 
 function stampSeconds(minutes: string, seconds: string) {
   return Number(minutes) * 60 + Number(seconds.replace(":", "."));
@@ -82,11 +120,13 @@ function stampSeconds(minutes: string, seconds: string) {
 
 /** Reads a sheet: LRC (one or more stamps a line, metadata tags, an [offset:]) or plain text. */
 export function parseLyrics(source: string): LyricLine[] {
+  // Subtitles (SRT, WebVTT) are timed lyrics too: read as LRC.
+  if (looksLikeSubtitles(source)) source = subtitlesToLrc(source);
   const out: LyricLine[] = [];
   // LRC's [offset:+n] is in ms; positive shows the words earlier.
   let offset = 0;
   for (const raw of source.replace(/\r\n?/g, "\n").split("\n")) {
-    let rest = raw.trim();
+    let rest = raw.replace(WORD_STAMP, "").trim();
     const times: number[] = [];
     let match: RegExpExecArray | null;
     while ((match = STAMP.exec(rest))) {
@@ -96,7 +136,7 @@ export function parseLyrics(source: string): LyricLine[] {
     if (times.length === 0) {
       const tag = TAG.exec(rest);
       // [ar:Artist], [ti:Title], [length:…] and the like: not words to sing.
-      if (tag && !/\s/.test(tag[1])) {
+      if (tag && LRC_TAGS.has(tag[1].toLowerCase())) {
         if (tag[1].toLowerCase() === "offset" && Number.isFinite(Number(tag[2]))) offset = Number(tag[2]) / 1000;
         continue;
       }
@@ -205,12 +245,16 @@ export function spreadOverBars(
   const bar = beatSeconds(bpm) * beatsPerBar;
   let at = Math.max(0, startBar - 1) * bar;
   let started = false;
+  // A break is a blank line, or a section heading straight after words: one bar's rest either way.
+  let rested = true;
   return lines.map((l) => {
-    if (!l.text) {
-      if (started && restAtBreaks) at += bar;
+    if (!isSung(l)) {
+      if (started && restAtBreaks && !rested) at += bar;
+      rested = true;
       return { ...l, time: null };
     }
     started = true;
+    rested = false;
     const line = { ...l, time: round(at) };
     at += bar * Math.max(0.25, barsPerLine);
     return line;
@@ -283,8 +327,9 @@ export type LineFit = {
 /** Whether line `index` fits the room it has before the next one. */
 export function fitOf(lines: LyricLine[], index: number, bpm: number, style: SingStyle = "rap", end?: number): LineFit {
   const line = lines[index];
+  if (!isSung(line)) return { syllables: 0, seconds: null, beats: null, verdict: null };
   const syllables = countSyllables(line.text);
-  if (line.time === null || !line.text) return { syllables, seconds: null, beats: null, verdict: null };
+  if (line.time === null) return { syllables, seconds: null, beats: null, verdict: null };
   let next: number | null = null;
   for (let i = index + 1; i < lines.length; i++) {
     const time = lines[i].time;
@@ -327,4 +372,283 @@ export function cleanAiLines(text: string): string[] {
     .trim()
     .split("\n")
     .filter((l, _, all) => all.length > 1 || l);
+}
+
+/** New words for the sung lines, in order; blank lines and section headings stay where they are. */
+export function replaceSung(old: LyricLine[], texts: string[]): LyricLine[] {
+  const out: LyricLine[] = [];
+  let k = 0;
+  for (const line of old) {
+    if (!isSung(line)) out.push(line);
+    else if (k < texts.length) out.push({ time: line.time, text: texts[k++] });
+  }
+  for (; k < texts.length; k++) out.push({ time: null, text: texts[k] });
+  return out;
+}
+
+// ── Subtitles ────────────────────────────────────────────────────────────
+
+const CUE_TIME = /(?:(\d{1,2}):)?(\d{1,2}):(\d{2})[,.](\d{1,3})\s*-->\s*(?:(\d{1,2}):)?(\d{1,2}):(\d{2})[,.](\d{1,3})/;
+
+/** SRT or WebVTT: cues with "00:00:12,500 --> 00:00:15,000" times. */
+export function looksLikeSubtitles(source: string) {
+  return /^﻿?WEBVTT/.test(source.trimStart()) || CUE_TIME.test(source.slice(0, 2000));
+}
+
+/**
+ * Subtitles as LRC: each cue a timed line (a cue over two lines is one
+ * line of lyrics), with a blank line where the singing stops for a while.
+ */
+export function subtitlesToLrc(source: string): string {
+  const seconds = (h: string | undefined, m: string, s: string, ms: string) => Number(h ?? 0) * 3600 + Number(m) * 60 + Number(s) + Number(ms.padEnd(3, "0")) / 1000;
+  const out: string[] = [];
+  let lastEnd: number | null = null;
+  for (const block of source.replace(/\r\n?/g, "\n").split(/\n\s*\n/)) {
+    const rows = block.split("\n");
+    const at = rows.findIndex((r) => CUE_TIME.test(r));
+    if (at < 0) continue;
+    const t = CUE_TIME.exec(rows[at])!;
+    const start = seconds(t[1], t[2], t[3], t[4]);
+    const end = seconds(t[5], t[6], t[7], t[8]);
+    const text = rows
+      .slice(at + 1)
+      .map((r) => r.replace(/<[^>]+>/g, "").replace(/\{\\[^}]*\}/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ").trim())
+      .filter(Boolean)
+      .join(" ")
+      // Music notes subtitles put around sung words.
+      .replace(/^[♪♫\s]+|[♪♫\s]+$/g, "")
+      .trim();
+    if (!text) continue;
+    if (lastEnd !== null && start - lastEnd > 3.5) out.push("");
+    out.push(`${formatStamp(start)}${text}`);
+    lastEnd = end;
+  }
+  return out.join("\n");
+}
+
+// ── Borrowing times from another copy of the same lyrics ────────────────
+
+function normalizeLine(text: string) {
+  return text
+    .toLowerCase()
+    .replace(/[ي]/g, "ی")
+    .replace(/[ك]/g, "ک")
+    .replace(/[ً-ٰٟ‌‍]/g, "")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function bigrams(text: string) {
+  const s = ` ${text} `;
+  const out = new Map<string, number>();
+  for (let i = 0; i < s.length - 1; i++) {
+    const g = s.slice(i, i + 2);
+    out.set(g, (out.get(g) ?? 0) + 1);
+  }
+  return out;
+}
+
+/** How alike two lyric lines are, 0..1 (Dice over letter pairs — works in any script). */
+export function lineSimilarity(a: string, b: string) {
+  const x = normalizeLine(a);
+  const y = normalizeLine(b);
+  if (!x || !y) return 0;
+  if (x === y) return 1;
+  const gx = bigrams(x);
+  const gy = bigrams(y);
+  let shared = 0;
+  let total = 0;
+  for (const [g, n] of gx) {
+    shared += Math.min(n, gy.get(g) ?? 0);
+    total += n;
+  }
+  for (const n of gy.values()) total += n;
+  return total ? (2 * shared) / total : 0;
+}
+
+/**
+ * Times for `words` (lyrics copied from a site, untimed) from `timed` (the
+ * same song's timed lyrics from elsewhere): the lines are matched up in
+ * order, even where one copy has lines the other doesn't, and a sung line
+ * with no match gets a time between its neighbours'. Null when too few
+ * lines match to trust it.
+ */
+export function borrowTimes(words: LyricLine[], timed: LyricLine[]): { lines: LyricLine[]; matched: number; total: number } | null {
+  const a = words.map((l, i) => ({ l, i })).filter(({ l }) => isSung(l));
+  const b = timed.filter((l) => isSung(l) && l.time !== null);
+  if (a.length === 0 || b.length === 0) return null;
+  const MIN = 0.55;
+  // Best order-keeping matching (like a diff), scored by how alike matched lines are.
+  const score: number[][] = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  const sim = (i: number, j: number) => lineSimilarity(a[i].l.text, b[j].text);
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      const s = sim(i, j);
+      score[i][j] = Math.max(score[i + 1][j], score[i][j + 1], s >= MIN ? s + score[i + 1][j + 1] : 0);
+    }
+  }
+  const times: (number | null)[] = new Array(a.length).fill(null);
+  let matched = 0;
+  for (let i = 0, j = 0; i < a.length && j < b.length; ) {
+    const s = sim(i, j);
+    if (s >= MIN && Math.abs(score[i][j] - (s + score[i + 1][j + 1])) < 1e-9) {
+      times[i] = b[j].time;
+      matched++;
+      i++;
+      j++;
+    } else if (score[i + 1][j] >= score[i][j + 1]) i++;
+    else j++;
+  }
+  if (matched < Math.max(2, Math.ceil(a.length * 0.5))) return null;
+  // Unmatched lines between two matched ones share the time between them evenly.
+  for (let i = 0; i < a.length; i++) {
+    if (times[i] !== null) continue;
+    let k = i;
+    while (k < a.length && times[k] === null) k++;
+    const before = i > 0 ? times[i - 1] : null;
+    const after = k < a.length ? times[k] : null;
+    if (before !== null && after !== null && after > before) {
+      for (let m = i; m < k; m++) times[m] = round(before + ((after - before) * (m - i + 1)) / (k - i + 1));
+    }
+    i = k;
+  }
+  const out = words.map((l) => ({ ...l, time: null as number | null }));
+  a.forEach(({ i }, k) => (out[i].time = times[k]));
+  return { lines: out, matched, total: a.length };
+}
+
+// ── Timing lines from a vocal recording ─────────────────────────────────
+
+/** A loudness curve on the timeline: `values[i]` is the level at `start + i * step` seconds. */
+export type Envelope = { values: ArrayLike<number>; start: number; step: number };
+
+/** The stretches where someone is singing, from a loudness curve: [start, end] in seconds. */
+export function voicedRuns(env: Envelope, { from = -Infinity, to = Infinity } = {}): [number, number][] {
+  const values = Array.from(env.values);
+  if (values.length === 0) return [];
+  const sorted = [...values].sort((x, y) => x - y);
+  const floor = sorted[Math.floor(sorted.length * 0.2)];
+  const loud = sorted[Math.floor(sorted.length * 0.9)];
+  if (loud <= floor) return [];
+  const threshold = floor + (loud - floor) * 0.2;
+  const runs: [number, number][] = [];
+  let open: number | null = null;
+  for (let i = 0; i <= values.length; i++) {
+    const t = env.start + i * env.step;
+    const on = i < values.length && values[i] > threshold && t >= from && t < to;
+    if (on && open === null) open = t;
+    if (!on && open !== null) {
+      runs.push([open, t]);
+      open = null;
+    }
+  }
+  // Breaths inside a phrase aren't breaks; blips aren't singing.
+  const merged: [number, number][] = [];
+  for (const run of runs) {
+    const last = merged[merged.length - 1];
+    if (last && run[0] - last[1] < 0.12) last[1] = run[1];
+    else merged.push([...run]);
+  }
+  return merged.filter(([s, e]) => e - s >= 0.1);
+}
+
+/**
+ * A first guess at each sung line's time from a vocal recording: the
+ * singing is cut into as many phrases as there are lines — at its longest
+ * pauses, weighed against how long each line is — and each line starts
+ * where its phrase does. Sections and blank lines stay untimed. Null when
+ * the recording has no singing in it.
+ */
+export function autoTime(lines: LyricLine[], env: Envelope, range: { from?: number; to?: number } = {}): LyricLine[] | null {
+  const sung = lines.map((l, i) => ({ l, i })).filter(({ l }) => isSung(l));
+  const n = sung.length;
+  const runs = voicedRuns(env, range);
+  if (n === 0 || runs.length === 0) return null;
+  const weights = sung.map(({ l }) => Math.max(1, countSyllables(l.text)));
+  const totalWeight = weights.reduce((x, y) => x + y, 0);
+
+  // Places a line can start: each run's start. Keep the ones after the longest pauses if there are very many.
+  let starts = runs.map(([s], k) => ({ at: s, pause: k === 0 ? Infinity : s - runs[k - 1][1], k }));
+  const LIMIT = 360;
+  if (starts.length > LIMIT) starts = [...starts].sort((x, y) => y.pause - x.pause).slice(0, LIMIT).sort((x, y) => x.at - y.at);
+  // Singing time (not pauses) up to each run, for weighing lines against phrases.
+  const sungBefore: number[] = [0];
+  for (const [s, e] of runs) sungBefore.push(sungBefore[sungBefore.length - 1] + (e - s));
+  const totalSung = sungBefore[sungBefore.length - 1];
+  const sungFrom = (k: number) => sungBefore[k];
+  const m = starts.length;
+  // Where on the timeline a moment of singing time falls (pauses skipped).
+  const atSung = (x: number) => {
+    for (let k = 0; k < runs.length; k++) if (sungBefore[k + 1] >= x) return runs[k][0] + (x - sungBefore[k]);
+    return runs[runs.length - 1][1];
+  };
+  /** Lines spread over the singing in proportion to their length. */
+  const spread = () => {
+    let acc = 0;
+    return weights.map((w) => {
+      const t = round(atSung((acc / totalWeight) * totalSung));
+      acc += w;
+      return t;
+    });
+  };
+  let times: number[];
+  if (m < n) {
+    // Fewer phrases than lines: no pauses to go by.
+    times = spread();
+  } else {
+    // Choose n of the m phrase starts (the first always included) that best fit
+    // the lines' lengths, preferring long pauses before a new line.
+    const pauseScore = (p: number) => (p === 0 ? 0 : Math.log1p(Math.min(3, starts[p].pause) / 0.2));
+    const cost = (line: number, p: number, q: number) => {
+      // Line `line` runs from start p to start q (or the end).
+      const sungTime = (q < m ? sungFrom(starts[q].k) : totalSung) - sungFrom(starts[p].k);
+      const expected = (weights[line] / totalWeight) * totalSung;
+      const miss = (sungTime - expected) / Math.max(expected, 0.6);
+      return miss * miss - pauseScore(p) * 0.6;
+    };
+    const INF = Number.POSITIVE_INFINITY;
+    // best[line][p]: the cheapest way to start lines 0..line with line `line` at start p.
+    const best: Float64Array[] = Array.from({ length: n }, () => new Float64Array(m).fill(INF));
+    const from: Int32Array[] = Array.from({ length: n }, () => new Int32Array(m).fill(-1));
+    // Each next line starts within a window after the previous one, which keeps this quick.
+    const reach = Math.max(8, Math.ceil((m / n) * 4));
+    best[0][0] = 0;
+    for (let line = 1; line < n; line++) {
+      for (let q = line; q <= m - (n - line); q++) {
+        let top = INF;
+        let arg = -1;
+        for (let p = Math.max(line - 1, q - reach); p < q; p++) {
+          if (best[line - 1][p] === INF) continue;
+          const c = best[line - 1][p] + cost(line - 1, p, q);
+          if (c < top) {
+            top = c;
+            arg = p;
+          }
+        }
+        best[line][q] = top;
+        from[line][q] = arg;
+      }
+    }
+    let end = -1;
+    let top = INF;
+    for (let q = n - 1; q < m; q++) {
+      if (best[n - 1][q] === INF) continue;
+      const c = best[n - 1][q] + cost(n - 1, q, m);
+      if (c < top) {
+        top = c;
+        end = q;
+      }
+    }
+    if (end < 0) return lines.map((l, i) => ({ ...l, time: isSung(l) ? spread()[sung.findIndex((x) => x.i === i)] : null }));
+    const picks: number[] = new Array(n);
+    for (let line = n - 1, q = end; line >= 0; line--) {
+      picks[line] = q;
+      q = from[line][q];
+    }
+    times = picks.map((p) => round(starts[p].at));
+  }
+  const out = lines.map((l) => ({ ...l, time: null as number | null }));
+  sung.forEach(({ i }, k) => (out[i].time = times[k] ?? null));
+  return out;
 }

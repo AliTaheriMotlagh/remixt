@@ -29,12 +29,13 @@ import {
   type Take,
 } from "@/lib/client/recorder";
 import { activeSheet, useLyrics } from "@/lib/client/lyricsStore";
-import { beatSeconds } from "@/lib/lyrics";
+import { beatSeconds, isSung, lineAt, sectionAt } from "@/lib/lyrics";
 import { useStudioStore } from "@/lib/client/studioStore";
 import { useStudioView } from "@/lib/client/studioView";
 import { useKeepScreenOn } from "@/lib/client/wakeLock";
 import { guardLeaving } from "@/lib/client/leaveGuard";
 import { LyricsCue, LyricsTools } from "./LyricsPanel";
+import LyricsTimeline from "./LyricsTimeline";
 
 // The vocal booth: one panel for the take and its words. Recording starts
 // at the playhead with the beat playing (a metronome count-in first, when
@@ -200,6 +201,7 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
   const hasMix = useStudioStore((s) => s.lanes.length > 0);
   const setTakeState = useLyrics((s) => s.setTake);
   const sheet = useLyrics(activeSheet);
+  const lines = useLyrics((s) => s.lines);
   const lyricsAt = useLyrics((s) => {
     const first = s.lines.find((l) => l.time !== null && l.text)?.time;
     return first === undefined ? null : first;
@@ -376,8 +378,12 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
     saving.current = controller;
     try {
       // Named for the lyrics sung, so the take is easy to find in the song list later.
+      // …and the part of the song it starts in ("Chorus"), when the lyrics mark their sections.
+      const at = lineAt(lines, take.start + 0.5);
+      const firstSung = lines.findIndex((l) => isSung(l) && l.time !== null);
+      const section = sectionAt(lines, at >= 0 ? at : firstSung);
       const title = sheet?.title
-        ? `${sheet.title} — take ${takeNumber}`.slice(0, 200)
+        ? `${sheet.title}${section ? ` — ${section.replace(/:.*$/, "")}` : ""} — take ${takeNumber}`.slice(0, 200)
         : `Studio vocal — take ${takeNumber} (${new Date().toLocaleDateString()})`;
       const { stemId } = await uploadTake(
         take,
@@ -479,6 +485,7 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
             )}
           </div>
         </div>
+        <LyricsTimeline lines={lines} seekable={false} height={88} />
         <LyricsCue big />
       </div>
     );
@@ -507,6 +514,7 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
             <LiveMonitor recording={active} onBleed={onBleed} />
           </div>
         </div>
+        <LyricsTimeline lines={lines} take={{ start: recStart, level: active.level }} seekable={false} height={88} />
         {bleeding && (
           <div className="flex items-start gap-2 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
             <HeadphoneOff className="mt-0.5 shrink-0" />
@@ -529,8 +537,9 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
             {formatTime(take.buffer.duration)} long · from {formatTime(take.start)}
           </span>
         </div>
+        <LyricsTimeline lines={lines} take={{ start: take.start, peaks: take.peaks, duration: take.buffer.duration }} height={76} />
         <div className="rounded-lg bg-background/60 px-2 py-1.5">
-          <Waveform peaks={take.peaks} color="var(--vocals)" height={44} />
+          <Waveform peaks={take.peaks} color="var(--vocals)" height={36} />
         </div>
         <TakeBadges take={take} />
         {state === "saving" ? (
@@ -708,6 +717,7 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
         )}
       </div>
       {error && <p className="text-xs text-danger">{error}</p>}
+      {hasMix && <LyricsTimeline lines={lines} height={64} />}
       <LyricsCue />
     </div>
   );

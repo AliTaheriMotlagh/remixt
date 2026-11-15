@@ -15,7 +15,8 @@ export type LyricSheet = {
   artist: string;
   /** The sheet as LRC text: timed lines stamped, the rest plain. */
   text: string;
-  source: "library" | "own" | "ai";
+  /** Found in the lyrics library, brought in from a page or a file, written here, or by the AI. */
+  source: "library" | "web" | "file" | "own" | "ai";
   updatedAt: number;
   /**
    * Found lyrics are timed to the original recording; once they've been
@@ -87,8 +88,8 @@ type LyricsState = {
   select: (id: string | null) => void;
   /** A new sheet, opened. */
   create: (sheet: Pick<LyricSheet, "title" | "artist" | "text" | "source" | "aligned">) => string;
-  /** The open sheet's title or artist. */
-  rename: (patch: Partial<Pick<LyricSheet, "title" | "artist">>) => void;
+  /** The open sheet's title or artist (or whether it's lined up with the beat). */
+  rename: (patch: Partial<Pick<LyricSheet, "title" | "artist" | "aligned">>) => void;
   /** The open sheet's text as typed (no undo step for every key). */
   setText: (text: string) => void;
   /** Marks where typing starts, so Undo can go back to before it. */

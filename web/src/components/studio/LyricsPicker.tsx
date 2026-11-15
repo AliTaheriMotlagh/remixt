@@ -1,18 +1,32 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ComponentType } from "react";
-import { ArrowLeft, Check, ChevronDown, ClipboardPaste, Clock, ExternalLink, Music2, PenLine, Search, Sparkles, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { ArrowLeft, Check, ChevronDown, ClipboardPaste, Clock, ExternalLink, FileText, Link2, Music2, PenLine, Search, Sparkles, Trash2 } from "lucide-react";
 import { useLyrics } from "@/lib/client/lyricsStore";
+import { importLyricsLink, laneOfRecording, searchLyrics, timeFromLibrary } from "@/lib/client/lyricsSources";
 import { useStudioStore, type StudioLane } from "@/lib/client/studioStore";
 import { useStudioView } from "@/lib/client/studioView";
-import { formatClock, isSynced, parseLyrics, placeOnLane, serializeLyrics, splitSongTitle, type LyricsResult } from "@/lib/lyrics";
+import { formatClock, isSung, isSynced, parseLyrics, placeOnLane, serializeLyrics, splitSongTitle, type LyricsPage, type LyricsResult } from "@/lib/lyrics";
+import { isLyricsLink, lyricsFromFile, lyricsFromHtml, lyricsLinkFrom, looksLikeHtml, type ImportedLyrics } from "@/lib/lyricsImport";
+
+function safeHost(url: string) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
 import { hasPersian, normalizePersian } from "@/lib/lyricsSearch";
 
 // Choosing the lyrics to sing from, all on one screen: look a song up (in
 // Persian or English letters — the mix's own song is looked up as soon as
-// this opens), paste them, write them, or have the AI write them — and the
-// sheets used before, to switch back to or delete. Swapping lyrics is the
-// same two taps from anywhere: "Change", then the one you want.
+// this opens) in the lyrics library and on Genius, paste a lyrics page's
+// link or embed code, open a lyrics file (LRC, SRT, VTT, text), paste the
+// words, write them, or have the AI write them — and the sheets used
+// before, to switch back to or delete. Words that come without times get
+// them from the library's timed copy of the same song when it has one.
+// Swapping lyrics is the same two taps from anywhere: "Change", then the
+// one you want.
 
 /** A song playing in the mix, to look its lyrics up. */
 type MixSong = { key: string; song: string; artist: string; lane: StudioLane };
@@ -37,15 +51,8 @@ function useMixSongs(): MixSong[] {
   }, [lanes]);
 }
 
-/** The mix lane playing this recording (same length, within a few seconds), if any. */
-function laneOf(result: LyricsResult, lanes: StudioLane[]) {
-  if (!result.duration) return null;
-  return (
-    lanes.find(
-      (l) => l.artistName !== "You" && !l.clips && Math.abs(l.originalDuration - result.duration!) <= 3
-    ) ?? null
-  );
-}
+/** The mix lane playing this recording, if any (see laneOfRecording). */
+const laneOf = laneOfRecording;
 
 /** The first lines of a sheet, without their times, to glance at. */
 function previewOf(result: LyricsResult) {
@@ -112,6 +119,35 @@ function ResultRow({ result, onUse, matchesMix }: { result: LyricsResult; onUse:
   );
 }
 
+function WebRow({ page, onUse, busy }: { page: LyricsPage; onUse: () => void; busy: boolean }) {
+  return (
+    <li className="flex items-center gap-2 rounded-xl border border-border bg-background/50 p-2 transition-colors hover:border-vocals/50">
+      {page.image ? (
+        // eslint-disable-next-line @next/next/no-img-element -- a small remote thumbnail
+        <img src={page.image} alt="" className="h-10 w-10 shrink-0 rounded-lg object-cover" loading="lazy" referrerPolicy="no-referrer" />
+      ) : (
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-surface-raised text-muted">
+          <FileText />
+        </span>
+      )}
+      <span className="min-w-0 flex-1">
+        <span dir="auto" className="block truncate text-sm font-medium">
+          {page.title}
+        </span>
+        <span dir="auto" className="block truncate text-[11px] text-muted">
+          {[page.artist, "Genius"].filter(Boolean).join(" · ")}
+        </span>
+      </span>
+      <a href={page.url} target="_blank" rel="noopener noreferrer" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-muted hover:text-foreground" aria-label={`Open “${page.title}” on Genius`}>
+        <ExternalLink />
+      </a>
+      <button onClick={onUse} disabled={busy} className="h-10 shrink-0 rounded-lg bg-vocals px-4 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40">
+        Use
+      </button>
+    </li>
+  );
+}
+
 export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPicked: () => void; onWrite: () => void; onAi: () => void; onBack?: () => void }) {
   const sheets = useLyrics((s) => s.sheets);
   const activeId = useLyrics((s) => s.activeId);
@@ -128,10 +164,77 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<LyricsResult[] | null>(null);
+  const [web, setWeb] = useState<LyricsPage[]>([]);
+  /** A page or file being read in. */
+  const [importing, setImporting] = useState<string | null>(null);
+  /** A page that couldn't be read from here, to copy the words from by hand. */
+  const [manual, setManual] = useState<{ url: string; title: string; artist: string; why: string } | null>(null);
+  const file = useRef<HTMLInputElement>(null);
+  const isLink = isLyricsLink(query);
+
+  /** A new sheet from words brought in from a page or a file — timed from the library when they come untimed. */
+  async function addImported(lyrics: ImportedLyrics, source: "web" | "file" | "own") {
+    let text = lyrics.text;
+    let aligned = false;
+    setImporting("Looking for the timing…");
+    const timed = isSynced(parseLyrics(text)) ? null : await timeFromLibrary(text, lyrics.title, lyrics.artist).catch(() => null);
+    if (timed) {
+      text = timed.text;
+      aligned = timed.aligned;
+    }
+    setImporting(null);
+    create({ title: lyrics.title || "Lyrics", artist: lyrics.artist, text, source, aligned });
+    const notify = useStudioView.getState().notify;
+    if (timed) notify(`Timed from the lyrics library — ${timed.matched} of ${timed.total} lines matched${timed.aligned ? ", lined up with your song" : ""}`);
+    else if (isSynced(parseLyrics(text))) notify("Lyrics added, with their times");
+    else notify(`Lyrics added${lyrics.source ? ` from ${lyrics.source}` : ""} — time them by tapping along, or with “Get times”`);
+    onPicked();
+  }
+
+  /** `song`: what the page is, when known (a Genius result) — kept for words pasted from it by hand. */
+  async function importLink(link: string, song?: { title: string; artist: string }) {
+    setError(null);
+    setManual(null);
+    setImporting("Reading the page…");
+    try {
+      const lyrics = await importLyricsLink(link);
+      await addImported(lyrics, "web");
+    } catch (err) {
+      // The site won't let the server read it: the singer copies the words, and they're named and timed all the same.
+      const url = lyricsLinkFrom(link);
+      if (url) setManual({ url, title: song?.title ?? "", artist: song?.artist ?? "", why: err instanceof Error ? err.message : "" });
+      else setError(err instanceof Error ? err.message : "Couldn't read that link");
+    } finally {
+      setImporting(null);
+    }
+  }
+
+  async function openFile(chosen: File | undefined) {
+    if (!chosen) return;
+    if (chosen.size > 1_000_000) {
+      setError("That file is too big for lyrics — pick an .lrc, .srt, .vtt or .txt file");
+      return;
+    }
+    setError(null);
+    const raw = await chosen.text().catch(() => "");
+    const html = looksLikeHtml(raw) ? lyricsFromHtml(raw, "") : null;
+    const text = html ? html.text : lyricsFromFile(raw);
+    if (!text.trim()) {
+      setError("No lyrics in that file");
+      return;
+    }
+    const name = chosen.name.replace(/\.\w+$/, "").replace(/[_]+/g, " ").trim();
+    const split = splitSongTitle(name);
+    await addImported({ title: split.song || name || "Lyrics", artist: split.artist, text, source: "" }, "file");
+  }
 
   async function search(what: string | MixSong) {
     const label = typeof what === "string" ? what.trim() : [what.artist, what.song].filter(Boolean).join(" – ");
     if (!label) return;
+    if (typeof what === "string" && isLyricsLink(label)) {
+      await importLink(label);
+      return;
+    }
     const params =
       typeof what === "string"
         ? new URLSearchParams({ q: label })
@@ -145,13 +248,13 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
     setSearching(true);
     setError(null);
     try {
-      const res = await fetch(`/api/lyrics/search?${params}`);
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? "Couldn't search");
-      setResults(data.results as LyricsResult[]);
+      const found = await searchLyrics(params);
+      setResults(found.results);
+      setWeb(found.web);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't search");
       setResults(null);
+      setWeb([]);
     } finally {
       setSearching(false);
     }
@@ -190,13 +293,38 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
       // Not allowed here: the editor's box takes a long-press paste instead.
     }
     if (!text) {
-      onWrite();
+      if (manual?.title) {
+        // Named for the page they come from, ready for the words.
+        create({ title: manual.title, artist: manual.artist, text: "", source: "web" });
+        setManual(null);
+        useLyrics.getState().setView("edit");
+      } else onWrite();
       useStudioView.getState().notify("Paste the words into the box — long-press, or Ctrl/⌘+V");
       return;
     }
-    const firstLine = parseLyrics(text).find((l) => l.text)?.text ?? "";
-    create({ title: (query.trim() || firstLine).slice(0, 60) || "My lyrics", artist: "", text: text.slice(0, 20_000), source: "own" });
-    onPicked();
+    // A link or embed code: the page it points to is read.
+    if (isLyricsLink(text)) {
+      setQuery(text.slice(0, 500));
+      await importLink(text);
+      return;
+    }
+    // A page's HTML: the words on it.
+    const fromPage = looksLikeHtml(text) ? lyricsFromHtml(text, "") : null;
+    const words = fromPage?.text ?? lyricsFromFile(text);
+    const firstLine = parseLyrics(words).find(isSung)?.text ?? "";
+    const typed = query.trim() && !isLyricsLink(query) ? query.trim() : "";
+    const split = splitSongTitle(typed);
+    const from = manual;
+    setManual(null);
+    await addImported(
+      {
+        title: (fromPage?.title || from?.title || split.song || firstLine).slice(0, 60) || "My lyrics",
+        artist: fromPage?.artist || from?.artist || split.artist,
+        text: words.slice(0, 20_000),
+        source: from ? safeHost(from.url) : "",
+      },
+      from ? "web" : "own"
+    );
   }
 
   const q = normalizePersian(query).toLowerCase();
@@ -206,6 +334,7 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
   const webSearch = `https://www.google.com/search?q=${encodeURIComponent(
     hasPersian(searchedFor) ? `متن آهنگ ${searchedFor}` : `${searchedFor} lyrics`
   )}`;
+  const geniusSearch = `https://genius.com/search?q=${encodeURIComponent(searchedFor)}`;
 
   return (
     <div className="flex flex-col gap-3">
@@ -217,7 +346,7 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
         )}
         <div className="min-w-0">
           <p className="text-sm font-semibold">{active ? "Change lyrics" : "Lyrics to sing from"}</p>
-          <p className="truncate text-[11px] text-muted">Find a song in Persian or English, or bring your own words.</p>
+          <p className="truncate text-[11px] text-muted">Find a song in Persian or English, paste a lyrics link, or bring your own words.</p>
         </div>
       </div>
 
@@ -229,26 +358,69 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
         className="flex gap-2"
       >
         <div className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-muted" />
+          {isLink ? (
+            <Link2 className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-vocals" />
+          ) : (
+            <Search className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-muted" />
+          )}
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="هیچکس فیروز · Hichkas Firooz"
+            onPaste={(e) => {
+              // A pasted link or embed code is read straight away.
+              const pasted = e.clipboardData.getData("text");
+              if (isLyricsLink(pasted)) {
+                e.preventDefault();
+                setQuery(pasted.trim().slice(0, 500));
+                void importLink(pasted);
+              }
+            }}
+            placeholder="Song or artist — or paste a lyrics link"
             dir="auto"
             type="search"
-            enterKeyHint="search"
-            aria-label="Search lyrics by song or artist"
+            enterKeyHint={isLink ? "go" : "search"}
+            aria-label="Search lyrics by song or artist, or paste a link to a lyrics page"
             className="h-11 w-full rounded-xl border border-border bg-background ps-9 pe-3 text-sm max-lg:text-base"
           />
         </div>
         <button
           type="submit"
-          disabled={searching || !query.trim()}
+          disabled={searching || !!importing || !query.trim()}
           className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl bg-vocals px-4 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
         >
-          {searching ? "Looking…" : "Find"}
+          {searching ? "Looking…" : importing ? "Reading…" : isLink ? "Import" : "Find"}
         </button>
       </form>
+      {importing && (
+        <p className="flex items-center gap-2 rounded-xl bg-vocals/10 px-3 py-2 text-xs text-foreground" role="status">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-vocals" /> {importing}
+        </p>
+      )}
+      {error && !searching && !results && <p className="text-xs text-danger" role="alert">{error}</p>}
+      {manual && (
+        <div className="flex flex-col gap-2 rounded-xl border border-beat/40 bg-beat/10 p-3 text-xs" role="status">
+          <p>
+            <b dir="auto">{manual.title ? `“${manual.title}”: ` : ""}</b>
+            {safeHost(manual.url)} doesn&apos;t let the Studio read its pages. Three steps instead:
+          </p>
+          <ol className="list-inside list-decimal space-y-0.5 text-muted">
+            <li>Open the page — it opens in a new tab.</li>
+            <li>Select the lyrics and copy them.</li>
+            <li>Come back and tap Paste — they&apos;re timed for you when the library has the song.</li>
+          </ol>
+          <div className="flex flex-wrap gap-2">
+            <a href={manual.url} target="_blank" rel="noopener noreferrer" className="flex h-10 items-center gap-1.5 rounded-lg border border-border bg-background px-3 font-semibold text-foreground hover:border-vocals">
+              <ExternalLink /> Open the page
+            </a>
+            <button onClick={() => void paste()} className="flex h-10 items-center gap-1.5 rounded-lg bg-vocals px-3 font-semibold text-white hover:opacity-90">
+              <ClipboardPaste /> Paste the words
+            </button>
+            <button onClick={() => setManual(null)} className="h-10 px-2 text-muted hover:text-foreground">
+              Not now
+            </button>
+          </div>
+        </div>
+      )}
 
       {mixSongs.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
@@ -267,11 +439,22 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
         </div>
       )}
 
-      <div className="grid grid-cols-3 gap-2">
-        <QuickAction icon={ClipboardPaste} label="Paste lyrics" onClick={() => void paste()} tone="text-beat" />
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <QuickAction icon={ClipboardPaste} label="Paste words or link" onClick={() => void paste()} tone="text-beat" />
+        <QuickAction icon={FileText} label="Open a file" onClick={() => file.current?.click()} tone="text-success" />
         <QuickAction icon={PenLine} label="Write my own" onClick={onWrite} tone="text-vocals" />
         <QuickAction icon={Sparkles} label="Write with AI" onClick={onAi} tone="text-brand-strong" />
       </div>
+      <input
+        ref={file}
+        type="file"
+        accept=".lrc,.srt,.vtt,.txt,.html,.htm,text/plain,text/vtt,application/x-subrip"
+        className="hidden"
+        onChange={(e) => {
+          void openFile(e.target.files?.[0]);
+          e.target.value = "";
+        }}
+      />
 
       {(searching || error || results) && (
         <section aria-label="Found online" className="flex flex-col gap-1.5">
@@ -293,7 +476,30 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
               ))}
             </ul>
           )}
-          {!searching && results && results.length === 0 && (
+          {!searching && web.length > 0 && (
+            <>
+              <p className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-muted">On Genius · words, timed from the library when it can</p>
+              <ul className="flex flex-col gap-1.5">
+                {web.map((page) => (
+                  <WebRow key={page.url} page={page} busy={!!importing} onUse={() => void importLink(page.url, page)} />
+                ))}
+              </ul>
+            </>
+          )}
+          {!searching && results && results.length > 0 && (
+            <p className="text-[11px] text-muted">
+              Not the one?{" "}
+              <a href={geniusSearch} target="_blank" rel="noopener noreferrer" className="font-semibold text-vocals hover:underline">
+                Search Genius
+              </a>{" "}
+              or{" "}
+              <a href={webSearch} target="_blank" rel="noopener noreferrer" className="font-semibold text-vocals hover:underline">
+                the web
+              </a>
+              , copy the page&apos;s link (or its embed code) and paste it in the box above.
+            </p>
+          )}
+          {!searching && results && results.length === 0 && web.length === 0 && (
             <div className="flex flex-col gap-2 rounded-xl border border-dashed border-border px-3 py-3 text-xs text-muted">
               <p>
                 <b className="text-foreground">No lyrics found for “{searchedFor}”.</b>{" "}
@@ -301,7 +507,7 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
                   ? "Try the artist's name too, or the title in English letters (Finglish)."
                   : "Try the artist's name too, or fewer words."}
               </p>
-              <p>Found them on a lyrics site? Copy the words, come back and tap Paste.</p>
+              <p>Found them on a lyrics site? Copy the page&apos;s link (or the words), come back and tap Paste.</p>
               <div className="flex flex-wrap gap-2">
                 <a
                   href={webSearch}
@@ -310,6 +516,14 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
                   className="flex h-10 items-center gap-1.5 rounded-lg border border-border px-3 font-semibold text-foreground hover:border-vocals"
                 >
                   <ExternalLink /> Search the web
+                </a>
+                <a
+                  href={geniusSearch}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex h-10 items-center gap-1.5 rounded-lg border border-border px-3 font-semibold text-foreground hover:border-vocals"
+                >
+                  <ExternalLink /> Genius
                 </a>
                 <button onClick={() => void paste()} className="flex h-10 items-center gap-1.5 rounded-lg bg-vocals px-3 font-semibold text-white hover:opacity-90">
                   <ClipboardPaste /> Paste lyrics
@@ -378,7 +592,7 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
         </section>
       )}
 
-      <p className="text-[11px] text-muted/80">Lyrics from LRCLIB, an open lyrics library.</p>
+      <p className="text-[11px] text-muted/80">Timed lyrics from LRCLIB, an open lyrics library; words from Genius or any lyrics page you link. Files: .lrc, .srt, .vtt, .txt.</p>
     </div>
   );
 }

@@ -114,7 +114,7 @@ export async function checkLink(raw: string): Promise<string> {
 }
 
 /** Refuses a host on this machine or a private network (see checkLink). */
-async function checkHost(hostname: string) {
+export async function checkHost(hostname: string) {
   const host = hostname.replace(/^\[|\]$/g, "");
   const addresses = isIP(host)
     ? [host]

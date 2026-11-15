@@ -65,6 +65,16 @@ links back on:
 Only let people import what they have the right to use; see
 [Before you open it to the public](#before-you-open-it-to-the-public).
 
+### Lyrics from Genius (optional)
+
+The Studio's lyrics search uses LRCLIB, which needs no setup. To also list
+matching songs from Genius, set `GENIUS_ACCESS_TOKEN` to a client access
+token from [genius.com/api-clients](https://genius.com/api-clients).
+Without it, people can still paste a Genius link or embed code. Genius
+usually refuses to let servers read its pages, so the Studio then asks
+them to copy the words by hand and paste them; the words still get their
+times from LRCLIB when it has the song.
+
 ---
 
 ## Free on Vercel, with Neon and Vercel Blob

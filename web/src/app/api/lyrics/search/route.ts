@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import type { LyricsResult } from "@/lib/lyrics";
+import type { LyricsPage, LyricsResult } from "@/lib/lyrics";
 import { hasSureMatch, libraryQueries, rankCandidates, type LibraryQuery } from "@/lib/lyricsSearch";
 
 // Finds a song's lyrics to sing along to in the Studio, from LRCLIB
@@ -83,9 +83,50 @@ export async function GET(req: NextRequest) {
 
   const candidates = found.filter((r) => r && typeof r.id === "number" && (r.plainLyrics || r.syncedLyrics || r.instrumental)).map(toResult);
   const results = rankCandidates(candidates, wanted, duration).slice(0, MAX_RESULTS);
+  const web = await geniusPages(wanted);
 
-  return NextResponse.json({ results }, { headers: { "Cache-Control": "public, max-age=600, s-maxage=3600" } });
+  return NextResponse.json({ results, web }, { headers: { "Cache-Control": "public, max-age=600, s-maxage=3600" } });
 }
+
+/**
+ * Songs on Genius matching the search — their pages, to import the words
+ * from (api/lyrics/import). Genius's API needs a token (GENIUS_ACCESS_TOKEN,
+ * free from genius.com/api-clients); without one this finds nothing and
+ * the Studio offers a link to search Genius instead.
+ */
+async function geniusPages(query: string): Promise<LyricsPage[]> {
+  const token = process.env.GENIUS_ACCESS_TOKEN;
+  if (!token || !query) return [];
+  const key = `genius:${query.toLowerCase()}`;
+  const kept = webCache.get(key);
+  if (kept && Date.now() - kept.at < CACHE_MS) return kept.found;
+  try {
+    const res = await fetch(`https://api.genius.com/search?q=${encodeURIComponent(query)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as { response?: { hits?: { type?: string; result?: GeniusSong }[] } };
+    const found = (data.response?.hits ?? [])
+      .filter((h) => h.type === "song" && h.result?.url)
+      .slice(0, 6)
+      .map(({ result }) => ({
+        title: result!.title ?? "Untitled",
+        artist: result!.primary_artist?.name ?? "",
+        url: result!.url!,
+        image: result!.song_art_image_thumbnail_url ?? null,
+        source: "genius" as const,
+      }));
+    if (webCache.size >= MAX_CACHED) webCache.delete(webCache.keys().next().value!);
+    webCache.set(key, { at: Date.now(), found });
+    return found;
+  } catch {
+    return [];
+  }
+}
+
+type GeniusSong = { title?: string; url?: string; song_art_image_thumbnail_url?: string; primary_artist?: { name?: string } };
+const webCache = new Map<string, { at: number; found: LyricsPage[] }>();
 
 function toResult(r: LrclibResult): LyricsResult {
   return {

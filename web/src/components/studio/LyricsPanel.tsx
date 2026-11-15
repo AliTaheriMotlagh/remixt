@@ -3,6 +3,7 @@
 import { memo, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import {
   ArrowLeft,
+  AudioLines,
   Check,
   ChevronDown,
   ClipboardPaste,
@@ -18,30 +19,41 @@ import {
   Play,
   Plus,
   PenLine,
+  Library,
+  Repeat,
   Repeat2,
   Rows3,
   ScrollText,
   Sparkles,
   Timer,
   Undo2,
+  WandSparkles,
   X,
 } from "lucide-react";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { browserKey, savedModelChoice, savedProvider } from "@/lib/client/coproducerChat";
 import { activeSheet, useLyrics } from "@/lib/client/lyricsStore";
-import { useStudioStore } from "@/lib/client/studioStore";
+import { laneEnvelope, timeFromLibrary, vocalLanes } from "@/lib/client/lyricsSources";
+import { laneName, useStudioStore } from "@/lib/client/studioStore";
 import { useStudioView } from "@/lib/client/studioView";
 import LyricsPicker from "./LyricsPicker";
+import LyricsTimeline from "./LyricsTimeline";
 import {
+  autoTime,
   barAt,
   beatSeconds,
   clearTimes,
   fitOf,
   formatClock,
+  isSection,
+  isSung,
   isSynced,
-  keepTimes,
   lineAt,
+  parseLyrics,
   plainText,
+  replaceSung,
+  sectionAt,
+  sectionName,
   shiftLines,
   snapLines,
   spreadOverBars,
@@ -186,6 +198,13 @@ const Prompter = memo(function Prompter({
     <div ref={box} className="relative max-h-[min(24rem,50dvh)] overflow-y-auto overscroll-contain rounded-xl border border-border/60 bg-background/60 p-1.5">
       {lines.map((line, i) => {
         if (!line.text) return <div key={i} data-line={i} className="h-4" />;
+        if (isSection(line.text)) {
+          return (
+            <p key={i} data-line={i} dir="auto" className="px-2 pb-0.5 pt-2 text-[10px] font-bold uppercase tracking-wider text-vocals/80">
+              {sectionName(line.text)}
+            </p>
+          );
+        }
         const active = i === current;
         const tapping = i === tapIndex;
         return (
@@ -346,6 +365,184 @@ function FitTools({ lines }: { lines: LyricLine[] }) {
   );
 }
 
+/** Loops the line under the playhead, to practise it over and over; tap again to stop. */
+function LoopLineButton({ lines, className }: { lines: LyricLine[]; className: string }) {
+  const looping = useStudioStore((s) => s.loopEnabled);
+  const setLoop = useStudioStore((s) => s.setLoop);
+  const bpm = useStudioStore((s) => s.projectBpm);
+  function toggle() {
+    if (looping) {
+      setLoop({ enabled: false });
+      return;
+    }
+    let index = lineAt(lines, useStudioStore.getState().playhead);
+    if (index < 0 || !isSung(lines[index])) index = lines.findIndex((l) => isSung(l) && l.time !== null);
+    const start = lines[index]?.time;
+    if (start === null || start === undefined) return;
+    const end = nextTime(lines, index) ?? start + beatSeconds(bpm) * 8;
+    // A breath before the line, so it's sung from its start each time round.
+    const from = Math.max(0, start - 0.4);
+    setLoop({ start: from, end, enabled: true });
+    audioEngine.seek(from);
+    useStudioView.getState().notify("Looping this line — sing it until it sits, then tap the loop again");
+  }
+  return (
+    <button
+      onClick={toggle}
+      aria-pressed={looping}
+      className={`${className} ${looping ? "!border-vocals !bg-vocals/10 !text-vocals" : ""}`}
+      title={looping ? "Stop looping" : "Loop the line under the playhead, to practise it"}
+      aria-label={looping ? "Stop looping" : "Loop this line"}
+    >
+      <Repeat />
+    </button>
+  );
+}
+
+/**
+ * Ways to give lines their times without tapping each one: from the
+ * library's timed copy of the same song, from the singing in a vocal lane
+ * of the mix (the song's own vocal, or a take), or one line a bar — or tap
+ * along. `again` shows the first two as a row in the fit tools, to redo.
+ */
+function GetTimes({ lines, onTap, again = false }: { lines: LyricLine[]; onTap?: () => void; again?: boolean }) {
+  const sheet = useLyrics(activeSheet);
+  const setLines = useLyrics((s) => s.setLines);
+  const rename = useLyrics((s) => s.rename);
+  const barsPerLine = useLyrics((s) => s.prefs.barsPerLine);
+  const lanes = useStudioStore((s) => s.lanes);
+  const bpm = useStudioStore((s) => s.projectBpm);
+  const voices = useMemo(() => vocalLanes(lanes), [lanes]);
+  const [laneId, setLaneId] = useState("");
+  const [busy, setBusy] = useState<"library" | "vocals" | null>(null);
+  // The song's own vocal first; else the latest take.
+  const chosen = voices.find((l) => l.laneId === laneId) ?? voices.find((l) => l.artistName !== "You") ?? voices[voices.length - 1];
+  const notify = useStudioView.getState().notify;
+
+  async function fromLibrary() {
+    if (!sheet) return;
+    setBusy("library");
+    try {
+      const timed = await timeFromLibrary(useLyrics.getState().sheets.find((s) => s.id === sheet.id)?.text ?? "", sheet.title, sheet.artist);
+      if (!timed) {
+        notify("No timed copy of these lyrics in the library — try the vocals, or tap along", "error");
+        return;
+      }
+      setLines(parseLyrics(timed.text));
+      rename({ aligned: timed.aligned });
+      notify(`${timed.matched} of ${timed.total} lines timed from the library${timed.aligned ? ", lined up with your song" : " — timed to the original song"}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function fromVocals() {
+    if (!chosen) return;
+    setBusy("vocals");
+    try {
+      const env = await laneEnvelope(chosen);
+      const end = chosen.offsetSeconds + (chosen.duration || chosen.originalDuration / (chosen.tempoRatio || 1));
+      const timed = autoTime(useLyrics.getState().lines, env, { from: chosen.offsetSeconds, to: end });
+      if (!timed) {
+        notify("Couldn't hear any singing in that lane", "error");
+        return;
+      }
+      setLines(timed);
+      rename({ aligned: true });
+      notify("A first guess from the singing — play it through, and drag a line's mark on the waveform to fix it");
+    } catch {
+      notify("Couldn't read that lane's audio", "error");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const laneChoice = voices.length > 1 && (
+    <select
+      value={chosen?.laneId ?? ""}
+      onChange={(e) => setLaneId(e.target.value)}
+      aria-label="Which vocal to time from"
+      className="h-8 min-w-0 max-w-[11rem] truncate rounded-lg border border-border bg-background px-1.5 text-[11px] text-foreground max-lg:h-9"
+    >
+      {voices.map((l) => (
+        <option key={l.laneId} value={l.laneId}>
+          {laneName(l)}
+        </option>
+      ))}
+    </select>
+  );
+
+  if (again) {
+    const small =
+      "h-8 rounded-lg border border-border bg-background px-2.5 text-[11px] font-medium text-muted transition-colors hover:border-beat hover:text-foreground disabled:opacity-40 max-lg:h-9";
+    return (
+      <div className="flex flex-col gap-1.5 rounded-xl border border-beat/30 bg-beat/5 p-2.5 text-xs sm:flex-row sm:items-center">
+        <span className="flex w-20 shrink-0 items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-beat">
+          <WandSparkles /> Re-time
+        </span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button onClick={() => void fromLibrary()} disabled={!!busy || !sheet?.title} className={small} title="Times from the library's timed copy of this song">
+            <Library className="inline" /> {busy === "library" ? "Looking…" : "From the library"}
+          </button>
+          <button onClick={() => void fromVocals()} disabled={!!busy || !chosen} className={small} title={chosen ? "Times from where the singing starts in a vocal lane" : "Add a vocal (the song's, or a take) to time from it"}>
+            <AudioLines className="inline" /> {busy === "vocals" ? "Listening…" : "From the vocals"}
+          </button>
+          {laneChoice}
+        </div>
+      </div>
+    );
+  }
+
+  const option =
+    "flex min-h-14 items-start gap-2 rounded-xl border border-border bg-background/60 px-2.5 py-2 text-left transition-colors hover:border-vocals disabled:opacity-40 disabled:hover:border-border";
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-vocals/30 bg-vocals/5 p-2.5">
+      <p className="flex items-center gap-1.5 text-xs font-semibold">
+        <Timer className="text-vocals" /> Not timed yet — give the lines their times, so they follow the song
+      </p>
+      <div className="grid grid-cols-2 gap-1.5">
+        <button onClick={() => void fromLibrary()} disabled={!!busy || !sheet?.title} className={option}>
+          <Library className="mt-0.5 shrink-0 text-beat" />
+          <span className="min-w-0">
+            <span className="block text-xs font-semibold">{busy === "library" ? "Looking…" : "From the original"}</span>
+            <span className="block text-[10px] leading-tight text-muted">The library&apos;s timed copy of this song</span>
+          </span>
+        </button>
+        <button onClick={() => void fromVocals()} disabled={!!busy || !chosen} className={option}>
+          <AudioLines className="mt-0.5 shrink-0 text-vocals" />
+          <span className="min-w-0">
+            <span className="block text-xs font-semibold">{busy === "vocals" ? "Listening…" : "From the vocals"}</span>
+            <span dir="auto" className="block truncate text-[10px] leading-tight text-muted">
+              {chosen ? `Where the singing starts in ${laneName(chosen)}` : "Add the song's vocal or a take first"}
+            </span>
+          </span>
+        </button>
+        <button onClick={onTap} className={option}>
+          <Timer className="mt-0.5 shrink-0 text-brand-strong" />
+          <span className="min-w-0">
+            <span className="block text-xs font-semibold">Tap along</span>
+            <span className="block text-[10px] leading-tight text-muted">Play, and tap as each line starts</span>
+          </span>
+        </button>
+        <button
+          onClick={() => {
+            setLines(spreadOverBars(lines, bpm, { startBar: barAt(useStudioStore.getState().playhead, bpm), barsPerLine }));
+            rename({ aligned: true });
+          }}
+          className={option}
+        >
+          <Rows3 className="mt-0.5 shrink-0 text-success" />
+          <span className="min-w-0">
+            <span className="block text-xs font-semibold">{barsPerLine === 1 ? "A line a bar" : `A line every ${barsPerLine} bars`}</span>
+            <span className="block text-[10px] leading-tight text-muted">On the beat, from the playhead&apos;s bar</span>
+          </span>
+        </button>
+      </div>
+      {laneChoice && <div className="flex items-center gap-1.5 text-[11px] text-muted">Vocal to time from: {laneChoice}</div>}
+    </div>
+  );
+}
+
 function SingTab({ lines, onEdit, onRecord }: { lines: LyricLine[]; onEdit: () => void; onRecord?: () => void }) {
   const setLines = useLyrics((s) => s.setLines);
   const sheet = useLyrics(activeSheet);
@@ -361,7 +558,7 @@ function SingTab({ lines, onEdit, onRecord }: { lines: LyricLine[]; onEdit: () =
   /** The next line with words from `from` on (read from the store, so a key press sees the latest). */
   const nextSung = (from: number) => {
     const all = useLyrics.getState().lines;
-    for (let i = from; i < all.length; i++) if (all[i].text) return i;
+    for (let i = from; i < all.length; i++) if (isSung(all[i])) return i;
     return null;
   };
 
@@ -407,7 +604,7 @@ function SingTab({ lines, onEdit, onRecord }: { lines: LyricLine[]; onEdit: () =
   const synced = isSynced(lines);
   const target = syllableTarget(bpm, prefs.style, prefs.barsPerLine);
   // Found lyrics are timed to the original recording; on another beat they need lining up once.
-  const fromOriginal = synced && sheet?.source === "library" && !sheet.aligned;
+  const fromOriginal = synced && (sheet?.source === "library" || sheet?.source === "web") && !sheet.aligned;
 
   return (
     <div className="flex flex-col gap-2.5">
@@ -465,6 +662,7 @@ function SingTab({ lines, onEdit, onRecord }: { lines: LyricLine[]; onEdit: () =
           </>
         )}
         <div className="ml-auto flex items-center gap-1">
+          {synced && <LoopLineButton lines={lines} className={`h-9 w-9 ${GHOST}`} />}
           {onRecord && (
             <button onClick={onRecord} className={`h-9 w-9 ${GHOST} hover:!border-vocals hover:!text-vocals`} title="Record over the beat, singing from these" aria-label="Record with these lyrics">
               <Mic />
@@ -505,13 +703,13 @@ function SingTab({ lines, onEdit, onRecord }: { lines: LyricLine[]; onEdit: () =
         </p>
       )}
       {!synced && tapIndex === null && (
-        <div className="flex items-start gap-2 rounded-xl bg-surface-raised px-3 py-2 text-xs text-muted">
-          <Timer className="mt-0.5 shrink-0 text-vocals" />
-          <span>
-            Not timed yet. Press <b className="text-foreground">Tap to time</b> and tap as each line starts while the beat plays — or open{" "}
-            <b className="text-foreground">Fit to the beat</b> and <b className="text-foreground">Lay out</b> one line a bar.
-          </span>
-        </div>
+        <GetTimes
+          lines={lines}
+          onTap={() => {
+            markAligned();
+            setTapIndex(nextSung(0));
+          }}
+        />
       )}
 
       <button
@@ -527,6 +725,7 @@ function SingTab({ lines, onEdit, onRecord }: { lines: LyricLine[]; onEdit: () =
       </button>
       {tools && (
         <>
+          {synced && <GetTimes lines={lines} again />}
           <FitTools lines={lines} />
           <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted">
             <span>Delivery</span>
@@ -548,6 +747,14 @@ function SingTab({ lines, onEdit, onRecord }: { lines: LyricLine[]; onEdit: () =
         </>
       )}
 
+      <LyricsTimeline
+        lines={lines}
+        onMoveLine={(index, time) => {
+          setLines(useLyrics.getState().lines.map((l, i) => (i === index ? { ...l, time } : l)));
+          markAligned();
+        }}
+        height={76}
+      />
       <Prompter lines={lines} tapIndex={tapIndex} onPickTap={setTapIndex} showFit={tools} />
       {big && <BigPrompter lines={lines} onClose={() => setBig(false)} />}
     </div>
@@ -562,11 +769,12 @@ function BigPrompter({ lines, onClose }: { lines: LyricLine[]; onClose: () => vo
   const at = synced ? Math.max(0, current) : manual;
   const sung = (from: number, count: number) => {
     const out: { line: LyricLine; index: number }[] = [];
-    for (let i = from; i < lines.length && out.length < count; i++) if (lines[i].text) out.push({ line: lines[i], index: i });
+    for (let i = from; i < lines.length && out.length < count; i++) if (isSung(lines[i])) out.push({ line: lines[i], index: i });
     return out;
   };
   const ahead = sung(at, 4);
-  const before = [...lines.slice(0, at)].reverse().find((l) => l.text);
+  const before = [...lines.slice(0, at)].reverse().find(isSung);
+  const section = ahead[0] ? sectionAt(lines, ahead[0].index) : null;
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -596,6 +804,7 @@ function BigPrompter({ lines, onClose }: { lines: LyricLine[]; onClose: () => vo
         className="flex flex-1 flex-col items-center justify-center gap-5 overflow-hidden text-center"
         onClick={() => !synced && setManual((n) => Math.min(lines.length - 1, n + 1))}
       >
+        {section && <p className="text-xs font-bold uppercase tracking-[0.2em] text-vocals sm:text-sm">{section}</p>}
         {before && (
           <p dir="auto" className="max-w-4xl text-xl text-muted/60 sm:text-2xl">
             {before.text}
@@ -623,8 +832,29 @@ function EditTab({ onDone }: { onDone: () => void }) {
   const rename = useLyrics((s) => s.rename);
   const checkpoint = useLyrics((s) => s.checkpoint);
   const [pasteError, setPasteError] = useState(false);
+  const box = useRef<HTMLTextAreaElement>(null);
   if (!sheet) return null;
   const canPaste = typeof navigator !== "undefined" && !!navigator.clipboard?.readText;
+
+  /** A section heading ("[Chorus]") on its own line where the cursor is, a blank line before it. */
+  function insertSection(name: string) {
+    if (!sheet) return;
+    const text = sheet.text;
+    const el = box.current;
+    const at = el && document.activeElement === el ? el.selectionStart : text.length;
+    const lineStart = text.lastIndexOf("\n", Math.max(0, at - 1)) + 1;
+    const start = at === text.length && text && !text.endsWith("\n") ? text.length : lineStart;
+    const before = text.slice(0, start);
+    const gap = !before.trim() ? "" : before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
+    const block = `${gap}[${name}]\n`;
+    checkpoint();
+    setText((before + block + text.slice(start)).slice(0, 20_000));
+    requestAnimationFrame(() => {
+      const pos = (before + block).length;
+      el?.focus();
+      el?.setSelectionRange(pos, pos);
+    });
+  }
 
   async function paste() {
     if (!sheet) return;
@@ -659,14 +889,28 @@ function EditTab({ onDone }: { onDone: () => void }) {
           className="h-10 min-w-0 rounded-lg border border-border bg-background px-3 text-sm"
         />
       </div>
+      <div className="flex flex-wrap items-center gap-1" aria-label="Add a section heading">
+        {["Intro", "Verse", "Pre-Chorus", "Chorus", "Hook", "Bridge", "Outro"].map((name) => (
+          <button
+            key={name}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => insertSection(name)}
+            className="h-8 rounded-full border border-border px-2.5 text-[11px] font-semibold text-muted transition-colors hover:border-vocals hover:text-foreground max-lg:h-9"
+            title={`Start a ${name.toLowerCase()} here`}
+          >
+            + {name}
+          </button>
+        ))}
+      </div>
       <textarea
+        ref={box}
         value={sheet.text}
         onFocus={checkpoint}
         onChange={(e) => setText(e.target.value.slice(0, 20_000))}
         dir="auto"
         rows={12}
         spellCheck={false}
-        placeholder={"One line of lyrics per line.\nLeave an empty line between verses.\n\nTimes (optional) go first, like this:\n[00:12.50] First line"}
+        placeholder={"One line of lyrics per line.\nLeave an empty line between verses.\n[Chorus] on its own line marks a section.\n\nTimes (optional) go first, like this:\n[00:12.50] First line"}
         aria-label="Lyrics"
         className="min-h-48 w-full resize-y rounded-xl border border-border bg-background px-3 py-2.5 font-mono text-[13px] leading-relaxed max-lg:text-base"
       />
@@ -719,7 +963,8 @@ function AiTabView({ lines, onDone }: { lines: LyricLine[]; onDone: () => void }
         headers: { "Content-Type": "application/json", ...(key ? { "x-ai-key": key } : {}) },
         body: JSON.stringify({
           mode,
-          lyrics: plainText(lines),
+          // Fitting rewrites the sung lines one for one; headings and breaks stay put.
+          lyrics: mode === "fit" ? plainText(lines.filter(isSung)) : plainText(lines),
           idea,
           bpm,
           style: prefs.style,
@@ -745,7 +990,7 @@ function AiTabView({ lines, onDone }: { lines: LyricLine[]; onDone: () => void }
   function accept() {
     if (!draft) return;
     const added = draft.lines.map((text) => ({ time: null, text }));
-    if (draft.mode === "fit") setLines(keepTimes(lines, draft.lines));
+    if (draft.mode === "fit") setLines(replaceSung(lines, draft.lines.filter(Boolean)));
     else if (!sheet) create({ title: idea.slice(0, 60) || "New lyrics", artist: "", text: draft.lines.join("\n"), source: "ai" });
     // Carried on after what's there, with a break before a new verse.
     else setLines([...lines, ...(draft.mode === "write" && hasWords ? [{ time: null, text: "" }] : []), ...added]);
@@ -914,7 +1159,7 @@ export function LyricsTools({ onSing }: { onSing?: () => void }) {
   if (!sheet) return null;
 
   const timed = isSynced(lines);
-  const lineCount = lines.filter((l) => l.text).length;
+  const lineCount = lines.filter(isSung).length;
   const editing = shown === "edit";
   const icon = `h-10 w-10 ${GHOST}`;
 
@@ -990,7 +1235,7 @@ export function LyricsCue({ big = false }: { big?: boolean }) {
   const current = useCurrentLine(lines);
   useEffect(() => load(), [load]);
 
-  if (!sheet || !lines.some((l) => l.text)) {
+  if (!sheet || !lines.some(isSung)) {
     return (
       <button
         onClick={() => openLyrics(sheet ? "edit" : "pick")}
@@ -1024,7 +1269,11 @@ export function LyricsCue({ big = false }: { big?: boolean }) {
         {heading}
         <div className={`${big ? "max-h-64" : "max-h-36"} overflow-y-auto overscroll-contain`} dir="auto">
           {lines.map((line, i) =>
-            line.text ? (
+            line.text && isSection(line.text) ? (
+              <p key={i} className="pt-1 text-[10px] font-bold uppercase tracking-wider text-vocals/80">
+                {sectionName(line.text)}
+              </p>
+            ) : line.text ? (
               <p key={i} dir="auto" className="leading-snug" style={{ fontSize }}>
                 {line.text}
               </p>
@@ -1041,11 +1290,13 @@ export function LyricsCue({ big = false }: { big?: boolean }) {
   }
 
   const shown: number[] = [];
-  for (let i = Math.max(0, current); i < lines.length && shown.length < 3; i++) if (lines[i].text) shown.push(i);
-  const previous = current > 0 ? [...lines.slice(0, current)].reverse().find((l) => l.text) : undefined;
+  for (let i = Math.max(0, current); i < lines.length && shown.length < 3; i++) if (isSung(lines[i])) shown.push(i);
+  const previous = current > 0 ? [...lines.slice(0, current)].reverse().find(isSung) : undefined;
+  const section = shown.length ? sectionAt(lines, shown[0]) : null;
   return (
     <div className={`rounded-xl border border-border/60 bg-background/60 px-3 ${big ? "py-4" : "py-2.5"}`} aria-label="Lyrics" aria-live="polite">
       {heading}
+      {section && <p className="text-[10px] font-bold uppercase tracking-wider text-vocals/80">{section}</p>}
       {previous && (
         <p dir="auto" className="truncate text-xs text-muted/50">
           {previous.text}
