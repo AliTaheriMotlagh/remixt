@@ -24,6 +24,8 @@ export type LyricsPage = {
   url: string;
   image: string | null;
   source: "genius";
+  /** Genius's id for the song: its embed can be read when the page can't (see lyricsImport.geniusEmbedHtml). */
+  id?: number;
 };
 
 export type LyricLine = {
@@ -651,4 +653,142 @@ export function autoTime(lines: LyricLine[], env: Envelope, range: { from?: numb
   const out = lines.map((l) => ({ ...l, time: null as number | null }));
   sung.forEach(({ i }, k) => (out[i].time = times[k] ?? null));
   return out;
+}
+
+// ── Editing one line's time ──────────────────────────────────────────────
+
+/** The smallest room kept between two timed lines, so they stay in order. */
+const MIN_GAP = 0.05;
+
+function timedNeighbour(lines: LyricLine[], index: number, step: -1 | 1): number | null {
+  for (let i = index + step; i >= 0 && i < lines.length; i += step) {
+    const time = lines[i].time;
+    if (time !== null) return time;
+  }
+  return null;
+}
+
+/**
+ * Line `index` sung at `time`. With `ripple`, every timed line after it
+ * moves by as much, so the rest of the song stays in sync with it (the
+ * usual fix: one line comes in late, and so does everything after it).
+ * Without, the line stays between its neighbours. Either way it never goes
+ * before the line ahead of it.
+ */
+export function retimeLine(lines: LyricLine[], index: number, time: number, { ripple = false }: { ripple?: boolean } = {}): LyricLine[] {
+  const line = lines[index];
+  if (!line) return lines;
+  const before = timedNeighbour(lines, index, -1);
+  let at = Math.max(0, time, before === null ? 0 : before + MIN_GAP);
+  if (!ripple) {
+    const after = timedNeighbour(lines, index, 1);
+    if (after !== null) at = Math.min(at, Math.max(before === null ? 0 : before + MIN_GAP, after - MIN_GAP));
+  }
+  at = round(at);
+  const delta = line.time === null ? 0 : at - line.time;
+  return lines.map((l, i) => {
+    if (i === index) return { ...l, time: at };
+    if (ripple && delta !== 0 && i > index && l.time !== null) return { ...l, time: round(Math.max(at + MIN_GAP, l.time + delta)) };
+    return l;
+  });
+}
+
+/** Line `index` moved by `delta` seconds (see retimeLine); an untimed line is left as it is. */
+export function nudgeLine(lines: LyricLine[], index: number, delta: number, options: { ripple?: boolean } = {}): LyricLine[] {
+  const time = lines[index]?.time;
+  return time === null || time === undefined ? lines : retimeLine(lines, index, time + delta, options);
+}
+
+/** A part of the song: a section heading's lines, or a verse between blank lines when there are no headings. */
+export type LyricSection = {
+  name: string;
+  /** The heading line, or the part's first line. */
+  index: number;
+  /** When its first line is sung, and when the next part starts (null: not timed, or the song's end). */
+  start: number | null;
+  end: number | null;
+  lines: number;
+};
+
+/** The song's parts, in order — for jumping to and looping one. */
+export function sectionsOf(lines: LyricLine[]): LyricSection[] {
+  const headed = lines.some((l) => l.text && isSection(l.text));
+  const out: LyricSection[] = [];
+  let open: LyricSection | null = null;
+  let verse = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    const heading = !!l.text && isSection(l.text);
+    const breakHere = headed ? heading : !l.text;
+    if (breakHere) {
+      if (open && open.lines) out.push(open);
+      open = heading ? { name: sectionName(l.text), index: i, start: null, end: null, lines: 0 } : null;
+      continue;
+    }
+    if (!isSung(l)) continue;
+    if (!open) open = { name: headed ? "Intro" : `Verse ${++verse}`, index: i, start: null, end: null, lines: 0 };
+    open.lines++;
+    if (open.start === null && l.time !== null) open.start = l.time;
+  }
+  if (open && open.lines) out.push(open);
+  for (let k = 0; k < out.length; k++) {
+    for (let j = k + 1; j < out.length; j++) {
+      if (out[j].start !== null) {
+        out[k].end = out[j].start;
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * How far to move lyrics timed to the original recording so they land on
+ * the singing in `env` (a vocal stem that has been moved, trimmed or put
+ * after an intro): the shift whose line starts best meet where phrases
+ * start. Null when no shift lines up enough of them to trust it.
+ */
+export function alignToVoice(lines: LyricLine[], env: Envelope, { range = 60 }: { range?: number } = {}): { shift: number; matched: number; total: number } | null {
+  const times = lines.filter((l) => isSung(l) && l.time !== null).map((l) => l.time!);
+  const starts = voicedRuns(env).map(([s]) => s);
+  if (times.length < 2 || starts.length < 2) return null;
+  const near = (t: number) => {
+    // Distance to the nearest phrase start (binary search; starts are in order).
+    let lo = 0;
+    let hi = starts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (starts[mid] < t) lo = mid + 1;
+      else hi = mid;
+    }
+    return Math.min(Math.abs(starts[lo] - t), lo > 0 ? Math.abs(starts[lo - 1] - t) : Infinity);
+  };
+  const score = (shift: number) => times.reduce((sum, t) => sum + Math.exp(-((near(t + shift) / 0.25) ** 2)), 0);
+  // Coarse over the whole range, then fine around the best.
+  let best = 0;
+  let bestScore = -1;
+  const all: number[] = [];
+  for (let s = -range; s <= range; s += 0.1) {
+    const v = score(s);
+    all.push(v);
+    if (v > bestScore + 1e-9 || (Math.abs(v - bestScore) < 1e-9 && Math.abs(s) < Math.abs(best))) {
+      bestScore = v;
+      best = s;
+    }
+  }
+  // A real fit stands well clear of what any shift scores: dense singing
+  // puts some phrase start near almost anything, so being near isn't enough.
+  const mean = all.reduce((x, y) => x + y, 0) / all.length;
+  const spread = Math.sqrt(all.reduce((x, y) => x + (y - mean) ** 2, 0) / all.length);
+  if (spread === 0 || (bestScore - mean) / spread < 4) return null;
+  for (let s = best - 0.1; s <= best + 0.1; s += 0.01) {
+    const v = score(s);
+    if (v > bestScore) {
+      bestScore = v;
+      best = s;
+    }
+  }
+  const matched = times.filter((t) => near(t + best) <= 0.35).length;
+  if (matched < Math.max(2, Math.ceil(times.length * 0.4))) return null;
+  return { shift: round(best), matched, total: times.length };
 }

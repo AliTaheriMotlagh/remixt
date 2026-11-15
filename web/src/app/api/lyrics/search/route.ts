@@ -116,6 +116,7 @@ async function geniusPages(query: string): Promise<LyricsPage[]> {
         url: result!.url!,
         image: result!.song_art_image_thumbnail_url ?? null,
         source: "genius" as const,
+        ...(typeof result!.id === "number" ? { id: result!.id } : {}),
       }));
     if (webCache.size >= MAX_CACHED) webCache.delete(webCache.keys().next().value!);
     webCache.set(key, { at: Date.now(), found });
@@ -125,7 +126,7 @@ async function geniusPages(query: string): Promise<LyricsPage[]> {
   }
 }
 
-type GeniusSong = { title?: string; url?: string; song_art_image_thumbnail_url?: string; primary_artist?: { name?: string } };
+type GeniusSong = { id?: number; title?: string; url?: string; song_art_image_thumbnail_url?: string; primary_artist?: { name?: string } };
 const webCache = new Map<string, { at: number; found: LyricsPage[] }>();
 
 function toResult(r: LrclibResult): LyricsResult {

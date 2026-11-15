@@ -13,6 +13,7 @@ import Arrangement from "./studio/Arrangement";
 import LaneInspector from "./studio/LaneInspector";
 import MixerConsole from "./studio/MixerConsole";
 import EasyStudio from "./studio/easy/EasyStudio";
+import VocalStudio from "./studio/vocal/VocalStudio";
 import { ModeChooser, ModeSwitch } from "./studio/ModePicker";
 import AiProducer from "./studio/AiProducer";
 import SplitLaneDialog from "./studio/SplitLaneDialog";
@@ -158,6 +159,7 @@ export default function Studio({ user }: { user: User | null }) {
   const setProView = useStudioView((s) => s.setProView);
   useEffect(() => useStudioView.getState().readMode(), []);
   const easy = mode === "easy";
+  const vocal = mode === "vocal";
 
   // Asked for from elsewhere (the AI producer's "Pick from the library").
   // The count lives in a store that outlives this page: only asks made since
@@ -434,7 +436,7 @@ export default function Studio({ user }: { user: User | null }) {
             user={user}
             remixId={sourceRemix?.id ?? null}
             defaultTitle={remixTitle ? `${remixTitle} (remix)` : undefined}
-            simple={easy}
+            simple={easy || vocal}
           />
 
           {loadingRemix ? (
@@ -444,6 +446,10 @@ export default function Studio({ user }: { user: User | null }) {
           ) : easy ? (
             <div data-studio-mix>
               <EasyStudio />
+            </div>
+          ) : vocal ? (
+            <div data-studio-mix>
+              <VocalStudio signedIn={!!user} />
             </div>
           ) : lanes.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border bg-surface px-6 py-10 text-center text-muted sm:p-12">
@@ -495,8 +501,9 @@ export default function Studio({ user }: { user: User | null }) {
             </>
           )}
 
-          <VocalBooth signedIn={!!user} />
-          {lanes.length > 0 && !easy && <SamplePads />}
+          {/* The Vocalist studio has the booth built in. */}
+          {!vocal && <VocalBooth signedIn={!!user} />}
+          {lanes.length > 0 && !easy && !vocal && <SamplePads />}
             </>
           )}
         </div>

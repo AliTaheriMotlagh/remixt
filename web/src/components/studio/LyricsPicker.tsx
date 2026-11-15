@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { ArrowLeft, Check, ChevronDown, ClipboardPaste, Clock, ExternalLink, FileText, Link2, Music2, PenLine, Search, Sparkles, Trash2 } from "lucide-react";
 import { useLyrics } from "@/lib/client/lyricsStore";
-import { importLyricsLink, laneOfRecording, searchLyrics, timeFromLibrary } from "@/lib/client/lyricsSources";
+import { autoTimeSheet, importLyrics, laneOfRecording, searchLyrics, type SongHint } from "@/lib/client/lyricsSources";
 import { useStudioStore, type StudioLane } from "@/lib/client/studioStore";
 import { useStudioView } from "@/lib/client/studioView";
 import { formatClock, isSung, isSynced, parseLyrics, placeOnLane, serializeLyrics, splitSongTitle, type LyricsPage, type LyricsResult } from "@/lib/lyrics";
@@ -23,8 +23,10 @@ import { hasPersian, normalizePersian } from "@/lib/lyricsSearch";
 // this opens) in the lyrics library and on Genius, paste a lyrics page's
 // link or embed code, open a lyrics file (LRC, SRT, VTT, text), paste the
 // words, write them, or have the AI write them — and the sheets used
-// before, to switch back to or delete. Words that come without times get
-// them from the library's timed copy of the same song when it has one.
+// before, to switch back to or delete. However the words come in, they're
+// timed on the way (autoTimeSheet): from the library's timed copy of the
+// song, or from the singing in the song's vocal lane — and lined up with
+// where the song plays in the mix.
 // Swapping lyrics is the same two taps from anywhere: "Change", then the
 // one you want.
 
@@ -71,7 +73,7 @@ function QuickAction({ icon: Icon, label, onClick, tone }: { icon: ComponentType
   );
 }
 
-function ResultRow({ result, onUse, matchesMix }: { result: LyricsResult; onUse: () => void; matchesMix: boolean }) {
+function ResultRow({ result, onUse, matchesMix, busy }: { result: LyricsResult; onUse: () => void; matchesMix: boolean; busy: boolean }) {
   const [open, setOpen] = useState(false);
   const usable = !!(result.plain || result.synced);
   return (
@@ -92,7 +94,9 @@ function ResultRow({ result, onUse, matchesMix }: { result: LyricsResult; onUse:
             ) : result.instrumental && !usable ? (
               <span className="rounded-full bg-foreground/10 px-1.5 py-px text-[10px] text-muted">Instrumental</span>
             ) : (
-              <span className="rounded-full bg-foreground/10 px-1.5 py-px text-[10px] text-muted">Words only</span>
+              <span className="rounded-full bg-foreground/10 px-1.5 py-px text-[10px] text-muted" title="Timed for you when you use them — from the library or your mix's vocals">
+                Words · auto-timed
+              </span>
             )}
             {matchesMix && (
               <span className="flex items-center gap-1 rounded-full bg-brand/15 px-1.5 py-px text-[10px] font-semibold text-brand-strong" title="Same length as the song in your mix — likely the same recording">
@@ -104,7 +108,7 @@ function ResultRow({ result, onUse, matchesMix }: { result: LyricsResult; onUse:
         <ChevronDown className={`shrink-0 text-muted transition-transform ${open ? "rotate-180" : ""}`} aria-hidden />
         <button
           onClick={onUse}
-          disabled={!usable}
+          disabled={!usable || busy}
           className="h-10 shrink-0 rounded-lg bg-vocals px-4 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40"
         >
           Use
@@ -172,33 +176,40 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
   const file = useRef<HTMLInputElement>(null);
   const isLink = isLyricsLink(query);
 
-  /** A new sheet from words brought in from a page or a file — timed from the library when they come untimed. */
-  async function addImported(lyrics: ImportedLyrics, source: "web" | "file" | "own") {
+  /**
+   * A new sheet from words that came in from anywhere, timed on the way
+   * (see autoTimeSheet) — the singer is told how, or how to time them.
+   */
+  async function addTimed(lyrics: ImportedLyrics, source: "library" | "web" | "file" | "own", { aligned = false }: { aligned?: boolean } = {}) {
     let text = lyrics.text;
-    let aligned = false;
-    setImporting("Looking for the timing…");
-    const timed = isSynced(parseLyrics(text)) ? null : await timeFromLibrary(text, lyrics.title, lyrics.artist).catch(() => null);
-    if (timed) {
-      text = timed.text;
-      aligned = timed.aligned;
+    let isAligned = aligned;
+    let note = "";
+    if (!aligned) {
+      setImporting("Looking for the timing…");
+      const timed = await autoTimeSheet(text, { title: lyrics.title, artist: lyrics.artist }, setImporting).catch(() => null);
+      if (timed) {
+        text = timed.text;
+        isAligned = timed.aligned;
+        note = timed.note;
+      }
     }
     setImporting(null);
-    create({ title: lyrics.title || "Lyrics", artist: lyrics.artist, text, source, aligned });
+    create({ title: lyrics.title || "Lyrics", artist: lyrics.artist, text, source, aligned: isAligned });
     const notify = useStudioView.getState().notify;
-    if (timed) notify(`Timed from the lyrics library — ${timed.matched} of ${timed.total} lines matched${timed.aligned ? ", lined up with your song" : ""}`);
-    else if (isSynced(parseLyrics(text))) notify("Lyrics added, with their times");
-    else notify(`Lyrics added${lyrics.source ? ` from ${lyrics.source}` : ""} — time them by tapping along, or with “Get times”`);
+    if (note) notify(note);
+    else if (isSynced(parseLyrics(text))) notify(isAligned ? "Lyrics lined up with your song in the mix" : "Lyrics added, with their times");
+    else notify(`Lyrics added${lyrics.source ? ` from ${lyrics.source}` : ""} — no timing found: tap along to time them`);
     onPicked();
   }
 
-  /** `song`: what the page is, when known (a Genius result) — kept for words pasted from it by hand. */
-  async function importLink(link: string, song?: { title: string; artist: string }) {
+  /** `song`: what the page is, when known (a Genius result) — tried other ways when the page can't be read, and kept for words pasted from it by hand. */
+  async function importLink(link: string, song?: SongHint) {
     setError(null);
     setManual(null);
     setImporting("Reading the page…");
     try {
-      const lyrics = await importLyricsLink(link);
-      await addImported(lyrics, "web");
+      const lyrics = await importLyrics(link, song, setImporting);
+      await addTimed(lyrics, lyrics.source === "lrclib.net" ? "library" : "web");
     } catch (err) {
       // The site won't let the server read it: the singer copies the words, and they're named and timed all the same.
       const url = lyricsLinkFrom(link);
@@ -225,7 +236,7 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
     }
     const name = chosen.name.replace(/\.\w+$/, "").replace(/[_]+/g, " ").trim();
     const split = splitSongTitle(name);
-    await addImported({ title: split.song || name || "Lyrics", artist: split.artist, text, source: "" }, "file");
+    await addTimed({ title: split.song || name || "Lyrics", artist: split.artist, text, source: "" }, "file");
   }
 
   async function search(what: string | MixSong) {
@@ -271,18 +282,13 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [first?.key]);
 
-  function use(result: LyricsResult) {
+  /** A library result as the sheet: timed ones put where their recording plays in the mix; words-only ones timed on the way. */
+  async function use(result: LyricsResult) {
     let text = result.synced ?? result.plain ?? "";
-    let aligned = false;
     // The same recording as a lane in the mix: its times are put where that lane plays.
     const lane = result.synced ? laneOf(result, useStudioStore.getState().lanes) : null;
-    if (lane) {
-      text = serializeLyrics(placeOnLane(parseLyrics(text), lane.offsetSeconds, lane.tempoRatio));
-      aligned = true;
-    }
-    create({ title: result.title, artist: result.artist, text, source: "library", aligned });
-    if (lane) useStudioView.getState().notify("Lyrics lined up with your song in the mix");
-    onPicked();
+    if (lane) text = serializeLyrics(placeOnLane(parseLyrics(text), lane.offsetSeconds, lane.tempoRatio));
+    await addTimed({ title: result.title, artist: result.artist, text, source: "" }, "library", { aligned: !!lane });
   }
 
   async function paste() {
@@ -316,7 +322,7 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
     const split = splitSongTitle(typed);
     const from = manual;
     setManual(null);
-    await addImported(
+    await addTimed(
       {
         title: (fromPage?.title || from?.title || split.song || firstLine).slice(0, 60) || "My lyrics",
         artist: fromPage?.artist || from?.artist || split.artist,
@@ -406,7 +412,7 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
           <ol className="list-inside list-decimal space-y-0.5 text-muted">
             <li>Open the page — it opens in a new tab.</li>
             <li>Select the lyrics and copy them.</li>
-            <li>Come back and tap Paste — they&apos;re timed for you when the library has the song.</li>
+            <li>Come back and tap Paste — they&apos;re timed for you.</li>
           </ol>
           <div className="flex flex-wrap gap-2">
             <a href={manual.url} target="_blank" rel="noopener noreferrer" className="flex h-10 items-center gap-1.5 rounded-lg border border-border bg-background px-3 font-semibold text-foreground hover:border-vocals">
@@ -472,16 +478,16 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
           {!searching && results && results.length > 0 && (
             <ul className="flex flex-col gap-1.5">
               {results.map((r) => (
-                <ResultRow key={r.id} result={r} onUse={() => use(r)} matchesMix={!!r.synced && !!laneOf(r, lanes)} />
+                <ResultRow key={r.id} result={r} busy={!!importing} onUse={() => void use(r)} matchesMix={!!r.synced && !!laneOf(r, lanes)} />
               ))}
             </ul>
           )}
           {!searching && web.length > 0 && (
             <>
-              <p className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-muted">On Genius · words, timed from the library when it can</p>
+              <p className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-muted">On Genius · words, timed for you</p>
               <ul className="flex flex-col gap-1.5">
                 {web.map((page) => (
-                  <WebRow key={page.url} page={page} busy={!!importing} onUse={() => void importLink(page.url, page)} />
+                  <WebRow key={page.url} page={page} busy={!!importing} onUse={() => void importLink(page.url, { title: page.title, artist: page.artist, geniusId: page.id })} />
                 ))}
               </ul>
             </>

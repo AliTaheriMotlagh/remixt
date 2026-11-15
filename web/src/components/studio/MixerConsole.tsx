@@ -62,7 +62,7 @@ function tick(now: number) {
   frame = meters.size ? requestAnimationFrame(tick) : 0;
 }
 
-function Meter({ source, className = "" }: { source: () => AnalyserNode | null; className?: string }) {
+export function Meter({ source, className = "" }: { source: () => AnalyserNode | null; className?: string }) {
   const bar = useRef<HTMLSpanElement>(null);
   const peak = useRef<HTMLSpanElement>(null);
   const clip = useRef<HTMLSpanElement>(null);

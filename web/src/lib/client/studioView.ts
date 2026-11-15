@@ -11,10 +11,17 @@ export type InspectorTab = "mix" | "tempo" | "fx" | "match" | "edit" | "history"
 
 /**
  * Who the Studio is laid out for: "easy" — someone who's never made music
- * (big cards, one per line, the AI up front) — or "pro", a producer with
- * every tool of a DAW. Remembered per browser; null until they've picked.
+ * (big cards, one per line, the AI up front) — "vocal", a singer or rapper
+ * (the lyrics big and in time, the booth, their takes and their voice in
+ * the mix), or "pro", a producer with every tool of a DAW. Remembered per
+ * browser; null until they've picked.
  */
-export type StudioMode = "easy" | "pro";
+export type StudioMode = "easy" | "vocal" | "pro";
+
+const MODES: readonly StudioMode[] = ["easy", "vocal", "pro"];
+
+/** The Vocalist studio's workspace under the stage: the words, the takes, or the vocal mix. */
+export type VocalTab = "lyrics" | "takes" | "mix";
 
 /** A producer's main view: the timeline, or the mixing console. */
 export type ProView = "arrange" | "mixer";
@@ -56,6 +63,8 @@ type ViewState = {
   readMode: () => void;
   proView: ProView;
   setProView: (view: ProView) => void;
+  vocalTab: VocalTab;
+  setVocalTab: (tab: VocalTab) => void;
   aiOpen: boolean;
   setAiOpen: (open: boolean) => void;
   /** A tab the AI producer was asked to show (it follows it when it changes). */
@@ -128,7 +137,7 @@ export const useStudioView = create<ViewState>((set) => ({
     const mode = recall(MODE_KEY);
     const view = recall(PRO_VIEW_KEY);
     set({
-      mode: mode === "easy" || mode === "pro" ? mode : null,
+      mode: MODES.includes(mode as StudioMode) ? (mode as StudioMode) : null,
       modeKnown: true,
       proView: view === "mixer" ? "mixer" : "arrange",
     });
@@ -138,6 +147,8 @@ export const useStudioView = create<ViewState>((set) => ({
     remember(PRO_VIEW_KEY, proView);
     set({ proView });
   },
+  vocalTab: "lyrics",
+  setVocalTab: (vocalTab) => set({ vocalTab }),
   aiOpen: false,
   setAiOpen: (aiOpen) => set({ aiOpen }),
   aiTab: null,

@@ -290,3 +290,56 @@ export function isLyricsLink(input: string) {
 export function looksLikeHtml(text: string) {
   return /<(html|body|div|p|br)\b[^>]*>/i.test(text.slice(0, 5000)) && (text.match(/<[a-z][^>]*>/gi)?.length ?? 0) > 5;
 }
+
+// ── Genius embeds ────────────────────────────────────────────────────────
+//
+// Genius turns servers away (Cloudflare answers 403 to anything that isn't
+// a browser), but it offers every song as an embed for other sites to show:
+// genius.com/songs/<id>/embed.js writes the lyrics into the page. The
+// Studio loads that in a sandboxed frame in the singer's own browser (see
+// lyricsSources.geniusFromBrowser) and reads the words out of what it
+// wrote; the server tries the same script first, in case it's let through.
+
+/** A Genius song's id from a link or embed code: genius.com/songs/123, data-song-id="123", rg_embed_link_123. */
+export function geniusSongId(input: string): number | null {
+  const m = /genius\.com\/songs\/(\d+)/i.exec(input) ?? /data-song-id=["']?(\d+)/i.exec(input) ?? /rg_embed_link_(\d+)/i.exec(input);
+  const id = m ? Number(m[1]) : NaN;
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+/** The lyrics from what a Genius embed writes into a page: the words in its body, the song and artist from its link ("“Song” by Artist"). */
+export function lyricsFromGeniusEmbed(html: string): ImportedLyrics | null {
+  const at = html.search(/<div[^>]+class=["'][^"']*\brg_embed_body\b[^"']*["'][^>]*>/i);
+  if (at < 0) return null;
+  const body = dropElements(innerHtmlAt(html, at), /class=["'][^"']*\brg_embed_(footer|header|analytics)\b/i);
+  const words = tidy(htmlToText(body));
+  if (words.split("\n").filter(Boolean).length < 2) return null;
+  const link = /<div[^>]+class=["'][^"']*\brg_embed_link\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i.exec(html)?.[1] ?? "";
+  const label = decodeEntities(link.replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
+  const named = /[“"]([^”"]+)[”"]\s+by\s+(.+?)(?:\s+on\s+Genius)?$/i.exec(label.replace(/^Read\s+/i, ""));
+  return { title: named?.[1].trim() ?? "", artist: named?.[2].trim() ?? "", text: words, source: "genius.com" };
+}
+
+/** A JavaScript string literal's text: the escapes Genius's embed script uses (\\uXXXX, \\', \\", \\/, \\n …). */
+function unescapeJs(literal: string): string {
+  return literal.replace(/\\(u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[\s\S])/g, (_, e: string) => {
+    if (e[0] === "u" && e.length === 5) return String.fromCharCode(parseInt(e.slice(1), 16));
+    if (e[0] === "x" && e.length === 3) return String.fromCharCode(parseInt(e.slice(1), 16));
+    return ({ n: "\n", r: "\r", t: "\t", b: "\b", f: "\f", v: "\v", "0": "\0", "\n": "" } as Record<string, string>)[e] ?? e;
+  });
+}
+
+/** The HTML Genius's embed.js writes: its `document.write(JSON.parse('…'))` calls, unpacked and joined. */
+export function geniusEmbedHtml(js: string): string {
+  const out: string[] = [];
+  const re = /JSON\.parse\('((?:[^'\\]|\\[\s\S])*)'\)/g;
+  for (let m = re.exec(js); m; m = re.exec(js)) {
+    try {
+      const value = JSON.parse(unescapeJs(m[1]));
+      if (typeof value === "string") out.push(value);
+    } catch {
+      // Not a string of HTML: skipped.
+    }
+  }
+  return out.join("\n");
+}

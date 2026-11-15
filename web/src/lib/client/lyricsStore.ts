@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import { parseLyrics, serializeLyrics, type LyricLine, type SingStyle } from "@/lib/lyrics";
+import { nudgeLine, parseLyrics, retimeLine, serializeLyrics, type LyricLine, type SingStyle } from "@/lib/lyrics";
 
 // The lyric sheets someone sings from in the Studio: found in the lyrics
 // library, pasted in, or written with the AI. Kept in this browser (they're
@@ -31,11 +31,20 @@ const PREFS_KEY = "remixt.lyrics.prefs";
 const MAX_SHEETS = 60;
 const MAX_UNDO = 30;
 
+/** A take to draw over the song: being recorded (`level` read every frame) or recorded (`peaks`). */
+export type TimelineTake = { start: number; level: () => number } | { start: number; peaks: number[]; duration: number };
+
 /** What the lyrics half of the booth shows: the open sheet, its editor, choosing a sheet, or the AI. */
 export type LyricsView = "sheet" | "edit" | "pick" | "ai";
 
-export type LyricsPrefs = { style: SingStyle; fontSize: number; barsPerLine: number };
-const DEFAULT_PREFS: LyricsPrefs = { style: "rap", fontSize: 18, barsPerLine: 1 };
+export type LyricsPrefs = {
+  style: SingStyle;
+  fontSize: number;
+  barsPerLine: number;
+  /** Moving a line's time moves the lines after it too, so the rest stays in sync. */
+  ripple: boolean;
+};
+const DEFAULT_PREFS: LyricsPrefs = { style: "rap", fontSize: 18, barsPerLine: 1, ripple: true };
 
 function read<T>(key: string, fallback: T): T {
   try {
@@ -84,6 +93,9 @@ type LyricsState = {
    */
   take: "idle" | "recording" | "review";
   setTake: (take: "idle" | "recording" | "review") => void;
+  /** The take being recorded or reviewed, for views beside the recorder to draw (the Vocalist stage). */
+  liveTake: TimelineTake | null;
+  setLiveTake: (take: TimelineTake | null) => void;
   load: () => void;
   select: (id: string | null) => void;
   /** A new sheet, opened. */
@@ -105,6 +117,20 @@ type LyricsState = {
   removed: { sheet: LyricSheet; wasActive: boolean } | null;
   restore: () => void;
   setPrefs: (prefs: Partial<LyricsPrefs>) => void;
+  /** The line whose timing is being edited (its row opens its controls), if any. */
+  selectedLine: number | null;
+  /**
+   * Where it was picked — the stage (karaoke or waveform) or the list of
+   * lines — so its controls open there, and only there.
+   */
+  selectedWhere: "stage" | "list";
+  selectLine: (index: number | null, where?: "stage" | "list") => void;
+  /** Line `index` sung at `time` — the lines after it follow when ripple is on. One undo step. */
+  retime: (index: number, time: number) => void;
+  /** Line `index` moved by `delta` seconds (see retime). */
+  nudge: (index: number, delta: number) => void;
+  /** Line `index` untimed. */
+  untime: (index: number) => void;
 };
 
 function persist(sheets: LyricSheet[], activeId: string | null) {
@@ -139,6 +165,8 @@ export const useLyrics = create<LyricsState>((set, get) => {
     openLyrics: (view) => set({ boothOpen: true, boothTab: "lyrics", view }),
     take: "idle",
     setTake: (take) => set({ take }),
+    liveTake: null,
+    setLiveTake: (liveTake) => set({ liveTake }),
     load: () => {
       if (get().loaded) return;
       const stored = read<LyricSheet[]>(SHEETS_KEY, []);
@@ -156,7 +184,7 @@ export const useLyrics = create<LyricsState>((set, get) => {
     select: (id) => {
       const sheet = get().sheets.find((s) => s.id === id) ?? null;
       write(ACTIVE_KEY, sheet?.id ?? null);
-      set({ activeId: sheet?.id ?? null, lines: sheet ? parseLyrics(sheet.text) : [], past: [] });
+      set({ activeId: sheet?.id ?? null, lines: sheet ? parseLyrics(sheet.text) : [], past: [], selectedLine: null });
     },
     create: (sheet) => {
       const id = `lyr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -164,7 +192,7 @@ export const useLyrics = create<LyricsState>((set, get) => {
       // Newest first; the oldest go once there are too many.
       const sheets = [full, ...get().sheets].slice(0, MAX_SHEETS);
       persist(sheets, id);
-      set({ sheets, activeId: id, lines: parseLyrics(full.text), past: [] });
+      set({ sheets, activeId: id, lines: parseLyrics(full.text), past: [], selectedLine: null });
       return id;
     },
     rename: (patch) => {
@@ -223,6 +251,23 @@ export const useLyrics = create<LyricsState>((set, get) => {
       const next = { ...get().prefs, ...prefs };
       write(PREFS_KEY, next);
       set({ prefs: next });
+    },
+    selectedLine: null,
+    selectedWhere: "list",
+    selectLine: (index, where) =>
+      set((s) => ({ selectedLine: index !== null && index >= 0 && index < s.lines.length ? index : null, selectedWhere: where ?? s.selectedWhere })),
+    retime: (index, time) => {
+      const { lines, prefs } = get();
+      commit(serializeLyrics(retimeLine(lines, index, time, { ripple: prefs.ripple })), true);
+    },
+    nudge: (index, delta) => {
+      const { lines, prefs } = get();
+      commit(serializeLyrics(nudgeLine(lines, index, delta, { ripple: prefs.ripple })), true);
+    },
+    untime: (index) => {
+      const { lines } = get();
+      if (lines[index]?.time === null) return;
+      commit(serializeLyrics(lines.map((l, i) => (i === index ? { ...l, time: null } : l))), true);
     },
   };
 });

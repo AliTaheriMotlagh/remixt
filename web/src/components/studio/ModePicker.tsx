@@ -1,11 +1,13 @@
 "use client";
 
-import { AudioWaveform, Check, SlidersHorizontal, Sparkles, Wand2 } from "lucide-react";
+import { AudioWaveform, Check, Mic, SlidersHorizontal, Sparkles, Wand2 } from "lucide-react";
+import { useLyrics } from "@/lib/client/lyricsStore";
 import { useStudioView, type StudioMode } from "@/lib/client/studioView";
 
 // Who the Studio is laid out for. Someone who's never made music gets big
 // cards, one per line of the song, with the AI producer doing the hard
-// parts; a producer gets the whole DAW. Asked once (remembered in this
+// parts; a singer or rapper gets the lyrics, the booth and their takes up
+// front; a producer gets the whole DAW. Asked once (remembered in this
 // browser), switchable any time from the Studio's header.
 
 const MODES: {
@@ -23,6 +25,14 @@ const MODES: {
     icon: Wand2,
     points: ["Big, simple controls — one card per line", "The AI makes your lines fit and tells you what it did", "Tap to hear, switch anything on or off"],
     accent: "from-vocals to-brand",
+  },
+  {
+    id: "vocal",
+    title: "Vocalist",
+    who: "I sing or rap",
+    icon: Mic,
+    points: ["Your lyrics big and in time — found and timed for you", "Record, compare takes, keep the best one for each part", "Loop a part, fix any line's timing, mix your voice"],
+    accent: "from-vocals to-beat",
   },
   {
     id: "pro",
@@ -48,7 +58,7 @@ export function ModeChooser() {
         </h2>
         <p className="mt-1.5 text-sm text-muted">Pick the Studio that fits you — you can switch any time from the top of the page.</p>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid gap-3 sm:grid-cols-3">
         {MODES.map((m) => (
           <button
             key={m.id}
@@ -71,7 +81,7 @@ export function ModeChooser() {
               ))}
             </ul>
             <span className="mt-auto flex h-10 items-center justify-center gap-1.5 rounded-xl bg-brand text-sm font-semibold text-white group-hover:bg-brand-strong">
-              {m.id === "easy" ? <Sparkles /> : <SlidersHorizontal />} Start in {m.title}
+              {m.id === "easy" ? <Sparkles /> : m.id === "vocal" ? <Mic /> : <SlidersHorizontal />} Start in {m.title}
             </span>
           </button>
         ))}
@@ -80,10 +90,11 @@ export function ModeChooser() {
   );
 }
 
-/** Easy or Producer, in the Studio's header. */
+/** Easy, Vocalist or Producer, in the Studio's header — held while a take is being recorded (switching would cut it off). */
 export function ModeSwitch() {
   const mode = useStudioView((s) => s.mode);
   const setMode = useStudioView((s) => s.setMode);
+  const busy = useLyrics((s) => s.take) !== "idle";
   if (!mode) return null;
   return (
     <div className="flex shrink-0 overflow-hidden rounded-lg border border-border text-xs font-semibold" role="radiogroup" aria-label="Studio mode">
@@ -93,8 +104,9 @@ export function ModeSwitch() {
           role="radio"
           aria-checked={mode === m.id}
           onClick={() => setMode(m.id)}
-          title={m.who}
-          className={`flex h-8 items-center gap-1 px-2.5 transition-colors ${mode === m.id ? "bg-brand text-white" : "text-muted hover:text-foreground"}`}
+          disabled={busy && mode !== m.id}
+          title={busy && mode !== m.id ? "Finish (or discard) the take first" : m.who}
+          className={`flex h-8 items-center gap-1 px-2.5 transition-colors disabled:opacity-40 ${mode === m.id ? "bg-brand text-white" : "text-muted hover:text-foreground"}`}
         >
           <m.icon />
           <span className={mode === m.id ? "" : "max-sm:hidden"}>{m.title}</span>

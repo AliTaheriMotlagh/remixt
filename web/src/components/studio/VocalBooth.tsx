@@ -193,8 +193,13 @@ function overallSave(step: SaveStep, fraction: number) {
   return from + (to - from) * Math.min(1, Math.max(0, fraction));
 }
 
-/** The record half of the booth. */
-function RecordTab({ signedIn }: { signedIn: boolean }) {
+/**
+ * The record half of the booth. `compact`: beside a stage that already
+ * shows the lyrics and the song's waveform (the Vocalist studio), so the
+ * recorder doesn't draw them again — the take is handed to the stage
+ * (useLyrics.liveTake) to draw instead.
+ */
+export function RecordTab({ signedIn, compact = false }: { signedIn: boolean; compact?: boolean }) {
   const addStem = useStudioStore((s) => s.addStem);
   const setOffset = useStudioStore((s) => s.setOffset);
   const projectBpm = useStudioStore((s) => s.projectBpm);
@@ -232,6 +237,15 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
   useEffect(() => {
     setTakeState(state === "starting" || state === "recording" ? "recording" : state === "review" || state === "saving" ? "review" : "idle");
   }, [state, setTakeState]);
+
+  // The take for other views to draw: live while it's sung, its waveform once it's done.
+  const setLiveTake = useLyrics((s) => s.setLiveTake);
+  useEffect(() => {
+    if (state === "recording" && active) setLiveTake({ start: recStart, level: active.level });
+    else if ((state === "review" || state === "saving") && take) setLiveTake({ start: take.start, peaks: take.peaks, duration: take.buffer.duration });
+    else setLiveTake(null);
+  }, [state, active, take, recStart, setLiveTake]);
+  useEffect(() => () => setLiveTake(null), [setLiveTake]);
 
   function setPrefs(patch: Partial<RecordPrefs>) {
     setPrefsState((p) => {
@@ -485,8 +499,8 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
             )}
           </div>
         </div>
-        <LyricsTimeline lines={lines} seekable={false} height={88} />
-        <LyricsCue big />
+        {!compact && <LyricsTimeline lines={lines} seekable={false} height={88} />}
+        {!compact && <LyricsCue big />}
       </div>
     );
   }
@@ -514,7 +528,7 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
             <LiveMonitor recording={active} onBleed={onBleed} />
           </div>
         </div>
-        <LyricsTimeline lines={lines} take={{ start: recStart, level: active.level }} seekable={false} height={88} />
+        {!compact && <LyricsTimeline lines={lines} take={{ start: recStart, level: active.level }} seekable={false} height={88} />}
         {bleeding && (
           <div className="flex items-start gap-2 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
             <HeadphoneOff className="mt-0.5 shrink-0" />
@@ -523,7 +537,7 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
             </span>
           </div>
         )}
-        <LyricsCue big />
+        {!compact && <LyricsCue big />}
       </div>
     );
   }
@@ -537,7 +551,7 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
             {formatTime(take.buffer.duration)} long · from {formatTime(take.start)}
           </span>
         </div>
-        <LyricsTimeline lines={lines} take={{ start: take.start, peaks: take.peaks, duration: take.buffer.duration }} height={76} />
+        {!compact && <LyricsTimeline lines={lines} take={{ start: take.start, peaks: take.peaks, duration: take.buffer.duration }} height={76} />}
         <div className="rounded-lg bg-background/60 px-2 py-1.5">
           <Waveform peaks={take.peaks} color="var(--vocals)" height={36} />
         </div>
@@ -717,8 +731,8 @@ function RecordTab({ signedIn }: { signedIn: boolean }) {
         )}
       </div>
       {error && <p className="text-xs text-danger">{error}</p>}
-      {hasMix && <LyricsTimeline lines={lines} height={64} />}
-      <LyricsCue />
+      {hasMix && !compact && <LyricsTimeline lines={lines} height={64} />}
+      {!compact && <LyricsCue />}
     </div>
   );
 }

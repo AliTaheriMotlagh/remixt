@@ -1,0 +1,152 @@
+"use client";
+
+import { useEffect, useMemo, type ComponentType } from "react";
+import { Check, Drum, Layers, Mic, ScrollText, SlidersVertical } from "lucide-react";
+import { activeSheet, useLyrics } from "@/lib/client/lyricsStore";
+import { isTakeLane } from "@/lib/client/lyricsSources";
+import { useStudioStore } from "@/lib/client/studioStore";
+import { useStudioView, type VocalTab } from "@/lib/client/studioView";
+import { isSung, isSynced } from "@/lib/lyrics";
+import { LyricsTools } from "../LyricsPanel";
+import { RecordTab } from "../VocalBooth";
+import TakesPanel from "./TakesPanel";
+import VocalMixer, { QuickLevels } from "./VocalMixer";
+import VocalStage from "./VocalStage";
+
+// The Studio for singers and rappers. Everything is laid out around the
+// voice: the stage (the words big and in time, the song's waveform, its
+// parts to loop), the booth beside it (record, count-in, mic, levels), and
+// under the stage the work around a take — the lyrics and their timing,
+// the takes kept so far, and the vocal mix. The producer's timeline and
+// mixer are a switch away (Producer mode) for anything more.
+
+const TABS: { id: VocalTab; label: string; icon: ComponentType<{ className?: string }> }[] = [
+  { id: "lyrics", label: "Lyrics & timing", icon: ScrollText },
+  { id: "takes", label: "Takes", icon: Layers },
+  { id: "mix", label: "Vocal mix", icon: SlidersVertical },
+];
+
+/** What's left to do before a take, as three steps — shown until all are done. */
+function Steps({ hasBeat, hasLyrics, timed, hasTake }: { hasBeat: boolean; hasLyrics: boolean; timed: boolean; hasTake: boolean }) {
+  const steps = [
+    { done: hasBeat, title: "Pick a beat", action: () => useStudioView.getState().showLibrary("beat"), cta: "Add a beat" },
+    {
+      done: hasLyrics && timed,
+      title: hasLyrics ? "Time the lyrics" : "Pick the lyrics",
+      action: () => {
+        useLyrics.getState().openLyrics(hasLyrics ? "sheet" : "pick");
+        useStudioView.getState().setVocalTab("lyrics");
+        document.getElementById("vocal-workspace")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      },
+      cta: hasLyrics ? "Time them" : "Find lyrics",
+    },
+    { done: hasTake, title: "Record a take", action: () => document.getElementById("vocal-booth")?.scrollIntoView({ behavior: "smooth", block: "center" }), cta: "Go to the booth" },
+  ];
+  if (steps.every((s) => s.done)) return null;
+  const at = steps.findIndex((s) => !s.done);
+  return (
+    <ol className="flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-surface p-2.5" aria-label="Getting started">
+      {steps.map((s, i) => (
+        <li key={s.title} className="flex min-w-0 flex-1 basis-40 items-center gap-2">
+          <span
+            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+              s.done ? "bg-success text-white" : i === at ? "bg-vocals text-white ring-4 ring-vocals/25" : "bg-surface-raised text-muted"
+            }`}
+            aria-current={i === at ? "step" : undefined}
+          >
+            {s.done ? <Check /> : i + 1}
+          </span>
+          <span className={`min-w-0 flex-1 truncate text-xs font-semibold ${i === at ? "" : "text-muted"}`}>{s.title}</span>
+          {i === at && (
+            <button onClick={s.action} className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-vocals px-3 text-xs font-semibold text-white hover:opacity-90 max-lg:h-10">
+              {i === 0 ? <Drum /> : i === 1 ? <ScrollText /> : <Mic />} {s.cta}
+            </button>
+          )}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+export default function VocalStudio({ signedIn }: { signedIn: boolean }) {
+  const load = useLyrics((s) => s.load);
+  const sheet = useLyrics(activeSheet);
+  const lines = useLyrics((s) => s.lines);
+  const take = useLyrics((s) => s.take);
+  const lanes = useStudioStore((s) => s.lanes);
+  const tab = useStudioView((s) => s.vocalTab);
+  const setTab = useStudioView((s) => s.setVocalTab);
+  const takes = useMemo(() => lanes.filter(isTakeLane).length, [lanes]);
+  useEffect(() => load(), [load]);
+
+  const hasLyrics = !!sheet && lines.some(isSung);
+  const toBooth = () => document.getElementById("vocal-booth")?.scrollIntoView({ behavior: "smooth", block: "center" });
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Steps hasBeat={lanes.length > 0} hasLyrics={hasLyrics} timed={isSynced(lines)} hasTake={takes > 0} />
+      {/* One booth, never mounted twice (a remount would cut a take off): on a phone it sits
+          between the stage and the workspace; on a wide screen it stays beside them both. */}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_22rem] xl:grid-rows-[auto_1fr]">
+        <div className="min-w-0 xl:col-start-1 xl:row-start-1">
+          <VocalStage />
+        </div>
+        <div className="min-w-0 xl:col-start-2 xl:row-span-2 xl:row-start-1">
+          <div className="xl:sticky xl:top-[calc(var(--header-h)+1rem)]">
+            <Booth signedIn={signedIn} take={take} />
+          </div>
+        </div>
+        <section id="vocal-workspace" aria-label="Workspace" className="min-w-0 scroll-mt-20 rounded-2xl border border-border bg-surface p-3 sm:p-4 xl:col-start-1 xl:row-start-2">
+          <div className="mb-3 flex gap-1 rounded-full bg-surface-raised p-1" role="tablist" aria-label="Workspace">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                role="tab"
+                aria-selected={tab === t.id}
+                onClick={() => setTab(t.id)}
+                className={`flex h-9 flex-1 items-center justify-center gap-1.5 rounded-full px-2 text-xs font-semibold transition-colors sm:text-sm ${
+                  tab === t.id ? "bg-vocals text-white shadow-sm" : "text-muted hover:text-foreground"
+                }`}
+              >
+                <t.icon className="shrink-0" />
+                <span className="truncate">{t.label}</span>
+                {t.id === "takes" && takes > 0 && <span className={`rounded-full px-1.5 text-[10px] tabular-nums ${tab === t.id ? "bg-white/25" : "bg-foreground/10"}`}>{takes}</span>}
+              </button>
+            ))}
+          </div>
+          <div role="tabpanel">
+            {tab === "lyrics" && <LyricsTools stage onSing={toBooth} />}
+            {tab === "takes" && <TakesPanel onRecord={toBooth} />}
+            {tab === "mix" && <VocalMixer />}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+/** The recorder and the levels to sing over, together. */
+function Booth({ signedIn, take }: { signedIn: boolean; take: "idle" | "recording" | "review" }) {
+  return (
+    <section
+      id="vocal-booth"
+      aria-label="Booth"
+      className={`flex flex-col gap-4 rounded-2xl border bg-surface p-3 sm:p-4 ${take === "recording" ? "border-danger/60" : "border-vocals/30"}`}
+    >
+      <div className="flex items-center gap-2">
+        <Mic className="text-vocals" />
+        <h2 className="text-sm font-bold">Booth</h2>
+        {take !== "idle" && (
+          <span className="ms-auto flex items-center gap-1 rounded-full bg-danger/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-danger">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-danger" /> {take === "recording" ? "Recording" : "Review"}
+          </span>
+        )}
+      </div>
+      <RecordTab signedIn={signedIn} compact />
+      <div className="border-t border-border pt-3">
+        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted">In your headphones</p>
+        <QuickLevels />
+      </div>
+    </section>
+  );
+}

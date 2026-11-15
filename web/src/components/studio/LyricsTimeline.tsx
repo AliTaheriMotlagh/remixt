@@ -4,21 +4,29 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { mixEnvelope } from "@/lib/client/lyricsSources";
 import { useStudioStore } from "@/lib/client/studioStore";
-import { beatSeconds, isSung, lineAt, type LyricLine } from "@/lib/lyrics";
+import { beatSeconds, isSung, lineAt, retimeLine, type LyricLine } from "@/lib/lyrics";
 
 // The song as a strip that scrolls under a fixed playhead: the mix's
 // waveform, bar lines, each lyric line where it's sung (drag one to move
-// it), and the take — drawn in as it's sung, or laid over the beat to
-// check. One canvas redrawn from the playhead, so it costs no React
+// it — with ripple, the lines after it come along), and the take — drawn
+// in as it's sung, or laid over the beat to check. One canvas redrawn from the playhead, so it costs no React
 // renders while the song plays.
 
-/** A take to draw: being recorded (`level` read every frame) or recorded (`peaks`). */
-export type TimelineTake = { start: number; level: () => number } | { start: number; peaks: number[]; duration: number };
+import type { TimelineTake } from "@/lib/client/lyricsStore";
+export type { TimelineTake };
 
 type Props = {
   lines?: LyricLine[];
   /** Lets lines be dragged to a new time. */
   onMoveLine?: (index: number, time: number) => void;
+  /** Dragging a line moves the lines after it too (shown while dragging). */
+  ripple?: boolean;
+  /** A line tapped on the strip (its mark), e.g. to edit its timing. */
+  onSelectLine?: (index: number) => void;
+  /** The line being edited, drawn picked out. */
+  selected?: number | null;
+  /** How much of the song shows: 1 ≈ 11 s across a phone, more zooms in. */
+  zoom?: number;
   take?: TimelineTake | null;
   /** Tapping or dragging the strip moves the playhead (not while recording). */
   seekable?: boolean;
@@ -33,16 +41,32 @@ function cssColor(el: Element, name: string, fallback: string) {
   return getComputedStyle(el).getPropertyValue(name).trim() || fallback;
 }
 
-export default function LyricsTimeline({ lines = [], onMoveLine, take = null, seekable = true, height = 84, className = "" }: Props) {
+/** Pixels a second at this width and zoom. */
+function pixelsPerSecond(width: number, zoom: number) {
+  return Math.min(110, Math.max(45, width / 11)) * Math.min(4, Math.max(0.5, zoom));
+}
+
+export default function LyricsTimeline({
+  lines = [],
+  onMoveLine,
+  ripple = false,
+  onSelectLine,
+  selected = null,
+  zoom = 1,
+  take = null,
+  seekable = true,
+  height = 84,
+  className = "",
+}: Props) {
   const lanes = useStudioStore((s) => s.lanes);
   const bpm = useStudioStore((s) => s.projectBpm);
   const env = useMemo(() => mixEnvelope(lanes), [lanes]);
   const box = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   // What the draw reads, kept current without re-subscribing.
-  const state = useRef({ lines, take, bpm, env, seekable, onMoveLine });
+  const state = useRef({ lines, take, bpm, env, seekable, onMoveLine, ripple, onSelectLine, selected, zoom });
   useLayoutEffect(() => {
-    state.current = { lines, take, bpm, env, seekable, onMoveLine };
+    state.current = { lines, take, bpm, env, seekable, onMoveLine, ripple, onSelectLine, selected, zoom };
   });
   /** The singing so far in a take being recorded: [time, level] pairs. */
   const live = useRef<{ start: number; points: [number, number][] }>({ start: -1, points: [] });
@@ -67,7 +91,7 @@ export default function LyricsTimeline({ lines = [], onMoveLine, take = null, se
     readColors();
 
     draw.current = () => {
-      const { lines, take, bpm, env } = state.current;
+      const { lines, take, bpm, env, ripple, selected, zoom } = state.current;
       const dpr = window.devicePixelRatio || 1;
       const width = container.clientWidth;
       // Hidden (the other booth tab, or the booth closed): nothing to draw.
@@ -84,7 +108,7 @@ export default function LyricsTimeline({ lines = [], onMoveLine, take = null, se
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, width, h);
       const playhead = useStudioStore.getState().playhead;
-      const pps = Math.min(110, Math.max(45, width / 11));
+      const pps = pixelsPerSecond(width, zoom);
       const headX = Math.round(width * 0.3);
       const t0 = playhead - headX / pps;
       const t1 = t0 + width / pps;
@@ -146,7 +170,8 @@ export default function LyricsTimeline({ lines = [], onMoveLine, take = null, se
       }
 
       // Lyric lines: a mark where each starts, its words along the top.
-      const shown = drag.current ? lines.map((l, i) => (i === drag.current!.index ? { ...l, time: drag.current!.time } : l)) : lines;
+      // While dragging, drawn as it will land (with the lines after it, under ripple).
+      const shown = drag.current ? retimeLine(lines, drag.current.index, drag.current.time, { ripple }) : lines;
       const current = lineAt(shown, playhead);
       const timed = shown.map((l, i) => ({ l, i })).filter(({ l }) => isSung(l) && l.time !== null);
       ctx.font = "600 11px ui-sans-serif, system-ui, sans-serif";
@@ -158,12 +183,15 @@ export default function LyricsTimeline({ lines = [], onMoveLine, take = null, se
         if (nextX < 0 || x > width) continue;
         const active = i === current;
         const dragging = drag.current?.index === i;
-        ctx.fillStyle = active || dragging ? colors.vocals : colors.fg;
-        ctx.globalAlpha = active || dragging ? 1 : 0.45;
-        ctx.fillRect(Math.round(x), 0, dragging ? 2 : 1, h);
+        const picked = i === selected;
+        // Under ripple, the lines after the one being dragged move with it.
+        const carried = !!drag.current && ripple && i > drag.current.index;
+        ctx.fillStyle = active || dragging || picked ? colors.vocals : carried ? colors.brand : colors.fg;
+        ctx.globalAlpha = active || dragging || picked ? 1 : carried ? 0.7 : 0.45;
+        ctx.fillRect(Math.round(x), 0, dragging || picked ? 2 : 1, h);
         // A handle to grab.
         ctx.beginPath();
-        ctx.arc(x, LABEL_ROW / 2, dragging ? 5 : 3.5, 0, Math.PI * 2);
+        ctx.arc(x, LABEL_ROW / 2, dragging || picked ? 5 : 3.5, 0, Math.PI * 2);
         ctx.fill();
         ctx.globalAlpha = active ? 1 : 0.7;
         ctx.save();
@@ -206,14 +234,14 @@ export default function LyricsTimeline({ lines = [], onMoveLine, take = null, se
   // A change of lines, take or mix redraws even while paused.
   useEffect(() => {
     draw.current();
-  }, [lines, take, env, bpm]);
+  }, [lines, take, env, bpm, selected, zoom, ripple]);
 
   // Grabbing a line moves it; grabbing anywhere else scrubs the song.
   const gesture = useRef<{ kind: "line" | "scrub"; x: number; playhead: number; moved: boolean; pointer: number } | null>(null);
 
   function geometry() {
     const width = box.current?.clientWidth ?? 0;
-    const pps = Math.min(110, Math.max(45, width / 11));
+    const pps = pixelsPerSecond(width, state.current.zoom);
     const headX = Math.round(width * 0.3);
     const t0 = useStudioStore.getState().playhead - headX / pps;
     return { pps, t0 };
@@ -272,7 +300,10 @@ export default function LyricsTimeline({ lines = [], onMoveLine, take = null, se
       const moved = drag.current;
       drag.current = null;
       if (g.moved) state.current.onMoveLine?.(moved.index, moved.time);
-      else audioEngine.seek(moved.time);
+      else {
+        audioEngine.seek(moved.time);
+        state.current.onSelectLine?.(moved.index);
+      }
       draw.current();
       return;
     }
@@ -297,7 +328,11 @@ export default function LyricsTimeline({ lines = [], onMoveLine, take = null, se
         draw.current();
       }}
       role="img"
-      aria-label={onMoveLine ? "The song's waveform with your lyric lines — drag a line's mark to move it" : "The song's waveform with your lyrics"}
+      aria-label={
+        onMoveLine
+          ? `The song's waveform with your lyric lines — drag a line's mark to move it${ripple ? " (the lines after it follow)" : ""}, tap it to edit its timing`
+          : "The song's waveform with your lyrics"
+      }
     >
       <canvas ref={canvas} className="block" />
     </div>

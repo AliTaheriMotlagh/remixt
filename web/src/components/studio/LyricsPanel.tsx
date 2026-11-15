@@ -3,7 +3,9 @@
 import { memo, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import {
   ArrowLeft,
+  ArrowUpDown,
   AudioLines,
+  ChevronsRight,
   Check,
   ChevronDown,
   ClipboardPaste,
@@ -33,13 +35,12 @@ import {
 import { audioEngine } from "@/lib/client/audioEngine";
 import { browserKey, savedModelChoice, savedProvider } from "@/lib/client/coproducerChat";
 import { activeSheet, useLyrics } from "@/lib/client/lyricsStore";
-import { laneEnvelope, timeFromLibrary, vocalLanes } from "@/lib/client/lyricsSources";
+import { autoTimeSheet, timeFromLibrary, timeFromVoice, untimed, vocalLanes } from "@/lib/client/lyricsSources";
 import { laneName, useStudioStore } from "@/lib/client/studioStore";
 import { useStudioView } from "@/lib/client/studioView";
 import LyricsPicker from "./LyricsPicker";
 import LyricsTimeline from "./LyricsTimeline";
 import {
-  autoTime,
   barAt,
   beatSeconds,
   clearTimes,
@@ -98,7 +99,7 @@ async function togglePlay() {
   }
 }
 
-function PlayButton({ big = false }: { big?: boolean }) {
+export function PlayButton({ big = false }: { big?: boolean }) {
   const isPlaying = useStudioStore((s) => s.isPlaying);
   return (
     <button
@@ -165,7 +166,174 @@ function FitBadge({ fit }: { fit: LineFit }) {
   );
 }
 
-/** The sheet as a list that follows the playhead: tap a line to jump there. */
+/** "1:23.45" — a line's time to the hundredth, for fine timing. */
+export function formatPrecise(seconds: number) {
+  const centis = Math.round(Math.max(0, seconds) * 100);
+  return `${Math.floor(centis / 6000)}:${String(Math.floor((centis % 6000) / 100)).padStart(2, "0")}.${String(centis % 100).padStart(2, "0")}`;
+}
+
+/** Plays the mix from a moment before `seconds`, to hear a line come in. */
+export function playFrom(seconds: number, preRoll = 1) {
+  audioEngine.seek(Math.max(0, seconds - preRoll));
+  if (!useStudioStore.getState().isPlaying) void togglePlay();
+}
+
+/** Whether moving a line's time moves the lines after it too — the setting, as a pill. */
+export function RippleToggle({ className = "" }: { className?: string }) {
+  const ripple = useLyrics((s) => s.prefs.ripple);
+  const setPrefs = useLyrics((s) => s.setPrefs);
+  return (
+    <button
+      onClick={() => setPrefs({ ripple: !ripple })}
+      aria-pressed={ripple}
+      title={ripple ? "Moving a line moves every line after it too — the rest stays in sync. Tap to move lines on their own." : "Lines move on their own. Tap to have the lines after a line follow it."}
+      className={`flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-semibold transition-colors max-lg:h-10 ${
+        ripple ? "border-brand bg-brand/10 text-brand-strong" : "border-border text-muted hover:text-foreground"
+      } ${className}`}
+    >
+      <ChevronsRight /> Ripple {ripple ? "on" : "off"}
+    </button>
+  );
+}
+
+/** The next (or previous) line with words from `index`, or null. */
+function sungFrom(lines: LyricLine[], index: number, step: 1 | -1) {
+  for (let i = index + step; i >= 0 && i < lines.length; i += step) if (isSung(lines[i])) return i;
+  return null;
+}
+
+/**
+ * The timing of one line, to fix it: nudge it earlier or later, set it to
+ * the playhead, hear it come in, take its time off — and, with ripple on,
+ * every line after it follows. Keys while it's open: ←/→ nudge (Shift: a
+ * beat, Alt: a hair), ↑/↓ the line before/after, S sets it to the
+ * playhead, P plays it, Esc closes.
+ */
+export function LineTimingEditor({ index, className = "" }: { index: number; className?: string }) {
+  const lines = useLyrics((s) => s.lines);
+  const ripple = useLyrics((s) => s.prefs.ripple);
+  const nudge = useLyrics((s) => s.nudge);
+  const retime = useLyrics((s) => s.retime);
+  const untime = useLyrics((s) => s.untime);
+  const selectLine = useLyrics((s) => s.selectLine);
+  const markAligned = useLyrics((s) => s.markAligned);
+  const bpm = useStudioStore((s) => s.projectBpm);
+  const box = useRef<HTMLDivElement>(null);
+  const line = lines[index];
+  const beat = beatSeconds(bpm);
+  const after = lines.slice(index + 1).filter((l) => l.time !== null && isSung(l)).length;
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      // Only while it's on screen (the booth keeps hidden tabs mounted), and not while typing.
+      if (!box.current || box.current.offsetParent === null || isTyping(event.target) || event.metaKey || event.ctrlKey) return;
+      const state = useLyrics.getState();
+      const time = state.lines[index]?.time ?? null;
+      const step = event.shiftKey ? beatSeconds(useStudioStore.getState().projectBpm) : event.altKey ? 0.01 : 0.05;
+      if (event.key === "ArrowLeft" && time !== null) state.nudge(index, -step);
+      else if (event.key === "ArrowRight" && time !== null) state.nudge(index, step);
+      else if (event.key === "ArrowUp") state.selectLine(sungFrom(state.lines, index, -1) ?? index);
+      else if (event.key === "ArrowDown") state.selectLine(sungFrom(state.lines, index, 1) ?? index);
+      else if (event.key === "s" || event.key === "S") state.retime(index, useStudioStore.getState().playhead);
+      else if ((event.key === "p" || event.key === "P") && time !== null) playFrom(time);
+      else if (event.key === "Escape") state.selectLine(null);
+      else return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      state.markAligned();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [index]);
+
+  if (!line || !isSung(line)) return null;
+  const step = "h-8 min-w-9 rounded-md px-1.5 text-[11px] font-semibold tabular-nums text-muted transition-colors hover:bg-surface-raised hover:text-foreground disabled:opacity-40 max-lg:h-10";
+  const timed = line.time !== null;
+  const move = (delta: number) => {
+    nudge(index, delta);
+    markAligned();
+  };
+  return (
+    <div
+      ref={box}
+      onClick={(e) => e.stopPropagation()}
+      className={`flex flex-col gap-2 rounded-xl border border-vocals/40 bg-surface p-2 text-xs shadow-sm ${className}`}
+      role="group"
+      aria-label={`Timing of line ${index + 1}`}
+    >
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="rounded-md bg-vocals/10 px-2 py-1 font-mono text-sm font-semibold tabular-nums text-vocals" aria-live="polite">
+          {timed ? formatPrecise(line.time!) : "not timed"}
+        </span>
+        <div className="flex items-center rounded-lg border border-border" role="group" aria-label="Nudge">
+          <button disabled={!timed} onClick={() => move(-beat)} className={step} title="A beat earlier (Shift+←)">
+            −beat
+          </button>
+          <button disabled={!timed} onClick={() => move(-0.1)} className={step} title="A touch earlier (←)">
+            −0.1
+          </button>
+          <button disabled={!timed} onClick={() => move(-0.02)} className={step} title="A hair earlier (Alt+←)">
+            −.02
+          </button>
+          <span className="h-5 w-px bg-border" aria-hidden />
+          <button disabled={!timed} onClick={() => move(0.02)} className={step} title="A hair later (Alt+→)">
+            +.02
+          </button>
+          <button disabled={!timed} onClick={() => move(0.1)} className={step} title="A touch later (→)">
+            +0.1
+          </button>
+          <button disabled={!timed} onClick={() => move(beat)} className={step} title="A beat later (Shift+→)">
+            +beat
+          </button>
+        </div>
+        <button
+          onClick={() => {
+            retime(index, useStudioStore.getState().playhead);
+            markAligned();
+          }}
+          className="flex h-8 items-center gap-1 rounded-lg bg-vocals px-2.5 text-[11px] font-semibold text-white hover:opacity-90 max-lg:h-10"
+          title="This line starts at the playhead (S)"
+        >
+          <Crosshair /> To playhead
+        </button>
+        <button
+          disabled={!timed}
+          onClick={() => playFrom(line.time!)}
+          className="flex h-8 items-center gap-1 rounded-lg border border-border px-2.5 text-[11px] font-semibold text-muted hover:border-vocals hover:text-foreground disabled:opacity-40 max-lg:h-10"
+          title="Hear it come in, from a second before (P)"
+        >
+          <Play /> Hear it
+        </button>
+        <button
+          disabled={!timed}
+          onClick={() => untime(index)}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:text-danger disabled:opacity-40 max-lg:h-10 max-lg:w-10"
+          title="Take this line's time off"
+          aria-label="Take this line's time off"
+        >
+          <Eraser />
+        </button>
+        <button
+          onClick={() => selectLine(null)}
+          className="ms-auto flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:text-foreground max-lg:h-10 max-lg:w-10"
+          aria-label="Done with this line (Esc)"
+          title="Done (Esc)"
+        >
+          <X />
+        </button>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted">
+        <RippleToggle className="!h-7 !px-2.5 !text-[11px]" />
+        <span>{ripple ? (after ? `Moves the ${after} line${after === 1 ? "" : "s"} after it too` : "Last timed line") : "Moves this line only"}</span>
+        <span className="flex items-center gap-1 max-sm:hidden">
+          <ArrowUpDown className="h-3 w-3" /> line before / after · ←/→ nudge
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** The sheet as a list that follows the playhead: tap a line to jump there, tap its time to fix it. */
 const Prompter = memo(function Prompter({
   lines,
   tapIndex,
@@ -181,21 +349,26 @@ const Prompter = memo(function Prompter({
   const bpm = useStudioStore((s) => s.projectBpm);
   const duration = useStudioStore((s) => s.duration);
   const { style, fontSize } = useLyrics((s) => s.prefs);
-  const setLines = useLyrics((s) => s.setLines);
+  const retime = useLyrics((s) => s.retime);
+  const selected = useLyrics((s) => s.selectedLine);
+  const pickedHere = useLyrics((s) => s.selectedWhere === "list");
+  const selectLine = useLyrics((s) => s.selectLine);
   const box = useRef<HTMLDivElement>(null);
   const fits = useMemo(() => lines.map((_, i) => fitOf(lines, i, bpm, style, duration || undefined)), [lines, bpm, style, duration]);
 
-  // The line being sung stays in the middle of the box (the page itself doesn't scroll).
+  // The line being sung stays in the middle of the box (the page itself doesn't scroll) — or the one being fixed.
   useEffect(() => {
     const container = box.current;
-    const index = tapIndex ?? current;
+    const index = tapIndex ?? selected ?? current;
     const row = container?.querySelector<HTMLElement>(`[data-line="${index}"]`);
     if (!container || !row) return;
     container.scrollTo({ top: row.offsetTop - container.clientHeight / 2 + row.clientHeight / 2, behavior: "smooth" });
-  }, [current, tapIndex]);
+    // Not on every playhead move while a line is being fixed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected === null ? current : -1, tapIndex, selected]);
 
   return (
-    <div ref={box} className="relative max-h-[min(24rem,50dvh)] overflow-y-auto overscroll-contain rounded-xl border border-border/60 bg-background/60 p-1.5">
+    <div ref={box} className="relative max-h-[min(28rem,55dvh)] overflow-y-auto overscroll-contain rounded-xl border border-border/60 bg-background/60 p-1.5">
       {lines.map((line, i) => {
         if (!line.text) return <div key={i} data-line={i} className="h-4" />;
         if (isSection(line.text)) {
@@ -207,22 +380,26 @@ const Prompter = memo(function Prompter({
         }
         const active = i === current;
         const tapping = i === tapIndex;
+        const picked = i === selected;
         return (
           <div
             key={i}
             data-line={i}
             className={`group relative flex items-start gap-2 rounded-lg px-2 py-1.5 transition-colors ${
-              tapping ? "bg-vocals/15 ring-1 ring-vocals" : active ? "bg-vocals/10" : "hover:bg-surface-raised"
+              tapping || picked ? "bg-vocals/15 ring-1 ring-vocals" : active ? "bg-vocals/10" : "hover:bg-surface-raised"
             }`}
           >
             {/* The line being sung gets a bar on its left, so it reads at a glance mid-take. */}
             <span className={`absolute inset-y-1 left-0 w-1 rounded-full bg-vocals transition-opacity ${active ? "opacity-100" : "opacity-0"}`} />
             <button
-              onClick={() => (line.time !== null ? audioEngine.seek(line.time) : onPickTap(i))}
-              className="mt-1 w-10 shrink-0 text-left text-[10px] tabular-nums text-muted/70 hover:text-foreground"
-              title={line.time !== null ? "Jump here" : "Not timed yet — tap it in"}
+              onClick={() => selectLine(picked ? null : i, "list")}
+              aria-expanded={picked}
+              className={`mt-0.5 w-14 shrink-0 rounded px-1 py-0.5 text-left font-mono text-[10px] tabular-nums transition-colors ${
+                picked ? "bg-vocals text-white" : "text-muted/70 hover:bg-vocals/10 hover:text-foreground"
+              }`}
+              title="Fix this line's timing"
             >
-              {line.time !== null ? formatClock(line.time) : "–:––"}
+              {line.time !== null ? formatPrecise(line.time) : "–:––.––"}
             </button>
             <div className="min-w-0 flex-1">
               <p
@@ -237,12 +414,16 @@ const Prompter = memo(function Prompter({
                 {line.text}
               </p>
               {active && <LineProgress start={line.time ?? 0} end={nextTime(lines, i)} />}
+              {picked && pickedHere && <LineTimingEditor index={i} className="mt-2" />}
             </div>
             {showFit && <FitBadge fit={fits[i]} />}
             <button
-              onClick={() => setLines(lines.map((l, j) => (j === i ? { ...l, time: Math.round(useStudioStore.getState().playhead * 100) / 100 } : l)))}
+              onClick={() => {
+                retime(i, useStudioStore.getState().playhead);
+                useLyrics.getState().markAligned();
+              }}
               className="mt-0.5 shrink-0 rounded p-1 text-muted opacity-0 hover:text-foreground focus:opacity-100 group-hover:opacity-100 max-lg:opacity-60"
-              title="Set this line to the playhead"
+              title="This line starts at the playhead (the lines after it follow when ripple is on)"
               aria-label="Set this line to the playhead"
             >
               <Clock />
@@ -366,7 +547,7 @@ function FitTools({ lines }: { lines: LyricLine[] }) {
 }
 
 /** Loops the line under the playhead, to practise it over and over; tap again to stop. */
-function LoopLineButton({ lines, className }: { lines: LyricLine[]; className: string }) {
+export function LoopLineButton({ lines, className }: { lines: LyricLine[]; className: string }) {
   const looping = useStudioStore((s) => s.loopEnabled);
   const setLoop = useStudioStore((s) => s.setLoop);
   const bpm = useStudioStore((s) => s.projectBpm);
@@ -405,7 +586,7 @@ function LoopLineButton({ lines, className }: { lines: LyricLine[]; className: s
  * of the mix (the song's own vocal, or a take), or one line a bar — or tap
  * along. `again` shows the first two as a row in the fit tools, to redo.
  */
-function GetTimes({ lines, onTap, again = false }: { lines: LyricLine[]; onTap?: () => void; again?: boolean }) {
+export function GetTimes({ lines, onTap, again = false }: { lines: LyricLine[]; onTap?: () => void; again?: boolean }) {
   const sheet = useLyrics(activeSheet);
   const setLines = useLyrics((s) => s.setLines);
   const rename = useLyrics((s) => s.rename);
@@ -414,7 +595,7 @@ function GetTimes({ lines, onTap, again = false }: { lines: LyricLine[]; onTap?:
   const bpm = useStudioStore((s) => s.projectBpm);
   const voices = useMemo(() => vocalLanes(lanes), [lanes]);
   const [laneId, setLaneId] = useState("");
-  const [busy, setBusy] = useState<"library" | "vocals" | null>(null);
+  const [busy, setBusy] = useState<"auto" | "library" | "vocals" | null>(null);
   // The song's own vocal first; else the latest take.
   const chosen = voices.find((l) => l.laneId === laneId) ?? voices.find((l) => l.artistName !== "You") ?? voices[voices.length - 1];
   const notify = useStudioView.getState().notify;
@@ -436,13 +617,30 @@ function GetTimes({ lines, onTap, again = false }: { lines: LyricLine[]; onTap?:
     }
   }
 
+  /** The best timing there is, worked out on its own: the library's timed copy lined up with the mix, else the song's vocals. */
+  async function automatic() {
+    if (!sheet) return;
+    setBusy("auto");
+    try {
+      const text = useLyrics.getState().sheets.find((s) => s.id === sheet.id)?.text ?? "";
+      const timed = await autoTimeSheet(untimed(text), { title: sheet.title, artist: sheet.artist });
+      if (timed.how === "none") {
+        notify(voices.length ? "Couldn't work the timing out — tap along instead" : "No timing found — add the song's vocal to the mix, or tap along", "error");
+        return;
+      }
+      setLines(parseLyrics(timed.text));
+      rename({ aligned: timed.aligned });
+      notify(timed.note || "Timed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function fromVocals() {
     if (!chosen) return;
     setBusy("vocals");
     try {
-      const env = await laneEnvelope(chosen);
-      const end = chosen.offsetSeconds + (chosen.duration || chosen.originalDuration / (chosen.tempoRatio || 1));
-      const timed = autoTime(useLyrics.getState().lines, env, { from: chosen.offsetSeconds, to: end });
+      const timed = await timeFromVoice(useLyrics.getState().lines, chosen);
       if (!timed) {
         notify("Couldn't hear any singing in that lane", "error");
         return;
@@ -481,6 +679,9 @@ function GetTimes({ lines, onTap, again = false }: { lines: LyricLine[]; onTap?:
           <WandSparkles /> Re-time
         </span>
         <div className="flex flex-wrap items-center gap-1.5">
+          <button onClick={() => void automatic()} disabled={!!busy} className={`${small} !border-beat/60 !text-foreground`} title="Worked out for you: the library's timed copy lined up with your mix, else the song's vocals">
+            <WandSparkles className="inline" /> {busy === "auto" ? "Timing…" : "Automatic"}
+          </button>
           <button onClick={() => void fromLibrary()} disabled={!!busy || !sheet?.title} className={small} title="Times from the library's timed copy of this song">
             <Library className="inline" /> {busy === "library" ? "Looking…" : "From the library"}
           </button>
@@ -500,6 +701,17 @@ function GetTimes({ lines, onTap, again = false }: { lines: LyricLine[]; onTap?:
       <p className="flex items-center gap-1.5 text-xs font-semibold">
         <Timer className="text-vocals" /> Not timed yet — give the lines their times, so they follow the song
       </p>
+      <button
+        onClick={() => void automatic()}
+        disabled={!!busy}
+        className="flex min-h-12 items-center gap-2.5 rounded-xl bg-vocals px-3 py-2 text-left text-white shadow-lg shadow-vocals/20 transition-opacity hover:opacity-90 disabled:opacity-60"
+      >
+        <WandSparkles className="shrink-0" />
+        <span className="min-w-0">
+          <span className="block text-sm font-semibold">{busy === "auto" ? "Working out the timing…" : "Time them for me"}</span>
+          <span className="block text-[11px] leading-tight text-white/80">From the original song&apos;s timing, lined up with your mix — or from the vocals</span>
+        </span>
+      </button>
       <div className="grid grid-cols-2 gap-1.5">
         <button onClick={() => void fromLibrary()} disabled={!!busy || !sheet?.title} className={option}>
           <Library className="mt-0.5 shrink-0 text-beat" />
@@ -543,8 +755,11 @@ function GetTimes({ lines, onTap, again = false }: { lines: LyricLine[]; onTap?:
   );
 }
 
-function SingTab({ lines, onEdit, onRecord }: { lines: LyricLine[]; onEdit: () => void; onRecord?: () => void }) {
+function SingTab({ lines, onEdit, onRecord, stage = false }: { lines: LyricLine[]; onEdit: () => void; onRecord?: () => void; stage?: boolean }) {
   const setLines = useLyrics((s) => s.setLines);
+  const retime = useLyrics((s) => s.retime);
+  const selectLine = useLyrics((s) => s.selectLine);
+  const selected = useLyrics((s) => s.selectedLine);
   const sheet = useLyrics(activeSheet);
   const markAligned = useLyrics((s) => s.markAligned);
   const past = useLyrics((s) => s.past);
@@ -562,11 +777,11 @@ function SingTab({ lines, onEdit, onRecord }: { lines: LyricLine[]; onEdit: () =
     return null;
   };
 
-  // Times line `index` at the playhead (less a moment to react) and moves on to the next.
+  // Times line `index` at the playhead (less a moment to react) and moves on to the next —
+  // with ripple on, lines already timed after it move along, so re-tapping one line fixes the rest.
   function tap(index: number | null) {
     if (index === null) return;
-    const time = Math.max(0, Math.round((useStudioStore.getState().playhead - TAP_REACTION) * 100) / 100);
-    setLines(useLyrics.getState().lines.map((l, i) => (i === index ? { ...l, time } : l)));
+    retime(index, Math.max(0, useStudioStore.getState().playhead - TAP_REACTION));
     setTapIndex(nextSung(index + 1));
   }
 
@@ -662,6 +877,7 @@ function SingTab({ lines, onEdit, onRecord }: { lines: LyricLine[]; onEdit: () =
           </>
         )}
         <div className="ml-auto flex items-center gap-1">
+          {synced && <RippleToggle className="max-sm:hidden" />}
           {synced && <LoopLineButton lines={lines} className={`h-9 w-9 ${GHOST}`} />}
           {onRecord && (
             <button onClick={onRecord} className={`h-9 w-9 ${GHOST} hover:!border-vocals hover:!text-vocals`} title="Record over the beat, singing from these" aria-label="Record with these lyrics">
@@ -700,6 +916,7 @@ function SingTab({ lines, onEdit, onRecord }: { lines: LyricLine[]; onEdit: () =
       {tapIndex !== null && (
         <p className="rounded-lg bg-vocals/10 px-2.5 py-1.5 text-[11px] text-foreground">
           Play the beat, and tap (or press Enter) right as each line starts. Click a line to tap from there; Esc to stop.
+          {prefs.ripple && synced ? " Ripple is on: lines already timed after the one you tap move along with it." : ""}
         </p>
       )}
       {!synced && tapIndex === null && (
@@ -747,14 +964,19 @@ function SingTab({ lines, onEdit, onRecord }: { lines: LyricLine[]; onEdit: () =
         </>
       )}
 
-      <LyricsTimeline
-        lines={lines}
-        onMoveLine={(index, time) => {
-          setLines(useLyrics.getState().lines.map((l, i) => (i === index ? { ...l, time } : l)));
-          markAligned();
-        }}
-        height={76}
-      />
+      {!stage && (
+        <LyricsTimeline
+          lines={lines}
+          onMoveLine={(index, time) => {
+            retime(index, time);
+            markAligned();
+          }}
+          ripple={prefs.ripple}
+          onSelectLine={(i) => selectLine(i, "list")}
+          selected={selected}
+          height={76}
+        />
+      )}
       <Prompter lines={lines} tapIndex={tapIndex} onPickTap={setTapIndex} showFit={tools} />
       {big && <BigPrompter lines={lines} onClose={() => setBig(false)} />}
     </div>
@@ -762,7 +984,7 @@ function SingTab({ lines, onEdit, onRecord }: { lines: LyricLine[]; onEdit: () =
 }
 
 /** Full screen: the line being sung, big, with the next ones under it. */
-function BigPrompter({ lines, onClose }: { lines: LyricLine[]; onClose: () => void }) {
+export function BigPrompter({ lines, onClose }: { lines: LyricLine[]; onClose: () => void }) {
   const current = useCurrentLine(lines);
   const synced = isSynced(lines);
   const [manual, setManual] = useState(0);
@@ -1126,7 +1348,8 @@ function BackRow({ label, onBack }: { label: string; onBack: () => void }) {
  * can be done to it (change it, edit it, the AI, put it away), over the
  * words following the beat. With no sheet open, the picker.
  */
-export function LyricsTools({ onSing }: { onSing?: () => void }) {
+/** `stage`: shown under a stage that already has the song's waveform (the Vocalist studio) — the sheet doesn't draw its own. */
+export function LyricsTools({ onSing, stage = false }: { onSing?: () => void; stage?: boolean }) {
   const load = useLyrics((s) => s.load);
   const lines = useLyrics((s) => s.lines);
   const select = useLyrics((s) => s.select);
@@ -1215,7 +1438,7 @@ export function LyricsTools({ onSing }: { onSing?: () => void }) {
         </button>
       </div>
 
-      {editing ? <EditTab onDone={() => setView("sheet")} /> : <SingTab lines={lines} onEdit={() => setView("edit")} onRecord={onSing} />}
+      {editing ? <EditTab onDone={() => setView("sheet")} /> : <SingTab lines={lines} onEdit={() => setView("edit")} onRecord={onSing} stage={stage} />}
     </div>
   );
 }
