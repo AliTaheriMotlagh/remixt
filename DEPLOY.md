@@ -1,4 +1,4 @@
-# Deploying Remixt
+# Deploying Remixt 
 
 Songs are split into vocals and beat **in the listener's browser**, so the
 server only handles accounts, the library and remixes. Three setups:
