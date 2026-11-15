@@ -49,12 +49,16 @@ export type UploadItem = {
   /** Something worth saying about it: picked up after a reload, already in the library… */
   note: string | null;
   finishedAt: number | null;
+  /** The track it became (or was already), once done — split here; a queued song has none yet. */
+  trackId: string | null;
 };
 
 type Source = { kind: "file"; file: File } | { kind: "link"; url: string };
 type Entry = UploadItem & {
   source: Source;
   tags: string[];
+  /** Made a private track (see StoredUpload.keepPrivate). */
+  keepPrivate: boolean;
   /** Stops it, when it's working. */
   controller: AbortController | null;
   /** Tries that failed for the connection's sake, in a row. */
@@ -211,6 +215,7 @@ class Uploads {
       error: e.error,
       note: e.note,
       finishedAt: e.finishedAt,
+      trackId: e.trackId,
     }));
     const busy = (e: Entry) => e.status === "working" || e.status === "waiting";
     // Splitting a song here needs the page awake: a phone that locks
@@ -255,6 +260,19 @@ class Uploads {
     return result;
   }
 
+  /**
+   * One song from a link, for something waiting on it (the Studio, which
+   * adds it to the mix when it's done): its upload's id — the one already
+   * on its way, if the link is.
+   */
+  addLink(url: string, { tags, mode, keepPrivate = false }: { tags: string[]; mode: UploadMode; keepPrivate?: boolean }): string {
+    const pending = this.entries.find((e) => e.source.kind === "link" && e.source.url === url && e.status !== "failed");
+    if (pending) return pending.id;
+    const entry = this.push({ kind: "link", url }, url, tags, mode, newId(), true, keepPrivate);
+    this.pump();
+    return entry.id;
+  }
+
   /** The songs behind some links (a link already on its way is left out). */
   addLinks(urls: string[], { tags, mode }: { tags: string[]; mode: UploadMode }): number {
     const pending = new Set(
@@ -271,7 +289,7 @@ class Uploads {
     return added;
   }
 
-  private push(source: Source, name: string, tags: string[], mode: UploadMode, id = newId(), keep = true) {
+  private push(source: Source, name: string, tags: string[], mode: UploadMode, id = newId(), keep = true, keepPrivate = false) {
     const entry: Entry = {
       id,
       name,
@@ -281,8 +299,10 @@ class Uploads {
       error: null,
       note: null,
       finishedAt: null,
+      trackId: null,
       source,
       tags: [...tags],
+      keepPrivate,
       controller: null,
       transientFailures: 0,
     };
@@ -302,6 +322,7 @@ class Uploads {
         status: "waiting",
         error: null,
         addedAt: Date.now(),
+        ...(keepPrivate ? { keepPrivate } : {}),
       });
     }
     return entry;
@@ -329,7 +350,7 @@ class Uploads {
               file: new File([k.source.file], k.source.fileName, { lastModified: k.source.lastModified }),
             }
           : k.source;
-      const entry = this.push(source, k.name, k.tags, k.mode, k.id, false);
+      const entry = this.push(source, k.name, k.tags, k.mode, k.id, false, !!k.keepPrivate);
       if (k.status === "failed") {
         this.update(entry.id, { status: "failed", error: k.error, finishedAt: k.addedAt });
       } else if (crashed && crashed === k.name) {
@@ -444,8 +465,9 @@ class Uploads {
   }
 
   private async attempt(entry: Entry, signal: AbortSignal) {
-    const { id, source, tags, mode } = entry;
+    const { id, source, tags, mode, keepPrivate } = entry;
     let name = entry.name;
+    let trackId: string | null = null;
     const report = (stage: UploadStage) => {
       if (!signal.aborted) this.update(id, { stage, name });
     };
@@ -468,7 +490,8 @@ class Uploads {
         if (foundBySearch.has(file)) {
           note = `Found by name as “${file.name.replace(/\.[^.]+$/, "")}” — check it's the song you meant`;
         }
-        const { existing } = await uploadSong(file, report, { tags, signal });
+        const { id: madeId, existing } = await uploadSong(file, report, { tags, signal, keepPrivate });
+        trackId = madeId;
         if (existing) {
           note = existing.mine
             ? `Already in your library as “${existing.title}” — nothing to split`
@@ -477,7 +500,7 @@ class Uploads {
       }
       signal.throwIfAborted();
       this.finishedCount++;
-      this.update(id, { status: "done", stage: null, name, note, controller: null, finishedAt: Date.now() });
+      this.update(id, { status: "done", stage: null, name, note, trackId, controller: null, finishedAt: Date.now() });
       void forgetUpload(id);
     } finally {
       if (mode === "split" && isConstrainedDevice()) rememberInFlight(null);

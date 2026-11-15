@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, type ComponentType } from "react";
-import { Check, Drum, Layers, Mic, ScrollText, SlidersVertical } from "lucide-react";
+import { Check, Drum, Globe, Layers, Mic, ScrollText, SlidersVertical } from "lucide-react";
 import { activeSheet, useLyrics } from "@/lib/client/lyricsStore";
 import { isTakeLane } from "@/lib/client/lyricsSources";
 import { useStudioStore } from "@/lib/client/studioStore";
@@ -9,6 +9,7 @@ import { useStudioView, type VocalTab } from "@/lib/client/studioView";
 import { isSung, isSynced } from "@/lib/lyrics";
 import { LyricsTools } from "../LyricsPanel";
 import { RecordTab } from "../VocalBooth";
+import SongFinder from "./SongFinder";
 import TakesPanel from "./TakesPanel";
 import VocalMixer, { QuickLevels } from "./VocalMixer";
 import VocalStage from "./VocalStage";
@@ -20,19 +21,21 @@ import VocalStage from "./VocalStage";
 // the takes kept so far, and the vocal mix. The producer's timeline and
 // mixer are a switch away (Producer mode) for anything more.
 
-const TABS: { id: VocalTab; label: string; icon: ComponentType<{ className?: string }> }[] = [
-  { id: "lyrics", label: "Lyrics & timing", icon: ScrollText },
-  { id: "takes", label: "Takes", icon: Layers },
-  { id: "mix", label: "Vocal mix", icon: SlidersVertical },
+const TABS: { id: VocalTab; label: string; short: string; icon: ComponentType<{ className?: string }> }[] = [
+  { id: "lyrics", label: "Lyrics & timing", short: "Lyrics", icon: ScrollText },
+  { id: "takes", label: "Takes", short: "Takes", icon: Layers },
+  { id: "mix", label: "Vocal mix", short: "Mix", icon: SlidersVertical },
+  { id: "songs", label: "Find a song", short: "Songs", icon: Globe },
 ];
 
 /** What's left to do before a take, as three steps — shown until all are done. */
 function Steps({ hasBeat, hasLyrics, timed, hasTake }: { hasBeat: boolean; hasLyrics: boolean; timed: boolean; hasTake: boolean }) {
   const steps = [
-    { done: hasBeat, title: "Pick a beat", action: () => useStudioView.getState().showLibrary("beat"), cta: "Add a beat" },
+    { done: hasBeat, title: "Pick a beat", short: "Beat", action: () => useStudioView.getState().showLibrary("beat"), cta: "Add a beat" },
     {
       done: hasLyrics && timed,
       title: hasLyrics ? "Time the lyrics" : "Pick the lyrics",
+      short: hasLyrics ? "Time lyrics" : "Lyrics",
       action: () => {
         useLyrics.getState().openLyrics(hasLyrics ? "sheet" : "pick");
         useStudioView.getState().setVocalTab("lyrics");
@@ -40,31 +43,49 @@ function Steps({ hasBeat, hasLyrics, timed, hasTake }: { hasBeat: boolean; hasLy
       },
       cta: hasLyrics ? "Time them" : "Find lyrics",
     },
-    { done: hasTake, title: "Record a take", action: () => document.getElementById("vocal-booth")?.scrollIntoView({ behavior: "smooth", block: "center" }), cta: "Go to the booth" },
+    { done: hasTake, title: "Record a take", short: "Record", action: () => document.getElementById("vocal-booth")?.scrollIntoView({ behavior: "smooth", block: "center" }), cta: "Go to the booth" },
   ];
   if (steps.every((s) => s.done)) return null;
   const at = steps.findIndex((s) => !s.done);
+  const current = steps[at];
+  // The steps as a row of short names (never cut off on a phone), then the one to do now with its button.
   return (
-    <ol className="flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-surface p-2.5" aria-label="Getting started">
-      {steps.map((s, i) => (
-        <li key={s.title} className="flex min-w-0 flex-1 basis-40 items-center gap-2">
-          <span
-            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
-              s.done ? "bg-success text-white" : i === at ? "bg-vocals text-white ring-4 ring-vocals/25" : "bg-surface-raised text-muted"
-            }`}
-            aria-current={i === at ? "step" : undefined}
+    <section className="flex flex-col gap-2 rounded-2xl border border-border bg-surface p-2.5 sm:flex-row sm:items-center" aria-label="Getting started">
+      <ol className="flex min-w-0 flex-1 items-center gap-1.5">
+        {steps.map((s, i) => (
+          <li key={s.title} className="flex min-w-0 items-center gap-1.5" aria-current={i === at ? "step" : undefined}>
+            {i > 0 && <span className="h-px w-3 shrink-0 bg-border sm:w-5" aria-hidden />}
+            <span
+              className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
+                s.done ? "bg-success text-white" : i === at ? "bg-vocals text-white ring-4 ring-vocals/25" : "bg-surface-raised text-muted"
+              }`}
+            >
+              {s.done ? <Check className="h-3.5 w-3.5" /> : i + 1}
+            </span>
+            <span className={`whitespace-nowrap text-xs font-semibold ${i === at ? "" : "text-muted"} ${i === at ? "" : "max-sm:hidden"}`}>{s.short}</span>
+          </li>
+        ))}
+      </ol>
+      <div className="flex shrink-0 gap-1.5">
+        {at === 0 && (
+          <button
+            onClick={() => {
+              useStudioView.getState().setVocalTab("songs");
+              document.getElementById("vocal-workspace")?.scrollIntoView({ behavior: "smooth", block: "start" });
+            }}
+            className="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg border border-border px-3 text-xs font-semibold hover:border-beat"
           >
-            {s.done ? <Check /> : i + 1}
-          </span>
-          <span className={`min-w-0 flex-1 truncate text-xs font-semibold ${i === at ? "" : "text-muted"}`}>{s.title}</span>
-          {i === at && (
-            <button onClick={s.action} className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-vocals px-3 text-xs font-semibold text-white hover:opacity-90 max-lg:h-10">
-              {i === 0 ? <Drum /> : i === 1 ? <ScrollText /> : <Mic />} {s.cta}
-            </button>
-          )}
-        </li>
-      ))}
-    </ol>
+            <Globe /> Find online
+          </button>
+        )}
+        <button
+          onClick={current.action}
+          className="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg bg-vocals px-4 text-xs font-semibold text-white hover:opacity-90"
+        >
+          {at === 0 ? <Drum /> : at === 1 ? <ScrollText /> : <Mic />} {current.cta}
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -109,7 +130,8 @@ export default function VocalStudio({ signedIn }: { signedIn: boolean }) {
                 }`}
               >
                 <t.icon className="shrink-0" />
-                <span className="truncate">{t.label}</span>
+                <span className="truncate max-sm:hidden">{t.label}</span>
+                <span className="sm:hidden">{t.short}</span>
                 {t.id === "takes" && takes > 0 && <span className={`rounded-full px-1.5 text-[10px] tabular-nums ${tab === t.id ? "bg-white/25" : "bg-foreground/10"}`}>{takes}</span>}
               </button>
             ))}
@@ -118,6 +140,7 @@ export default function VocalStudio({ signedIn }: { signedIn: boolean }) {
             {tab === "lyrics" && <LyricsTools stage onSing={toBooth} />}
             {tab === "takes" && <TakesPanel onRecord={toBooth} />}
             {tab === "mix" && <VocalMixer />}
+            {tab === "songs" && <SongFinder />}
           </div>
         </section>
       </div>

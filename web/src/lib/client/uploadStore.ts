@@ -17,6 +17,8 @@ export type StoredUpload = {
   status: "waiting" | "failed";
   error: string | null;
   addedAt: number;
+  /** Kept to its owner once split (a song brought into the Studio). */
+  keepPrivate?: boolean;
 };
 
 const DB_NAME = "remixt-uploads";

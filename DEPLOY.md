@@ -75,6 +75,17 @@ usually refuses to let servers read its pages, so the Studio then asks
 them to copy the words by hand and paste them; the words still get their
 times from LRCLIB when it has the song.
 
+### Iranian music sites (optional)
+
+The lyrics search and the Vocalist's "Find a song" tab also search Iranian
+music sites through their WordPress search API — beatmastering.ir,
+rozmusic.com, upmusics.com, musicfeed.ir, nicmusic.net and nex1music.ir by
+default — for a song's words and its MP3. Set `MUSIC_SITES` to a
+comma-separated list of hosts to ask others instead. A site that's down or
+blocks the server just adds nothing. Many `.ir` sites can't be reached
+from servers outside Iran (and some only from inside it), so which ones
+answer depends on where the app is hosted.
+
 ---
 
 ## Free on Vercel, with Neon and Vercel Blob

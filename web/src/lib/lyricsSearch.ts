@@ -136,6 +136,20 @@ export function findArtist(words: string[]): { artist: string; rest: string[] } 
   return null;
 }
 
+/**
+ * The search in Persian letters when it names a known artist in Finglish
+ * ("shayea monam haji" → "شایع monam haji") — Iranian music sites title
+ * their pages in Persian. Null when there's nothing to change.
+ */
+export function persianArtistQuery(query: string): string | null {
+  const words = normalizePersian(query).toLowerCase().split(" ").filter(Boolean);
+  if (!words.length || words.some(hasPersian)) return null;
+  const found = findArtist(words);
+  if (!found) return null;
+  const persian = ARTISTS.find(([latin]) => latin === found.artist)?.[1].find(hasPersian);
+  return persian ? [persian, ...found.rest].join(" ") : null;
+}
+
 const FA_LATIN: Record<string, string> = {
   ب: "b", پ: "p", ت: "t", ط: "t", ث: "s", س: "s", ص: "s", ج: "j", چ: "ch", ح: "h", خ: "kh",
   د: "d", ذ: "z", ز: "z", ض: "z", ظ: "z", ر: "r", ژ: "zh", ش: "sh", غ: "gh", ق: "gh", ف: "f",

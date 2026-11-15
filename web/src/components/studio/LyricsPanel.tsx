@@ -39,6 +39,7 @@ import { autoTimeSheet, timeFromLibrary, timeFromVoice, untimed, vocalLanes } fr
 import { laneName, useStudioStore } from "@/lib/client/studioStore";
 import { useStudioView } from "@/lib/client/studioView";
 import LyricsPicker from "./LyricsPicker";
+import { useMixSongs } from "@/lib/client/mixSongs";
 import LyricsTimeline from "./LyricsTimeline";
 import {
   barAt,
@@ -1357,6 +1358,7 @@ export function LyricsTools({ onSing, stage = false }: { onSing?: () => void; st
   const sheet = useLyrics(activeSheet);
   const view = useLyrics((s) => s.view);
   const setView = useLyrics((s) => s.setView);
+  const mixSong = useMixSongs()[0]?.key;
 
   useEffect(() => load(), [load]);
 
@@ -1369,7 +1371,16 @@ export function LyricsTools({ onSing, stage = false }: { onSing?: () => void; st
   const shown = !sheet && (view === "sheet" || view === "edit") ? "pick" : view;
 
   if (shown === "pick") {
-    return <LyricsPicker onPicked={() => setView("sheet")} onWrite={newSheet} onAi={() => setView("ai")} onBack={sheet ? () => setView("sheet") : undefined} />;
+    // A new song in the mix starts the picker afresh, on that song.
+    return (
+      <LyricsPicker
+        key={mixSong ?? "none"}
+        onPicked={() => setView("sheet")}
+        onWrite={newSheet}
+        onAi={() => setView("ai")}
+        onBack={sheet ? () => setView("sheet") : undefined}
+      />
+    );
   }
   if (shown === "ai") {
     return (

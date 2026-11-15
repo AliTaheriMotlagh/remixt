@@ -34,6 +34,8 @@ export function htmlToText(html: string) {
   return decodeEntities(
     html
       .replace(/<(script|style|noscript|svg|button|form|iframe)\b[\s\S]*?<\/\1>/gi, "")
+      // A <br> and the page source's own line break after it are one break.
+      .replace(/(<br\s*\/?>)[ \t]*\r?\n/gi, "$1")
       .replace(/<br\s*\/?>/gi, "\n")
       .replace(/<\/(p|div|li|h[1-6]|blockquote|pre|tr)>/gi, "\n")
       .replace(/<(p|div|li|h[1-6]|blockquote|pre|tr)\b[^>]*>/gi, "\n")
@@ -97,6 +99,11 @@ const JUNK = [
   /^translations?$/i,
   /^(submit corrections|writer\(s\):|thanks to .{1,80} for (adding|correcting))/i,
   /^(lyrics|متن آهنگ)$/i,
+  // A Persian page's heading over the words: "متن آهنگ شایعه حامد همایون".
+  /^(متن( کامل)?|دانلود|تکست) (آهنگ|اهنگ|ترانه|موزیک) .{1,80}$/,
+  // A music site's facts about the song: "نام آهنگ : …", "زمان : 4:21", "ترانه سرا: …".
+  /^(نام (آهنگ|اهنگ|خواننده|ترانه|آلبوم)|خواننده|زمان|مدت( زمان)?|فرمت|حجم|کیفیت|ترانه ?سرا|آهنگ ?ساز|تنظیم( کننده)?|میکس( و مستر)?|مستر(ینگ)?|سبک|ژانر|تاریخ انتشار)\s*[:：]/,
+  /^دانلود .{0,40}(با بهترین کیفیت|لینک (دانلود )?مستقیم|کیفیت عالی)/,
 ];
 
 function tidy(text: string) {
@@ -133,14 +140,14 @@ function fromAzLyrics(html: string) {
 }
 
 /** An element marked as the lyrics by its class or id, as most lyrics sites and blogs do. */
-function fromMarkedBlock(html: string) {
+function fromMarkedBlock(html: string, accept: (text: string) => boolean = () => true) {
   const re = /<(div|section|article|pre|p|span)\b[^>]*(?:class|id)=["'][^"']*(lyric|song-?text|songtext|matn|mtn|poem|she3r|entry-content|post-content|article-content|single-content)[^"']*["'][^>]*>/gi;
   let best = "";
   let bestScore = 0;
   for (let m = re.exec(html); m; m = re.exec(html)) {
     const text = htmlToText(innerHtmlAt(html, m.index));
     const lines = text.split("\n").filter(Boolean);
-    if (lines.length < 4) continue;
+    if (lines.length < 4 || !accept(text)) continue;
     // Lyrics are many short lines; an article is a few long ones. A "lyrics" class counts extra.
     const short = lines.filter((l) => l.length <= 90).length / lines.length;
     const score = lines.length * short * (/lyric|song-?text|matn/i.test(m[2]) ? 2 : 1);
@@ -156,7 +163,7 @@ function fromMarkedBlock(html: string) {
  * Any page: the longest run of short lines broken by <br> (paragraphs next
  * to each other count as one run, a verse each) — how lyrics sit on a page.
  */
-function fromLineRuns(html: string) {
+function fromLineRuns(html: string, accept: (text: string) => boolean = () => true) {
   const body = html
     .replace(/<head\b[\s\S]*?<\/head>/i, "")
     .replace(/<(script|style|noscript|svg|nav|header|footer|aside|form)\b[\s\S]*?<\/\1>/gi, "")
@@ -168,7 +175,7 @@ function fromLineRuns(html: string) {
   let run: string[] = [];
   let breaks = 0;
   const close = () => {
-    if (breaks >= 3 && run.filter(Boolean).length > best.filter(Boolean).length) best = run;
+    if (breaks >= 3 && run.filter(Boolean).length > best.filter(Boolean).length && accept(run.join("\n"))) best = run;
     run = [];
     breaks = 0;
   };
@@ -201,6 +208,44 @@ function fromLineRuns(html: string) {
   return best.filter(Boolean).length >= 4 ? text : "";
 }
 
+/**
+ * A music page's title as the song and who sings it. Iranian sites title
+ * their pages "دانلود آهنگ <singer> به نام <song>", "<song> از <singer>",
+ * "<song> » <singer>", or "Singer – Song", with extras around them (+ کیفیت
+ * عالی, با متن, MP3, the site's name) that are dropped.
+ */
+export function pageTitleParts(raw: string): { title: string; artist: string } {
+  // A remix or an album says so in front; it stays with the title, not the singer.
+  let kind = "";
+  let text = decodeEntities(raw)
+    .replace(/\u200c/g, " ")
+    .replace(/\s*[|]\s*[^|]*$/, "")
+    // The site's name after a dash: "… - رزموزیک".
+    .replace(/\s+[-–—]\s+(رز ?موزیک|آپ ?موزیک|نیک ?موزیک|موزیک ?فید|نکس ?وان ?موزیک|[\w.-]+\.(?:com|ir|net|org))\s*$/i, "")
+    .replace(/^\s*(دانلود\s+)?(آهنگ|موزیک|ترانه|ریمیکس|آلبوم)?\s*(جدید\s+)?/, (all, dl, k) => {
+      if (k === "ریمیکس" || k === "آلبوم") kind = k;
+      return "";
+    })
+    .replace(/\s*\+\s*.*$/, "")
+    // A second name after a slash: "… / Sanam Ahang", "… / کیفیت اصلی".
+    .replace(/\s+\/\s+.*$/, "")
+    .replace(/\s+(با|همراه)\s+(متن|کیفیت|لینک).*$/, "")
+    .replace(/\s+(mp3|MP3|ام پی تری)\s*$/, "")
+    .replace(/\s*[(（][^)）]*[)）]\s*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  text = text.replace(/^["«“]|["»”]$/g, "").trim();
+  const named = (title: string, artist: string) => ({ title: kind ? `${kind} ${title.trim()}` : title.trim(), artist: artist.trim() });
+  let m = /^(.+?)\s+(?:به\s*نام|بنام)\s+(.+)$/.exec(text);
+  if (m) return named(m[2], m[1]);
+  m = /^(.+?)\s*[»›]\s*(.+)$/.exec(text);
+  if (m) return named(m[1], m[2]);
+  m = /^(.+?)\s+از\s+(.+)$/.exec(text);
+  if (m) return named(m[1], m[2]);
+  const split = splitSongTitle(text);
+  return named(split.song || text, split.artist);
+}
+
 /** The song and artist a page is about, from its title tags, without the site's own words. */
 function titleOf(html: string, host: string): { title: string; artist: string } {
   const raw =
@@ -218,6 +263,8 @@ function titleOf(html: string, host: string): { title: string; artist: string } 
     if (m) return { artist: m[1].trim(), title: m[2].trim() };
   }
   title = title.replace(/\s*\|\s*.*$/, "").trim();
+  // Persian music and lyrics sites: "<singer> به نام <song>", "<song> از <singer>"…
+  if (/[\u0600-\u06ff]/.test(raw)) return pageTitleParts(raw.replace(/^متن( کامل)?( آهنگ)?\s+/, ""));
   const split = splitSongTitle(title);
   return { title: split.song || title, artist: split.artist };
 }
@@ -225,14 +272,27 @@ function titleOf(html: string, host: string): { title: string; artist: string } 
 /** The lyrics on a page, or null when none could be told apart from the rest of it. */
 export function lyricsFromHtml(html: string, url: string): ImportedLyrics | null {
   const host = safeHost(url);
+  // A Persian song's page often has an English translation by the words — or only the
+  // translation: the lyrics are the lines in Persian.
+  const persianPage = PERSIAN_LETTER.test(meta(html, "og:title") || /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] || "");
+  // A block of the song's facts and download links isn't its words: what's left once those go has to be a few lines.
+  const accept = (text: string) => tidy(text).split("\n").filter(Boolean).length >= 4 && (!persianPage || mostlyPersian(text));
   const text =
     (/genius\.com$/.test(host) || /data-lyrics-container/.test(html) ? fromGenius(html) : "") ||
     (/azlyrics\.com$/.test(host) ? fromAzLyrics(html) : "") ||
-    fromMarkedBlock(html) ||
-    fromLineRuns(html);
+    fromMarkedBlock(html, accept) ||
+    fromLineRuns(html, accept);
   const words = tidy(text);
   if (words.split("\n").filter(Boolean).length < 2) return null;
   return { ...titleOf(html, host), text: words, source: host };
+}
+
+const PERSIAN_LETTER = /[\u0600-\u06ff]/;
+
+/** Most of the lines are in Persian (Arabic script) letters. */
+function mostlyPersian(text: string) {
+  const lines = text.split("\n").filter((l) => /\p{L}/u.test(l));
+  return lines.length > 0 && lines.filter((l) => PERSIAN_LETTER.test(l)).length / lines.length >= 0.5;
 }
 
 /** A lyrics file's text (LRC, SRT, WebVTT or plain) as an LRC sheet. */

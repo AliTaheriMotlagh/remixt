@@ -22,19 +22,27 @@ import {
   type LyricsResult,
 } from "@/lib/lyrics";
 import { geniusSongId, lyricsFromGeniusEmbed, type ImportedLyrics } from "@/lib/lyricsImport";
+import type { MusicPage } from "@/lib/musicPages";
 
 // Where lyrics and their timing come from, for the Studio: the lyrics
 // library and Genius (api/lyrics/search), any lyrics page or embed code
 // (api/lyrics/import), and the vocals in the mix — whose loudness shows
 // where each line is sung.
 
-export type SearchAnswer = { results: LyricsResult[]; web: LyricsPage[] };
+/** Timed or plain lyrics from the library, Genius pages, and song pages on Iranian music sites (words and the MP3). */
+export type SearchAnswer = {
+  results: LyricsResult[];
+  web: LyricsPage[];
+  sites: MusicPage[];
+  /** The library surely has the song searched for (else the sites' pages are likelier it). */
+  sure: boolean;
+};
 
 export async function searchLyrics(params: URLSearchParams): Promise<SearchAnswer> {
   const res = await fetch(`/api/lyrics/search?${params}`);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error ?? "Couldn't search");
-  return { results: (data.results ?? []) as LyricsResult[], web: (data.web ?? []) as LyricsPage[] };
+  return { results: (data.results ?? []) as LyricsResult[], web: (data.web ?? []) as LyricsPage[], sites: (data.sites ?? []) as MusicPage[], sure: data.sure !== false };
 }
 
 /** What's known about a song before its words are read: its name, and its Genius id when it came from a search. */

@@ -19,7 +19,8 @@ import ReadOnlyStudio, { type StudioActivity } from "./ReadOnlyStudio";
 import PartyStage, { readBands, type PartyHandle } from "./PartyStage";
 import { hostPosition } from "@/lib/client/liveSync";
 import type { PartyMusic, PartyPerson } from "@/lib/client/party/partyWorld";
-import { applyLiveMix, type LiveMix } from "@/lib/client/liveStudio";
+import { applyLiveMix, type LiveLyrics as LiveWords, type LiveMix } from "@/lib/client/liveStudio";
+import LiveLyrics from "./LiveLyrics";
 import { describeMixChanges } from "@/lib/client/liveStudioDiff";
 
 const VOLUME_KEY = "remixt_live_volume";
@@ -83,6 +84,8 @@ export default function LiveRoom({
   // Studio sessions: the host's mix, applied here as it changes, and what changed in words.
   const [studioReady, setStudioReady] = useState(false);
   const [activity, setActivity] = useState<StudioActivity[]>([]);
+  /** The words a singing host is singing from. */
+  const [lyrics, setLyrics] = useState<LiveWords | null>(null);
   const lastMix = useRef<LiveMix | null>(null);
   const activityId = useRef(0);
   const conn = useLiveConnection(stream.id, {
@@ -103,6 +106,7 @@ export default function LiveRoom({
           const lines = describeMixChanges(lastMix.current, applied);
           lastMix.current = applied;
           setStudioReady(true);
+          setLyrics(applied.lyrics ?? null);
           if (lines.length) {
             const at = Date.now();
             setActivity((list) => [...lines.map((text) => ({ id: activityId.current++, text, at })).reverse(), ...list].slice(0, 80));
@@ -442,6 +446,7 @@ export default function LiveRoom({
                 </p>
               )}
 
+              {hasStage && studio && lyrics && <LiveLyrics lyrics={lyrics} />}
               {hasStage && studio && <ReadOnlyStudio activity={activity} />}
 
               {hasStage && !studio && lanes.length > 0 && (

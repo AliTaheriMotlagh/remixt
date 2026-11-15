@@ -1,5 +1,6 @@
 "use client";
 
+import { activeSheet, useLyrics } from "./lyricsStore";
 import { projectToPayload } from "./remixLanes";
 import { withoutRecording } from "./studioHistory";
 import { DEFAULT_FX, PROJECT_DEFAULTS, useStudioStore, type ProjectSettings, type StudioLane } from "./studioStore";
@@ -12,9 +13,22 @@ import { DEFAULT_FX, PROJECT_DEFAULTS, useStudioStore, type ProjectSettings, typ
 // after each edit (PUT /api/live/[id]/mix) and only reaches listeners when
 // it changed. The transport — playing or not, where, which lanes are
 // selected — goes through the same stage state as a performance, so
-// listeners play in step (see liveSync.ts).
+// listeners play in step (see liveSync.ts). A singer's open lyrics travel
+// with the mix, so the room can follow the words as they're sung.
 
-export type LiveMix = { lanes: StudioLane[]; project: ProjectSettings };
+/** The words the host is singing from (LRC text: timed lines follow the playhead). */
+export type LiveLyrics = { title: string; artist: string; text: string };
+
+export type LiveMix = { lanes: StudioLane[]; project: ProjectSettings; lyrics?: LiveLyrics | null };
+
+const MAX_LYRICS = 20_000;
+
+/** The host's open lyrics sheet, if any. */
+function lyricsOf(): LiveLyrics | null {
+  const sheet = activeSheet(useLyrics.getState());
+  if (!sheet || !sheet.text.trim()) return null;
+  return { title: sheet.title.slice(0, 200), artist: sheet.artist.slice(0, 200), text: sheet.text.slice(0, MAX_LYRICS) };
+}
 
 const MIX_DELAY_MS = 350;
 const KEYFRAME_PLAYING_MS = 3000;
@@ -40,6 +54,7 @@ export function mixOf(state: Store): LiveMix {
   return {
     lanes: state.lanes.map((lane) => ({ ...lane, peaks: thinPeaks(lane.peaks) })),
     project: projectToPayload(state),
+    lyrics: lyricsOf(),
   };
 }
 
@@ -132,6 +147,11 @@ export function startStudioBroadcast(streamId: string): () => void {
     }
   });
 
+  // Picking, editing or timing the lyrics is a change to what the room sees.
+  const unsubscribeLyrics = useLyrics.subscribe((state, previous) => {
+    if (state.activeId !== previous.activeId || state.sheets !== previous.sheets) scheduleMix();
+  });
+
   const tick = () => {
     void sendState();
     keyframe = setTimeout(tick, useStudioStore.getState().isPlaying ? KEYFRAME_PLAYING_MS : KEYFRAME_IDLE_MS);
@@ -142,6 +162,7 @@ export function startStudioBroadcast(streamId: string): () => void {
   return () => {
     stopped = true;
     unsubscribe();
+    unsubscribeLyrics();
     for (const timer of [mixTimer, stateTimer, keyframe]) if (timer) clearTimeout(timer);
   };
 }
@@ -160,6 +181,15 @@ function isMix(value: unknown): value is { lanes: Partial<StudioLane>[]; project
  */
 export function applyLiveMix(raw: unknown): LiveMix | null {
   if (!isMix(raw)) return null;
+  const words = (raw as { lyrics?: Partial<LiveLyrics> | null }).lyrics;
+  const lyrics: LiveLyrics | null =
+    words && typeof words.text === "string" && words.text.trim()
+      ? {
+          title: typeof words.title === "string" ? words.title.slice(0, 200) : "",
+          artist: typeof words.artist === "string" ? words.artist.slice(0, 200) : "",
+          text: words.text.slice(0, MAX_LYRICS),
+        }
+      : null;
   const lanes = raw.lanes
     .filter((l): l is StudioLane => typeof l?.laneId === "string" && typeof l.stemId === "string")
     .map((lane) => ({
@@ -185,5 +215,5 @@ export function applyLiveMix(raw: unknown): LiveMix | null {
       loopEnd: project.loopEnd,
     }));
   });
-  return { lanes, project };
+  return { lanes, project, lyrics };
 }

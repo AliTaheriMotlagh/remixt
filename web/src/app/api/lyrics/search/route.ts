@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { LyricsPage, LyricsResult } from "@/lib/lyrics";
 import { hasSureMatch, libraryQueries, rankCandidates, type LibraryQuery } from "@/lib/lyricsSearch";
+import { askerOf, searchMusicSites } from "@/lib/musicSites";
 
 // Finds a song's lyrics to sing along to in the Studio, from LRCLIB
 // (lrclib.net): a free, open database of lyrics, many of them timed line
@@ -17,6 +18,10 @@ import { hasSureMatch, libraryQueries, rankCandidates, type LibraryQuery } from 
 //                                  artist its title names)
 //   &duration=<seconds>            the mix's song length: the same
 //                                  recording comes first
+//
+// Alongside: the song's page on Genius (words only), and on Iranian music
+// sites (lib/musicSites.ts) — the words most Persian songs are missing from
+// the library, and the song's MP3 itself.
 
 const BASE = "https://lrclib.net/api";
 const MAX_RESULTS = 12;
@@ -64,6 +69,9 @@ export async function GET(req: NextRequest) {
   if (!q && !track) return NextResponse.json({ error: "Type a song to look for" }, { status: 400 });
 
   const wanted = [artist, track, q].filter(Boolean).join(" ");
+  // Asked while the library is: they don't wait on each other.
+  const web = geniusPages(wanted);
+  const sites = searchMusicSites(wanted, askerOf(req.headers)).catch(() => []);
   const queries = libraryQueries(q, { track: track || undefined, artist: artist || undefined });
   // Two at a time, best first, stopping once the song is surely found: the
   // library limits how often one server may ask.
@@ -77,15 +85,16 @@ export async function GET(req: NextRequest) {
     }
     if (hasSureMatch(found.map(toResult), wanted)) break;
   }
-  if (found.length === 0 && failed > 0) {
+  const candidates = found.filter((r) => r && typeof r.id === "number" && (r.plainLyrics || r.syncedLyrics || r.instrumental)).map(toResult);
+  const results = rankCandidates(candidates, wanted, duration).slice(0, MAX_RESULTS);
+  const [webPages, sitePages] = await Promise.all([web, sites]);
+  if (found.length === 0 && failed > 0 && !webPages.length && !sitePages.length) {
     return NextResponse.json({ error: "The lyrics library couldn't be reached — try again in a moment, or paste the words in yourself" }, { status: 502 });
   }
 
-  const candidates = found.filter((r) => r && typeof r.id === "number" && (r.plainLyrics || r.syncedLyrics || r.instrumental)).map(toResult);
-  const results = rankCandidates(candidates, wanted, duration).slice(0, MAX_RESULTS);
-  const web = await geniusPages(wanted);
-
-  return NextResponse.json({ results, web }, { headers: { "Cache-Control": "public, max-age=600, s-maxage=3600" } });
+  // Whether the library surely has the song: if not, the sites' pages are likelier the one.
+  const sure = hasSureMatch(results, wanted);
+  return NextResponse.json({ results, web: webPages, sites: sitePages, sure }, { headers: { "Cache-Control": "public, max-age=600, s-maxage=3600" } });
 }
 
 /**

@@ -6,6 +6,7 @@ import { isIP } from "net";
 import os from "os";
 import path from "path";
 import { isYouTubeLink, YOUTUBE_UNAVAILABLE } from "./linkHosts";
+import { audioLinksFrom, isAudioUrl, pageTitleOf, pageTitleParts } from "./musicPages";
 
 // Gets a song from a link — YouTube, SoundCloud, Bandcamp, Vimeo, a direct
 // MP3 URL, anything yt-dlp knows — on the server, since a browser isn't
@@ -286,6 +287,13 @@ async function searchFor(link: string, signal?: AbortSignal): Promise<string> {
  */
 export async function importSong(raw: string, signal?: AbortSignal): Promise<ImportedSong & { foundBySearch: boolean }> {
   const link = await checkLink(raw);
+  // An MP3's own address, or a music site's song page with its MP3s on it
+  // (Iranian download sites: 320 and 128): downloaded straight, no yt-dlp.
+  if (isAudioUrl(link)) return { ...(await withRetry(() => downloadAudioFile(link, { signal }), signal)), foundBySearch: false };
+  if (!isStreamingLink(link) && !isYouTubeLink(link) && !YTDLP_SITE.test(new URL(link).hostname)) {
+    const fromPage = await songOnPage(link, signal);
+    if (fromPage) return { ...fromPage, foundBySearch: false };
+  }
   let target = link;
   if (isStreamingLink(link)) {
     target = await searchFor(link, signal);
@@ -306,6 +314,157 @@ export async function importSong(raw: string, signal?: AbortSignal): Promise<Imp
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
   }
+}
+
+/** Sites yt-dlp reads itself — no point looking for an MP3 link on their pages. */
+const YTDLP_SITE = /(^|\.)(soundcloud\.com|bandcamp\.com|vimeo\.com|mixcloud\.com|audiomack\.com|dailymotion\.com|tiktok\.com|instagram\.com|facebook\.com|twitter\.com|x\.com|aparat\.com|radiojavan\.com|rj\.app)$/i;
+
+async function withRetry<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await work();
+    } catch (err) {
+      const transient = err instanceof ImportError && /timed out|took too long|temporar|reset|error \(5\d\d\)|Connection/i.test(err.message);
+      if (!transient || attempt >= 2 || signal?.aborted) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
+}
+
+const BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
+const MAX_REDIRECTS = 5;
+const MAX_PAGE_BYTES = 3_000_000;
+
+/** A GET that follows redirects one at a time, each to a public host only (see checkLink). */
+async function fetchPublic(link: string, { signal, referer, accept }: { signal?: AbortSignal; referer?: string; accept: string }) {
+  let url = link;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    await checkHost(new URL(url).hostname);
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        redirect: "manual",
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(240_000)]) : AbortSignal.timeout(240_000),
+        headers: { "User-Agent": BROWSER_UA, Accept: accept, "Accept-Language": "fa,en;q=0.8", ...(referer ? { Referer: referer } : {}) },
+      });
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      throw new ImportError("That site timed out or dropped the connection — try again");
+    }
+    const location = res.headers.get("location");
+    if (res.status >= 300 && res.status < 400 && location) {
+      void res.body?.cancel();
+      url = new URL(location, url).href;
+      if (!/^https?:$/.test(new URL(url).protocol)) throw new ImportError("That link goes somewhere this server can't fetch from");
+      continue;
+    }
+    return { res, url };
+  }
+  throw new ImportError("That link redirects too many times");
+}
+
+/** A response's body, up to `max` bytes — more than that is an error, or (for a page) cut off. */
+async function readCapped(res: Response, max: number, { cut = false } = {}): Promise<Buffer> {
+  const reader = res.body?.getReader();
+  if (!reader) return Buffer.alloc(0);
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > max) {
+      void reader.cancel();
+      if (cut) break;
+      throw new ImportError("That file is too big to import");
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
+
+const AUDIO_TYPES: Record<string, string> = {
+  "audio/mpeg": "mp3",
+  "audio/mp3": "mp3",
+  "audio/mp4": "m4a",
+  "audio/x-m4a": "m4a",
+  "audio/aac": "aac",
+  "audio/ogg": "ogg",
+  "audio/opus": "opus",
+  "audio/wav": "wav",
+  "audio/x-wav": "wav",
+  "audio/flac": "flac",
+  "audio/webm": "webm",
+};
+
+/** An audio file at `link`, downloaded as it is. `title`: the song's name when the page said it. */
+export async function downloadAudioFile(link: string, { signal, referer, title }: { signal?: AbortSignal; referer?: string; title?: string } = {}): Promise<ImportedSong> {
+  const { res, url } = await fetchPublic(link, { signal, referer, accept: "audio/*,*/*;q=0.5" });
+  if (res.status === 404 || res.status === 410) throw new ImportError("That file isn't there any more — the site may have moved it");
+  if (res.status === 401 || res.status === 403) throw new ImportError("That site didn't let this server download the song");
+  if (!res.ok) throw new ImportError(`That site answered with an error (${res.status})`);
+  const type = (res.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+  if (/^text\/|html|json/.test(type)) throw new ImportError("That link opened a page, not a song file");
+  const length = Number(res.headers.get("content-length"));
+  if (length > MAX_IMPORT_BYTES) throw new ImportError("That file is too big to import");
+  const bytes = await readCapped(res, MAX_IMPORT_BYTES);
+  if (bytes.length < 20_000) throw new ImportError("That file is too small to be a song");
+  let file = "";
+  try {
+    file = decodeURIComponent(new URL(url).pathname.split("/").pop() ?? "");
+  } catch {
+    file = new URL(url).pathname.split("/").pop() ?? "";
+  }
+  const ext = (/\.(\w{2,4})$/.exec(file)?.[1] ?? AUDIO_TYPES[type] ?? "mp3").toLowerCase();
+  if (!EXTENSIONS.has(ext)) throw new ImportError("That link gave a file that isn't audio we can use");
+  const name = (title || file.replace(/\.\w{2,4}$/, "").replace(/[_+]+/g, " "))
+    .replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 150);
+  return { bytes, title: name || "Untitled", ext };
+}
+
+/**
+ * The song on a web page that links its audio file (a music site's song
+ * page), downloaded — or null when the page has none, for yt-dlp to try.
+ */
+async function songOnPage(link: string, signal?: AbortSignal): Promise<ImportedSong | null> {
+  let html = "";
+  let pageUrl = link;
+  try {
+    const { res, url } = await fetchPublic(link, { signal, accept: "text/html,application/xhtml+xml,*/*;q=0.5" });
+    pageUrl = url;
+    const type = res.headers.get("content-type") ?? "";
+    // The link was a file after all (no extension in its address).
+    if (res.ok && /^audio\//i.test(type)) {
+      void res.body?.cancel();
+      return withRetry(() => downloadAudioFile(url, { signal }), signal);
+    }
+    if (!res.ok || !/html/i.test(type)) {
+      void res.body?.cancel();
+      return null;
+    }
+    html = (await readCapped(res, MAX_PAGE_BYTES, { cut: true })).toString("utf8");
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    return null;
+  }
+  const files = audioLinksFrom(html, pageUrl);
+  if (!files.length) return null;
+  const { title, artist } = pageTitleParts(pageTitleOf(html));
+  const name = [artist, title].filter(Boolean).join(" - ");
+  let lastError: unknown = null;
+  // The best quality first; if that copy is gone, the next.
+  for (const file of files.slice(0, 3)) {
+    try {
+      return await withRetry(() => downloadAudioFile(file.url, { signal, referer: pageUrl, title: name }), signal);
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      lastError = err;
+    }
+  }
+  throw lastError instanceof ImportError ? lastError : new ImportError("Couldn't download the song from that page");
 }
 
 export type ImportedSong = {

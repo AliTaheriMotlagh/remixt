@@ -1,13 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
-import { ArrowLeft, Check, ChevronDown, ClipboardPaste, Clock, ExternalLink, FileText, Link2, Music2, PenLine, Search, Sparkles, Trash2 } from "lucide-react";
-import { useLyrics } from "@/lib/client/lyricsStore";
-import { autoTimeSheet, importLyrics, laneOfRecording, searchLyrics, type SongHint } from "@/lib/client/lyricsSources";
-import { useStudioStore, type StudioLane } from "@/lib/client/studioStore";
+import { useEffect, useRef, useState, type ComponentType } from "react";
+import { ArrowLeft, Check, ChevronDown, ClipboardPaste, Clock, Download, ExternalLink, FileText, Globe, Link2, Loader2, Music2, PenLine, Search, Sparkles, Trash2 } from "lucide-react";
+import { useLyrics, type LyricSheet } from "@/lib/client/lyricsStore";
+import { autoTimeSheet, importLyrics, importLyricsLink, laneOfRecording, searchLyrics, type SearchAnswer, type SongHint } from "@/lib/client/lyricsSources";
+import { mixSongFor, sheetFitsMix, useMixSongs, type MixSong } from "@/lib/client/mixSongs";
+import { bringSongIn, useBringing } from "@/lib/client/songImport";
+import { useStudioStore } from "@/lib/client/studioStore";
 import { useStudioView } from "@/lib/client/studioView";
 import { formatClock, isSung, isSynced, parseLyrics, placeOnLane, serializeLyrics, splitSongTitle, type LyricsPage, type LyricsResult } from "@/lib/lyrics";
 import { isLyricsLink, lyricsFromFile, lyricsFromHtml, lyricsLinkFrom, looksLikeHtml, type ImportedLyrics } from "@/lib/lyricsImport";
+import type { MusicPage } from "@/lib/musicPages";
 
 function safeHost(url: string) {
   try {
@@ -16,41 +19,27 @@ function safeHost(url: string) {
     return "";
   }
 }
-import { hasPersian, normalizePersian } from "@/lib/lyricsSearch";
+import { hasPersian, matchScore, normalizePersian } from "@/lib/lyricsSearch";
 
 // Choosing the lyrics to sing from, all on one screen: look a song up (in
 // Persian or English letters — the mix's own song is looked up as soon as
-// this opens) in the lyrics library and on Genius, paste a lyrics page's
-// link or embed code, open a lyrics file (LRC, SRT, VTT, text), paste the
-// words, write them, or have the AI write them — and the sheets used
-// before, to switch back to or delete. However the words come in, they're
-// timed on the way (autoTimeSheet): from the library's timed copy of the
-// song, or from the singing in the song's vocal lane — and lined up with
-// where the song plays in the mix.
-// Swapping lyrics is the same two taps from anywhere: "Change", then the
-// one you want.
+// this opens, its best match on top) in the lyrics library, on Genius and
+// on Iranian music sites (which have the words most Persian songs are
+// missing from the library — and the song's MP3, to bring into the mix),
+// paste a lyrics page's link or embed code, open a lyrics file (LRC, SRT,
+// VTT, text), paste the words, write them, or have the AI write them — and
+// the sheets used before (this song's first), to switch back to or delete.
+// However the words come in, they're timed on the way (autoTimeSheet):
+// from the library's timed copy of the song, or from the singing in the
+// song's vocal lane — and lined up with where the song plays in the mix.
+// Found lyrics remember the song they're for (see mixSongs.ts), so they
+// follow the mix when its song changes.
 
-/** A song playing in the mix, to look its lyrics up. */
-type MixSong = { key: string; song: string; artist: string; lane: StudioLane };
+/** The last search, kept while the page is open: closing and opening the picker shows it again. */
+let lastSearch: { label: string; forKey: string | null; answer: SearchAnswer } | null = null;
 
-/** Mix songs already looked up this visit: opening the picker again doesn't search again. */
-const autoSearched = new Set<string>();
-
-/** The songs in the mix by their titles — never a recorded take, never who uploaded it. */
-function useMixSongs(): MixSong[] {
-  const lanes = useStudioStore((s) => s.lanes);
-  return useMemo(() => {
-    const out: MixSong[] = [];
-    for (const lane of lanes) {
-      if (lane.artistName === "You" || /^studio vocal|— take \d+/i.test(lane.trackTitle)) continue;
-      const { song, artist } = splitSongTitle(lane.trackTitle);
-      if (!song) continue;
-      const key = normalizePersian(`${artist} ${song}`).toLowerCase();
-      if (out.some((m) => m.key === key)) continue;
-      out.push({ key, song, artist, lane });
-    }
-    return out.slice(0, 4);
-  }, [lanes]);
+function rememberSearch(search: NonNullable<typeof lastSearch>) {
+  lastSearch = search;
 }
 
 /** The mix lane playing this recording, if any (see laneOfRecording). */
@@ -66,18 +55,18 @@ function QuickAction({ icon: Icon, label, onClick, tone }: { icon: ComponentType
   return (
     <button
       onClick={onClick}
-      className="flex min-h-11 flex-col items-center justify-center gap-1 rounded-xl border border-border bg-background/50 px-2 py-2 text-[11px] font-semibold transition-colors hover:border-vocals/60 hover:bg-surface-raised sm:flex-row sm:gap-1.5 sm:text-xs"
+      className="flex min-h-11 min-w-0 flex-col items-center justify-center gap-0.5 rounded-xl border border-border bg-background/50 px-1 py-1.5 text-[11px] font-semibold leading-tight transition-colors hover:border-vocals/60 hover:bg-surface-raised sm:flex-row sm:gap-1.5 sm:px-2 sm:text-xs"
     >
-      <Icon className={tone} /> {label}
+      <Icon className={`shrink-0 ${tone}`} /> <span className="max-w-full truncate">{label}</span>
     </button>
   );
 }
 
-function ResultRow({ result, onUse, matchesMix, busy }: { result: LyricsResult; onUse: () => void; matchesMix: boolean; busy: boolean }) {
+function ResultRow({ result, onUse, matchesMix, busy, best = false }: { result: LyricsResult; onUse: () => void; matchesMix: boolean; busy: boolean; best?: boolean }) {
   const [open, setOpen] = useState(false);
   const usable = !!(result.plain || result.synced);
   return (
-    <li className="rounded-xl border border-border bg-background/50 transition-colors hover:border-vocals/50">
+    <li className={`rounded-xl border transition-colors hover:border-vocals/50 ${best ? "border-vocals/60 bg-vocals/5" : "border-border bg-background/50"}`}>
       <div className="flex items-center gap-2 p-2">
         <button onClick={() => setOpen((v) => !v)} className="min-w-0 flex-1 text-left" aria-expanded={open} title="Show the first lines">
           <p dir="auto" className="truncate text-sm font-medium">
@@ -87,6 +76,7 @@ function ResultRow({ result, onUse, matchesMix, busy }: { result: LyricsResult; 
             {[result.artist, result.duration ? formatClock(result.duration) : ""].filter(Boolean).join(" · ")}
           </p>
           <span className="mt-1 flex flex-wrap gap-1">
+            {best && <span className="rounded-full bg-vocals px-1.5 py-px text-[10px] font-bold text-white">Best match</span>}
             {result.synced ? (
               <span className="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-px text-[10px] font-semibold text-success" title="Every line has its time — they'll follow the song">
                 <Clock className="h-3 w-3" /> Timed
@@ -152,6 +142,42 @@ function WebRow({ page, onUse, busy }: { page: LyricsPage; onUse: () => void; bu
   );
 }
 
+/** A song's page on an Iranian music site: its words to sing from, and the song itself to bring into the mix. */
+function SiteRow({ page, onLyrics, busy }: { page: MusicPage; onLyrics: () => void; busy: boolean }) {
+  const bringing = useBringing(page.url);
+  const name = [page.artist, page.title].filter(Boolean).join(" – ");
+  return (
+    <li className="flex items-center gap-2 rounded-xl border border-border bg-background/50 p-2 transition-colors hover:border-vocals/50">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-beat/15 text-beat">
+        <Globe />
+      </span>
+      <a href={page.url} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1" title="Open the page">
+        <span dir="auto" className="block truncate text-sm font-medium">
+          {page.title}
+        </span>
+        <span dir="auto" className="block truncate text-[11px] text-muted">
+          {[page.artist, page.site].filter(Boolean).join(" · ")}
+        </span>
+      </a>
+      <button
+        onClick={() => {
+          const why = bringSongIn(page.url, name);
+          if (why) useStudioView.getState().notify(why, "error");
+        }}
+        disabled={bringing}
+        className="flex h-10 shrink-0 items-center gap-1 rounded-lg border border-border px-2.5 text-xs font-semibold transition-colors hover:border-beat disabled:opacity-60"
+        title="Bring the song into the mix: downloaded, split here into its beat and vocal, kept private to you"
+        aria-label={`Bring “${name}” into the mix`}
+      >
+        {bringing ? <Loader2 className="animate-spin" /> : <Download />} <span className="max-sm:hidden">{bringing ? "Getting…" : "Song"}</span>
+      </button>
+      <button onClick={onLyrics} disabled={busy} className="h-10 shrink-0 rounded-lg bg-vocals px-3 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-40" aria-label={`Use the lyrics of “${name}”`}>
+        Lyrics
+      </button>
+    </li>
+  );
+}
+
 export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPicked: () => void; onWrite: () => void; onAi: () => void; onBack?: () => void }) {
   const sheets = useLyrics((s) => s.sheets);
   const activeId = useLyrics((s) => s.activeId);
@@ -163,17 +189,27 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
   const active = sheets.find((s) => s.id === activeId);
   const mixSongs = useMixSongs();
   const lanes = useStudioStore((s) => s.lanes);
-  const [query, setQuery] = useState("");
-  const [searchedFor, setSearchedFor] = useState("");
+  // The last search, shown again — unless it was for a song that's left the mix.
+  const kept = lastSearch && (!lastSearch.forKey || mixSongs.some((m) => m.key === lastSearch!.forKey)) ? lastSearch : null;
+  const [query, setQuery] = useState(kept?.label ?? "");
+  const [searchedFor, setSearchedFor] = useState(kept?.label ?? "");
+  /** The mix song the search is for, if it's one of them: the lyrics picked belong to it. */
+  const [forSong, setForSong] = useState<MixSong | null>(() => (kept?.forKey ? mixSongs.find((m) => m.key === kept.forKey) ?? null : null));
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [results, setResults] = useState<LyricsResult[] | null>(null);
-  const [web, setWeb] = useState<LyricsPage[]>([]);
+  const [results, setResults] = useState<LyricsResult[] | null>(kept?.answer.results ?? null);
+  const [web, setWeb] = useState<LyricsPage[]>(kept?.answer.web ?? []);
+  const [sites, setSites] = useState<MusicPage[]>(kept?.answer.sites ?? []);
+  const [sure, setSure] = useState(kept?.answer.sure ?? true);
+  /** The library's other results, shown when it isn't sure it has the song. */
+  const [allResults, setAllResults] = useState(false);
   /** A page or file being read in. */
   const [importing, setImporting] = useState<string | null>(null);
   /** A page that couldn't be read from here, to copy the words from by hand. */
   const [manual, setManual] = useState<{ url: string; title: string; artist: string; why: string } | null>(null);
   const file = useRef<HTMLInputElement>(null);
+  /** The newest search: an older one answering late (the mix's song, looked up on opening) doesn't replace it. */
+  const searchId = useRef(0);
   const isLink = isLyricsLink(query);
 
   /**
@@ -194,12 +230,20 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
       }
     }
     setImporting(null);
-    create({ title: lyrics.title || "Lyrics", artist: lyrics.artist, text, source, aligned: isAligned });
+    create({ title: lyrics.title || "Lyrics", artist: lyrics.artist, text, source, aligned: isAligned, ...binding(lyrics.title, lyrics.artist, source) });
     const notify = useStudioView.getState().notify;
     if (note) notify(note);
     else if (isSynced(parseLyrics(text))) notify(isAligned ? "Lyrics lined up with your song in the mix" : "Lyrics added, with their times");
     else notify(`Lyrics added${lyrics.source ? ` from ${lyrics.source}` : ""} — no timing found: tap along to time them`);
     onPicked();
+  }
+
+  /** Which song in the mix found lyrics are the words of (see LyricSheet.song) — or, for none in particular, the mix they were picked over. */
+  function binding(title: string, artist: string, source: LyricSheet["source"]): Pick<LyricSheet, "song" | "mix"> {
+    if (source === "own") return {};
+    const song = mixSongFor(title, artist, mixSongs) ?? forSong;
+    if (song) return { song: song.key };
+    return mixSongs.length ? { mix: mixSongs.map((m) => m.key) } : {};
   }
 
   /** `song`: what the page is, when known (a Genius result) — tried other ways when the page can't be read, and kept for words pasted from it by hand. */
@@ -218,6 +262,29 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
     } finally {
       setImporting(null);
     }
+  }
+
+  /**
+   * The words from a music site's page — or, when that page has none (only
+   * the MP3, or only a translation), from the same song's page on another
+   * site found by the search.
+   */
+  async function lyricsFromSites(page: MusicPage) {
+    const same = sites.filter((p) => p.url !== page.url && matchScore(`${page.artist} ${page.title}`, p.title, p.artist) >= 0.6);
+    setError(null);
+    setManual(null);
+    for (const [i, candidate] of [page, ...same].slice(0, 4).entries()) {
+      setImporting(i === 0 ? `Reading ${candidate.site}…` : `No words on that page — trying ${candidate.site}…`);
+      try {
+        const lyrics = await importLyricsLink(candidate.url, { title: candidate.title, artist: candidate.artist });
+        await addTimed({ ...lyrics, title: lyrics.title || candidate.title, artist: lyrics.artist || candidate.artist }, "web");
+        return;
+      } catch {
+        // The next site.
+      }
+    }
+    setImporting(null);
+    setManual({ url: page.url, title: page.title, artist: page.artist, why: "no-words" });
   }
 
   async function openFile(chosen: File | undefined) {
@@ -255,27 +322,37 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
             ...(what.lane.originalDuration ? { duration: String(Math.round(what.lane.originalDuration)) } : {}),
           });
     if (typeof what !== "string") setQuery(label);
+    // Typed: for a mix song if it names one.
+    const target = typeof what === "string" ? mixSongFor(splitSongTitle(label).song || label, splitSongTitle(label).artist, mixSongs) : what;
+    setForSong(target);
     setSearchedFor(label);
     setSearching(true);
     setError(null);
+    const id = ++searchId.current;
     try {
       const found = await searchLyrics(params);
+      if (id !== searchId.current) return;
       setResults(found.results);
       setWeb(found.web);
+      setSites(found.sites);
+      setSure(found.sure);
+      setAllResults(false);
+      rememberSearch({ label, forKey: target?.key ?? null, answer: found });
     } catch (err) {
+      if (id !== searchId.current) return;
       setError(err instanceof Error ? err.message : "Couldn't search");
       setResults(null);
       setWeb([]);
+      setSites([]);
     } finally {
-      setSearching(false);
+      if (id === searchId.current) setSearching(false);
     }
   }
 
-  // The mix's song is looked up as soon as the picker opens: most of the time it's the one wanted.
+  // The mix's song is looked up as soon as the picker opens (unless that's what's shown already): most of the time it's the one wanted.
   const first = mixSongs[0];
   useEffect(() => {
-    if (!first || autoSearched.has(first.key)) return;
-    autoSearched.add(first.key);
+    if (!first || lastSearch?.forKey === first.key || (lastSearch && !lastSearch.forKey && kept)) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- a search started for the mix's song
     void search(first);
     // Only when the mix's first song changes.
@@ -301,7 +378,7 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
     if (!text) {
       if (manual?.title) {
         // Named for the page they come from, ready for the words.
-        create({ title: manual.title, artist: manual.artist, text: "", source: "web" });
+        create({ title: manual.title, artist: manual.artist, text: "", source: "web", ...binding(manual.title, manual.artist, "web") });
         setManual(null);
         useLyrics.getState().setView("edit");
       } else onWrite();
@@ -334,9 +411,25 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
   }
 
   const q = normalizePersian(query).toLowerCase();
-  const saved = q
-    ? sheets.filter((s) => normalizePersian(`${s.title} ${s.artist}`).toLowerCase().includes(q))
-    : sheets;
+  const matching = q && !isLink && !results ? sheets.filter((s) => normalizePersian(`${s.title} ${s.artist}`).toLowerCase().includes(q)) : sheets;
+  // The ones for the song in the mix first.
+  const fits = (s: LyricSheet) => mixSongs.length > 0 && sheetFitsMix(s, mixSongs) === true;
+  const saved = [...matching.filter(fits), ...matching.filter((s) => !fits(s))];
+  const bestIsMix = !!results?.[0] && (!!results[0].synced && !!laneOf(results[0], lanes));
+  // The library not sure it has the song, and the music sites with pages for it: those first.
+  const sitesFirst = sites.length > 0 && !sure && !bestIsMix;
+  const shownResults = results ? (sitesFirst && !allResults ? results.slice(0, 4) : results) : [];
+  const sitesBlock = sites.length > 0 && (
+    <>
+      <p className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-muted">On Iranian music sites · lyrics, and the song</p>
+      <ul className="flex flex-col gap-1.5">
+        {sites.map((page) => (
+          <SiteRow key={page.url} page={page} busy={!!importing} onLyrics={() => void lyricsFromSites(page)} />
+        ))}
+      </ul>
+      {sitesFirst && results && results.length > 0 && <p className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-muted">From the lyrics library</p>}
+    </>
+  );
   const webSearch = `https://www.google.com/search?q=${encodeURIComponent(
     hasPersian(searchedFor) ? `متن آهنگ ${searchedFor}` : `${searchedFor} lyrics`
   )}`;
@@ -355,6 +448,26 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
           <p className="truncate text-[11px] text-muted">Find a song in Persian or English, paste a lyrics link, or bring your own words.</p>
         </div>
       </div>
+
+      {mixSongs.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
+          <Music2 className="h-3.5 w-3.5 shrink-0 text-brand-strong" /> In your mix:
+          {mixSongs.map((m) => (
+            <button
+              key={m.key}
+              onClick={() => void search(m)}
+              dir="auto"
+              aria-pressed={forSong?.key === m.key}
+              className={`max-w-[16rem] truncate rounded-full border px-2.5 py-1 text-[11px] transition-colors hover:border-vocals hover:text-foreground ${
+                forSong?.key === m.key ? "border-vocals bg-vocals/10 font-semibold text-foreground" : "border-border text-muted"
+              }`}
+              title={`Find the lyrics of “${m.song}”`}
+            >
+              {m.artist ? `${m.artist} – ${m.song}` : m.song}
+            </button>
+          ))}
+        </div>
+      )}
 
       <form
         onSubmit={(e) => {
@@ -381,7 +494,7 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
                 void importLink(pasted);
               }
             }}
-            placeholder="Song or artist — or paste a lyrics link"
+            placeholder="Song, artist or link"
             dir="auto"
             type="search"
             enterKeyHint={isLink ? "go" : "search"}
@@ -391,10 +504,11 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
         </div>
         <button
           type="submit"
-          disabled={searching || !!importing || !query.trim()}
+          // Not held while a search runs: a new one replaces it (the mix's song is looked up on opening, and the singer may want another).
+          disabled={!!importing || !query.trim()}
           className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl bg-vocals px-4 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
         >
-          {searching ? "Looking…" : importing ? "Reading…" : isLink ? "Import" : "Find"}
+          {importing ? "Reading…" : searching && query.trim() === searchedFor ? "Looking…" : isLink ? "Import" : "Find"}
         </button>
       </form>
       {importing && (
@@ -407,7 +521,9 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
         <div className="flex flex-col gap-2 rounded-xl border border-beat/40 bg-beat/10 p-3 text-xs" role="status">
           <p>
             <b dir="auto">{manual.title ? `“${manual.title}”: ` : ""}</b>
-            {safeHost(manual.url)} doesn&apos;t let the Studio read its pages. Three steps instead:
+            {manual.why === "no-words"
+              ? "the music sites found have the song but not its words. If you find them on a page:"
+              : `${safeHost(manual.url)} doesn't let the Studio read its pages. Three steps instead:`}
           </p>
           <ol className="list-inside list-decimal space-y-0.5 text-muted">
             <li>Open the page — it opens in a new tab.</li>
@@ -428,28 +544,11 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
         </div>
       )}
 
-      {mixSongs.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
-          In your mix:
-          {mixSongs.map((m) => (
-            <button
-              key={m.key}
-              onClick={() => void search(m)}
-              dir="auto"
-              className="max-w-[16rem] truncate rounded-full border border-border px-2.5 py-1 text-[11px] text-muted transition-colors hover:border-vocals hover:text-foreground"
-              title={`Find the lyrics of “${m.song}”`}
-            >
-              {m.artist ? `${m.artist} – ${m.song}` : m.song}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <QuickAction icon={ClipboardPaste} label="Paste words or link" onClick={() => void paste()} tone="text-beat" />
-        <QuickAction icon={FileText} label="Open a file" onClick={() => file.current?.click()} tone="text-success" />
-        <QuickAction icon={PenLine} label="Write my own" onClick={onWrite} tone="text-vocals" />
-        <QuickAction icon={Sparkles} label="Write with AI" onClick={onAi} tone="text-brand-strong" />
+      <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
+        <QuickAction icon={ClipboardPaste} label="Paste" onClick={() => void paste()} tone="text-beat" />
+        <QuickAction icon={FileText} label="File" onClick={() => file.current?.click()} tone="text-success" />
+        <QuickAction icon={PenLine} label="Write" onClick={onWrite} tone="text-vocals" />
+        <QuickAction icon={Sparkles} label="AI" onClick={onAi} tone="text-brand-strong" />
       </div>
       <input
         ref={file}
@@ -464,8 +563,8 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
 
       {(searching || error || results) && (
         <section aria-label="Found online" className="flex flex-col gap-1.5">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
-            {searching ? `Looking for “${searchedFor}”…` : `Online · “${searchedFor}”`}
+          <p dir="auto" className="truncate text-[11px] font-semibold uppercase tracking-wide text-muted">
+            {searching ? `Looking for “${searchedFor}”…` : `Found for “${searchedFor}”`}
           </p>
           {searching && (
             <div className="flex flex-col gap-1.5" aria-hidden>
@@ -475,13 +574,20 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
             </div>
           )}
           {!searching && error && <p className="text-xs text-danger">{error}</p>}
+          {!searching && sitesFirst && sitesBlock}
           {!searching && results && results.length > 0 && (
             <ul className="flex flex-col gap-1.5">
-              {results.map((r) => (
-                <ResultRow key={r.id} result={r} busy={!!importing} onUse={() => void use(r)} matchesMix={!!r.synced && !!laneOf(r, lanes)} />
+              {shownResults.map((r, i) => (
+                <ResultRow key={r.id} result={r} best={i === 0 && !sitesFirst && (bestIsMix || !!forSong || sure)} busy={!!importing} onUse={() => void use(r)} matchesMix={!!r.synced && !!laneOf(r, lanes)} />
               ))}
             </ul>
           )}
+          {!searching && results && shownResults.length < results.length && (
+            <button onClick={() => setAllResults(true)} className="h-9 self-start rounded-lg px-2 text-xs font-semibold text-vocals hover:bg-vocals/10">
+              Show {results.length - shownResults.length} more from the lyrics library
+            </button>
+          )}
+          {!searching && !sitesFirst && sitesBlock}
           {!searching && web.length > 0 && (
             <>
               <p className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-muted">On Genius · words, timed for you</p>
@@ -505,7 +611,7 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
               , copy the page&apos;s link (or its embed code) and paste it in the box above.
             </p>
           )}
-          {!searching && results && results.length === 0 && web.length === 0 && (
+          {!searching && results && results.length === 0 && web.length === 0 && sites.length === 0 && (
             <div className="flex flex-col gap-2 rounded-xl border border-dashed border-border px-3 py-3 text-xs text-muted">
               <p>
                 <b className="text-foreground">No lyrics found for “{searchedFor}”.</b>{" "}
@@ -554,6 +660,7 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
       {saved.length > 0 && (
         <section aria-label="Your lyrics" className="flex flex-col gap-1.5">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Your lyrics · {saved.length}</p>
+          {/* The ones for the song in the mix are first, marked. */}
           <ul className="flex flex-col gap-1">
             {saved.map((s) => {
               const isActive = s.id === activeId;
@@ -572,6 +679,7 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
                         {s.title || "Untitled"}
                       </span>
                       <span dir="auto" className="block truncate text-[11px] text-muted">
+                        {fits(s) && <span className="me-1 font-semibold text-brand-strong">This song ·</span>}
                         {[s.artist, timed ? "Timed" : "Not timed"].filter(Boolean).join(" · ")}
                       </span>
                     </span>
@@ -598,7 +706,9 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
         </section>
       )}
 
-      <p className="text-[11px] text-muted/80">Timed lyrics from LRCLIB, an open lyrics library; words from Genius or any lyrics page you link. Files: .lrc, .srt, .vtt, .txt.</p>
+      <p className="text-[11px] text-muted/80">
+        Timed lyrics from LRCLIB, an open lyrics library; words from Genius, Iranian music sites, or any lyrics page you link. Files: .lrc, .srt, .vtt, .txt.
+      </p>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ChevronsLeft, ChevronsRight, Maximize2, Minus, Plus, Repeat, ScrollText, ZoomIn } from "lucide-react";
+import { ChevronsLeft, ChevronsRight, Maximize2, Repeat, Repeat2, ScrollText } from "lucide-react";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { activeSheet, useLyrics } from "@/lib/client/lyricsStore";
 import { projectKey } from "@/lib/client/lineStatus";
@@ -259,7 +259,8 @@ export default function VocalStage() {
   const lanes = useStudioStore((s) => s.lanes);
   const key = useMemo(() => projectKey(lanes).key, [lanes]);
   const hasMix = lanes.length > 0;
-  const [zoom, setZoom] = useState(1);
+  const zoom = useLyrics((s) => s.prefs.zoom);
+  const setPrefs = useLyrics((s) => s.setPrefs);
   const [focus, setFocus] = useState(false);
   const sections = useMemo(() => sectionsOf(lines), [lines]);
   const synced = isSynced(lines);
@@ -281,47 +282,40 @@ export default function VocalStage() {
         recording ? "border-danger/50 shadow-[0_0_48px_-20px_var(--danger)]" : "border-vocals/30"
       } bg-gradient-to-b from-vocals/10 via-surface to-surface`}
     >
-      <header className="flex flex-wrap items-center gap-2">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-vocals/15 text-vocals">
+      <header className="flex items-center gap-2">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-vocals/15 text-vocals max-sm:hidden">
           <ScrollText />
         </span>
+        {/* The song's name gets the room: everything else is one icon or one word. */}
         <div className="min-w-0 flex-1">
-          <p dir="auto" className="truncate text-sm font-bold leading-tight">
+          <p dir="auto" className="truncate text-sm font-bold leading-tight sm:text-base" title={sheet?.title}>
             {sheet?.title || "No lyrics yet"}
           </p>
-          <p className="flex flex-wrap items-center gap-x-2 text-[11px] text-muted">
+          <p className="flex min-w-0 items-center gap-x-2 overflow-hidden whitespace-nowrap text-[11px] text-muted">
             {sheet?.artist && (
-              <span dir="auto" className="max-w-[12rem] truncate">
+              <span dir="auto" className="min-w-0 truncate">
                 {sheet.artist}
               </span>
             )}
-            {hasMix && <span className="tabular-nums">{Math.round(bpm)} BPM</span>}
-            {key && <span>{keyLabel(key)}</span>}
-            {hasWords && <span className={synced ? "font-semibold text-success" : ""}>{synced ? "Timed" : "Not timed"}</span>}
+            {hasMix && <span className="shrink-0 tabular-nums">{Math.round(bpm)} BPM</span>}
+            {key && <span className="shrink-0">{keyLabel(key)}</span>}
+            {hasWords && <span className={`shrink-0 ${synced ? "font-semibold text-success" : ""}`}>{synced ? "Timed" : "Not timed"}</span>}
           </p>
         </div>
         {hasWords && (
-          <div className="flex items-center gap-1">
-            <button onClick={() => setZoom((z) => Math.max(0.5, z / 1.5))} className={icon} aria-label="Zoom out the waveform" title="See more of the song">
-              <Minus />
-            </button>
-            <span className="flex w-10 items-center justify-center text-muted" title="Waveform zoom">
-              <ZoomIn className="h-4 w-4" />
-            </span>
-            <button onClick={() => setZoom((z) => Math.min(4, z * 1.5))} className={icon} aria-label="Zoom in the waveform" title="See the timing closer up">
-              <Plus />
-            </button>
-            <button onClick={() => setFocus(true)} className={icon} aria-label="Full screen lyrics" title="Full screen, to sing from across the room">
-              <Maximize2 />
-            </button>
-          </div>
+          <button onClick={() => setFocus(true)} className={icon} aria-label="Full screen lyrics" title="Full screen, to sing from across the room">
+            <Maximize2 />
+          </button>
         )}
         <button
           onClick={pickLyrics}
           disabled={recording}
-          className="flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-semibold transition-colors hover:border-vocals disabled:opacity-40 max-lg:h-10"
+          className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-semibold transition-colors hover:border-vocals disabled:opacity-40 max-lg:h-10"
+          title={sheet ? "Find other lyrics, or switch to ones you've used" : "Find the lyrics to sing"}
         >
-          {sheet ? "Change lyrics" : "Pick lyrics"}
+          <Repeat2 className="sm:hidden" />
+          <span className="max-sm:hidden">{sheet ? "Change lyrics" : "Pick lyrics"}</span>
+          <span className="sm:hidden">{sheet ? "Change" : "Pick"}</span>
         </button>
       </header>
 
@@ -364,6 +358,7 @@ export default function VocalStage() {
           onSelectLine={(i) => selectLine(i, "stage")}
           selected={selected}
           zoom={zoom}
+          onZoom={(z) => setPrefs({ zoom: z })}
           height={112}
         />
       )}
@@ -381,7 +376,7 @@ export default function VocalStage() {
           </button>
           <LoopLineButton lines={lines} className={icon} />
           <RippleToggle />
-          <p className="ms-auto text-[11px] text-muted max-md:hidden">Drag a line on the waveform to move it · tap one to fix it</p>
+          <p className="ms-auto text-[11px] text-muted max-md:hidden">Drag a line on the waveform to move it · tap one to fix it · pinch or Ctrl/⌘ + scroll to zoom</p>
         </div>
       )}
 

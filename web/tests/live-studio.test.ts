@@ -20,6 +20,13 @@ const lane = (id: string, patch: Partial<DiffLane> = {}): DiffLane => ({
 const mix = (lanes: DiffLane[], project: DiffMix["project"] = { projectBpm: 120 }): DiffMix => ({ lanes, project });
 
 describe("describing a live mix's changes", () => {
+  test("a singer's lyrics: opened, retimed, put away", () => {
+    const words = (title: string, text: string) => ({ ...mix([lane("a")]), lyrics: { title, text } });
+    assert.deepEqual(describeMixChanges(mix([lane("a")]), words("Shayee", "[00:01.00]line")), ["Opened the lyrics of “Shayee”"]);
+    assert.deepEqual(describeMixChanges(words("Shayee", "[00:01.00]line"), words("Shayee", "[00:02.00]line")), ["Fixed the lyrics' timing"]);
+    assert.deepEqual(describeMixChanges(words("Shayee", "x"), mix([lane("a")])), ["Put the lyrics away"]);
+  });
+
   test("the first mix, and nothing changed", () => {
     assert.deepEqual(describeMixChanges(null, mix([lane("a"), lane("b")])), ["Opened a mix with 2 stems"]);
     assert.deepEqual(describeMixChanges(mix([lane("a")]), mix([lane("a")])), []);

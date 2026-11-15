@@ -31,6 +31,7 @@ import { detectMissingKeys, listenForBeats } from "@/lib/client/autoMatch";
 import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/remixLanes";
 import { useStudioStore } from "@/lib/client/studioStore";
 import { useStudioView } from "@/lib/client/studioView";
+import { useLyricsFollowMix } from "@/lib/client/mixSongs";
 import { importHistory, resetHistory, undo } from "@/lib/client/studioHistory";
 import {
   clearDraft,
@@ -68,6 +69,11 @@ export default function Studio({ user }: { user: User | null }) {
   const [startingSession, setStartingSession] = useState(false);
 
   const userId = user?.id ?? null;
+  useEffect(() => {
+    useStudioView.setState({ signedIn: !!userId });
+  }, [userId]);
+  // Found lyrics go with their song: a new song in the mix brings its own.
+  useLyricsFollowMix();
 
   // An invite link (/studio?join=<code>): join, then open the session.
   useEffect(() => {

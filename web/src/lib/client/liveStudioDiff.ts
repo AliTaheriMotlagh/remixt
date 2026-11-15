@@ -20,6 +20,8 @@ export type DiffLane = {
 
 export type DiffMix = {
   lanes: DiffLane[];
+  /** The words the host is singing from, if any. */
+  lyrics?: { title: string; text: string } | null;
   project: {
     projectBpm?: number;
     loopEnabled?: boolean;
@@ -122,5 +124,10 @@ export function describeMixChanges(prev: DiffMix | null, next: DiffMix, max = 4)
   if (p.crossfader !== undefined && n.crossfader !== undefined && Math.abs(p.crossfader - n.crossfader) > 0.02) {
     lines.push("Moved the crossfader");
   }
+  const words = next.lyrics ?? null;
+  const had = prev.lyrics ?? null;
+  if (words && (!had || had.title !== words.title)) lines.unshift(`Opened the lyrics of “${words.title}”`);
+  else if (!words && had) lines.push("Put the lyrics away");
+  else if (words && had && words.text !== had.text) lines.push("Fixed the lyrics' timing");
   return lines.slice(0, max);
 }

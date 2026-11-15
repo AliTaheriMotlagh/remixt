@@ -535,7 +535,7 @@ async function alreadyThere(hash: string, signal?: AbortSignal): Promise<Already
 export async function uploadSong(
   file: File,
   onStage: (stage: UploadStage) => void,
-  { tags = [], signal }: { tags?: string[]; signal?: AbortSignal } = {}
+  { tags = [], signal, keepPrivate = false }: { tags?: string[]; signal?: AbortSignal; keepPrivate?: boolean } = {}
 ): Promise<{ id: string; existing: AlreadyThere | null }> {
   onStage({ stage: "checking" });
   const sourceHash = await fingerprint(file);
@@ -558,6 +558,7 @@ export async function uploadSong(
       body: JSON.stringify({
         ...splitTrackPayload(file, result, duration, tags),
         ...(sourceHash ? { sourceHash } : {}),
+        ...(keepPrivate ? { private: true } : {}),
         // The upload form doesn't start without the box ticked.
         rightsConfirmed: true,
       }),

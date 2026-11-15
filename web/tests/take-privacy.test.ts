@@ -40,7 +40,7 @@ const json = { "Content-Type": "application/json" };
 type Target = { type: string; url: string; headers: Record<string, string> };
 
 /** A finished track: a take (`recording`) or a split song, its stems uploaded. */
-async function makeTrack(client: Client, { recording = false, sourceHash }: { recording?: boolean; sourceHash?: string } = {}) {
+async function makeTrack(client: Client, { recording = false, sourceHash, keepPrivate = false }: { recording?: boolean; sourceHash?: string; keepPrivate?: boolean } = {}) {
   const res = await client.fetch("/api/tracks", {
     method: "POST",
     headers: json,
@@ -52,6 +52,7 @@ async function makeTrack(client: Client, { recording = false, sourceHash }: { re
       vocalsPeaks: peaks,
       ...(recording ? { recording: true, tags: ["studio recording"] } : { beatPeaks: peaks, tags: [] }),
       ...(sourceHash ? { sourceHash } : {}),
+      ...(keepPrivate ? { private: true } : {}),
       rightsConfirmed: true,
     }),
   });
@@ -132,6 +133,15 @@ describe("takes are private until shared", () => {
     const song = await makeTrack(uploader);
     assert.ok((await libraryIds(listener)).includes(song.vocalId));
     assert.equal(await canHear(listener, song.vocalId), 200);
+  });
+
+  test("a song brought into the Studio from a link is kept to the one who brought it", async () => {
+    const singer = await signUp("bringer");
+    const listener = await signUp("onlooker");
+    const song = await makeTrack(singer, { keepPrivate: true });
+    assert.ok((await libraryIds(singer)).includes(song.vocalId));
+    assert.ok(!(await libraryIds(listener)).includes(song.vocalId));
+    assert.notEqual(await canHear(listener, song.vocalId), 200);
   });
 });
 

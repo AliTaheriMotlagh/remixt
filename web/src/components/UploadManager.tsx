@@ -274,7 +274,8 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
         </button>
       </form>
       <p className="mt-2 text-xs text-muted">
-        Paste one link or several at once — SoundCloud, Bandcamp, Vimeo, direct MP3 links and many more sites.
+        Paste one link or several at once — SoundCloud, Bandcamp, Vimeo, a direct MP3 link, a song&apos;s page on an Iranian music site
+        (beatmastering.ir, rozmusic, upmusics… — its MP3 is found on the page) and many more sites.
         {youtubeImport
           ? " YouTube works too."
           : " For YouTube, Spotify, Apple Music and other streaming links, the same song is looked up on SoundCloud — check it's the right one."}

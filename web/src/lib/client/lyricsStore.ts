@@ -23,6 +23,14 @@ export type LyricSheet = {
    * lined up with this beat (or kept as they are) the hint stays gone.
    */
   aligned?: boolean;
+  /**
+   * The song in the mix these are the words of (see mixSongs.songKey), so
+   * they're put away when that song leaves the mix and opened again when it
+   * comes back. Unset for words written here, which go with any beat.
+   */
+  song?: string;
+  /** The mix's songs when found lyrics were picked for none of them in particular: they go with that mix. */
+  mix?: string[];
 };
 
 const SHEETS_KEY = "remixt.lyrics.sheets";
@@ -43,8 +51,10 @@ export type LyricsPrefs = {
   barsPerLine: number;
   /** Moving a line's time moves the lines after it too, so the rest stays in sync. */
   ripple: boolean;
+  /** How close up the waveform under the lyrics is (see LyricsTimeline's zoom). */
+  zoom: number;
 };
-const DEFAULT_PREFS: LyricsPrefs = { style: "rap", fontSize: 18, barsPerLine: 1, ripple: true };
+const DEFAULT_PREFS: LyricsPrefs = { style: "rap", fontSize: 18, barsPerLine: 1, ripple: true, zoom: 1 };
 
 function read<T>(key: string, fallback: T): T {
   try {
@@ -99,7 +109,7 @@ type LyricsState = {
   load: () => void;
   select: (id: string | null) => void;
   /** A new sheet, opened. */
-  create: (sheet: Pick<LyricSheet, "title" | "artist" | "text" | "source" | "aligned">) => string;
+  create: (sheet: Pick<LyricSheet, "title" | "artist" | "text" | "source" | "aligned" | "song" | "mix">) => string;
   /** The open sheet's title or artist (or whether it's lined up with the beat). */
   rename: (patch: Partial<Pick<LyricSheet, "title" | "artist" | "aligned">>) => void;
   /** The open sheet's text as typed (no undo step for every key). */

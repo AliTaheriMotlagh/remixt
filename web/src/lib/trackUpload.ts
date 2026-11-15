@@ -25,6 +25,8 @@ export const splitTrackSchema = z.object({
   beatPeaks: peaksSchema.optional(),
   /** A vocal recorded in the Studio rather than a song split into stems. */
   recording: z.boolean().default(false),
+  /** Kept to its owner (a song brought into the Studio to sing over), not put in the public library. */
+  private: z.boolean().default(false),
   /** The beat's drums, bass and other parts, when the browser split them out too. */
   partPeaks: z
     .object({ drums: peaksSchema.optional(), bass: peaksSchema.optional(), other: peaksSchema.optional() })
@@ -68,12 +70,13 @@ export async function createTrackForUpload(
 
   await sql.begin(async (tx) => {
     // original_url stays empty: the original isn't kept.
-    // A take recorded in the booth is private to its singer until they share it.
+    // A take recorded in the booth is private to its singer until they share it, as is a
+    // song brought into the Studio to sing over.
     await tx`
       INSERT INTO tracks (id, owner_id, title, original_filename, status, duration, bpm, original_url,
                           tags, rights_confirmed_at, visibility, source_hash)
       VALUES (${trackId}, ${ownerId}, ${data.title}, ${data.filename}, 'processing', ${data.duration}, ${data.bpm}, '',
-              ${tags}, now(), ${data.recording ? "private" : "public"}, ${data.sourceHash ?? null})
+              ${tags}, now(), ${data.recording || data.private ? "private" : "public"}, ${data.sourceHash ?? null})
     `;
     for (const kind of kinds) {
       await tx`

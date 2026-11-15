@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { Minus, Plus } from "lucide-react";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { mixEnvelope } from "@/lib/client/lyricsSources";
 import { useStudioStore } from "@/lib/client/studioStore";
@@ -25,8 +26,13 @@ type Props = {
   onSelectLine?: (index: number) => void;
   /** The line being edited, drawn picked out. */
   selected?: number | null;
-  /** How much of the song shows: 1 ≈ 11 s across a phone, more zooms in. */
+  /** How much of the song shows: 1 ≈ 11 s across a phone, more zooms in (ZOOM_MIN–ZOOM_MAX). */
   zoom?: number;
+  /**
+   * Makes the strip zoomable: − / + on it, pinch, Ctrl/⌘ + scroll (and a
+   * sideways scroll moves through the song). Called with the new zoom.
+   */
+  onZoom?: (zoom: number) => void;
   take?: TimelineTake | null;
   /** Tapping or dragging the strip moves the playhead (not while recording). */
   seekable?: boolean;
@@ -41,9 +47,13 @@ function cssColor(el: Element, name: string, fallback: string) {
   return getComputedStyle(el).getPropertyValue(name).trim() || fallback;
 }
 
+export const ZOOM_MIN = 0.25;
+export const ZOOM_MAX = 8;
+const clampZoom = (z: number) => Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z)) * 100) / 100;
+
 /** Pixels a second at this width and zoom. */
 function pixelsPerSecond(width: number, zoom: number) {
-  return Math.min(110, Math.max(45, width / 11)) * Math.min(4, Math.max(0.5, zoom));
+  return Math.min(110, Math.max(45, width / 11)) * Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoom));
 }
 
 export default function LyricsTimeline({
@@ -53,6 +63,7 @@ export default function LyricsTimeline({
   onSelectLine,
   selected = null,
   zoom = 1,
+  onZoom,
   take = null,
   seekable = true,
   height = 84,
@@ -64,9 +75,9 @@ export default function LyricsTimeline({
   const box = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   // What the draw reads, kept current without re-subscribing.
-  const state = useRef({ lines, take, bpm, env, seekable, onMoveLine, ripple, onSelectLine, selected, zoom });
+  const state = useRef({ lines, take, bpm, env, seekable, onMoveLine, ripple, onSelectLine, selected, zoom, onZoom });
   useLayoutEffect(() => {
-    state.current = { lines, take, bpm, env, seekable, onMoveLine, ripple, onSelectLine, selected, zoom };
+    state.current = { lines, take, bpm, env, seekable, onMoveLine, ripple, onSelectLine, selected, zoom, onZoom };
   });
   /** The singing so far in a take being recorded: [time, level] pairs. */
   const live = useRef<{ start: number; points: [number, number][] }>({ start: -1, points: [] });
@@ -236,8 +247,31 @@ export default function LyricsTimeline({
     draw.current();
   }, [lines, take, env, bpm, selected, zoom, ripple]);
 
-  // Grabbing a line moves it; grabbing anywhere else scrubs the song.
+  // Grabbing a line moves it; grabbing anywhere else scrubs the song; two fingers zoom.
   const gesture = useRef<{ kind: "line" | "scrub"; x: number; playhead: number; moved: boolean; pointer: number } | null>(null);
+  /** Fingers on the strip, for a pinch. */
+  const touches = useRef(new Map<number, number>());
+  const pinch = useRef<{ distance: number; zoom: number } | null>(null);
+
+  // Ctrl/⌘ + scroll (and a trackpad's pinch, which arrives as that) zooms; a sideways scroll moves through the song.
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => {
+      const { onZoom, zoom, seekable } = state.current;
+      if (!onZoom) return;
+      if (event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+        onZoom(clampZoom(zoom * Math.exp(-event.deltaY * 0.01)));
+      } else if (seekable && Math.abs(event.deltaX) > Math.abs(event.deltaY) * 1.5) {
+        event.preventDefault();
+        const pps = pixelsPerSecond(el.clientWidth, zoom);
+        audioEngine.seek(Math.max(0, useStudioStore.getState().playhead + event.deltaX / pps));
+      }
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
 
   function geometry() {
     const width = box.current?.clientWidth ?? 0;
@@ -248,6 +282,16 @@ export default function LyricsTimeline({
   }
 
   function onPointerDown(event: React.PointerEvent) {
+    touches.current.set(event.pointerId, event.clientX);
+    if (touches.current.size === 2 && state.current.onZoom) {
+      // A second finger: a pinch, not a drag — whatever the first started is dropped.
+      const [a, b] = [...touches.current.values()];
+      pinch.current = { distance: Math.max(20, Math.abs(a - b)), zoom: state.current.zoom };
+      gesture.current = null;
+      drag.current = null;
+      draw.current();
+      return;
+    }
     const rect = event.currentTarget.getBoundingClientRect();
     const x = event.clientX - rect.left;
     const { pps, t0 } = geometry();
@@ -277,6 +321,12 @@ export default function LyricsTimeline({
   }
 
   function onPointerMove(event: React.PointerEvent) {
+    if (touches.current.has(event.pointerId)) touches.current.set(event.pointerId, event.clientX);
+    if (pinch.current && touches.current.size >= 2) {
+      const [a, b] = [...touches.current.values()];
+      state.current.onZoom?.(clampZoom(pinch.current.zoom * (Math.max(20, Math.abs(a - b)) / pinch.current.distance)));
+      return;
+    }
     const g = gesture.current;
     if (!g || g.pointer !== event.pointerId) return;
     const rect = event.currentTarget.getBoundingClientRect();
@@ -293,6 +343,11 @@ export default function LyricsTimeline({
   }
 
   function onPointerUp(event: React.PointerEvent) {
+    touches.current.delete(event.pointerId);
+    if (pinch.current) {
+      if (touches.current.size === 0) pinch.current = null;
+      return;
+    }
     const g = gesture.current;
     gesture.current = null;
     if (!g || g.pointer !== event.pointerId) return;
@@ -322,7 +377,9 @@ export default function LyricsTimeline({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerCancel={() => {
+      onPointerCancel={(event) => {
+        touches.current.delete(event.pointerId);
+        if (touches.current.size === 0) pinch.current = null;
         gesture.current = null;
         drag.current = null;
         draw.current();
@@ -335,6 +392,43 @@ export default function LyricsTimeline({
       }
     >
       <canvas ref={canvas} className="block" />
+      {onZoom && (
+        // On the strip itself, so what it changes is right there.
+        <div
+          className="absolute bottom-1.5 end-1.5 flex items-center overflow-hidden rounded-lg border border-border/70 bg-surface/90 shadow-sm backdrop-blur"
+          onPointerDown={(e) => e.stopPropagation()}
+          role="group"
+          aria-label="Waveform zoom"
+        >
+          <button
+            onClick={() => onZoom(clampZoom(zoom / 1.5))}
+            disabled={zoom <= ZOOM_MIN}
+            className="flex h-8 w-8 items-center justify-center text-muted hover:text-foreground disabled:opacity-30 max-lg:h-9 max-lg:w-9"
+            aria-label="Zoom out — see more of the song"
+            title="Zoom out — see more of the song (or pinch, or Ctrl/⌘ + scroll)"
+          >
+            <Minus className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={() => onZoom(1)}
+            onDoubleClick={() => onZoom(1)}
+            className="h-8 min-w-10 px-1 text-[11px] font-semibold tabular-nums text-muted hover:text-foreground max-lg:h-9"
+            title="Back to normal zoom"
+            aria-label={`Zoom ${zoom}×, tap to reset`}
+          >
+            {zoom >= 1 ? `${Math.round(zoom * 10) / 10}×` : `${Math.round(zoom * 100) / 100}×`}
+          </button>
+          <button
+            onClick={() => onZoom(clampZoom(zoom * 1.5))}
+            disabled={zoom >= ZOOM_MAX}
+            className="flex h-8 w-8 items-center justify-center text-muted hover:text-foreground disabled:opacity-30 max-lg:h-9 max-lg:w-9"
+            aria-label="Zoom in — see the timing closer up"
+            title="Zoom in — see the timing closer up (or pinch, or Ctrl/⌘ + scroll)"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

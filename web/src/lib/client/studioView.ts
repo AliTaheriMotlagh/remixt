@@ -20,8 +20,8 @@ export type StudioMode = "easy" | "vocal" | "pro";
 
 const MODES: readonly StudioMode[] = ["easy", "vocal", "pro"];
 
-/** The Vocalist studio's workspace under the stage: the words, the takes, or the vocal mix. */
-export type VocalTab = "lyrics" | "takes" | "mix";
+/** The Vocalist studio's workspace under the stage: the words, the takes, the vocal mix, or finding a song to sing over. */
+export type VocalTab = "lyrics" | "takes" | "mix" | "songs";
 
 /** A producer's main view: the timeline, or the mixing console. */
 export type ProView = "arrange" | "mixer";
@@ -65,6 +65,8 @@ type ViewState = {
   setProView: (view: ProView) => void;
   vocalTab: VocalTab;
   setVocalTab: (tab: VocalTab) => void;
+  /** Whether someone is signed in (getting a song from a link needs it). */
+  signedIn: boolean;
   aiOpen: boolean;
   setAiOpen: (open: boolean) => void;
   /** A tab the AI producer was asked to show (it follows it when it changes). */
@@ -149,6 +151,7 @@ export const useStudioView = create<ViewState>((set) => ({
   },
   vocalTab: "lyrics",
   setVocalTab: (vocalTab) => set({ vocalTab }),
+  signedIn: false,
   aiOpen: false,
   setAiOpen: (aiOpen) => set({ aiOpen }),
   aiTab: null,
