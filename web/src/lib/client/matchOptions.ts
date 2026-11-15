@@ -79,9 +79,8 @@ export function sectionLabels(ctx: PairContext): string[] {
  * the last one ends, plus `breakBars` when a section repeats straight
  * after itself. Stops at the first section that doesn't fit the beat.
  */
-function sequence(ctx: PairContext, order: number[], entry: number, keepGapsUpTo: number, breakBars = 0) {
+function sequence(ctx: PairContext, order: number[], entry: number, keepGapsUpTo: number, breakBars = 0, endBar = ctx.structure.endBar) {
   const { sections } = ctx.heard;
-  const endBar = ctx.structure.endBar;
   const placements: { section: number; bar: number }[] = [];
   let left = 0;
   for (let i = 0; i < order.length; i++) {
@@ -113,8 +112,13 @@ function sequence(ctx: PairContext, order: number[], entry: number, keepGapsUpTo
 
 export type MatchPlan = { plan: PairPlan; notes: string[] };
 
-/** Turns the panel's choices into a plan for applyPairPlan. */
-export function planFromOptions(ctx: PairContext, options: MatchOptions): MatchPlan {
+/**
+ * Turns the panel's choices into a plan for applyPairPlan. `reachBar`: how
+ * far the beat can be made to run when the vocal is the longer one (its
+ * body played again) — shapes that keep the whole vocal then keep all of
+ * it, instead of leaving out what doesn't fit before the beat's own end.
+ */
+export function planFromOptions(ctx: PairContext, options: MatchOptions, reachBar?: number): MatchPlan {
   const { sections } = ctx.heard;
   const all = sections.map((_, i) => i);
   const notes: string[] = [];
@@ -166,11 +170,22 @@ export function planFromOptions(ctx: PairContext, options: MatchOptions): MatchP
   // including its fallbacks for a vocal longer than the beat.
   let placements;
   let left: number;
+  const endBar = ctx.structure.endBar;
+  const reach = Math.max(endBar, reachBar ?? 0);
   if (options.structure === "as-sung" && options.entry === "auto") {
-    placements = ctx.suggestion.placements;
-    left = ctx.suggestion.dropped.length;
+    const suggestion = reach > endBar ? ctx.full : ctx.suggestion;
+    placements = suggestion.placements;
+    left = suggestion.dropped.length;
   } else {
-    ({ placements, left } = sequence(ctx, order, entry, keepGaps, breakBars));
+    // Whole-vocal shapes may run on past the beat's end; "fill" as far as
+    // the whole vocal needs, then stops; the short ones stay inside the beat.
+    const whole = options.structure === "as-sung" || options.structure === "tight" || options.structure === "chorus-first";
+    const limit = whole
+      ? reach
+      : options.structure === "fill" && reach > endBar
+        ? Math.max(endBar, sequence(ctx, all, entry, keepGaps, 0, reach).placements.reduce((max, p) => Math.max(max, p.bar + sectionBars(sections[p.section])), 0))
+        : endBar;
+    ({ placements, left } = sequence(ctx, order, entry, keepGaps, breakBars, limit));
   }
   const repeating = options.structure === "fill" || options.structure === "hook";
   if (left > 0 && !repeating) {
@@ -182,7 +197,11 @@ export function planFromOptions(ctx: PairContext, options: MatchOptions): MatchP
     notes.push("The vocal is longer than the beat, so it runs past the end");
   }
   const bars = placements.reduce((max, p) => Math.max(max, p.bar + sectionBars(sections[p.section])), 0);
-  notes.push(`${placements.length} section${placements.length === 1 ? "" : "s"}, about ${bars} bars of the beat's ${ctx.structure.endBar}`);
+  notes.push(
+    bars > endBar + 0.5
+      ? `${placements.length} section${placements.length === 1 ? "" : "s"}, about ${bars} bars — ${bars - endBar} more than the beat's ${endBar}, so the beat plays on`
+      : `${placements.length} section${placements.length === 1 ? "" : "s"}, about ${bars} bars of the beat's ${endBar}`
+  );
 
   return {
     plan: {

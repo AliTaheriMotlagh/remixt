@@ -489,11 +489,14 @@ export function sameSongLayout(heard: HeardVocal, structure: BeatStructure): Sug
 /**
  * The arrangement AI Match picks on its own: in after the intro, the
  * original song's spacing, long breaks shortened, and the sections that
- * don't fit before the beat ends left out.
+ * don't fit before the beat ends left out. `reachBar`: how far the beat
+ * can be made to run (its body played again, see beatReprise) — past its
+ * own end, so a vocal longer than the beat keeps every section.
  */
-export function suggestLayout(heard: HeardVocal, structure: BeatStructure): SuggestedLayout {
+export function suggestLayout(heard: HeardVocal, structure: BeatStructure, reachBar: number = structure.endBar): SuggestedLayout {
   const { sections } = heard;
-  const { introBars, endBar } = structure;
+  const { introBars } = structure;
+  const endBar = Math.max(structure.endBar, reachBar);
   // In after the intro, on a 4-bar line — or after 4 bars, if the beat
   // starts at full strength, the way a song lets the groove land first.
   const preferred = introBars <= 1 ? 4 : Math.ceil((introBars - 1) / 4) * 4;
@@ -835,4 +838,147 @@ export function arrangeVocal(
     );
   }
   return { offsetSeconds: placement.offsetSeconds, clips: placement.clips, lines };
+}
+
+// --- Making a beat last -------------------------------------------------------------------
+//
+// A vocal is often longer than the beat it's put on. Rather than leaving
+// out the sections that don't fit — or looping the same few bars under the
+// rest of the song — the beat's body (its bars at full strength, between
+// its intro and its ending) plays again, as a producer would arrange it:
+// intro once, body, body again for as long as the vocal needs, ending once.
+
+/** Cuts fall this long before the bar line, so a clip's fade-in is over by the time the kick lands. */
+const CUT_AHEAD = 0.012;
+
+/** On the clips that play the beat's body again, and its ending after them. */
+export const REPRISE_LABEL = "Main part again";
+const ENDING_LABEL = "Ending";
+
+/** Whether a beat's clips are a reprise the AI made (which it may make again, differently). */
+export function isReprise(clips: LaneClip[] | null | undefined) {
+  return !!clips?.some((c) => c.label === REPRISE_LABEL);
+}
+
+/** Mean power of the beat's bars from `from` up to `to`. */
+function barsEnergy(structure: BeatStructure, from: number, to: number) {
+  let sum = 0;
+  for (let bar = from; bar < to; bar++) sum += structure.barEnergy[bar] ?? 0;
+  return sum / Math.max(1, to - from);
+}
+
+/** A typical bar's power: the middle one of those with music in them. */
+function typicalEnergy(structure: BeatStructure) {
+  const sorted = structure.barEnergy.slice(0, structure.endBar).filter((e) => e > 0).sort((a, b) => a - b);
+  return sorted[sorted.length >> 1] ?? 0;
+}
+
+/**
+ * The beat's body: its bars at full strength, from the 4-bar line where
+ * its intro is over to the last 4-bar line before it winds down. Null
+ * when it's under 8 bars: too short to repeat well.
+ */
+export function beatBody(structure: BeatStructure): { from: number; to: number } | null {
+  const end = Math.min(structure.endBar, structure.barEnergy.length);
+  const typical = typicalEnergy(structure);
+  if (!(typical > 0)) return null;
+  const strong = (bar: number) => barsEnergy(structure, bar, bar + 4) >= 0.6 * typical;
+  let to = Math.floor(end / 4) * 4;
+  while (to >= 8 && !strong(to - 4)) to -= 4;
+  let from = Math.ceil(Math.max(0, structure.introBars - 1) / 4) * 4;
+  while (from + 8 <= to && !strong(from)) from += 4;
+  return to - from >= 8 ? { from, to } : null;
+}
+
+/**
+ * The beat's lifts: every 4-bar line where the next 4 bars are clearly
+ * louder than the 4 before (and loud in themselves) — its drop and the
+ * smaller ones after it, where a chorus sits well. In its own bars.
+ */
+export function beatLifts(structure: BeatStructure): number[] {
+  const end = Math.min(structure.endBar, structure.barEnergy.length);
+  const typical = typicalEnergy(structure);
+  const lifts: number[] = [];
+  for (let bar = 4; bar + 4 <= end; bar += 4) {
+    const after = barsEnergy(structure, bar, bar + 4);
+    if (after >= 0.8 * typical && after >= 1.3 * barsEnergy(structure, bar - 4, bar)) lifts.push(bar);
+  }
+  return lifts;
+}
+
+/** A beat made to last: its `body` played again for `extra` bars, between the end of its body and its ending. */
+export type Reprise = { body: { from: number; to: number }; extra: number };
+
+/** The beat's own bar that plays at bar `bar` of the extended beat (both from 0). */
+export function repriseSource(reprise: Reprise, bar: number) {
+  const { body, extra } = reprise;
+  if (bar < body.to) return bar;
+  if (bar >= body.to + extra) return bar - extra;
+  const length = body.to - body.from;
+  // The body, over and over, timed so its last bar plays right before the ending.
+  return body.from + ((((bar - body.to - extra) % length) + length) % length);
+}
+
+/**
+ * The reprise that keeps the beat's music going until its bar `untilBar`
+ * (counted on as if it never stopped): whole 4-bar lines of its body, at
+ * most ten minutes of them. Null when it lasts that long as it is, or has
+ * no body to repeat.
+ */
+export function repriseFor(structure: BeatStructure, untilBar: number): Reprise | null {
+  const body = beatBody(structure);
+  if (!body) return null;
+  const barSeconds = structure.grid.period * 4;
+  const extra = Math.min(Math.ceil((untilBar - structure.endBar) / 4) * 4, Math.floor(600 / barSeconds / 4) * 4);
+  return extra >= 4 ? { body, extra } : null;
+}
+
+/**
+ * The bars of a beat as it plays with a reprise: every beat of the
+ * repeated stretch exactly as long as it is in the audio it's read from,
+ * so a vocal laid on these bars lands on the repeated beat's real hits —
+ * no drift, however long the repeat runs.
+ */
+export function repriseStructure(structure: BeatStructure, reprise: Reprise): BeatStructure {
+  const { grid, downbeat } = structure;
+  const { body, extra } = reprise;
+  const first = downbeat + 4 * body.to;
+  const times: number[] = [];
+  for (let i = 0; i <= first; i++) times.push(grid.time(i));
+  let t = times[first];
+  for (let bar = body.to; bar < body.to + extra; bar++) {
+    const source = downbeat + 4 * repriseSource(reprise, bar);
+    for (let b = 0; b < 4; b++) {
+      t += grid.time(source + b + 1) - grid.time(source + b);
+      times.push(t);
+    }
+  }
+  for (let i = first + 1; i < grid.times.length; i++) {
+    t += grid.times[i] - grid.times[i - 1];
+    times.push(t);
+  }
+  const barEnergy = Array.from({ length: structure.bars + extra }, (_, bar) => structure.barEnergy[repriseSource(reprise, bar)] ?? 0);
+  return { ...structure, grid: new BeatGrid(Float64Array.from(times), grid.period), bars: structure.bars + extra, barEnergy, endBar: structure.endBar + extra };
+}
+
+/**
+ * The clips that play a beat with a reprise: the beat up to the end of
+ * its body, the body again, then the beat's own ending — each repeated
+ * stretch starting right on its bar line (see repriseStructure). `duration`
+ * is the length of the beat's audio.
+ */
+export function repriseClips(structure: BeatStructure, reprise: Reprise, duration: number): LaneClip[] {
+  const { body, extra } = reprise;
+  const played = repriseStructure(structure, reprise);
+  const cut = (of: BeatStructure, bar: number) => Math.max(0, of.grid.time(of.downbeat + 4 * bar) - CUT_AHEAD);
+  const clips: LaneClip[] = [{ from: 0, to: cut(structure, body.to), at: 0 }];
+  let bar = body.to;
+  while (bar < body.to + extra) {
+    const source = repriseSource(reprise, bar);
+    const bars = Math.min(body.to - source, body.to + extra - bar);
+    clips.push({ from: cut(structure, source), to: cut(structure, source + bars), at: cut(played, bar), label: REPRISE_LABEL });
+    bar += bars;
+  }
+  if (duration - cut(structure, body.to) > 0.05) clips.push({ from: cut(structure, body.to), to: duration, at: cut(played, body.to + extra), label: ENDING_LABEL });
+  return clips;
 }

@@ -8,6 +8,10 @@ import {
   hearVocal,
   placeVocal,
   placementNotes,
+  isReprise,
+  repriseClips,
+  repriseFor,
+  repriseStructure,
   rulerBar,
   sameSongLayout,
   sectionBars,
@@ -15,6 +19,7 @@ import {
   type BeatStructure,
   type HeardVocal,
   type LaneInput,
+  type Reprise,
   type SectionPlacement,
   type SuggestedLayout,
 } from "./arrange";
@@ -139,6 +144,12 @@ export type PairContext = {
   structure: BeatStructure;
   heard: HeardVocal;
   suggestion: SuggestedLayout;
+  /**
+   * The same arrangement with nothing left out: every section, running
+   * past the beat's end when the vocal is the longer one — for when the
+   * beat can be made to last (its body played again, see aiIdeas).
+   */
+  full: SuggestedLayout;
   vocalKey: MusicalKey;
   beatKey: MusicalKey;
   keys: string;
@@ -203,6 +214,11 @@ export async function preparePair(vocalLaneId: string, beatLaneId: string): Prom
   if (!structure) throw new Error(`Couldn't find the bars of “${beatLane.trackTitle}”.`);
   if (!heard) throw new Error(`Couldn't hear clear phrases in “${vocalLane.trackTitle}”.`);
 
+  // The vocal's own song's beat (its guide is this very beat): put it back as sung.
+  const sameSong = !!guide && guide === beatAnalysis;
+  const suggestion = sameSong ? sameSongLayout(heard, structure) : suggestLayout(heard, structure);
+  const full = sameSong || !suggestion.dropped.length ? suggestion : suggestLayout(heard, structure, Infinity);
+
   const vocalKey = effectiveKey(vocalLane) ?? vocalAnalysis.key;
   const beatKey = (tonal ? effectiveKey(tonal) : beatLane.kind === "drums" ? null : effectiveKey(beatLane)) ?? beatAnalysis.key;
   const keyMatch = bestKeyShift(vocalKey, beatKey);
@@ -222,8 +238,8 @@ export async function preparePair(vocalLaneId: string, beatLaneId: string): Prom
     tempos,
     structure,
     heard,
-    // The vocal's own song's beat (its guide is this very beat): put it back as sung.
-    suggestion: guide && guide === beatAnalysis ? sameSongLayout(heard, structure) : suggestLayout(heard, structure),
+    suggestion,
+    full,
     vocalKey,
     beatKey,
     keys,
@@ -258,12 +274,24 @@ export function applyPairPlan(ctx: PairContext, plan: PairPlan): string[] {
 export function pairPlanPatches(
   ctx: PairContext,
   plan: PairPlan,
-  lanes: StudioLane[]
-): { patches: Record<string, LanePatch>; projectBpm: number; lines: string[]; placements: SectionPlacement[] } {
+  lanes: StudioLane[],
+  /** How far the beat can be made to run, in its bars, when past its own end (see PairContext.full). */
+  reachBar?: number
+): {
+  patches: Record<string, LanePatch>;
+  projectBpm: number;
+  lines: string[];
+  placements: SectionPlacement[];
+  /** The beat's bars as it plays now — with its body repeated, when it was made to last. */
+  structure: BeatStructure;
+  reprise: Reprise | null;
+} {
   const vocalLane = lanes.find((l) => l.laneId === ctx.vocalLaneId);
   const beatLane = lanes.find((l) => l.laneId === ctx.beatLaneId);
   if (!vocalLane || !beatLane) throw new Error("One of those lanes is gone.");
-  const { structure, heard } = ctx;
+  const { heard } = ctx;
+  let structure = ctx.structure;
+  const endBar = Math.max(structure.endBar, reachBar ?? 0);
   const lines: string[] = [];
   const tempo = ctx.tempos[plan.follow];
   const beatInput: LaneInput = {
@@ -298,7 +326,7 @@ export function pairPlanPatches(
     const lead = found.start - found.bar; // negative for a pickup
     const earliest = Math.ceil(singingUntil - 0.1 - lead);
     const start = Math.max(bar, earliest, 0);
-    if (start >= structure.endBar) {
+    if (start >= endBar) {
       lines.push(`Section ${section} would start past the end of the beat's music (bar ${structure.endBar}), so it was left out`);
       continue;
     }
@@ -306,10 +334,17 @@ export function pairPlanPatches(
     placements.push({ section, bar: start });
     singingUntil = start + (found.end - found.bar);
   }
-  if (singingUntil > structure.endBar + 0.5) {
+  if (singingUntil > endBar + 0.5) {
     lines.push(`Warning: the last section runs ${(singingUntil - structure.endBar).toFixed(1)} bars past the end of the beat's music`);
   }
   if (placements.length === 0) throw new Error("None of those sections could be placed — check the section numbers and bars.");
+
+  // A vocal that runs past the beat's music: the beat's body plays again
+  // under the rest of it (two bars past the last word), and the vocal is
+  // laid on the bars of the beat as it then plays.
+  const extendable = reachBar !== undefined && reachBar > structure.endBar;
+  const reprise = extendable ? repriseFor(structure, Math.ceil(singingUntil + 2)) : null;
+  if (reprise) structure = repriseStructure(structure, reprise);
 
   const shiftBeats = Math.max(-3, Math.min(3, Math.round(plan.shift_beats ?? 0)));
   const placement = placeVocal(vocalInput, beatInput, structure, heard, placements, shiftBeats, sectionLabels(ctx));
@@ -336,6 +371,12 @@ export function pairPlanPatches(
     [beatLane.laneId]: {
       bpm: ctx.beatBpm,
       tempoRatio: tempo.beatRatio,
+      // Made to last — or, a beat extended before that no longer needs to be, whole again.
+      ...(reprise
+        ? { clips: repriseClips(ctx.structure, reprise, beatLane.originalDuration) }
+        : extendable && isReprise(beatLane.clips)
+          ? { clips: null }
+          : {}),
       ...(beatPreset ? { fx: { ...DEFAULT_FX, ...beatPreset.fx } } : {}),
     },
   };
@@ -358,6 +399,6 @@ export function pairPlanPatches(
   if (beatPreset) lines.push(`Beat effects: ${beatPreset.label}`);
   lines.push(`Keys: ${keyLabel(ctx.vocalKey)} on ${keyLabel(ctx.beatKey)} — ${ctx.keys}`);
   lines.push(...placementNotes(vocalInput, beatInput, structure, heard, placement));
-  return { patches, projectBpm, lines, placements };
+  return { patches, projectBpm, lines, placements, structure, reprise };
 }
 

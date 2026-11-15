@@ -2,7 +2,7 @@
 
 import { ALL_ASPECTS, type Aspect, type Vibe } from "./aiControl";
 import type { StemAnalysis } from "./analysis";
-import { sectionBars, type BeatStructure } from "./arrange";
+import { beatBody, beatLifts, isReprise, repriseClips, repriseFor, sectionBars, type BeatStructure, type Reprise } from "./arrange";
 import { analyzeLane, suggestMatches } from "./autoMatch";
 import { gatePattern, pumpPattern, spliceAutomation } from "./automationPatterns";
 import { findParts } from "./beatParts";
@@ -277,6 +277,8 @@ class Draft {
   patches: Record<string, LanePatch> = {};
   projectBpm: number | undefined;
   lines: string[] = [];
+  /** The beat's bars as the draft plays them — with its body repeated, when it was made to last (see adoptTiming). */
+  played: BeatStructure | undefined;
   readonly session: Session;
 
   constructor(session: Session) {
@@ -458,7 +460,9 @@ function beatBarTime(draft: Draft, bar: number) {
   const pair = draft.session.pair!;
   // With the beat swapped for its parts, any part has the beat's timing.
   const beat = draft.lanes.get(pair.beatLaneId) ?? draft.lane(draft.session.beat!.laneId);
-  return beat.offsetSeconds + pair.structure.grid.time(pair.structure.downbeat + 4 * bar) / beat.tempoRatio;
+  // The beat as it plays: with its body repeated, when the draft made it last (see adoptTiming).
+  const structure = draft.played ?? pair.structure;
+  return beat.offsetSeconds + structure.grid.time(structure.downbeat + 4 * bar) / beat.tempoRatio;
 }
 
 // --- Remixer & beatmaker: arrangement -------------------------------------------------
@@ -512,6 +516,14 @@ function adoptTiming(draft: Draft, result: ReturnType<typeof pairPlanPatches>) {
     draft.patch(id, timing);
   }
   draft.projectBpm = result.projectBpm;
+  draft.played = result.structure;
+  if (result.reprise) draft.lines.push(repriseNote(result.reprise));
+}
+
+/** In plain words: the beat's body plays again so the vocal keeps every section. */
+function repriseNote(reprise: Reprise) {
+  const { body, extra } = reprise;
+  return `The vocal runs ${extra} bars longer than the beat, so the beat's main part (its bars ${body.from + 1}–${body.to}) plays again for ${extra} bars before its ending — no section of the vocal is left out`;
 }
 
 /**
@@ -520,43 +532,70 @@ function adoptTiming(draft: Draft, result: ReturnType<typeof pairPlanPatches>) {
  */
 function arrange(draft: Draft, options: Partial<MatchOptions>) {
   const pair = draft.session.pair!;
-  const { plan, notes } = planFromOptions(pair, { ...DEFAULT_OPTIONS, vocalPreset: "none", beatPreset: "none", ...options });
-  const result = pairPlanPatches(pair, plan, [...draft.lanes.values()]);
+  // A vocal longer than the beat keeps every section: the beat plays on under it (see extendBeat).
+  const reach = beatReach(draft);
+  const { plan, notes } = planFromOptions(pair, { ...DEFAULT_OPTIONS, vocalPreset: "none", beatPreset: "none", ...options }, reach);
+  const result = pairPlanPatches(pair, plan, [...draft.lanes.values()], reach);
   adoptTiming(draft, result);
   draft.lines.push(...notes, ...result.lines.filter((l) => !l.startsWith("Vocal level")));
   return `${plan.follow}|${JSON.stringify(plan.sections)}|${plan.shift_beats ?? 0}`;
 }
 
 /**
- * The vocal in its own order, moved as a whole so its chorus lands right
- * on the beat's drop. False when that can't work (no chorus placed, or it
- * would push the chorus off the beat).
+ * How far the beat can be made to run, in its own bars: as far as it's
+ * asked to, when its body can be played again (arrange.ts repriseFor) —
+ * undefined when it can't (tracks kept whole, a beat the person cut up
+ * themselves, or too short a beat to have a body), so everything has to
+ * fit before its own end. A beat the AI extended before can be again.
  */
-function arrangeOnDrop(draft: Draft, drop: Drop, tempo?: TempoChoice): boolean {
+function beatReach(draft: Draft): number | undefined {
+  const { session } = draft;
+  const pair = session.pair;
+  if (!pair || session.options.keepWhole) return undefined;
+  const beat = draft.lanes.get(pair.beatLaneId);
+  if (!beat || (beat.clips?.length && !isReprise(beat.clips)) || !beatBody(pair.structure)) return undefined;
+  return Infinity;
+}
+
+/**
+ * The vocal in its own order, moved as a whole so its chorus lands right
+ * on the beat's drop — or, when that would push its first sections off
+ * the front of the beat, on the beat's next lift after it that keeps them
+ * (see beatLifts). Never at the cost of the song: false when the chorus
+ * can't be put on a lift without leaving out sections the plain
+ * arrangement keeps. Returns the beat's bar the chorus landed on.
+ */
+function arrangeOnDrop(draft: Draft, drop: Drop, tempo?: TempoChoice): number | false {
   const pair = draft.session.pair!;
   const chorus = findChorus(pair);
-  const base = pair.suggestion.placements;
+  const reach = beatReach(draft);
+  const layout = reach ? pair.full : pair.suggestion;
+  const base = layout.placements;
   const at = base.find((p) => chorus.all.includes(p.section));
   if (!at) return false;
-  const shift = drop.bar - at.bar;
-  const fits = (p: { section: number; bar: number }) =>
-    p.bar >= 0 && p.bar + sectionBars(pair.heard.sections[p.section]) <= pair.structure.endBar + 0.25;
-  const sections = base.map((p) => ({ ...p, bar: p.bar + shift })).filter(fits);
-  if (!sections.some((p) => p.section === at.section)) return false;
-  try {
-    const result = pairPlanPatches(pair, { follow: tempo ?? gentlestTempo(pair), sections }, [...draft.lanes.values()]);
-    adoptTiming(draft, result);
-  } catch {
-    return false;
+  const endBar = Math.max(pair.structure.endBar, reach ?? 0);
+  const fits = (p: { section: number; bar: number }) => p.bar >= 0 && p.bar + sectionBars(pair.heard.sections[p.section]) <= endBar + 0.25;
+  // The drop first, then the other lifts by how little the vocal has to move.
+  const lifts = [drop.bar, ...beatLifts(pair.structure).filter((bar) => bar !== drop.bar).sort((x, y) => Math.abs(x - at.bar) - Math.abs(y - at.bar))];
+  for (const bar of lifts) {
+    const shift = bar - at.bar;
+    const sections = base.map((p) => ({ ...p, bar: p.bar + shift })).filter(fits);
+    if (sections.length < base.length) continue;
+    try {
+      const result = pairPlanPatches(pair, { follow: tempo ?? gentlestTempo(pair), sections }, [...draft.lanes.values()], reach);
+      adoptTiming(draft, result);
+    } catch {
+      continue;
+    }
+    const what = bar === drop.bar ? (drop.kind === "drop" ? "drop" : "loudest part") : "lift";
+    draft.lines.push(
+      shift === 0
+        ? `The chorus already lands on the beat's ${what} — every line locked to its bars`
+        : `Vocal moved ${Math.abs(shift)} bars ${shift > 0 ? "later" : "earlier"} so its chorus lands on the beat's ${what} (bar ${bar + 1}) — every section kept`
+    );
+    return bar;
   }
-  const left = base.length - sections.length;
-  draft.lines.push(
-    shift === 0
-      ? "The chorus already lands on the beat's drop — every line locked to its bars"
-      : `Vocal moved ${Math.abs(shift)} bars ${shift > 0 ? "later" : "earlier"} so its chorus lands on the beat's ${drop.kind === "drop" ? "drop" : "loudest part"} (bar ${drop.bar + 1})`,
-    ...(left > 0 ? [`${left} section${left === 1 ? "" : "s"} that would fall off the beat left out`] : [])
-  );
-  return true;
+  return false;
 }
 
 /** "I-I-I-I want…": a half-beat slice of the vocal at `at` (its entry by default), four times. */
@@ -654,7 +693,12 @@ function buildUpTo(draft: Draft, at: number) {
   return true;
 }
 
-/** The beat's last full 8 (or 4) bars, looped until the vocal has finished, then the beat's own ending. */
+/**
+ * Makes the beat last as long as the vocal where it is now: its body
+ * played again (see arrange.ts repriseFor), instead of the song stopping
+ * when the beat does. A beat with no clear body loops its last 4 bars.
+ * False when the beat is long enough, or already cut.
+ */
 function extendBeat(draft: Draft, structure: BeatStructure) {
   const session = draft.session;
   if (!session.beat || !session.vocal) return false;
@@ -665,6 +709,14 @@ function extendBeat(draft: Draft, structure: BeatStructure) {
   const target = endOf(vocal) + 2 * bar;
   const needed = (target - beat.offsetSeconds) * beat.tempoRatio;
   if (needed <= beat.originalDuration + 0.5) return false;
+  // The first bar of the beat by which it has to still be playing.
+  const untilBar = Math.ceil((structure.grid.position(needed) - structure.downbeat) / 4);
+  const reprise = repriseFor(structure, untilBar);
+  if (reprise) {
+    draft.patch(beat.laneId, { clips: repriseClips(structure, reprise, beat.originalDuration) });
+    draft.lines.push(repriseNote(reprise));
+    return true;
+  }
   const loopBars = structure.endBar >= 16 ? 8 : 4;
   if (structure.endBar <= loopBars) return false;
   const loopFrom = structure.grid.time(structure.downbeat + 4 * (structure.endBar - loopBars));
@@ -1333,9 +1385,10 @@ function fixMix(session: Session, wants: Set<FixId>, { onDrop = false }: { onDro
     let placed = false;
     const chosen = syncChoice(session);
     // An entry the person picked (bar 1, an 8-bar intro) wins over the chorus-on-the-drop placement.
-    if (onDrop && chosen.entry === "auto" && drop?.kind === "drop" && findChorus(pair).confident && arrangeOnDrop(draft, drop, syncTempo(session))) {
+    const landed = onDrop && chosen.entry === "auto" && drop?.kind === "drop" && findChorus(pair).confident ? arrangeOnDrop(draft, drop, syncTempo(session)) : false;
+    if (landed !== false) {
       placed = true;
-      dropAt = beatBarTime(draft, drop.bar);
+      dropAt = beatBarTime(draft, landed);
     }
     if (!placed) {
       try {
@@ -1666,7 +1719,8 @@ function fullRemixIdeas(session: Session): Idea[] {
     const draft = new Draft(session);
     const chosen = syncChoice(session);
     const tempo = syncTempo(session, r.tempo);
-    const onDrop = !!(r.onDrop && chosen.entry === "auto" && drop?.kind === "drop" && arrangeOnDrop(draft, drop, tempo));
+    const landed = r.onDrop && chosen.entry === "auto" && drop?.kind === "drop" ? arrangeOnDrop(draft, drop, tempo) : false;
+    const onDrop = landed !== false;
     if (!onDrop) {
       try {
         arrange(draft, { tempo, structure: r.structure, entry: chosen.entry });
@@ -1674,7 +1728,7 @@ function fullRemixIdeas(session: Session): Idea[] {
         continue;
       }
     }
-    const dropAt = onDrop ? beatBarTime(draft, drop!.bar) : null;
+    const dropAt = landed !== false ? beatBarTime(draft, landed) : null;
     if (r.stutter) stutterAt(draft, dropAt ?? undefined);
     if (r.swell) reverseSwell(draft);
     if (r.extend) extendBeat(draft, pair.structure);
@@ -1711,8 +1765,9 @@ function momentIdeas(session: Session): Idea[] {
   if (pair && drop) {
     const label = drop.kind === "drop" ? "drop" : "loudest part";
     const onDrop = new Draft(session);
-    if (arrangeOnDrop(onDrop, drop)) {
-      const at = beatBarTime(onDrop, drop.bar);
+    const landed = arrangeOnDrop(onDrop, drop);
+    if (landed !== false) {
+      const at = beatBarTime(onDrop, landed);
       ideas.push(
         onDrop.idea({
           id: "moment-chorus-drop",
@@ -1721,7 +1776,10 @@ function momentIdeas(session: Session): Idea[] {
           icon: "target",
           title: `Chorus on the ${label}`,
           short: "The hook lands as the beat hits",
-          why: `The beat's biggest moment is at bar ${drop.bar + 1}. Moving the vocal so its chorus starts right there makes both hit at once — the moment a remix is remembered for.`,
+          why:
+            landed === drop.bar
+              ? `The beat's biggest moment is at bar ${drop.bar + 1}. Moving the vocal so its chorus starts right there makes both hit at once — the moment a remix is remembered for.`
+              : `The beat's biggest moment (bar ${drop.bar + 1}) comes before the vocal reaches its chorus, so the chorus goes on the beat's next lift, at bar ${landed + 1} — both hit at once, and no verse is cut to get there.`,
           vibes: ["club", "radio"],
           listenAt: Math.max(0, at - 2 * onDrop.bar),
         })
@@ -1729,7 +1787,7 @@ function momentIdeas(session: Session): Idea[] {
 
       const big = new Draft(session);
       arrangeOnDrop(big, drop);
-      const bigAt = beatBarTime(big, drop.bar);
+      const bigAt = beatBarTime(big, landed);
       buildUpTo(big, bigAt);
       stutterAt(big, bigAt);
       ideas.push(
