@@ -37,6 +37,7 @@ import type { User } from "@/lib/auth";
 import TagInput from "./TagInput";
 import SocialClipButton from "./studio/SocialClipButton";
 import ExportSheet from "./studio/ExportSheet";
+import StemLoadPill from "./studio/StemLoadPill";
 
 function formatTime(seconds: number) {
   const m = Math.floor(seconds / 60);
@@ -557,6 +558,7 @@ export default function StudioTransport({
           >
             <Square className="fill-current" />
           </button>
+          <StemLoadPill />
           {!simple && (
             <button
               onClick={() => setLoop({ enabled: !loopEnabled, start: hasLoop ? loopStart : 0, end: hasLoop ? loopEnd : Math.min(duration, 16) })}

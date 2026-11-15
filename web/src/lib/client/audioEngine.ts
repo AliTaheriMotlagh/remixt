@@ -26,6 +26,7 @@ import {
   stopNowPlayingAnchor,
 } from "./nowPlayingAnchor";
 import { fetchStem } from "./stemFetch";
+import { setStemLoad } from "./stemLoading";
 import { useStudioView } from "./studioView";
 import {
   beatLength,
@@ -568,6 +569,8 @@ class AudioEngine {
     // A vocal and its layers play the same stem: one download for all of them.
     let pending = this.decoding.get(stemId);
     if (!pending) {
+      // Waiting its turn behind other stems counts as on its way too.
+      setStemLoad(stemId, { phase: "download", progress: null });
       pending = decodeGate
         .run(() => this.decode(stemId))
         .then((raw) => {
@@ -586,7 +589,10 @@ class AudioEngine {
           this.trimCaches();
           return stem;
         })
-        .finally(() => this.decoding.delete(stemId));
+        .finally(() => {
+          this.decoding.delete(stemId);
+          setStemLoad(stemId, null);
+        });
       this.decoding.set(stemId, pending);
     }
     return pending;
@@ -595,8 +601,11 @@ class AudioEngine {
   /** Downloads (or reads from this device) and decodes a stem. */
   private async decode(stemId: string): Promise<AudioBuffer> {
     const ctx = this.getContext();
-    const bytes = await fetchStem(stemId);
+    // Shown on the lane (and the transport) while it's on its way — see stemLoading.ts.
+    setStemLoad(stemId, { phase: "download", progress: null });
     try {
+      const bytes = await fetchStem(stemId, (loaded, total) => setStemLoad(stemId, { phase: "download", progress: total ? loaded / total : null }));
+      setStemLoad(stemId, { phase: "decode", progress: null });
       return await ctx.decodeAudioData(bytes);
     } catch (error) {
       // The context was replaced while it decoded (iOS after a call or
@@ -605,6 +614,8 @@ class AudioEngine {
       // again — from this device's cache.)
       if (this.ctx === ctx) throw error;
       return this.getContext().decodeAudioData(await fetchStem(stemId));
+    } finally {
+      setStemLoad(stemId, null);
     }
   }
 

@@ -71,7 +71,12 @@ export default function LyricsTimeline({
 }: Props) {
   const lanes = useStudioStore((s) => s.lanes);
   const bpm = useStudioStore((s) => s.projectBpm);
-  const env = useMemo(() => mixEnvelope(lanes), [lanes]);
+  // Worked out again only when what it draws changes — not for every step of a fader drag or a lane renamed.
+  const shape = lanes
+    .map((l) => `${l.laneId}|${l.offsetSeconds}|${l.tempoRatio}|${l.muted}|${l.solo}|${Math.round(l.volume * 10)}|${l.peaks.length}|${l.clips ? JSON.stringify(l.clips) : ""}`)
+    .join("\n");
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `shape` stands for the parts of `lanes` it reads
+  const env = useMemo(() => mixEnvelope(lanes), [shape]);
   const box = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   // What the draw reads, kept current without re-subscribing.
@@ -220,10 +225,19 @@ export default function LyricsTimeline({
       ctx.fillRect(headX - 1, 0, 2, h);
     };
 
-    const ro = new ResizeObserver(() => draw.current());
+    // One draw a frame at most, however many changes land in it (the playhead, a fader dragged, a lane loading).
+    let frame: number | null = null;
+    const schedule = () => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        draw.current();
+      });
+    };
+    const ro = new ResizeObserver(schedule);
     ro.observe(container);
     const unsubscribe = useStudioStore.subscribe((s, prev) => {
-      if (s.playhead !== prev.playhead || s.lanes !== prev.lanes) draw.current();
+      if (s.playhead !== prev.playhead || s.lanes !== prev.lanes) schedule();
     });
     const scheme = window.matchMedia("(prefers-color-scheme: dark)");
     const recolor = () => {
@@ -235,6 +249,7 @@ export default function LyricsTimeline({
     themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-theme", "style"] });
     draw.current();
     return () => {
+      if (frame !== null) cancelAnimationFrame(frame);
       ro.disconnect();
       unsubscribe();
       scheme.removeEventListener?.("change", recolor);

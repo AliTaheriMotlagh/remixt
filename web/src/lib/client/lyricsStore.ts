@@ -103,6 +103,21 @@ type LyricsState = {
    */
   take: "idle" | "recording" | "review";
   setTake: (take: "idle" | "recording" | "review") => void;
+  /** A song in the mix whose lyrics are being looked up on their own (see mixSongs.useLyricsFollowMix), and the step it's on. */
+  finding: { song: string; step: string } | null;
+  setFinding: (finding: { song: string; step: string } | null) => void;
+  /** Line `index`'s words replaced (its time kept). One undo step. */
+  editLine: (index: number, text: string) => void;
+  /** A new empty line after `index` (at the playhead's time when timed lines are around it), selected. */
+  insertLine: (index: number, time?: number | null) => void;
+  /** Line `index` taken out. */
+  deleteLine: (index: number) => void;
+  /** Line `index` and the next sung line as one (the first one's time). */
+  mergeNext: (index: number) => void;
+  /** Line `index` cut at character `at`: the rest starts a new line (untimed, or at `time`). */
+  splitLine: (index: number, at: number, time?: number | null) => void;
+  /** Line `index` again, right after it — a repeated hook. */
+  duplicateLine: (index: number) => void;
   /** The take being recorded or reviewed, for views beside the recorder to draw (the Vocalist stage). */
   liveTake: TimelineTake | null;
   setLiveTake: (take: TimelineTake | null) => void;
@@ -177,6 +192,48 @@ export const useLyrics = create<LyricsState>((set, get) => {
     setTake: (take) => set({ take }),
     liveTake: null,
     setLiveTake: (liveTake) => set({ liveTake }),
+    finding: null,
+    setFinding: (finding) => set({ finding }),
+    editLine: (index, text) => {
+      const { lines } = get();
+      if (!lines[index] || lines[index].text === text) return;
+      commit(serializeLyrics(lines.map((l, i) => (i === index ? { ...l, text: text.replace(/[\r\n]+/g, " ") } : l))), true);
+    },
+    insertLine: (index, time = null) => {
+      const { lines } = get();
+      const next = [...lines.slice(0, index + 1), { time, text: "…" }, ...lines.slice(index + 1)];
+      commit(serializeLyrics(next), true);
+      set({ selectedLine: Math.min(index + 1, get().lines.length - 1) });
+    },
+    deleteLine: (index) => {
+      const { lines } = get();
+      if (!lines[index]) return;
+      commit(serializeLyrics(lines.filter((_, i) => i !== index)), true);
+      set({ selectedLine: null });
+    },
+    mergeNext: (index) => {
+      const { lines } = get();
+      let j = index + 1;
+      while (j < lines.length && !lines[j].text) j++;
+      if (!lines[index] || j >= lines.length) return;
+      const merged = { ...lines[index], text: `${lines[index].text} ${lines[j].text}`.trim() };
+      commit(serializeLyrics([...lines.slice(0, index), merged, ...lines.slice(j + 1)]), true);
+    },
+    splitLine: (index, at, time = null) => {
+      const { lines } = get();
+      const line = lines[index];
+      if (!line) return;
+      const head = line.text.slice(0, at).trim();
+      const tail = line.text.slice(at).trim();
+      if (!head || !tail) return;
+      commit(serializeLyrics([...lines.slice(0, index), { ...line, text: head }, { time, text: tail }, ...lines.slice(index + 1)]), true);
+    },
+    duplicateLine: (index) => {
+      const { lines } = get();
+      if (!lines[index]) return;
+      commit(serializeLyrics([...lines.slice(0, index + 1), { time: null, text: lines[index].text }, ...lines.slice(index + 1)]), true);
+      set({ selectedLine: index + 1 });
+    },
     load: () => {
       if (get().loaded) return;
       const stored = read<LyricSheet[]>(SHEETS_KEY, []);

@@ -388,3 +388,15 @@ body {
   transform-origin: left center;
   animation: live-level var(--d, 0.9s) ease-in-out infinite;
 }
+
+/* A bar going back and forth under something being looked for (the lyrics finder). */
+@keyframes lyrics-sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+.lyrics-sweep {
+  animation: lyrics-sweep 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lyrics-sweep { animation: none; }
+}

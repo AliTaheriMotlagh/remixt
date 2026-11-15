@@ -352,3 +352,42 @@ export async function autoTimeSheet(text: string, song: { title: string; artist:
 export function untimed(text: string) {
   return plainText(clearTimes(parseLyrics(text)));
 }
+
+// ── Finding a song's lyrics on its own ──────────────────────────────────
+
+export type FoundLyrics = TimedSheet & { title: string; artist: string };
+
+/**
+ * A song in the mix's lyrics, found without being asked: the library's
+ * timed copy first (the one as long as the song's recording, which then
+ * lands exactly where that song's beat or vocal plays), else its words,
+ * timed from the vocals in the mix where they can be. Null when the
+ * library doesn't have the song.
+ */
+export async function autoFindLyrics(song: { song: string; artist: string; lane: StudioLane }, onStep?: (step: string) => void): Promise<FoundLyrics | null> {
+  if (!song.song.trim()) return null;
+  const length = song.lane.originalDuration;
+  const params = new URLSearchParams({ track: song.song.trim().slice(0, 200) });
+  if (song.artist.trim()) params.set("artist", song.artist.trim().slice(0, 200));
+  if (length) params.set("duration", String(Math.round(length)));
+  onStep?.("Searching the lyrics library…");
+  const { results } = await searchLyrics(params).catch(() => ({ results: [] as LyricsResult[] }));
+  const fits = results.filter((r) => !r.instrumental && (r.synced || r.plain) && lineSimilarity(r.title, song.song) >= 0.5);
+  const sameRecording = (r: LyricsResult) => !!r.duration && !!length && Math.abs(r.duration - length) <= 3;
+  const pick = fits.find((r) => r.synced && sameRecording(r)) ?? fits.find((r) => r.synced) ?? fits[0];
+  if (!pick) return null;
+  const named = { title: pick.title, artist: pick.artist };
+
+  if (pick.synced) {
+    // Timed to the recording this lane plays: put where that lane plays in the mix, at its speed.
+    const lane = laneOfRecording(pick, currentLanes());
+    if (lane) {
+      const lines = placeOnLane(parseLyrics(pick.synced), lane.offsetSeconds, lane.tempoRatio);
+      return { ...named, text: serializeLyrics(lines), how: "library", aligned: true, note: `Timed lyrics found — lined up with “${lane.name?.trim() || splitSongTitle(lane.trackTitle).song}”` };
+    }
+    const timed = await autoTimeSheet(pick.synced, named, onStep);
+    return { ...named, ...timed, how: "library", note: timed.aligned ? timed.note : "Timed lyrics found — timed to the original song; nudge them if your beat starts elsewhere" };
+  }
+  const timed = await autoTimeSheet(pick.plain!, named, onStep);
+  return { ...named, ...timed, note: timed.note || "Lyrics found — not timed yet: tap Get times, or sing along and tap each line" };
+}

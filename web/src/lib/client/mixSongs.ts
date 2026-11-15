@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { splitSongTitle } from "@/lib/lyrics";
 import { matchScore, normalizePersian } from "@/lib/lyricsSearch";
+import { autoFindLyrics } from "./lyricsSources";
 import { activeSheet, useLyrics, type LyricSheet } from "./lyricsStore";
 import { useStudioStore, type StudioLane } from "./studioStore";
 import { useStudioView } from "./studioView";
@@ -100,13 +101,45 @@ export function useLyricsFollowMix() {
       if (sheet) notify(`Lyrics switched to “${kept.title}” — the song in your mix`);
       return;
     }
-    if (sheet) {
-      state.select(null);
-      state.setView("pick");
-      notify(`New song in the mix — the lyrics of “${sheet.title}” are put away; finding “${songs[0].song}”`);
-    }
+    if (sheet) state.select(null);
+    // None kept: found on their own — timed, and lined up with the beat or vocal they're the words of.
+    void findForMix(songs, !!sheet);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `keys` stands for `songs`
   }, [keys]);
+}
+
+/** Songs already looked up this visit, so one the library doesn't have isn't searched for on every change. */
+const tried = new Set<string>();
+
+/**
+ * The first song in the mix that the library has lyrics for, opened as a
+ * sheet — timed where it can be. The picker opens on the song when none is
+ * found (and the booth's lyrics were showing something to replace).
+ */
+async function findForMix(songs: MixSong[], replacing: boolean) {
+  const lyrics = useLyrics.getState();
+  if (lyrics.finding) return;
+  const notify = useStudioView.getState().notify;
+  for (const song of songs) {
+    if (tried.has(song.key)) continue;
+    tried.add(song.key);
+    lyrics.setFinding({ song: song.song, step: "Searching the lyrics library…" });
+    const found = await autoFindLyrics(song, (step) => useLyrics.getState().setFinding({ song: song.song, step })).catch(() => null);
+    useLyrics.getState().setFinding(null);
+    const now = useLyrics.getState();
+    // Something else got opened meanwhile (picked by hand, a take started), or the song left the mix: theirs wins.
+    if (now.activeId || now.take !== "idle" || !mixSongsOf(useStudioStore.getState().lanes).some((m) => m.key === song.key)) return;
+    if (!found) continue;
+    now.create({ title: found.title, artist: found.artist, text: found.text, source: "library", aligned: found.aligned, song: song.key });
+    if (now.view === "pick") now.setView("sheet");
+    notify(`${found.note} — “${found.title}”`);
+    return;
+  }
+  if (replacing && songs.length) {
+    const state = useLyrics.getState();
+    state.setView("pick");
+    notify(`No lyrics found for “${songs[0].song}” on their own — pick or paste them`);
+  }
 }
 
 /** Stand-ins for the mix's songs from their keys alone (for a mix that's gone). */

@@ -10,10 +10,12 @@ import {
   ChevronDown,
   ClipboardPaste,
   Clock,
+  Copy,
   Crosshair,
   Eraser,
   Magnet,
   Maximize2,
+  Merge,
   Mic,
   Minus,
   MoveHorizontal,
@@ -26,8 +28,10 @@ import {
   Repeat2,
   Rows3,
   ScrollText,
+  Scissors,
   Sparkles,
   Timer,
+  Trash2,
   Undo2,
   WandSparkles,
   X,
@@ -118,9 +122,9 @@ export function PlayButton({ big = false }: { big?: boolean }) {
 
 /** How far through the line being sung the playhead is, redrawn as it moves. */
 function LineProgress({ start, end }: { start: number; end: number | null }) {
-  const playhead = useStudioStore((s) => s.playhead);
+  // In hundredths: a redraw when the bar visibly moves, not on every playhead tick.
+  const fraction = useStudioStore((s) => (end === null || end <= start ? 0 : Math.round(Math.min(1, Math.max(0, (s.playhead - start) / (end - start))) * 100) / 100));
   if (end === null || end <= start) return null;
-  const fraction = Math.min(1, Math.max(0, (playhead - start) / (end - start)));
   return (
     <div className="mt-1 h-1 overflow-hidden rounded-full bg-vocals/15">
       <div className="h-full rounded-full bg-vocals transition-[width] duration-100" style={{ width: `${fraction * 100}%` }} />
@@ -201,6 +205,83 @@ export function RippleToggle({ className = "" }: { className?: string }) {
 function sungFrom(lines: LyricLine[], index: number, step: 1 | -1) {
   for (let i = index + step; i >= 0 && i < lines.length; i += step) if (isSung(lines[i])) return i;
   return null;
+}
+
+/**
+ * One line's words, fixed in place — and the line itself: cut in two where
+ * the cursor is, joined with the next, sung again (a repeated hook), a new
+ * line after it, or taken out. Each is one step Undo takes back.
+ */
+function LineWordsEditor({ index }: { index: number }) {
+  const line = useLyrics((s) => s.lines[index]);
+  const count = useLyrics((s) => s.lines.length);
+  const { editLine, splitLine, mergeNext, insertLine, duplicateLine, deleteLine, selectLine } = useLyrics.getState();
+  const [draft, setDraft] = useState(line?.text ?? "");
+  const input = useRef<HTMLInputElement>(null);
+  if (!line) return null;
+  const save = () => {
+    const text = draft.trim();
+    if (text && text !== line.text) editLine(index, text);
+    else setDraft(line.text);
+  };
+  const tool = "flex h-8 items-center gap-1 rounded-lg px-2 text-[11px] font-semibold text-muted transition-colors hover:bg-surface-raised hover:text-foreground disabled:opacity-40 max-lg:h-10";
+  return (
+    <div className="flex flex-col gap-1.5 rounded-lg bg-background/60 p-1.5">
+      <input
+        ref={input}
+        dir="auto"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            save();
+            input.current?.blur();
+          } else if (e.key === "Escape") {
+            e.stopPropagation();
+            setDraft(line.text);
+            input.current?.blur();
+          }
+        }}
+        className="h-9 w-full rounded-md border border-border bg-surface px-2.5 text-sm font-medium outline-none transition-colors focus:border-vocals"
+        aria-label={`Words of line ${index + 1}`}
+        placeholder="The words of this line"
+      />
+      <div className="flex flex-wrap items-center gap-0.5" role="group" aria-label="Line">
+        <button
+          className={tool}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            const at = input.current?.selectionStart ?? Math.floor(line.text.length / 2);
+            splitLine(index, at, null);
+          }}
+          title="Cut the line in two where the cursor is"
+        >
+          <Scissors /> Split
+        </button>
+        <button className={tool} disabled={index >= count - 1} onClick={() => mergeNext(index)} title="Join with the next line">
+          <Merge /> Join next
+        </button>
+        <button className={tool} onClick={() => duplicateLine(index)} title="Sing this line again, right after it">
+          <Copy /> Repeat
+        </button>
+        <button className={tool} onClick={() => insertLine(index, null)} title="A new line after this one">
+          <Plus /> Line after
+        </button>
+        <button
+          className={`${tool} ms-auto hover:!text-danger`}
+          onClick={() => {
+            deleteLine(index);
+            selectLine(null);
+          }}
+          title="Take this line out (Undo brings it back)"
+        >
+          <Trash2 /> Delete
+        </button>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -323,6 +404,8 @@ export function LineTimingEditor({ index, className = "" }: { index: number; cla
           <X />
         </button>
       </div>
+      {/* Keyed by the words: a change from elsewhere (Undo, the editor) starts the field afresh. */}
+      <LineWordsEditor key={`${index}:${line.text}`} index={index} />
       <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted">
         <RippleToggle className="!h-7 !px-2.5 !text-[11px]" />
         <span>{ripple ? (after ? `Moves the ${after} line${after === 1 ? "" : "s"} after it too` : "Last timed line") : "Moves this line only"}</span>
@@ -1336,6 +1419,33 @@ function AiTabView({ lines, onDone }: { lines: LyricLine[]; onDone: () => void }
 }
 
 /** A small back row over a tool that has its own screen. */
+/** A song's lyrics being looked up on their own (see mixSongs.findForMix): which song, and the step it's on. */
+export function FindingBanner({ className = "" }: { className?: string }) {
+  const finding = useLyrics((s) => s.finding);
+  if (!finding) return null;
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={`relative flex items-center gap-3 overflow-hidden rounded-xl border border-vocals/40 bg-gradient-to-r from-vocals/15 via-brand/10 to-transparent p-3 ${className}`}
+    >
+      <span className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-vocals/20 text-vocals">
+        <span className="absolute inset-0 animate-ping rounded-full bg-vocals/20" aria-hidden />
+        <ScrollText />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p dir="auto" className="truncate text-sm font-semibold leading-tight">
+          Finding the lyrics for “{finding.song}”
+        </p>
+        <p className="truncate text-[11px] text-muted">{finding.step}</p>
+      </div>
+      <span className="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden" aria-hidden>
+        <span className="block h-full w-1/3 lyrics-sweep rounded-full bg-vocals" />
+      </span>
+    </div>
+  );
+}
+
 function BackRow({ label, onBack }: { label: string; onBack: () => void }) {
   return (
     <button onClick={onBack} className="flex h-10 items-center gap-1.5 self-start rounded-full pe-3 text-xs font-semibold text-muted hover:text-foreground">
@@ -1373,6 +1483,8 @@ export function LyricsTools({ onSing, stage = false }: { onSing?: () => void; st
   if (shown === "pick") {
     // A new song in the mix starts the picker afresh, on that song.
     return (
+      <div className="flex flex-col gap-3">
+      <FindingBanner />
       <LyricsPicker
         key={mixSong ?? "none"}
         onPicked={() => setView("sheet")}
@@ -1380,6 +1492,7 @@ export function LyricsTools({ onSing, stage = false }: { onSing?: () => void; st
         onAi={() => setView("ai")}
         onBack={sheet ? () => setView("sheet") : undefined}
       />
+      </div>
     );
   }
   if (shown === "ai") {
@@ -1399,10 +1512,12 @@ export function LyricsTools({ onSing, stage = false }: { onSing?: () => void; st
 
   return (
     <div className="flex flex-col gap-3">
+      <FindingBanner />
       {/* The open sheet: what it is, and everything that changes which one it is. */}
-      <div className="flex items-center gap-2 rounded-xl border border-border bg-background/50 p-2">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-vocals/15 text-vocals max-sm:hidden">
+      <div className="relative flex items-center gap-2 overflow-hidden rounded-2xl border border-vocals/25 bg-gradient-to-br from-vocals/12 via-surface to-brand/10 p-2 shadow-sm">
+        <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-vocals to-brand text-white shadow-[0_6px_18px_-8px_var(--vocals)] max-sm:hidden">
           <ScrollText />
+          {timed && <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-surface bg-success" title="Timed" />}
         </span>
         <div className="min-w-0 flex-1">
           <p dir="auto" className="truncate text-sm font-semibold leading-tight">
@@ -1416,8 +1531,12 @@ export function LyricsTools({ onSing, stage = false }: { onSing?: () => void; st
             )}
             <span className="shrink-0">{lineCount} lines</span>
             {lineCount > 0 && (
-              <span className={`shrink-0 rounded-full px-1.5 font-semibold ${timed ? "bg-success/15 text-success" : "bg-foreground/10"}`}>{timed ? "Timed" : "Not timed"}</span>
+              <span className={`shrink-0 rounded-full px-1.5 font-semibold ${timed ? (sheet.aligned ? "bg-success/15 text-success" : "bg-beat/15 text-beat") : "bg-foreground/10"}`}
+                title={timed && !sheet.aligned ? "Timed to the original recording — check it against your beat" : undefined}>
+                {timed ? (sheet.aligned ? "Synced to your mix" : "Timed") : "Not timed"}
+              </span>
             )}
+            {sheet.source === "library" && <span className="shrink-0 max-sm:hidden">· found for you</span>}
           </p>
         </div>
         <button
@@ -1466,9 +1585,11 @@ export function LyricsCue({ big = false }: { big?: boolean }) {
   // Mid-take the words are read at a glance from a step back.
   const fontSize = big ? Math.max(baseSize, 20) * 1.15 : baseSize;
   const openLyrics = useLyrics((s) => s.openLyrics);
+  const finding = useLyrics((s) => s.finding);
   const current = useCurrentLine(lines);
   useEffect(() => load(), [load]);
 
+  if (!sheet && finding) return <FindingBanner />;
   if (!sheet || !lines.some(isSung)) {
     return (
       <button

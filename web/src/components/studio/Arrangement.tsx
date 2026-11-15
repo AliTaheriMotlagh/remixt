@@ -44,6 +44,7 @@ import {
   type ClipRef,
 } from "@/lib/client/clipEdit";
 import { audioEngine } from "@/lib/client/audioEngine";
+import { stemLoadLabel, useStemLoading } from "@/lib/client/stemLoading";
 import { camelotCode, keyLabel } from "@/lib/client/musicKey";
 import { startNewStep } from "@/lib/client/studioHistory";
 import {
@@ -150,13 +151,33 @@ function LaneTrack({
   const clips = clipsOf(lane);
   const arranged = !!lane.clips?.length;
   const waveHeight = 46;
+  const load = useStemLoading((s) => s.stems[lane.stemId]);
 
   return (
     <div
       data-lane-track={lane.laneId}
+      aria-busy={!!load}
       onContextMenu={(e) => handlers.onTrackContextMenu(e, lane)}
       className={`relative ${LANE_H} border-b border-border/70`}
     >
+      {load && (
+        // On its way: a sweep over the lane and how far along it is, so a new stem never just sits there silent.
+        <div className="pointer-events-none absolute inset-y-1 z-20 overflow-hidden rounded-md" style={{
+            left: `${(Math.max(0, lane.offsetSeconds) / span) * 100}%`,
+            width: `${((lane.duration || lane.originalDuration / (lane.tempoRatio || 1)) / span) * 100}%`,
+            minWidth: "9rem",
+          }}>
+          <div className="absolute inset-0 animate-pulse" style={{ background: `color-mix(in srgb, ${accent} 10%, transparent)` }} />
+          <div
+            className="absolute inset-y-0 left-0 transition-[width] duration-300"
+            style={{ width: `${(load.progress ?? 0) * 100}%`, background: `color-mix(in srgb, ${accent} 22%, transparent)` }}
+          />
+          <span className="absolute left-2 top-1/2 flex -translate-y-1/2 items-center gap-1.5 rounded-full bg-background/85 px-2 py-0.5 text-[10.5px] font-semibold shadow-sm backdrop-blur">
+            <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" style={{ color: accent }} />
+            {stemLoadLabel(load)}
+          </span>
+        </div>
+      )}
       {clips.map((clip, i) => {
         const id = clipId(clip);
         const isSelected = selected.has(id);
@@ -240,6 +261,7 @@ function LaneHeader({ lane, focused }: { lane: StudioLane; focused: boolean }) {
   const toggleSolo = useStudioStore((s) => s.toggleSolo);
   const setVolume = useStudioStore((s) => s.setVolume);
   const isRendering = useStudioStore((s) => s.renderingLaneIds.has(lane.laneId));
+  const load = useStemLoading((s) => s.stems[lane.stemId]);
   const automation = useStudioView((s) => s.automationLanes.includes(lane.laneId));
   const accent = kindColor(lane.kind);
   const key = effectiveKey(lane);
@@ -280,6 +302,11 @@ function LaneHeader({ lane, focused }: { lane: StudioLane; focused: boolean }) {
           {isRendering && <span className="h-1.5 w-1.5 shrink-0 animate-pulse-glow rounded-full bg-brand-strong" title="Re-rendering pitch/tempo" />}
           <span className="truncate">{laneName(lane)}</span>
         </p>
+        {load ? (
+          <p className="truncate text-[10px] font-medium leading-tight" style={{ color: accent }} aria-live="polite">
+            {stemLoadLabel(load)}
+          </p>
+        ) : (
         <p className="truncate text-[10px] leading-tight text-muted">
           <span style={{ color: accent }}>{kindLabel(lane.kind)}</span>
           {bpm && <span className="max-sm:hidden"> · {bpm.toFixed(1)}</span>}
@@ -290,6 +317,7 @@ function LaneHeader({ lane, focused }: { lane: StudioLane; focused: boolean }) {
             </span>
           )}
         </p>
+        )}
         <div className="mt-0.5 flex items-center gap-1" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
           <button
             onClick={() => toggleMute(lane.laneId)}

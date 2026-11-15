@@ -55,7 +55,7 @@ async function fetchWhole(url: string, onProgress?: (loaded: number, total: numb
  * file never changes under its id — so a song opened again, a draft
  * reopened, or a vocal's original beat listened to again costs no download.
  */
-export async function fetchStem(stemId: string): Promise<ArrayBuffer> {
+export async function fetchStem(stemId: string, onProgress?: (loaded: number, total: number) => void): Promise<ArrayBuffer> {
   const kept = await cacheGet<Blob>("stem", stemId);
   if (kept) {
     try {
@@ -64,7 +64,7 @@ export async function fetchStem(stemId: string): Promise<ArrayBuffer> {
       // The browser lost the file behind it: download it again.
     }
   }
-  const bytes = await fetchInSlices(`/api/audio/stem/${stemId}`);
+  const bytes = await fetchInSlices(`/api/audio/stem/${stemId}`, onProgress);
   // Copied as it's put, so the caller can decode (and detach) `bytes` at once.
   void cachePut("stem", stemId, bytes, bytes.byteLength);
   return bytes;
