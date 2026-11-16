@@ -57,6 +57,7 @@ const DEFAULT_FX_VALUES: Partial<LaneFx> = {
   highpass: 20,
   lowpass: 20000,
   eqLow: 0,
+  eqLowMid: 0,
   eqMid: 0,
   eqHigh: 0,
   drive: 0,
@@ -317,7 +318,7 @@ async function run(name: CoproducerToolName, input: Record<string, unknown>, ctx
     if (fx) {
       const names: Record<string, keyof LaneFx> = {
         reverb: "reverb", delay: "delay", width: "width", drive: "drive", duck: "duck",
-        eq_low: "eqLow", eq_mid: "eqMid", eq_high: "eqHigh", highpass: "highpass", lowpass: "lowpass", compress: "compress", pan: "pan",
+        eq_low: "eqLow", eq_low_mid: "eqLowMid", eq_mid: "eqMid", eq_high: "eqHigh", highpass: "highpass", lowpass: "lowpass", compress: "compress", pan: "pan",
         reverb_size: "reverbSize", delay_feedback: "delayFeedback", fade_in: "fadeIn", fade_out: "fadeOut",
       };
       const changes: Partial<LaneFx> = {};

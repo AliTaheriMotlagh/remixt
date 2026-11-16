@@ -472,7 +472,7 @@ function LaneControls({ lane, onDeleted }: { lane: StudioLane; onDeleted: () => 
           </div>
         </Group>
 
-        <Group title="Tone (EQ)" action={<ResetButton onClick={() => set({ highpass: DEFAULT_FX.highpass, lowpass: DEFAULT_FX.lowpass, eqLow: 0, eqMid: 0, eqHigh: 0 })} />}>
+        <Group title="Tone (EQ)" action={<ResetButton onClick={() => set({ highpass: DEFAULT_FX.highpass, lowpass: DEFAULT_FX.lowpass, eqLow: 0, eqLowMid: 0, eqMid: 0, eqHigh: 0 })} />}>
           <Slider label="Low cut" value={cutToPos(fx.highpass)} min={0} max={1} text={fx.highpass <= 21 ? "Off" : `${fx.highpass} Hz`} onChange={(p) => set({ highpass: posToCut(p) })} reset={0} />
           <Slider label="Bass" value={fx.eqLow} min={-12} max={12} step={0.5} text={db(fx.eqLow)} onChange={(eqLow) => set({ eqLow })} reset={0} />
           <Slider label="Body" value={fx.eqMid} min={-12} max={12} step={0.5} text={db(fx.eqMid)} onChange={(eqMid) => set({ eqMid })} reset={0} />

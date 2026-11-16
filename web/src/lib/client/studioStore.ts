@@ -32,6 +32,7 @@ export type LaneFx = {
   highpass: number; // Hz, 20 = off
   lowpass: number; // Hz, 20000 = off
   eqLow: number; // dB, low shelf
+  eqLowMid: number; // dB, bell at 350 Hz — the low mids, where a mix gets muddy
   eqMid: number; // dB, mid peak
   eqHigh: number; // dB, high shelf
   drive: number; // 0..1 saturation
@@ -57,6 +58,7 @@ export const DEFAULT_FX: LaneFx = {
   highpass: 20,
   lowpass: 20000,
   eqLow: 0,
+  eqLowMid: 0,
   eqMid: 0,
   eqHigh: 0,
   drive: 0,
@@ -300,6 +302,8 @@ export type MasterFx = {
   high: number;
   /** 0..1 bus compression (and make-up gain). */
   glue: number;
+  /** dB of level into the fader and limiter — what "Master to target" sets to reach a loudness. Missing = 0. */
+  gain?: number;
 };
 
 export const DEFAULT_MASTER: MasterFx = { low: 0, high: 0, glue: 0 };
@@ -480,6 +484,7 @@ export function normaliseMaster(value: unknown): MasterFx {
     low: num(raw.low, -6, 6, 0),
     high: num(raw.high, -6, 6, 0),
     glue: num(raw.glue, 0, 1, 0),
+    ...(typeof raw.gain === "number" && Number.isFinite(raw.gain) && Math.abs(raw.gain) >= 0.05 ? { gain: num(raw.gain, -12, 18, 0) } : {}),
   };
 }
 

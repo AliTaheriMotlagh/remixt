@@ -8,7 +8,8 @@ import { DEFAULT_MASTER, MASTER_PRESETS, useStudioStore, type MasterFx } from "@
 // sits in front of the fader and the safety limiter, and goes into
 // exports too. Each preset tap is one undo step; a slider drag is one.
 
-const same = (a: MasterFx, b: MasterFx) => Math.abs(a.low - b.low) < 0.05 && Math.abs(a.high - b.high) < 0.05 && Math.abs(a.glue - b.glue) < 0.01;
+const same = (a: MasterFx, b: MasterFx) =>
+  Math.abs(a.low - b.low) < 0.05 && Math.abs(a.high - b.high) < 0.05 && Math.abs(a.glue - b.glue) < 0.01 && Math.abs((a.gain ?? 0) - (b.gain ?? 0)) < 0.05;
 
 /** Which preset the master is on, if any. */
 export function masterPresetOf(master: MasterFx) {
@@ -56,7 +57,7 @@ export default function MasterPanel() {
             key={p.id}
             onClick={() => {
               startNewStep();
-              setMaster(p.master);
+              setMaster({ gain: 0, ...p.master });
             }}
             title={p.hint}
             aria-pressed={preset?.id === p.id}
@@ -68,6 +69,7 @@ export default function MasterPanel() {
       </div>
       <Slider label="Low" value={master.low} min={-6} max={6} step={0.5} format={db} reset={0} onChange={(low) => setMaster({ low })} />
       <Slider label="High" value={master.high} min={-6} max={6} step={0.5} format={db} reset={0} onChange={(high) => setMaster({ high })} />
+      <Slider label="Gain" value={master.gain ?? 0} min={-12} max={18} step={0.5} format={db} reset={0} onChange={(gain) => setMaster({ gain })} />
       <Slider label="Glue" value={master.glue} min={0} max={1} step={0.05} format={(v) => `${Math.round(v * 100)}%`} reset={0} onChange={(glue) => setMaster({ glue })} />
       <p className="text-[10px] text-muted">{preset ? preset.hint : "Custom"} · double-click a slider to reset it</p>
     </div>

@@ -93,6 +93,20 @@ describe("what exactly happened", () => {
     assert.match(diff.summary[0], /^“vocal”: 30\.4% faster \(92 → 120 BPM\); 3 semitones higher/);
   });
 
+  test("a beat made to last says its main part plays again, not that it was cut at its silences", () => {
+    const after = {
+      ...beat,
+      clips: [
+        { from: 0, to: 56, at: 0 },
+        { from: 8, to: 24, at: 56, label: "Main part again" },
+        { from: 56, to: 64, at: 72, label: "Ending" },
+      ],
+    };
+    const cut = diffMix({ lanes: [beat], projectBpm: BPM }, { lanes: [after], projectBpm: BPM }).lanes[0].changes.find((c) => c.label === "Cut")!;
+    assert.match(cut.text, /main part plays again for 8 bars/);
+    assert.doesNotMatch(cut.text, /silences/);
+  });
+
   test("effects and drawn moves are listed in words", () => {
     const after = { ...beat, fx: { ...beat.fx, reverb: 0.2, compress: true, highpass: 110 }, automation: { volume: [{ t: 0, v: 1 }, { t: 4, v: 0 }] } };
     const diff = diffMix({ lanes: [beat], projectBpm: BPM }, { lanes: [after], projectBpm: BPM });

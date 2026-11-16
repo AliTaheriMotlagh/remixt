@@ -128,6 +128,10 @@ export default function LaneFxPanel({ lane }: { lane: StudioLane }) {
           format={db} onChange={(eqLow) => patch({ eqLow })} title="Low shelf at 220 Hz"
         />
         <FxSlider
+          label="EQ low-mid" value={fx.eqLowMid ?? 0} min={-12} max={12} step={0.5}
+          format={db} onChange={(eqLowMid) => patch({ eqLowMid })} title="Bell at 350 Hz — cut it when the mix sounds muddy or boxy"
+        />
+        <FxSlider
           label="EQ mid" value={fx.eqMid} min={-12} max={12} step={0.5}
           format={db} onChange={(eqMid) => patch({ eqMid })} title="Peak at 1.4 kHz"
         />

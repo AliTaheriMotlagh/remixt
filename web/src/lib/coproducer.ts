@@ -97,7 +97,7 @@ export const COPRODUCER_TOOLS = [
   {
     name: "adjust_lane",
     description:
-      "A hands-on change to one lane, tried on top of whatever is on (the person can switch it off, compare and keep or undo it, like an idea). All fields optional; effect values are absolute. volume 0–1.5 (1 = as loaded); pitch_semitones -12…12 (vocals keep their natural voice); nudge_beats moves the lane earlier (negative) or later in beats; effects: reverb/delay/width/drive/duck 0–1, eq_low/eq_mid/eq_high in dB (-12…12), highpass/lowpass in Hz, compress true/false, pan -1…1. Returns the change's id and the new score.",
+      "A hands-on change to one lane, tried on top of whatever is on (the person can switch it off, compare and keep or undo it, like an idea). All fields optional; effect values are absolute. volume 0–1.5 (1 = as loaded); pitch_semitones -12…12 (vocals keep their natural voice); nudge_beats moves the lane earlier (negative) or later in beats; effects: reverb/delay/width/drive/duck 0–1, eq_low/eq_low_mid/eq_mid/eq_high in dB (-12…12; eq_low_mid is a 350 Hz bell for mud), highpass/lowpass in Hz, compress true/false, pan -1…1. Returns the change's id and the new score.",
     input_schema: {
       type: "object",
       properties: {
@@ -116,6 +116,7 @@ export const COPRODUCER_TOOLS = [
             duck: { type: "number", minimum: 0, maximum: 1 },
             eq_low: { type: "number", minimum: -12, maximum: 12 },
             eq_mid: { type: "number", minimum: -12, maximum: 12 },
+            eq_low_mid: { type: "number", minimum: -12, maximum: 12 },
             eq_high: { type: "number", minimum: -12, maximum: 12 },
             highpass: { type: "number", minimum: 20, maximum: 2000 },
             lowpass: { type: "number", minimum: 1000, maximum: 20000 },

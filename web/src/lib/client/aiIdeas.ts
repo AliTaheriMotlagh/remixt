@@ -1129,6 +1129,7 @@ export function describeFx(fx: LaneFx) {
   if (fx.compress) parts.push("compressor");
   for (const [k, label] of [
     ["eqLow", "lows"],
+    ["eqLowMid", "low mids"],
     ["eqMid", "mids"],
     ["eqHigh", "highs"],
   ] as const) {

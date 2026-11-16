@@ -1,4 +1,5 @@
 import type { Aspect } from "./aiControl";
+import { REPRISE_LABEL } from "./arrange";
 import { clipEnd, clipStart, clipsOf } from "./clipEdit";
 import { keyLabel } from "./musicKey";
 import { DEFAULT_FX, beatLength, effectiveKey, laneName, type LaneFx, type StudioLane } from "./studioStore";
@@ -77,8 +78,9 @@ function fxChanges(before: LaneFx, after: LaneFx): string[] {
   if (before.compress !== after.compress) words.push(after.compress ? "compressor on" : "compressor off");
   if (Math.abs(before.highpass - after.highpass) > 1) words.push(after.highpass <= 25 ? "low cut off" : `low cut at ${Math.round(after.highpass)} Hz`);
   if (Math.abs(before.lowpass - after.lowpass) > 10) words.push(after.lowpass >= 19500 ? "high cut off" : `high cut at ${(after.lowpass / 1000).toFixed(1)} kHz`);
-  const eq = (["eqLow", "eqMid", "eqHigh"] as const).filter((k) => Math.abs(before[k] - after[k]) > 0.05);
-  if (eq.length) words.push(`EQ ${eq.map((k) => `${k === "eqLow" ? "low" : k === "eqMid" ? "mid" : "high"} ${signed(Math.round(after[k] * 10) / 10, " dB")}`).join(", ")}`);
+  const eq = (["eqLow", "eqLowMid", "eqMid", "eqHigh"] as const).filter((k) => Math.abs((before[k] ?? 0) - (after[k] ?? 0)) > 0.05);
+  const eqName = { eqLow: "low", eqLowMid: "low-mid", eqMid: "mid", eqHigh: "high" } as const;
+  if (eq.length) words.push(`EQ ${eq.map((k) => `${eqName[k]} ${signed(Math.round((after[k] ?? 0) * 10) / 10, " dB")}`).join(", ")}`);
   if (Math.abs(before.pan - after.pan) > 0.02) words.push(Math.abs(after.pan) < 0.02 ? "centred" : `panned ${pct(Math.abs(after.pan))} ${after.pan < 0 ? "left" : "right"}`);
   if (before.delayDivision !== after.delayDivision && after.delay > 0.005) words.push(`echo every ${after.delayDivision}`);
   if (Math.abs(before.fadeIn - after.fadeIn) > 0.05) words.push(after.fadeIn > 0.05 ? `fades in over ${after.fadeIn.toFixed(1)}s` : "no fade-in");
@@ -171,8 +173,12 @@ export function laneChanges(before: StudioLane, after: StudioLane, mix: { before
     const isWhole = !after.clips?.length;
     const named = sections(after);
     const reversed = (after.clips ?? []).filter((c) => c.reverse).length - (before.clips ?? []).filter((c) => c.reverse).length;
+    const repeated = (after.clips ?? []).filter((c) => c.label === REPRISE_LABEL && !c.muted);
+    const repeatedBars = Math.round(repeated.reduce((sum, c) => sum + (c.to - c.from) / (c.stretch ?? 1), 0) / after.tempoRatio / bar);
     const text = isWhole
       ? "Back to one whole take, as recorded"
+      : repeated.length
+        ? `Made to last the whole vocal: its main part plays again for ${repeatedBars} bar${repeatedBars === 1 ? "" : "s"}, each repeat on its bar line, then its own ending`
       : wasWhole
         ? `Cut at its silences into ${after.clips!.length} pieces, each laid on the beat's bars${named.length ? ` — ${named.slice(0, 5).join(", ")}${named.length > 5 ? "…" : ""}` : ""}`
         : `Re-arranged: ${cutWords(before)} → ${cutWords(after)}${named.length ? ` (${named.slice(0, 5).join(", ")}${named.length > 5 ? "…" : ""})` : ""}`;
@@ -180,7 +186,7 @@ export function laneChanges(before: StudioLane, after: StudioLane, mix: { before
     const endBefore = endOf(before);
     const endAfter = endOf(after);
     if (Math.abs(endAfter - endBefore) > bar) {
-      changes.push({ aspect: "arrangement", label: "Ends", value: `${clock(endBefore)} → ${clock(endAfter)}`, text: endAfter > endBefore ? "Lasts longer (looped or extended)" : "Ends sooner (trimmed)" });
+      changes.push({ aspect: "arrangement", label: "Ends", value: `${clock(endBefore)} → ${clock(endAfter)}`, text: endAfter > endBefore ? (repeated.length ? "Lasts longer (its main part repeated)" : "Lasts longer (looped or extended)") : "Ends sooner (trimmed)" });
     }
   }
 

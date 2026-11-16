@@ -184,7 +184,7 @@ type Insert = {
 
 const INSERTS: Insert[] = [
   { id: "hp", label: "HP", title: "High-pass filter — cuts rumble below", on: (fx) => fx.highpass > 20, enable: (l) => ({ highpass: l.kind === "vocals" ? 110 : l.kind === "bass" ? 30 : 40 }), disable: { highpass: DEFAULT_FX.highpass } },
-  { id: "eq", label: "EQ", title: "3-band EQ — low, mid, high", on: (fx) => fx.eqLow !== 0 || fx.eqMid !== 0 || fx.eqHigh !== 0, enable: (l) => (l.kind === "vocals" ? { eqMid: 1.5, eqHigh: 2.5 } : { eqLow: 2, eqHigh: 1 }), disable: { eqLow: 0, eqMid: 0, eqHigh: 0 } },
+  { id: "eq", label: "EQ", title: "3-band EQ — low, mid, high", on: (fx) => fx.eqLow !== 0 || (fx.eqLowMid ?? 0) !== 0 || fx.eqMid !== 0 || fx.eqHigh !== 0, enable: (l) => (l.kind === "vocals" ? { eqMid: 1.5, eqHigh: 2.5 } : { eqLow: 2, eqHigh: 1 }), disable: { eqLow: 0, eqLowMid: 0, eqMid: 0, eqHigh: 0 } },
   { id: "drv", label: "DRV", title: "Drive — saturation", on: (fx) => fx.drive > 0, enable: () => ({ drive: 0.2 }), disable: { drive: 0 } },
   { id: "cmp", label: "CMP", title: "Compressor — evens the level out", on: (fx) => fx.compress, enable: () => ({ compress: true }), disable: { compress: false } },
   { id: "lp", label: "LP", title: "Low-pass filter — softens the top", on: (fx) => fx.lowpass < 20000, enable: () => ({ lowpass: 9000 }), disable: { lowpass: DEFAULT_FX.lowpass } },
@@ -339,7 +339,7 @@ function MasterStrip() {
           ))}
         </select>
       </label>
-      <p className="text-center text-[9px] leading-tight text-muted">Low {master.low > 0 ? "+" : ""}{master.low} · High {master.high > 0 ? "+" : ""}{master.high} · Glue {Math.round(master.glue * 100)}%</p>
+      <p className="text-center text-[9px] leading-tight text-muted">Low {master.low > 0 ? "+" : ""}{master.low} · High {master.high > 0 ? "+" : ""}{master.high} · Glue {Math.round(master.glue * 100)}%{master.gain ? ` · Gain ${master.gain > 0 ? "+" : ""}${master.gain}` : ""}</p>
       <div className="mt-auto flex h-44 justify-center gap-1.5">
         <Fader value={masterVolume} onChange={(v) => useStudioStore.getState().setMasterVolume(Math.round(v * 1000) / 1000)} color="var(--brand)" label="Master level" />
         <Meter source={() => audioEngine.getAnalyser()} className="h-full" />

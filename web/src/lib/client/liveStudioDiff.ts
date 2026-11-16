@@ -37,6 +37,7 @@ const FX_WORDS: Record<string, string> = {
   highpass: "the high-pass filter",
   lowpass: "the low-pass filter",
   eqLow: "the bass EQ",
+  eqLowMid: "the low-mid EQ",
   eqMid: "the mid EQ",
   eqHigh: "the treble EQ",
   drive: "drive",

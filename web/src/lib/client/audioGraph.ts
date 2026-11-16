@@ -124,6 +124,10 @@ export function createLaneChain(
   const eqLow = ctx.createBiquadFilter();
   eqLow.type = "lowshelf";
   eqLow.frequency.value = 220;
+  const eqLowMid = ctx.createBiquadFilter();
+  eqLowMid.type = "peaking";
+  eqLowMid.frequency.value = 350;
+  eqLowMid.Q.value = 1;
   const eqMid = ctx.createBiquadFilter();
   eqMid.type = "peaking";
   eqMid.frequency.value = 1400;
@@ -174,7 +178,8 @@ export function createLaneChain(
 
   highpass.connect(lowpass);
   lowpass.connect(eqLow);
-  eqLow.connect(eqMid);
+  eqLow.connect(eqLowMid);
+  eqLowMid.connect(eqMid);
   eqMid.connect(eqHigh);
   shaper.connect(driveTrim);
   shaperLatency.connect(driveTrim);
@@ -272,6 +277,7 @@ export function createLaneChain(
     setParam(highpass.frequency, Math.max(20, fx.highpass), ctx);
     setParam(lowpass.frequency, Math.min(20000, fx.lowpass), ctx);
     setParam(eqLow.gain, fx.eqLow, ctx);
+    setParam(eqLowMid.gain, fx.eqLowMid ?? 0, ctx);
     setParam(eqMid.gain, fx.eqMid, ctx);
     setParam(eqHigh.gain, fx.eqHigh, ctx);
 
@@ -316,7 +322,7 @@ export function createLaneChain(
       if (compressorRelease) clearTimeout(compressorRelease);
       if (reverbRelease) clearTimeout(reverbRelease);
       for (const node of [
-        highpass, lowpass, eqLow, eqMid, eqHigh, shaper, shaperLatency, driveTrim,
+        highpass, lowpass, eqLow, eqLowMid, eqMid, eqHigh, shaper, shaperLatency, driveTrim,
         compressor, compressorBypass, compressorWet, fadeGain, autoGain, autoFilter, duckGain, volumeGain,
         splitter, merger, widthDelay, panner, reverbSend,
         delaySend, delayNode, feedback, feedbackDamp,
@@ -391,7 +397,7 @@ export function createMasterChain(ctx: BaseAudioContext, destination: AudioNode,
     setParam(glueWet.gain, amount > 0 ? 1 : 0, ctx);
     setParam(glueDry.gain, amount > 0 ? 0 : 1, ctx);
     // Win back about what the compressor takes off, so "more glue" reads as denser, not quieter.
-    setParam(makeUp.gain, 10 ** ((amount * 7) / 20), ctx);
+    setParam(makeUp.gain, 10 ** ((amount * 7 + (next.gain ?? 0)) / 20), ctx);
   }
   update(master);
   // Set outright the first time: an offline render has no time to ramp.
@@ -399,7 +405,7 @@ export function createMasterChain(ctx: BaseAudioContext, destination: AudioNode,
   high.gain.value = master.high;
   glueWet.gain.value = master.glue > 0 ? 1 : 0;
   glueDry.gain.value = master.glue > 0 ? 0 : 1;
-  makeUp.gain.value = 10 ** ((Math.min(1, Math.max(0, master.glue)) * 7) / 20);
+  makeUp.gain.value = 10 ** ((Math.min(1, Math.max(0, master.glue)) * 7 + (master.gain ?? 0)) / 20);
 
   return { input: low, gain, update };
 }

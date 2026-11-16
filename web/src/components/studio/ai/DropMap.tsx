@@ -3,6 +3,7 @@
 import { memo, useMemo } from "react";
 import { Zap } from "lucide-react";
 import type { Session } from "@/lib/client/aiIdeas";
+import { REPRISE_LABEL } from "@/lib/client/arrange";
 import { clipEnd, clipStart, clipsOf } from "@/lib/client/clipEdit";
 import { timelinesOf } from "@/lib/client/harmony";
 import { beatLength, useStudioStore, viewDuration, type StudioLane } from "@/lib/client/studioStore";
@@ -40,13 +41,17 @@ export default memo(function DropMap({ session, lanes, projectBpm, duration }: {
           .map((c) => ({ start: clipStart(vocal, c), end: clipEnd(vocal, c), label: c.label ?? "", chorus: c.label === "Chorus" }))
       : [];
     const chorusAt = parts.filter((p) => p.chorus).map((p) => p.start).sort((a, b) => a - b);
-    return { bars, dropAt, parts, chorusAt };
+    // Where the beat's main part plays again (a vocal longer than the beat).
+    const repeats = clipsOf(beat)
+      .filter((c) => c.label === REPRISE_LABEL && !c.muted)
+      .map((c) => ({ start: clipStart(beat, c), end: clipEnd(beat, c) }));
+    return { bars, dropAt, parts, chorusAt, repeats };
   }, [pair, drop, lanes, session.vocal]);
 
   if (!pair || !picture) {
     return <p className="rounded-xl border border-dashed border-border p-3 text-[11px] text-muted">The drop map needs a vocal and a beat the AI could match.</p>;
   }
-  const { bars, dropAt, parts, chorusAt } = picture;
+  const { bars, dropAt, parts, chorusAt, repeats } = picture;
   // How far the nearest chorus starts from the drop.
   const nearest = dropAt !== null && chorusAt.length ? chorusAt.reduce((best, t) => (Math.abs(t - dropAt) < Math.abs(best - dropAt) ? t : best)) : null;
   const offBars = nearest !== null && dropAt !== null ? Math.round((nearest - dropAt) / bar) : null;
@@ -86,6 +91,15 @@ export default memo(function DropMap({ session, lanes, projectBpm, duration }: {
               }}
             />
           ))}
+          {repeats.map((r, n) => (
+            <span
+              key={`r${n}`}
+              className="pointer-events-none absolute inset-y-0 border-x border-dashed border-beat/60 bg-beat/10"
+              style={{ left: `${(r.start / span) * 100}%`, width: `${((r.end - r.start) / span) * 100}%` }}
+            >
+              {n === 0 && <span className="absolute top-0.5 left-1 rounded bg-beat/80 px-1 text-[8.5px] font-black tracking-wide text-white">REPEAT</span>}
+            </span>
+          ))}
           {dropAt !== null && (
             <span className="absolute inset-y-0 w-0.5 bg-vocals" style={{ left: `${(dropAt / span) * 100}%` }}>
               <span className="absolute top-0.5 left-1 rounded bg-vocals px-1 text-[8.5px] font-black tracking-wide text-white">DROP</span>
@@ -111,7 +125,7 @@ export default memo(function DropMap({ session, lanes, projectBpm, duration }: {
           ))}
         </div>
         <div className="mt-1 flex justify-between text-[9.5px] text-muted tabular-nums" aria-hidden>
-          <span>beat energy · vocal below</span>
+          <span>beat energy{repeats.length ? " · main part repeated" : ""} · vocal below</span>
           <span>{clock(span)}</span>
         </div>
       </div>
