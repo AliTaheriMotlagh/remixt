@@ -33,6 +33,7 @@ import {
   Timer,
   Trash2,
   Undo2,
+  Redo2,
   WandSparkles,
   X,
 } from "lucide-react";
@@ -81,6 +82,29 @@ const TAP_REACTION = 0.08;
 
 const GHOST =
   "flex items-center justify-center gap-1.5 rounded-lg border border-border text-muted transition-colors hover:border-vocals hover:text-foreground disabled:opacity-40 max-lg:h-10 max-lg:w-10";
+
+/**
+ * Undo and Redo for the lyrics — every change to the words or their
+ * timing is a step (typing is one step per visit to the box). ⌘/Ctrl+Z
+ * and ⇧⌘Z / Ctrl+Y do the same while the lyrics have the focus (see
+ * StudioShortcuts).
+ */
+export function LyricsUndoRedo({ className = "h-9 w-9" }: { className?: string }) {
+  const canUndo = useLyrics((s) => s.past.length > 0);
+  const canRedo = useLyrics((s) => s.future.length > 0);
+  const undo = useLyrics((s) => s.undo);
+  const redo = useLyrics((s) => s.redo);
+  return (
+    <>
+      <button onClick={undo} disabled={!canUndo} className={`${className} ${GHOST}`} title="Undo the last change to the lyrics (⌘Z)" aria-label="Undo lyrics change">
+        <Undo2 />
+      </button>
+      <button onClick={redo} disabled={!canRedo} className={`${className} ${GHOST}`} title="Redo (⇧⌘Z)" aria-label="Redo lyrics change">
+        <Redo2 />
+      </button>
+    </>
+  );
+}
 
 function isTyping(target: EventTarget | null) {
   const el = target as HTMLElement | null;
@@ -339,6 +363,7 @@ export function LineTimingEditor({ index, className = "" }: { index: number; cla
   return (
     <div
       ref={box}
+      data-lyrics
       onClick={(e) => e.stopPropagation()}
       className={`flex flex-col gap-2 rounded-xl border border-vocals/40 bg-surface p-2 text-xs shadow-sm ${className}`}
       role="group"
@@ -847,8 +872,6 @@ function SingTab({ lines, onEdit, onRecord, stage = false }: { lines: LyricLine[
   const selected = useLyrics((s) => s.selectedLine);
   const sheet = useLyrics(activeSheet);
   const markAligned = useLyrics((s) => s.markAligned);
-  const past = useLyrics((s) => s.past);
-  const undo = useLyrics((s) => s.undo);
   const prefs = useLyrics((s) => s.prefs);
   const setPrefs = useLyrics((s) => s.setPrefs);
   const bpm = useStudioStore((s) => s.projectBpm);
@@ -969,15 +992,7 @@ function SingTab({ lines, onEdit, onRecord, stage = false }: { lines: LyricLine[
               <Mic />
             </button>
           )}
-          <button
-            onClick={undo}
-            disabled={past.length === 0}
-            className={`h-9 w-9 ${GHOST}`}
-            title="Take back the last change to the lyrics"
-            aria-label="Undo"
-          >
-            <Undo2 />
-          </button>
+          <LyricsUndoRedo />
           <button
             onClick={() => setPrefs({ fontSize: Math.max(12, prefs.fontSize - 2) })}
             className={`h-9 w-9 ${GHOST}`}
@@ -1138,6 +1153,7 @@ function EditTab({ onDone }: { onDone: () => void }) {
   const setText = useLyrics((s) => s.setText);
   const rename = useLyrics((s) => s.rename);
   const checkpoint = useLyrics((s) => s.checkpoint);
+  const clear = useLyrics((s) => s.clear);
   const [pasteError, setPasteError] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
   if (!sheet) return null;
@@ -1230,6 +1246,18 @@ function EditTab({ onDone }: { onDone: () => void }) {
             <ClipboardPaste /> Paste
           </button>
         )}
+        <button
+          onClick={() => {
+            clear();
+            box.current?.focus();
+          }}
+          disabled={!sheet.text.trim()}
+          className="flex h-10 items-center gap-1.5 rounded-lg border border-border px-3 text-xs font-semibold text-muted hover:border-danger/60 hover:text-danger disabled:opacity-40"
+          title="Take every line out, to start the words again (Undo brings them back)"
+        >
+          <Eraser /> Clear
+        </button>
+        <LyricsUndoRedo className="h-10 w-10" />
         <p className="min-w-0 flex-1 text-[11px] text-muted">
           {pasteError ? "The browser didn't allow pasting from here — long-press (or Ctrl/⌘+V) in the box instead." : "Saved in this browser as you type."}
         </p>
@@ -1512,7 +1540,7 @@ export function LyricsTools({ onSing, stage = false }: { onSing?: () => void; st
   const icon = `h-10 w-10 ${GHOST}`;
 
   return (
-    <div className="flex flex-col gap-3">
+    <div data-lyrics className="flex flex-col gap-3">
       <FindingBanner />
       {/* The open sheet: what it is, and everything that changes which one it is. */}
       <div className="relative flex items-center gap-2 overflow-hidden rounded-2xl border border-vocals/25 bg-gradient-to-br from-vocals/12 via-surface to-brand/10 p-2 shadow-sm">

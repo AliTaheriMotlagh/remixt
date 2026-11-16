@@ -78,6 +78,7 @@ const TAB_LABEL: Record<LibraryTab, string> = {
 const TAKE_TAG = "studio recording";
 
 const isTake = (tags: readonly string[] | null | undefined) => !!tags?.includes(TAKE_TAG);
+type TakeFilter = "all" | "others" | "mine";
 
 /** Marks a vocal recorded in the booth (yours, or one shared with you), so it stands out from songs in the list. */
 function TakeBadge({ mine }: { mine: boolean }) {
@@ -189,8 +190,11 @@ export default function StudioLibraryPanel() {
   const [tab, setTab] = useState<LibraryTab>("songs");
   const [all, setAll] = useState<ListedStem[] | null>(() => listCache);
   const [query, setQuery] = useState("");
-  /** Just the vocals recorded in the booth (songs and vocals tabs). */
-  const [takesOnly, setTakesOnly] = useState(false);
+  /**
+   * Songs and vocals tabs: everything, everything but the takes you
+   * recorded in the booth, or just those takes.
+   */
+  const [takeFilter, setTakeFilter] = useState<TakeFilter>("all");
   const lanes = useStudioStore((s) => s.lanes);
   const preview = usePreviewState();
 
@@ -240,12 +244,17 @@ export default function StudioLibraryPanel() {
       }),
     [all]
   );
-  const takeCount = songs.filter((song) => isTake(song.tags)).length;
-  const onlyTakes = takesOnly && takeCount > 0 && (tab === "songs" || tab === "vocals");
+  const takeCount = songs.filter((song) => isTake(song.tags) && song.mine).length;
+  const filtering = takeCount > 0 && (tab === "songs" || tab === "vocals") ? takeFilter : "all";
+  const onlyTakes = filtering === "mine";
+  /** Whether a song or stem passes the take filter (`myTake`: it's a take this user recorded). */
+  const passes = (myTake: boolean) => filtering === "all" || (filtering === "mine" ? myTake : !myTake);
   const shownSongs = songs.filter(
-    (song) => (!onlyTakes || isTake(song.tags)) && matches({ track_title: song.title, artist_name: song.artist, track_tags: song.tags })
+    (song) =>
+      passes(isTake(song.tags) && song.mine) && matches({ track_title: song.title, artist_name: song.artist, track_tags: song.tags })
   );
-  const stems = tab === "songs" ? [] : (all ?? []).filter((s) => s.kind === tab && (!onlyTakes || isTake(s.track_tags)) && matches(s));
+  const stems =
+    tab === "songs" ? [] : (all ?? []).filter((s) => s.kind === tab && passes(isTake(s.track_tags) && !!s.track_mine) && matches(s));
   const accent = tab === "songs" ? "var(--brand)" : KIND_INFO[tab].color;
   const addedStemIds = new Set(lanes.map((l) => l.stemId));
   const empty = tab === "songs" ? shownSongs.length === 0 : stems.length === 0;
@@ -282,23 +291,24 @@ export default function StudioLibraryPanel() {
           className="input mt-2 !py-1.5 text-xs"
         />
         {takeCount > 0 && (tab === "songs" || tab === "vocals") && (
-          <div className="mt-2 flex gap-1.5" role="radiogroup" aria-label="Which to show">
+          <div className="mt-2 flex flex-wrap gap-1.5" role="radiogroup" aria-label="Which to show">
             {(
               [
-                [false, "Everything"],
-                [true, `Your takes · ${takeCount}`],
+                ["all", "Everything"],
+                ["others", "Not my takes"],
+                ["mine", `My takes · ${takeCount}`],
               ] as const
-            ).map(([only, label]) => (
+            ).map(([value, label]) => (
               <button
-                key={label}
+                key={value}
                 role="radio"
-                aria-checked={takesOnly === only}
-                onClick={() => setTakesOnly(only)}
-                className={`flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors pointer-coarse:py-1.5 ${
-                  takesOnly === only ? "border-vocals bg-vocals/10 text-foreground" : "border-border text-muted hover:text-foreground"
+                aria-checked={takeFilter === value}
+                onClick={() => setTakeFilter(value)}
+                className={`flex items-center gap-1 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors pointer-coarse:py-1.5 ${
+                  takeFilter === value ? "border-vocals bg-vocals/10 text-foreground" : "border-border text-muted hover:text-foreground"
                 }`}
               >
-                {only && <Mic className="h-3 w-3" style={{ color: KIND_INFO.vocals.color }} />}
+                {value === "mine" && <Mic className="h-3 w-3" style={{ color: KIND_INFO.vocals.color }} />}
                 {label}
               </button>
             ))}
@@ -311,7 +321,7 @@ export default function StudioLibraryPanel() {
         )}
       </div>
 
-      <div className="scrollbar-thin flex-1 overflow-y-auto p-2">
+      <div className="scrollbar-thin flex-1 overflow-y-auto overscroll-contain p-2">
         {loading && <p className="p-3 text-xs text-muted">Loading…</p>}
         {!loading && empty && <p className="p-3 text-xs text-muted">Nothing here yet.</p>}
         <div className="flex flex-col gap-2">

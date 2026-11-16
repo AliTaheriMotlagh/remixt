@@ -349,14 +349,14 @@ export default function Studio({ user }: { user: User | null }) {
   return (
     // With the AI producer docked on the right, the Studio makes room for it.
     <div
-      className={`touch-targets mx-auto w-full max-w-[110rem] px-3 py-4 max-lg:pb-[calc(6rem+var(--ai-sheet-h,0px))] sm:px-5 sm:py-5 ${
+      className={`touch-targets mx-auto w-full max-w-[110rem] px-3 py-4 max-lg:pb-[calc(6rem+var(--ai-sheet-h,0px))] sm:px-5 sm:py-5 short:py-2 ${
         aiOpen ? "lg:max-w-none lg:pr-[24.25rem] xl:pr-[28.25rem]" : ""
       }`}
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="text-xl font-bold tracking-tight">Studio</h1>
-          <p className={`mt-0.5 truncate text-xs text-muted sm:text-sm ${challenge || remixTitle ? "" : "max-sm:hidden"}`}>
+          <h1 className="text-xl font-bold tracking-tight short:text-base">Studio</h1>
+          <p className={`mt-0.5 truncate text-xs text-muted sm:text-sm ${challenge || remixTitle ? "" : "max-sm:hidden short:hidden"}`}>
             {challenge ? (
               <>
                 <Flag /> Challenge: “{challenge.title}” — publish to enter

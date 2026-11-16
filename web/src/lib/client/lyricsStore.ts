@@ -37,7 +37,7 @@ const SHEETS_KEY = "remixt.lyrics.sheets";
 const ACTIVE_KEY = "remixt.lyrics.active";
 const PREFS_KEY = "remixt.lyrics.prefs";
 const MAX_SHEETS = 60;
-const MAX_UNDO = 30;
+const MAX_UNDO = 100;
 
 /** A take to draw over the song: being recorded (`level` read every frame) or recorded (`peaks`). */
 export type TimelineTake = { start: number; level: () => number } | { start: number; peaks: number[]; duration: number };
@@ -81,6 +81,8 @@ type LyricsState = {
   lines: LyricLine[];
   /** Earlier versions of the open sheet's text, for Undo. */
   past: string[];
+  /** Versions undone, for Redo (emptied by any new change). */
+  future: string[];
   prefs: LyricsPrefs;
   /**
    * The vocal booth (record + lyrics) is open — one panel for both, so
@@ -134,6 +136,10 @@ type LyricsState = {
   /** The open sheet's lines, changed by a tool — one undo step. */
   setLines: (lines: LyricLine[]) => void;
   undo: () => void;
+  /** Puts back the change last undone. */
+  redo: () => void;
+  /** Every line of the open sheet taken out (its title kept). One undo step. */
+  clear: () => void;
   /** Marks the open sheet as lined up with the beat (see LyricSheet.aligned). */
   markAligned: () => void;
   /** Deletes a sheet; the last one deleted can be brought back with restore(). */
@@ -171,7 +177,20 @@ export const useLyrics = create<LyricsState>((set, get) => {
     if (!current || current.text === text) return;
     const next = sheets.map((s) => (s.id === activeId ? { ...s, text, updatedAt: Date.now() } : s));
     persist(next, activeId);
-    set({ sheets: next, lines: parseLyrics(text), past: undoable ? [...past, current.text].slice(-MAX_UNDO) : past });
+    set({
+      sheets: next,
+      lines: parseLyrics(text),
+      ...(undoable ? { past: [...past, current.text].slice(-MAX_UNDO), future: [] } : { past }),
+    });
+  }
+
+  /** The open sheet's text set to `text` (an undo or redo), saved. */
+  function restoreText(text: string) {
+    const { sheets, activeId } = get();
+    const next = sheets.map((s) => (s.id === activeId ? { ...s, text, updatedAt: Date.now() } : s));
+    persist(next, activeId);
+    const lines = parseLyrics(text);
+    set((st) => ({ sheets: next, lines, selectedLine: st.selectedLine !== null && st.selectedLine < lines.length ? st.selectedLine : null }));
   }
 
   return {
@@ -180,6 +199,7 @@ export const useLyrics = create<LyricsState>((set, get) => {
     activeId: null,
     lines: [],
     past: [],
+    future: [],
     prefs: DEFAULT_PREFS,
     boothOpen: false,
     boothTab: "record",
@@ -251,7 +271,7 @@ export const useLyrics = create<LyricsState>((set, get) => {
     select: (id) => {
       const sheet = get().sheets.find((s) => s.id === id) ?? null;
       write(ACTIVE_KEY, sheet?.id ?? null);
-      set({ activeId: sheet?.id ?? null, lines: sheet ? parseLyrics(sheet.text) : [], past: [], selectedLine: null });
+      set({ activeId: sheet?.id ?? null, lines: sheet ? parseLyrics(sheet.text) : [], past: [], future: [], selectedLine: null });
     },
     create: (sheet) => {
       const id = `lyr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -259,7 +279,7 @@ export const useLyrics = create<LyricsState>((set, get) => {
       // Newest first; the oldest go once there are too many.
       const sheets = [full, ...get().sheets].slice(0, MAX_SHEETS);
       persist(sheets, id);
-      set({ sheets, activeId: id, lines: parseLyrics(full.text), past: [], selectedLine: null });
+      set({ sheets, activeId: id, lines: parseLyrics(full.text), past: [], future: [], selectedLine: null });
       return id;
     },
     rename: (patch) => {
@@ -272,16 +292,28 @@ export const useLyrics = create<LyricsState>((set, get) => {
     checkpoint: () => {
       const { past } = get();
       const current = activeSheet(get());
-      if (current && past[past.length - 1] !== current.text) set({ past: [...past, current.text].slice(-MAX_UNDO) });
+      if (current && past[past.length - 1] !== current.text) set({ past: [...past, current.text].slice(-MAX_UNDO), future: [] });
     },
     setLines: (lines) => commit(serializeLyrics(lines), true),
     undo: () => {
-      const { past, sheets, activeId } = get();
+      const { past, future } = get();
+      const current = activeSheet(get());
       const previous = past[past.length - 1];
-      if (previous === undefined) return;
-      const next = sheets.map((s) => (s.id === activeId ? { ...s, text: previous, updatedAt: Date.now() } : s));
-      persist(next, activeId);
-      set({ sheets: next, lines: parseLyrics(previous), past: past.slice(0, -1) });
+      if (previous === undefined || !current) return;
+      set({ past: past.slice(0, -1), future: [...future, current.text].slice(-MAX_UNDO) });
+      restoreText(previous);
+    },
+    redo: () => {
+      const { past, future } = get();
+      const current = activeSheet(get());
+      const following = future[future.length - 1];
+      if (following === undefined || !current) return;
+      set({ past: [...past, current.text].slice(-MAX_UNDO), future: future.slice(0, -1) });
+      restoreText(following);
+    },
+    clear: () => {
+      commit("", true);
+      set({ selectedLine: null });
     },
     markAligned: () => {
       const { sheets, activeId } = get();
@@ -298,7 +330,7 @@ export const useLyrics = create<LyricsState>((set, get) => {
       const sheets = get().sheets.filter((s) => s.id !== id);
       const activeId = wasActive ? null : get().activeId;
       persist(sheets, activeId);
-      set({ sheets, activeId, removed: { sheet, wasActive }, ...(wasActive ? { lines: [], past: [] } : {}) });
+      set({ sheets, activeId, removed: { sheet, wasActive }, ...(wasActive ? { lines: [], past: [], future: [] } : {}) });
     },
     restore: () => {
       const { removed, sheets, activeId } = get();
@@ -311,7 +343,7 @@ export const useLyrics = create<LyricsState>((set, get) => {
         sheets: next,
         activeId: active,
         removed: null,
-        ...(removed.wasActive ? { lines: parseLyrics(removed.sheet.text), past: [] } : {}),
+        ...(removed.wasActive ? { lines: parseLyrics(removed.sheet.text), past: [], future: [] } : {}),
       });
     },
     setPrefs: (prefs) => {

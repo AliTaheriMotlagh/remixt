@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
-import { Music } from "lucide-react";
+import { Music, Pause, Play } from "lucide-react";
+import { previewPlayer, usePreviewState } from "@/lib/client/previewPlayer";
 import Waveform from "./Waveform";
 import TagInput from "./TagInput";
 import { KIND_INFO, STEM_KINDS, type StemKind } from "@/lib/stemKinds";
@@ -453,6 +454,7 @@ function TrackRow({
               key={stem.id}
               label={KIND_INFO[stem.kind].label}
               stem={stem}
+              title={track.title}
               color={KIND_INFO[stem.kind].color}
               onAdd={() => onAddToStudio(track, stem)}
             />
@@ -463,28 +465,80 @@ function TrackRow({
   );
 }
 
+/** "1:05" */
+function clock(seconds: number) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
+}
+
+/**
+ * One stem of a song you added: hear it here (through the shared preview
+ * player, so it's stopped from anywhere and only one thing plays), seek by
+ * tapping the waveform, or send it to the Studio. Played once, it's kept on
+ * this device: playing it again — here or in the Studio — needs no download.
+ */
 function StemMiniRow({
   label,
   stem,
+  title,
   color,
   onAdd,
 }: {
   label: string;
   stem: Stem;
+  title: string;
   color: string;
   onAdd: () => void;
 }) {
   const peaks = useMemo<number[]>(() => JSON.parse(stem.peaks_json || "[]"), [stem.peaks_json]);
+  const preview = usePreviewState();
+  const mine = preview.current?.stemId === stem.id;
+  const playing = mine && preview.playing;
+  const track = { stemId: stem.id, title, artist: "You", kind: stem.kind, keep: true };
   return (
-    <div className="flex items-center gap-3 rounded-lg bg-surface-raised px-3 py-2">
-      <span
-        className="w-12 shrink-0 text-xs font-semibold sm:w-14"
-        style={{ color }}
+    <div className={`flex items-center gap-2.5 rounded-lg px-2 py-2 sm:gap-3 ${mine ? "bg-surface-hover" : "bg-surface-raised"}`}>
+      <button
+        onClick={() => void previewPlayer.toggle(track)}
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white shadow-sm transition-transform active:scale-95"
+        style={{ background: color }}
+        aria-label={`${playing ? "Pause" : "Play"} ${label.toLowerCase()} of ${title}`}
       >
+        {playing ? <Pause className="h-4 w-4" fill="currentColor" /> : <Play className="ml-0.5 h-4 w-4" fill="currentColor" />}
+      </button>
+      <span className="w-12 shrink-0 text-xs font-semibold sm:w-14" style={{ color }}>
         {label}
+        {mine && (
+          <span className="block text-[10px] font-normal tabular-nums text-muted">
+            {clock(preview.currentTime)}
+          </span>
+        )}
       </span>
       <div className="min-w-0 flex-1">
-        <Waveform peaks={peaks} color={color} height={28} />
+        <Waveform
+          peaks={peaks}
+          color={`${color}66`}
+          progressColor={color}
+          progress={mine ? preview.progress : 0}
+          height={28}
+          onSeek={(fraction) => {
+            if (mine) previewPlayer.seek(fraction);
+            else
+              void previewPlayer.play(track).then(() => {
+                // Starts where it was tapped once the length is known.
+                const ready = () => previewPlayer.getState().duration > 0;
+                if (ready()) previewPlayer.seek(fraction);
+                else {
+                  const stop = previewPlayer.subscribe((state) => {
+                    if (state.current?.stemId !== stem.id) return stop();
+                    if (state.duration > 0) {
+                      stop();
+                      previewPlayer.seek(fraction);
+                    }
+                  });
+                }
+              });
+          }}
+        />
       </div>
       <button
         onClick={onAdd}

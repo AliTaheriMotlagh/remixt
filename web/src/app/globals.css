@@ -1,5 +1,25 @@
 @import "tailwindcss";
 
+/* A phone on its side is wide (844px) but very short (~390px): for the
+   Studio's sticky bars that's a phone, not a desktop. `tight:` is a phone
+   either way up; `wide:` is everything else (sm and up, not short). */
+@custom-variant tight {
+  @media (max-width: 39.999rem), (orientation: landscape) and (max-height: 31.25rem) {
+    @slot;
+  }
+}
+/* Short landscape only (a phone on its side). */
+@custom-variant short {
+  @media (orientation: landscape) and (max-height: 31.25rem) {
+    @slot;
+  }
+}
+@custom-variant wide {
+  @media (min-width: 40rem) and (min-height: 31.26rem), (min-width: 40rem) and (orientation: portrait) {
+    @slot;
+  }
+}
+
 :root {
   --background: #0a0a0f;
   --surface: #131319;
@@ -24,6 +44,8 @@
      floating bars can keep clear of it. The bottom ones are 0 until the
      bar is actually on the page (see the :has() rules below). */
   --header-h: 3.5rem;
+  /* The bar's own height; --header-h is the room it takes while stuck to the top. */
+  --nav-h: 3.5rem;
   --tabbar-h: 0px;
   --previewbar-h: 0px;
   --bottom-chrome: calc(var(--tabbar-h) + var(--previewbar-h));
@@ -32,6 +54,19 @@
 @media (min-width: 48rem) {
   :root {
     --header-h: 4rem;
+    --nav-h: 4rem;
+  }
+}
+
+/* A phone on its side has ~390px of height: the header is slimmer and
+   scrolls away with the page instead of covering a sixth of the screen
+   (and, under the Studio's sticky transport, nearly half). Everything that
+   keeps clear of it (sticky bars, full-height panels) then uses the whole
+   screen. */
+@media (orientation: landscape) and (max-height: 31.25rem) {
+  :root {
+    --header-h: 0px;
+    --nav-h: 2.75rem;
   }
 }
 
@@ -88,7 +123,9 @@ body {
      under the notch in landscape and clear of the bars fixed at the bottom. */
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
-  padding-bottom: var(--bottom-chrome);
+  /* With no bar at the bottom (tablets and computers), still clear of an
+     iPad's home indicator — the home-screen app draws under it. */
+  padding-bottom: max(var(--bottom-chrome), env(safe-area-inset-bottom));
   -webkit-tap-highlight-color: transparent;
 }
 

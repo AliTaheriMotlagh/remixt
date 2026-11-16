@@ -1,5 +1,6 @@
 "use client";
 
+import { useLyrics } from "@/lib/client/lyricsStore";
 import { useEffect, useState } from "react";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { GRID_CHOICES, beatLength, useStudioStore } from "@/lib/client/studioStore";
@@ -106,6 +107,8 @@ function stepSelection(direction: 1 | -1, extend: boolean) {
 }
 
 function handleKey(event: KeyboardEvent, mode: Mode, openHelp: () => void) {
+  // The clip editor has the keyboard while it's open (its own undo, nudges, delete).
+  if (useStudioView.getState().clip) return;
   const mod = event.metaKey || event.ctrlKey;
   const typing = isTyping(event.target);
   const state = useStudioStore.getState();
@@ -120,10 +123,18 @@ function handleKey(event: KeyboardEvent, mode: Mode, openHelp: () => void) {
   const studio = mode === "studio";
 
   // Undo/redo — except while typing, where the text box has its own.
+  // Inside the lyrics, the lyrics' own history.
   if (mod && !event.altKey && (lower === "z" || lower === "y")) {
     if (typing) return;
     event.preventDefault();
-    if (lower === "y" || event.shiftKey) redo();
+    const again = lower === "y" || event.shiftKey;
+    if (event.target instanceof Element && event.target.closest("[data-lyrics]")) {
+      const lyrics = useLyrics.getState();
+      if (again) lyrics.redo();
+      else lyrics.undo();
+      return;
+    }
+    if (again) redo();
     else undo();
     return;
   }

@@ -17,6 +17,12 @@ export type PreviewTrack = {
   title: string;
   artist: string;
   kind: StemKind;
+  /**
+   * Keep the stem on this device once it's played (the Studio's stem cache,
+   * see stemFetch): a song just uploaded is about to be opened in the
+   * Studio, which then needs no download — and plays it again offline.
+   */
+  keep?: boolean;
 };
 
 export type PreviewState = {
@@ -143,16 +149,48 @@ class PreviewPlayer {
   async play(track: PreviewTrack) {
     this.claim();
     const audio = this.getAudio();
-    audio.src = `/api/audio/stem/${track.stemId}`;
-    audio.currentTime = 0;
+    const playing = ++this.playCount;
     this.emit({ current: track, progress: 0, currentTime: 0, duration: 0 });
+    // Kept on this device already: played from there — at once, and offline.
+    const kept = await keptStem(track.stemId);
+    if (playing !== this.playCount) return;
+    this.setSource(kept ? this.objectUrl(kept) : `/api/audio/stem/${track.stemId}`);
+    audio.currentTime = 0;
     try {
       await audio.play();
-    } catch {
-      // Autoplay refusal or a stem that failed to load — don't leave the
-      // UI claiming something is playing.
-      this.stop();
+    } catch (err) {
+      if (playing !== this.playCount) return;
+      // The store's CDN can be blocked where this site isn't: through this app instead.
+      if (!kept && !(err instanceof DOMException && err.name === "NotAllowedError")) {
+        this.setSource(`/api/audio/stem/${track.stemId}?via=app`);
+        try {
+          await audio.play();
+        } catch {
+          if (playing === this.playCount) this.stop();
+          return;
+        }
+      } else {
+        // Autoplay refusal or a stem that failed to load — don't leave the
+        // UI claiming something is playing.
+        this.stop();
+        return;
+      }
     }
+    if (track.keep && !kept) void keepStem(track.stemId);
+  }
+
+  /** Bumped by every play, so a slow cache lookup can't start an older one. */
+  private playCount = 0;
+  private url: string | null = null;
+
+  private objectUrl(blob: Blob) {
+    return URL.createObjectURL(blob);
+  }
+
+  private setSource(src: string) {
+    if (this.url) URL.revokeObjectURL(this.url);
+    this.url = src.startsWith("blob:") ? src : null;
+    this.getAudio().src = src;
   }
 
   seek(fraction: number) {
@@ -166,12 +204,40 @@ class PreviewPlayer {
   }
 
   stop() {
+    this.playCount++;
     if (this.audio) {
       this.audio.pause();
       this.audio.removeAttribute("src");
       this.audio.load();
     }
+    if (this.url) URL.revokeObjectURL(this.url);
+    this.url = null;
     this.emit({ current: null, playing: false, progress: 0, currentTime: 0, duration: 0 });
+  }
+}
+
+/** The stem's file, if this device keeps it (see stemFetch). */
+async function keptStem(stemId: string): Promise<Blob | null> {
+  try {
+    const { cacheGet } = await import("./localCache");
+    return await cacheGet<Blob>("stem", stemId);
+  } catch {
+    return null;
+  }
+}
+
+/** Downloads a stem into the device's cache, once at a time per stem. */
+const keeping = new Set<string>();
+async function keepStem(stemId: string) {
+  if (keeping.has(stemId)) return;
+  keeping.add(stemId);
+  try {
+    const { fetchStem } = await import("./stemFetch");
+    await fetchStem(stemId);
+  } catch {
+    // Only the shortcut is lost: it streams again next time.
+  } finally {
+    keeping.delete(stemId);
   }
 }
 

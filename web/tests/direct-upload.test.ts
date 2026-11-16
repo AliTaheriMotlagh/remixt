@@ -230,6 +230,25 @@ describe("upload to Vercel Blob", () => {
     await assert.rejects(run(blobTarget("queue/u/offline.wav"), randomBytes(20 * MB)), NetworkError);
   });
 
+  test("a slow line that drops after making headway keeps going: those tries aren't used up", async () => {
+    // Each try gets 300 KB out before the line drops — more drops than a
+    // request has tries; it still arrives, and nothing goes to the relay.
+    let drops = 4;
+    const flaky: Send = async (request, onProgress) => {
+      if (request.body instanceof Blob && drops > 0) {
+        drops--;
+        onProgress(300 * 1024);
+        throw new NetworkError("Upload failed — check your connection");
+      }
+      return send(request, onProgress);
+    };
+    const bytes = randomBytes(MB);
+    const target: UploadTarget = { ...blobTarget("stems/t20/vocals.mp3"), relay: `${base}/relay` };
+    await upload(target, new Blob([bytes as BlobPart]), () => {}, flaky);
+    assert.ok(stored.get("stems/t20/vocals.mp3")?.equals(bytes));
+    assert.equal(seen.filter((r) => r.path === "/relay").length, 0, "a drop mid-upload isn't taken for a blocked store");
+  });
+
   test("a refusal (403) fails at once rather than retrying", async () => {
     sabotage = () => 403;
     await assert.rejects(run(blobTarget("stems/t2/beat.mp3"), randomBytes(1000)), FinalUploadError);

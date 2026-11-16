@@ -387,6 +387,7 @@ export default function LyricsTimeline({
   return (
     <div
       ref={box}
+      data-lyrics
       className={`relative touch-none select-none overflow-hidden rounded-xl border border-border/60 bg-background/60 ${seekable || onMoveLine ? "cursor-pointer" : ""} ${className}`}
       style={{ height }}
       onPointerDown={onPointerDown}

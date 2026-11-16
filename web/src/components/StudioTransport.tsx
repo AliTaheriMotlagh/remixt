@@ -145,7 +145,7 @@ function TransportClock() {
         <LcdLabel>Bar</LcdLabel>
         <span className="font-mono text-lg font-semibold leading-tight text-brand-strong tabular-nums">{bars}</span>
       </div>
-      <div className="flex flex-col justify-center border-l border-white/10 px-3 py-1 max-sm:hidden">
+      <div className="flex flex-col justify-center border-l border-white/10 px-3 py-1 tight:hidden">
         <LcdLabel>Time</LcdLabel>
         <span className="whitespace-nowrap font-mono text-sm leading-tight tabular-nums">
           {time}
@@ -174,7 +174,7 @@ function MobileSeek({ empty }: { empty: boolean }) {
   const hasLoop = loopEnd > loopStart;
   return (
     <div
-      className="-my-1 w-full cursor-pointer py-2 sm:hidden"
+      className="-my-1 w-full cursor-pointer py-2 wide:hidden"
       onClick={(e) => {
         if (empty) return;
         const rect = e.currentTarget.getBoundingClientRect();
@@ -523,11 +523,11 @@ export default function StudioTransport({
     <div
       ref={barRef}
       data-studio-transport
-      className={`sticky top-[var(--header-h)] z-40 has-[.popover-sheet]:z-[70] rounded-xl border border-border bg-surface shadow-lg shadow-black/20 sm:bg-surface/95 sm:backdrop-blur-md ${
-        showSave ? "max-sm:static" : ""
+      className={`sticky top-[var(--header-h)] z-40 has-[.popover-sheet]:z-[70] rounded-xl border border-border bg-surface shadow-lg shadow-black/20 wide:bg-surface/95 wide:backdrop-blur-md ${
+        showSave ? "tight:static" : ""
       }`}
     >
-      <div className="flex flex-wrap items-center gap-2 p-2 sm:gap-2.5">
+      <div className="flex flex-wrap items-center gap-2 p-2 wide:gap-2.5">
         {/* Transport */}
         <div className="flex shrink-0 items-center gap-0.5 rounded-xl border border-white/10 bg-black/30 p-1">
           <button
@@ -563,7 +563,7 @@ export default function StudioTransport({
             <button
               onClick={() => setLoop({ enabled: !loopEnabled, start: hasLoop ? loopStart : 0, end: hasLoop ? loopEnd : Math.min(duration, 16) })}
               disabled={empty}
-              className={`flex h-9 w-9 items-center justify-center rounded-lg text-sm transition-colors disabled:opacity-40 max-sm:hidden ${
+              className={`flex h-9 w-9 items-center justify-center rounded-lg text-sm transition-colors disabled:opacity-40 tight:hidden ${
                 loopEnabled ? "bg-brand/25 text-foreground" : "text-muted hover:bg-white/5 hover:text-foreground"
               }`}
               title={hasLoop ? `Loop ${formatTime(loopStart)}–${formatTime(loopEnd)} (L)` : "Loop — or drag across the ruler to pick a region (L)"}
@@ -579,7 +579,7 @@ export default function StudioTransport({
         <div className="flex h-12 shrink-0 items-stretch rounded-xl border border-white/10 bg-black/40 shadow-inner">
           <TransportClock />
           {!empty && (
-            <div className="flex items-stretch border-l border-white/10 max-sm:hidden">
+            <div className="flex items-stretch border-l border-white/10 tight:hidden">
               <TempoControl />
               <div className="border-l border-white/10">
                 <KeyControl />
@@ -595,9 +595,9 @@ export default function StudioTransport({
         </div>
 
         {/* Toggles, level, export — inline from sm up; a row of their own on phones (⋯). */}
-        <div className={`${showTools ? "flex" : "hidden"} w-full flex-wrap items-center gap-1.5 border-t border-border pt-2 max-sm:order-last sm:contents`}>
+        <div className={`${showTools ? "flex" : "hidden"} w-full flex-wrap items-center gap-1.5 border-t border-border pt-2 tight:order-last wide:contents`}>
           {!empty && (
-            <div className="flex h-12 items-stretch rounded-xl border border-white/10 bg-black/40 sm:hidden">
+            <div className="flex h-12 items-stretch rounded-xl border border-white/10 bg-black/40 wide:hidden">
               <TempoControl />
               <div className="border-l border-white/10">
                 <KeyControl />
@@ -608,7 +608,7 @@ export default function StudioTransport({
             <button
               onClick={() => setLoop({ enabled: !loopEnabled, start: hasLoop ? loopStart : 0, end: hasLoop ? loopEnd : Math.min(duration, 16) })}
               disabled={empty}
-              className={`${toggle(loopEnabled)} sm:hidden`}
+              className={`${toggle(loopEnabled)} wide:hidden`}
               aria-pressed={loopEnabled}
             >
               <Repeat /> Loop
@@ -656,7 +656,7 @@ export default function StudioTransport({
               B
             </label>
           )}
-          <label className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted max-sm:min-w-[9rem] max-sm:flex-1" title="Master level (+ / −)">
+          <label className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted tight:min-w-[9rem] tight:flex-1" title="Master level (+ / −)">
             Out
             <input
               type="range"
@@ -666,7 +666,7 @@ export default function StudioTransport({
               value={masterVolume}
               onChange={(e) => setMasterVolume(Number(e.target.value))}
               onDoubleClick={() => setMasterVolume(1)}
-              className="h-1.5 w-16 accent-brand max-sm:flex-1 lg:w-20"
+              className="h-1.5 w-16 accent-brand tight:flex-1 lg:w-20"
               aria-label="Master level"
             />
           </label>
@@ -776,7 +776,7 @@ export default function StudioTransport({
           )}
         </div>
 
-        <div className="flex shrink-0 items-center gap-1 sm:ml-auto">
+        <div className="flex shrink-0 items-center gap-1 wide:ml-auto">
           <button
             onClick={undo}
             disabled={!canUndo}
@@ -789,7 +789,7 @@ export default function StudioTransport({
           <button
             onClick={redo}
             disabled={!canRedo}
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-border text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40 max-sm:hidden"
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-border text-sm text-muted transition-colors hover:text-foreground disabled:opacity-40 tight:hidden"
             title="Redo (⇧⌘Z / Ctrl+Y)"
             aria-label="Redo"
           >
@@ -802,7 +802,7 @@ export default function StudioTransport({
             onClick={() => setShowTools((v) => !v)}
             aria-expanded={showTools}
             aria-label="More controls"
-            className={`flex h-9 w-9 items-center justify-center rounded-lg border text-sm transition-colors sm:hidden ${
+            className={`flex h-9 w-9 items-center justify-center rounded-lg border text-sm transition-colors wide:hidden ${
               showTools ? "border-brand bg-brand/15 text-foreground" : "border-border text-muted"
             }`}
           >
@@ -814,12 +814,12 @@ export default function StudioTransport({
               disabled={empty}
               aria-pressed={aiOpen}
               aria-label="AI producer"
-              className={`flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-bold text-white transition-all disabled:opacity-40 max-sm:px-2.5 ${
+              className={`flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-bold text-white transition-all disabled:opacity-40 tight:px-2.5 ${
                 aiOpen ? "bg-brand ring-2 ring-brand-strong" : "bg-gradient-to-r from-brand to-vocals shadow-[0_0_18px_-6px_var(--vocals)] hover:brightness-110"
               }`}
               title="AI producer — make your mix sound good, try styles and drops (I)"
             >
-              <Sparkles /> <span className="max-sm:hidden">AI</span>
+              <Sparkles /> <span className="tight:hidden">AI</span>
             </button>
           )}
           <button

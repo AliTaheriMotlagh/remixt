@@ -34,6 +34,8 @@
 // because of that isn't held against the upload: it waits for the page to
 // be back, then carries on from the part it had reached.
 
+import { isConstrainedDevice } from "./device";
+
 export type UploadTarget = (
   | { type: "put"; url: string; headers: Record<string, string> }
   | {
@@ -55,8 +57,15 @@ export class FinalUploadError extends Error {}
 
 /** No bytes sent for this long and a request is taken to be stuck. */
 const STALL_MS = 45_000;
-/** A request's overall limit: a minute, plus the time it'd take at a slow 30 KB/s. */
+/**
+ * The library's `put` (no progress to watch) is given this long: a minute,
+ * plus the time it'd take at a slow 30 KB/s. Requests sent here have no
+ * overall limit — only the stall timer: a slow phone line shared by several
+ * requests made every big part "take too long" and start again from 0.
+ */
 const timeLimit = (bytes: number) => 60_000 + (bytes / 30_000) * 1000;
+/** A try that sent at least this much made headway: it isn't counted against the request's tries. */
+const HEADWAY_BYTES = 256 * 1024;
 /** Tries for a whole file (PUT targets, and small files to Blob). */
 const ATTEMPTS = 3;
 /** Tries per part of a multipart upload — cheap, so more of them. */
@@ -109,7 +118,58 @@ export function untilVisible(): Promise<void> {
 /** Whether the page has been hidden since `mark` (a value of `hides`), or is now. */
 const pausedSince = (mark: number) => hides !== mark || isHidden();
 
-const retryWait = (attempt: number) => new Promise((resolve) => setTimeout(resolve, Math.min(8000, 1000 * attempt)));
+/** A pause before trying again, longer each time; while the device says it's offline, until it's back. */
+const retryWait = (attempt: number) =>
+  new Promise<void>((resolve) => {
+    setTimeout(() => {
+      if (typeof navigator === "undefined" || navigator.onLine !== false || typeof window === "undefined") return resolve();
+      window.addEventListener("online", () => resolve(), { once: true });
+    }, Math.min(8000, 1000 * attempt));
+  });
+
+/**
+ * Counts what one try sent, so a try that made headway — on a slow line
+ * that's most of them — isn't held against the request.
+ */
+function tryMeter(onProgress: (loaded: number) => void) {
+  let best = 0;
+  return {
+    onProgress: (loaded: number) => {
+      if (loaded > best) best = loaded;
+      onProgress(loaded);
+    },
+    /** Whether this try got anywhere; resets for the next one. */
+    madeHeadway() {
+      const moved = best >= HEADWAY_BYTES;
+      best = 0;
+      return moved;
+    },
+  };
+}
+
+// --- How many requests at once ------------------------------------------------
+
+/**
+ * Every upload request on the page shares one connection: several songs,
+ * each in several parts, each part its own request. Too many at once and
+ * each gets so little of a phone's upload that none finishes — so they
+ * take turns, a few at a time, whatever's sending them.
+ */
+let running = 0;
+const turns: (() => void)[] = [];
+const maxAtOnce = () => (isConstrainedDevice() ? 3 : 6);
+
+async function takeTurn(): Promise<() => void> {
+  if (running >= maxAtOnce()) await new Promise<void>((resolve) => turns.push(resolve));
+  running++;
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    running--;
+    turns.shift()?.();
+  };
+}
 
 // --- Transport ---------------------------------------------------------------
 
@@ -120,6 +180,8 @@ export type SendRequest = {
   body: Blob | string | null;
   /** Stops the request (the upload was cancelled). */
   signal?: AbortSignal;
+  /** Called as the request actually goes out (it can wait its turn first, see takeTurn). */
+  onStart?: () => void;
 };
 export type SendResponse = { status: number; text: string };
 /**
@@ -139,14 +201,23 @@ export class UploadCancelled extends FinalUploadError {
   }
 }
 
-const xhrSend: Send = (request, onProgress) =>
+const xhrSend: Send = async (request, onProgress) => {
+  const release = await takeTurn();
+  try {
+    if (request.signal?.aborted) throw new UploadCancelled();
+    request.onStart?.();
+    return await sendNow(request, onProgress);
+  } finally {
+    release();
+  }
+};
+
+const sendNow: Send = (request, onProgress) =>
   new Promise((resolve, reject) => {
     watchVisibility();
     const xhr = new XMLHttpRequest();
     xhr.open(request.method, request.url);
     for (const [name, value] of Object.entries(request.headers)) xhr.setRequestHeader(name, value);
-    const size = request.body instanceof Blob ? request.body.size : (request.body?.length ?? 0);
-    xhr.timeout = timeLimit(size);
     let stall = setTimeout(() => xhr.abort(), STALL_MS);
     let lastActive = Date.now();
     const alive = () => {
@@ -179,7 +250,6 @@ const xhrSend: Send = (request, onProgress) =>
       reject(new NetworkError(message));
     };
     xhr.onerror = fail("Upload failed — check your connection");
-    xhr.ontimeout = fail("The upload took too long — check your connection");
     xhr.onabort = fail("The upload stalled — check your connection");
     request.signal?.addEventListener("abort", () => xhr.abort(), { once: true });
     xhr.send(request.body);
@@ -198,10 +268,11 @@ async function putWhole(
   onProgress: (loaded: number) => void,
   send: Send
 ) {
+  const meter = tryMeter(onProgress);
   for (let attempt = 1; ; attempt++) {
     const mark = hides;
     try {
-      const res = await send({ method: "PUT", url: target.url, headers: target.headers, body }, onProgress);
+      const res = await send({ method: "PUT", url: target.url, headers: target.headers, body }, meter.onProgress);
       if (res.status >= 200 && res.status < 300) return;
       const message = `Upload failed (HTTP ${res.status})`;
       throw isFinalStatus(res.status) ? new FinalUploadError(message) : new Error(message);
@@ -209,11 +280,14 @@ async function putWhole(
       if (err instanceof NetworkError && pausedSince(mark)) {
         // Lost to the screen turning off: doesn't count as a try.
         attempt--;
+        meter.madeHeadway();
         onProgress(0);
         await untilVisible();
         continue;
       }
-      if (attempt >= ATTEMPTS || err instanceof FinalUploadError) throw err;
+      if (err instanceof FinalUploadError) throw err;
+      if (meter.madeHeadway()) attempt = 0;
+      else if (attempt >= ATTEMPTS) throw err;
       onProgress(0);
       await retryWait(attempt);
     }
@@ -253,6 +327,7 @@ async function blobRequest<T>(
   const storeId = target.token.split("_")[3] ?? "";
   // The same id on every try, so the store can tell a retry from a new request.
   const requestId = `${storeId}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
+  const meter = tryMeter(onProgress);
   for (let attempt = 1, tries = 1; ; attempt++, tries++) {
     const mark = hides;
     try {
@@ -273,7 +348,7 @@ async function blobRequest<T>(
           },
           body: request.body,
         },
-        onProgress
+        meter.onProgress
       );
       if (res.status >= 200 && res.status < 300) return JSON.parse(res.text) as T;
       let code = "unknown_error";
@@ -293,13 +368,16 @@ async function blobRequest<T>(
       if (err instanceof NetworkError && pausedSince(mark)) {
         // Lost to the screen turning off: doesn't count as a try.
         tries--;
+        meter.madeHeadway();
         onProgress(0);
         await untilVisible();
         continue;
       }
-      if (tries >= attempts || err instanceof FinalUploadError) throw err;
+      if (err instanceof FinalUploadError) throw err;
+      if (meter.madeHeadway()) tries = 0;
+      else if (tries >= attempts) throw err;
       onProgress(0);
-      await retryWait(tries);
+      await retryWait(Math.max(1, tries));
     }
   }
 }
@@ -462,10 +540,11 @@ async function sendRetrying(
   send: Send,
   attempts: number
 ): Promise<SendResponse> {
+  const meter = tryMeter(onProgress);
   for (let attempt = 1; ; attempt++) {
     const mark = hides;
     try {
-      const res = await send(request, onProgress);
+      const res = await send(request, meter.onProgress);
       if (res.status >= 200 && res.status < 300) return res;
       let message = `Upload failed (HTTP ${res.status})`;
       try {
@@ -478,13 +557,16 @@ async function sendRetrying(
     } catch (err) {
       if (err instanceof NetworkError && pausedSince(mark)) {
         attempt--;
+        meter.madeHeadway();
         onProgress(0);
         await untilVisible();
         continue;
       }
-      if (attempt >= attempts || err instanceof FinalUploadError) throw err;
+      if (err instanceof FinalUploadError) throw err;
+      if (meter.madeHeadway()) attempt = 0;
+      else if (attempt >= attempts) throw err;
       onProgress(0);
-      await retryWait(attempt);
+      await retryWait(Math.max(1, attempt));
     }
   }
 }
@@ -543,11 +625,24 @@ function cancellable(send: Send, signal: AbortSignal): Send {
   return (request, onProgress) => {
     if (signal.aborted) return Promise.reject(new UploadCancelled());
     return new Promise<SendResponse>((resolve, reject) => {
-      const stop = () => reject(new UploadCancelled());
+      // Either stops the request: the upload being cancelled, or the
+      // request's own signal (the store's first-contact timer, see upload).
+      const both = new AbortController();
+      const own = request.signal;
+      const stopOwn = () => both.abort();
+      const stop = () => {
+        both.abort();
+        reject(new UploadCancelled());
+      };
       signal.addEventListener("abort", stop, { once: true });
-      send({ ...request, signal }, onProgress)
+      if (own?.aborted) both.abort();
+      else own?.addEventListener("abort", stopOwn, { once: true });
+      send({ ...request, signal: both.signal }, onProgress)
         .then(resolve, reject)
-        .finally(() => signal.removeEventListener("abort", stop));
+        .finally(() => {
+          signal.removeEventListener("abort", stop);
+          own?.removeEventListener("abort", stopOwn);
+        });
     });
   };
 }
@@ -587,13 +682,23 @@ export async function upload(
     ? async (request, progress) => {
         const mark = hides;
         const contact = new AbortController();
-        const timer = reached ? null : setTimeout(() => contact.abort(), FIRST_CONTACT_MS);
+        // Timed from when the request goes out, not while it waits its turn.
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        const arm = () => {
+          if (!reached && !timer) timer = setTimeout(() => contact.abort(), FIRST_CONTACT_MS);
+        };
         const outer = request.signal;
         const stop = () => contact.abort();
         outer?.addEventListener("abort", stop, { once: true });
         try {
-          const res = await send({ ...request, signal: contact.signal }, (loaded) => {
-            if (loaded > 0 && timer) clearTimeout(timer);
+          const res = await send({ ...request, signal: contact.signal, onStart: arm }, (loaded) => {
+            // Bytes going out means the store took the connection: a drop
+            // after this is the line's fault, not a block — it's retried
+            // here rather than sent through the (slower) relay from 0.
+            if (loaded > 0) {
+              reached = true;
+              if (timer) clearTimeout(timer);
+            }
             progress(loaded);
           });
           reached = true;

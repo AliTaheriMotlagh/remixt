@@ -548,9 +548,13 @@ class Uploads {
    * the first of its mode's line: no searching.
    */
   private pump() {
+    const phone = isConstrainedDevice();
     const limits: Record<UploadMode, number> = {
-      split: isConstrainedDevice() ? 1 : 2,
-      queue: QUEUE_SENDS_AT_ONCE,
+      split: phone ? 1 : 2,
+      // A phone's upload is the slowest link there is: one song at a time
+      // (its parts still go up side by side) gets the first one into the
+      // queue soonest, instead of several crawling along together.
+      queue: phone ? 1 : QUEUE_SENDS_AT_ONCE,
     };
     for (const mode of ["split", "queue"] as const) {
       while (this.active[mode] < limits[mode]) {
@@ -561,16 +565,29 @@ class Uploads {
           this.line[mode].delete(next.value);
           continue;
         }
-        this.active[mode]++;
-        const controller = new AbortController();
-        Object.assign(entry, { stage: null, controller });
-        this.setStatus(entry, "working");
-        void this.run(entry.id, controller.signal).finally(() => {
-          this.active[mode]--;
-          this.pump();
-        });
+        this.start(entry, mode);
       }
     }
+    // A link for the queue is one quick request (the server fetches the
+    // song): on a phone it doesn't wait behind a song still going up.
+    if (phone && this.active.queue < QUEUE_SENDS_AT_ONCE) {
+      for (const id of this.line.queue) {
+        if (this.active.queue >= QUEUE_SENDS_AT_ONCE) break;
+        const entry = this.entries.get(id);
+        if (entry?.source.kind === "link") this.start(entry, "queue");
+      }
+    }
+  }
+
+  private start(entry: Entry, mode: UploadMode) {
+    this.active[mode]++;
+    const controller = new AbortController();
+    Object.assign(entry, { stage: null, controller });
+    this.setStatus(entry, "working");
+    void this.run(entry.id, controller.signal).finally(() => {
+      this.active[mode]--;
+      this.pump();
+    });
   }
 
   /** One song, start to finish, trying again by itself while the connection is to blame. */
