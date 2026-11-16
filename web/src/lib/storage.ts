@@ -167,7 +167,9 @@ export async function createUploadTarget(
     return { type: "blob", pathname: key, token, contentType, access: await blobAccess(), relay: localPath };
   }
   const headers = { "Content-Type": contentType };
-  if (!r2) return { type: "put", url: localPath, headers };
+  // On disk the "store" is this app, and so is the relay: a phone sends its
+  // slices here in development exactly as it does in production.
+  if (!r2) return { type: "put", url: localPath, headers, relay: localPath };
   const url = new URL(objectUrl(key));
   url.searchParams.set("X-Amz-Expires", "3600");
   const signed = await r2.client.sign(new Request(url, { method: "PUT" }), {

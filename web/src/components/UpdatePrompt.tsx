@@ -3,10 +3,9 @@
 import { RefreshCw, X } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import { versionWatch } from "@/lib/client/versionCheck";
 
 const CHECK_EVERY_MS = 10 * 60_000;
-// Coming back to the app checks again, but not more than once a minute.
-const MIN_GAP_MS = 60_000;
 const LATER = "remixt-update-later";
 
 function readLater(): string | null {
@@ -26,10 +25,12 @@ function isStaleChunk(reason: unknown): boolean {
 /**
  * "A new version of Remixt is ready". An installed app (or a tab left
  * open for days) keeps running the code it started with, so this asks the
- * server which build is live — on open, on coming back to the app, every
+ * server which build is live — on open, on coming back to the app (however
+ * the phone says so: shown again, focused, restored, back online), every
  * ten minutes while it's showing, and straight away when a script fails to
  * load — and offers a reload when it's newer. "Later" holds off until the
- * next launch or the next new version.
+ * next launch or the next new version. The asking itself, and what keeps
+ * it going on a phone, is lib/client/versionCheck.ts.
  */
 export default function UpdatePrompt() {
   const pathname = usePathname() ?? "/";
@@ -42,47 +43,45 @@ export default function UpdatePrompt() {
     const mine = process.env.NEXT_DEPLOYMENT_ID;
     // Nothing to check while it's showing; "Later" starts the checks again.
     if (!mine || embed || ready) return;
-    let last = 0;
-    let busy = false;
-    let stopped = false;
-
-    const check = async (now = false) => {
-      if (busy) return;
-      if (!now && (document.visibilityState !== "visible" || Date.now() - last < MIN_GAP_MS)) return;
-      busy = true;
-      last = Date.now();
-      try {
-        const res = await fetch("/api/version", { cache: "no-store" });
-        const { id } = (await res.json()) as { id: string | null };
-        if (!stopped && id && id !== mine && readLater() !== id) setReady(id);
-      } catch {
-        // Offline or mid-deploy: the next check will do.
-      } finally {
-        busy = false;
-      }
-    };
-    const onVisible = () => void check();
+    const watch = versionWatch({
+      mine,
+      live: async (signal) => {
+        const res = await fetch("/api/version", { cache: "no-store", signal });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return ((await res.json()) as { id: string | null }).id;
+      },
+      onNewer: (id) => {
+        if (readLater() !== id) setReady(id);
+      },
+    });
+    const onBack = () => void watch.check();
     const onRejection = (e: PromiseRejectionEvent) => {
-      if (isStaleChunk(e.reason)) void check(true);
+      if (isStaleChunk(e.reason)) void watch.check(true);
     };
     const onError = (e: Event) => {
       const target = e.target as HTMLScriptElement | null;
       const scriptFailed = target?.tagName === "SCRIPT" && target.src.includes("/_next/");
-      if (scriptFailed || isStaleChunk((e as ErrorEvent).error ?? (e as ErrorEvent).message)) void check(true);
+      if (scriptFailed || isStaleChunk((e as ErrorEvent).error ?? (e as ErrorEvent).message)) void watch.check(true);
     };
 
-    void check(true);
-    const timer = setInterval(onVisible, CHECK_EVERY_MS);
-    document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("online", onVisible);
+    void watch.check(true);
+    const timer = setInterval(onBack, CHECK_EVERY_MS);
+    document.addEventListener("visibilitychange", onBack);
+    // A phone doesn't always say "visible" when an installed app comes back:
+    // it may only focus the window, or restore the page as it was.
+    window.addEventListener("focus", onBack);
+    window.addEventListener("pageshow", onBack);
+    window.addEventListener("online", onBack);
     window.addEventListener("unhandledrejection", onRejection);
     // Capturing: a <script> that fails to load doesn't bubble.
     window.addEventListener("error", onError, true);
     return () => {
-      stopped = true;
+      watch.stop();
       clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("online", onVisible);
+      document.removeEventListener("visibilitychange", onBack);
+      window.removeEventListener("focus", onBack);
+      window.removeEventListener("pageshow", onBack);
+      window.removeEventListener("online", onBack);
       window.removeEventListener("unhandledrejection", onRejection);
       window.removeEventListener("error", onError, true);
     };

@@ -7,7 +7,7 @@ import { encodeMp3Bytes } from "./mp3";
 import { fetchInSlices } from "./stemFetch";
 import { useStudioStore } from "./studioStore";
 import { keepScreenOn } from "./wakeLock";
-import { untilVisible, upload, type UploadTarget } from "./directUpload";
+import { FinalUploadError, NetworkError, untilVisible, upload, type RelayResume, type UploadTarget } from "./directUpload";
 import { isConstrainedDevice, splitSong, splitter, splitTrackPayload, uploadStems, type UploadStage } from "./splitter";
 
 // The browser side of the split queue (see lib/splitQueue.ts on the
@@ -107,20 +107,52 @@ async function shrinkForQueue(file: File, onStage: (stage: UploadStage) => void)
 }
 let shrinking: Promise<unknown> = Promise.resolve();
 
+/** A request to this app that hasn't answered in this long is asked again. */
+const API_LIMIT_MS = 30_000;
+const API_TRIES = 4;
+
 /**
- * A POST to this app, sent again if the connection drops — a phone whose
- * screen turned off mid-request, say (once it's back on).
+ * A POST to this app, with a time limit, sent again if the connection drops
+ * (a phone whose screen turned off mid-request, say — once it's back on) or
+ * the server hiccups. A request with no limit could hang for ever on a
+ * phone's half-dead line, with the song stuck at "sending". Only for
+ * requests that are safe to send twice.
  */
-async function postRetrying(url: string, init: RequestInit = {}): Promise<Response> {
+export async function postRetrying(url: string, init: RequestInit = {}, signal?: AbortSignal): Promise<Response> {
   for (let attempt = 1; ; attempt++) {
+    signal?.throwIfAborted();
+    const limit = new AbortController();
+    const timer = setTimeout(() => limit.abort(), API_LIMIT_MS);
+    const stop = () => limit.abort();
+    signal?.addEventListener("abort", stop, { once: true });
     try {
-      return await fetch(url, { ...init, method: "POST" });
+      const res = await fetch(url, { ...init, method: "POST", signal: limit.signal });
+      if (res.status < 500 || attempt >= API_TRIES) return res;
     } catch (err) {
-      if (attempt >= 3) throw err;
-      await untilVisible();
-      await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+      signal?.throwIfAborted();
+      // Said as the line's trouble (which it is), never as a cancel: nobody cancelled.
+      if (attempt >= API_TRIES) throw new NetworkError("Couldn't reach Remixt — check your connection", { cause: err });
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", stop);
     }
+    await untilVisible();
+    await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
   }
+}
+
+/**
+ * Where a song on its way to the queue had got to: the job it's going
+ * into, and what the relay has of it (see directUpload.ts). Kept by the
+ * uploads store, so the next try — or the next visit — carries on.
+ */
+export type QueueResume = { jobId: string; relay: RelayResume | null };
+
+/** Whether a failed send is worth carrying on from later: the line's trouble, not the song's or the server's answer. */
+function lineTrouble(err: unknown): boolean {
+  if (err instanceof FinalUploadError) return false;
+  if (err instanceof NetworkError || err instanceof TypeError) return true;
+  return err instanceof Error && /HTTP 5\d\d/.test(err.message);
 }
 
 /** Sends a song from this device to the queue, for a helper's computer to split. */
@@ -128,25 +160,36 @@ export async function queueFile(
   original: File,
   tags: string[],
   onStage: (stage: UploadStage) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  { resume = null, onResume = () => {} }: { resume?: QueueResume | null; onResume?: (state: QueueResume | null) => void } = {}
 ) {
   const file = await shrinkForQueue(original, onStage);
   signal?.throwIfAborted();
-  onStage({ stage: "queueing", progress: 0 });
-  const created = await json<{ id: string; upload: UploadTarget }>(
-    await postRetrying("/api/split-jobs", {
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title: file.name.replace(/\.[^/.]+$/, "").slice(0, 200) || "Untitled",
-        filename: file.name,
-        size: file.size,
-        tags,
-        // The upload form doesn't start without the box ticked.
-        rightsConfirmed: true,
-      }),
-    }),
+  // Only the very same bytes can be carried on — a file shrunk here may not come out the same twice.
+  const earlier = file === original && resume?.relay?.size === file.size ? resume : null;
+  const done = earlier?.relay ? earlier.relay.sent.reduce((sum, [, bytes]) => sum + bytes, 0) : 0;
+  onStage({ stage: "queueing", progress: done / Math.max(1, file.size) });
+  const created = await json<{ id: string; upload: UploadTarget; resumed?: boolean }>(
+    await postRetrying(
+      "/api/split-jobs",
+      {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: file.name.replace(/\.[^/.]+$/, "").slice(0, 200) || "Untitled",
+          filename: file.name,
+          size: file.size,
+          tags,
+          // The upload form doesn't start without the box ticked.
+          rightsConfirmed: true,
+          ...(earlier ? { resume: earlier.jobId } : {}),
+        }),
+      },
+      signal
+    ),
     "Couldn't add the song to the queue"
   );
+  const relay = created.resumed ? (earlier?.relay ?? null) : null;
+  onResume({ jobId: created.id, relay });
   try {
     // The file itself, not its bytes: it's read from disk as it's sent,
     // so even a big WAV never has to fit in the phone's memory.
@@ -155,13 +198,20 @@ export async function queueFile(
       file,
       (sent) => onStage({ stage: "queueing", progress: Math.min(1, sent / Math.max(1, file.size)) }),
       undefined,
-      signal
+      signal,
+      { resume: relay, onResume: (state) => onResume({ jobId: created.id, relay: state }) }
     );
-    await json(await postRetrying(`/api/split-jobs/${created.id}/queued`), "Couldn't queue the song");
+    await json(await postRetrying(`/api/split-jobs/${created.id}/queued`, {}, signal), "Couldn't queue the song");
   } catch (err) {
-    void fetch(`/api/split-jobs/${created.id}`, { method: "DELETE" }).catch(() => {});
+    // The line's trouble: the job stays, with what was sent, for the next
+    // try to carry on. Anything else (a cancel, a refusal) and it's dropped.
+    if (!lineTrouble(err) || file !== original) {
+      onResume(null);
+      void fetch(`/api/split-jobs/${created.id}`, { method: "DELETE" }).catch(() => {});
+    }
     throw err;
   }
+  onResume(null);
   return created.id;
 }
 

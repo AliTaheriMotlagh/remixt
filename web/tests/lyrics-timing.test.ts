@@ -59,9 +59,28 @@ describe("retimeLine", () => {
 describe("sectionsOf", () => {
   test("names the song's parts by their headings, with where they start and end", () => {
     assert.deepEqual(sectionsOf(sheet()), [
-      { name: "Verse 1", index: 0, start: 10, end: 20, lines: 3 },
-      { name: "Chorus", index: 5, start: 20, end: null, lines: 2 },
+      { name: "Verse 1", index: 0, start: 10, end: 20, last: 14, lines: 3 },
+      { name: "Chorus", index: 5, start: 20, end: null, last: 22, lines: 2 },
     ]);
+  });
+
+  test("a part's start and end are where it plays, not where it's written", () => {
+    // The vocal was rearranged: the chorus (written second) now plays first.
+    const lines: LyricLine[] = [
+      { time: null, text: "[Verse]" },
+      { time: 34, text: "second line, timed first by mistake" },
+      { time: 30, text: "first line" },
+      { time: null, text: "[Chorus]" },
+      { time: 5, text: "the hook" },
+      { time: 9, text: "again" },
+    ];
+    assert.deepEqual(
+      sectionsOf(lines).map((s) => [s.name, s.start, s.last, s.end]),
+      [
+        ["Verse", 30, 34, null],
+        ["Chorus", 5, 9, 30],
+      ]
+    );
   });
 
   test("without headings, verses are the blocks between blank lines", () => {

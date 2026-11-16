@@ -18,6 +18,7 @@ import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { after, before, describe, test } from "node:test";
 import postgres from "postgres";
+import { upload, UploadCancelled, type RelayResume, type Send } from "../src/lib/client/directUpload.ts";
 import { fetchInSlices } from "../src/lib/client/stemFetch.ts";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:3999";
@@ -99,6 +100,22 @@ async function queueSong(owner: Client, bytes: Uint8Array, filename = "My Song.m
   );
   await expectStatus(await post(owner, `/api/split-jobs/${created.id}/queued`), 200, "mark queued");
   return created.id as string;
+}
+
+/** The browser's upload requests, sent as `client` (progress arrives all at once, when the body's gone). */
+function sendAs(client: Client, seen: { method: string; url: string; bytes: number }[] = []): Send {
+  return async (request, onProgress) => {
+    const res = await client.fetch(request.url, { method: request.method, headers: request.headers, body: request.body });
+    const text = await res.text();
+    const bytes = request.body instanceof Blob ? request.body.size : 0;
+    seen.push({ method: request.method, url: request.url, bytes });
+    if (bytes) onProgress(bytes);
+    return { status: res.status, text };
+  };
+}
+
+function createJob(owner: Client, size: number, extra: Record<string, unknown> = {}) {
+  return post(owner, "/api/split-jobs", { title: "Phone Song", filename: "Phone Song.mp3", size, tags: [], rightsConfirmed: true, ...extra });
 }
 
 async function ownerJobs(owner: Client) {
@@ -462,5 +479,109 @@ describe("split queue", () => {
     assert.notEqual(got[0], got[1]);
     assert.deepEqual([...got].sort(), [...ids].sort());
     await Promise.all(helpers.map((h, i) => deliverStems(h.client, got[i], h.session)));
+  });
+});
+
+// A phone doesn't send its song whole: it goes through this app's relay a
+// slice at a time (lib/uploadRelay.ts), each slice saved as it's answered —
+// here with the browser's own upload code against the real routes.
+describe("a phone's song, through the relay", () => {
+  test("slices, joined: the helper downloads the very bytes the phone had", async () => {
+    const song = randomBytes(5 * 1024 * 1024 + 321);
+    const created = await expectStatus(await createJob(owner, song.length), 200, "create job");
+    assert.equal(created.upload.relay, `/api/split-jobs/${created.id}/source`, "the local store has a relay too");
+    const seen: { method: string; url: string; bytes: number }[] = [];
+    await upload(created.upload, new Blob([song as BlobPart]), () => {}, sendAs(owner, seen), undefined, { relayFirst: true });
+    assert.ok(seen.filter((r) => r.method === "PUT").length >= 2, "in slices");
+    assert.ok(seen.every((r) => r.url.includes("relay=")));
+    await expectStatus(await post(owner, `/api/split-jobs/${created.id}/queued`), 200, "mark queued");
+
+    const session = randomUUID();
+    const job = await claimJob(helper, session, created.id);
+    assert.ok(Buffer.from(await downloadSource(helper, job.sourceUrl, session)).equals(song));
+    await post(helper, `/api/split-jobs/${created.id}/fail`, { error: "only checking" }, { "x-split-session": session });
+    await owner.fetch(`/api/split-jobs/${created.id}`, { method: "DELETE" });
+  });
+
+  test("an upload cut off half-way carries on into the same job, and only the rest is sent", async () => {
+    const song = randomBytes(3 * 1024 * 1024 + 7);
+    const created = await expectStatus(await createJob(owner, song.length), 200, "create job");
+    // The page goes away after the third slice.
+    const gone = new AbortController();
+    let resume: RelayResume | null = null;
+    const first: { method: string; url: string; bytes: number }[] = [];
+    await assert.rejects(
+      upload(created.upload, new Blob([song as BlobPart]), () => {}, sendAs(owner, first), gone.signal, {
+        relayFirst: true,
+        onResume: (state) => {
+          resume = state;
+          if (state.sent.length >= 3) gone.abort();
+        },
+      }),
+      UploadCancelled
+    );
+    const saved = resume!.sent.reduce((sum, [, bytes]) => sum + bytes, 0);
+    assert.ok(saved > 0 && saved < song.length);
+
+    // Next visit: the same job, and what the relay kept.
+    const again = await expectStatus(await createJob(owner, song.length, { resume: created.id }), 200, "resume job");
+    assert.equal(again.id, created.id);
+    assert.equal(again.resumed, true);
+    const second: { method: string; url: string; bytes: number }[] = [];
+    await upload(again.upload, new Blob([song as BlobPart]), () => {}, sendAs(owner, second), undefined, { resume });
+    const sentAgain = second.filter((r) => r.method === "PUT").reduce((sum, r) => sum + r.bytes, 0);
+    assert.equal(sentAgain, song.length - saved, "nothing saved was sent again");
+    await expectStatus(await post(owner, `/api/split-jobs/${created.id}/queued`), 200, "mark queued");
+
+    const session = randomUUID();
+    const job = await claimJob(helper, session, created.id);
+    assert.ok(Buffer.from(await downloadSource(helper, job.sourceUrl, session)).equals(song), "whole, in order");
+    await post(helper, `/api/split-jobs/${created.id}/fail`, { error: "only checking" }, { "x-split-session": session });
+    await owner.fetch(`/api/split-jobs/${created.id}`, { method: "DELETE" });
+  });
+
+  test("a job that's gone (or someone else's) isn't carried on: a new one is made", async () => {
+    const mine = await expectStatus(await createJob(owner, 1000), 200, "create job");
+    const theirs = await expectStatus(await createJob(stranger, 1000, { resume: mine.id }), 200, "create job");
+    assert.notEqual(theirs.id, mine.id);
+    assert.equal(theirs.resumed, false);
+    const fresh = await expectStatus(await createJob(owner, 1000, { resume: randomUUID() }), 200, "create job");
+    assert.equal(fresh.resumed, false);
+    for (const [who, id] of [[owner, mine.id], [stranger, theirs.id], [owner, fresh.id]] as const) {
+      await who.fetch(`/api/split-jobs/${id}`, { method: "DELETE" });
+    }
+  });
+
+  test("the join goes by the list it's given: a gap is refused, a missing slice is named, a late longer copy is cut to length", async () => {
+    const created = await expectStatus(await createJob(owner, 3000), 200, "create job");
+    const relay = `/api/split-jobs/${created.id}/source?relay=${randomUUID()}`;
+    const slice = (at: number, bytes: Buffer) => owner.fetch(`${relay}&at=${at}`, { method: "PUT", body: new Blob([bytes as BlobPart]) });
+    const join = (size: number, parts: [number, number][]) => post(owner, `${relay}&size=${size}`, { parts });
+    const song = randomBytes(3000);
+    await expectStatus(await slice(0, song.subarray(0, 1000)), 200, "slice");
+    await expectStatus(await slice(2000, song.subarray(2000)), 200, "slice");
+    await expectStatus(await join(3000, [[0, 1000], [2000, 1000]]), 400, "a list with a gap");
+    const missing = await expectStatus(await join(3000, [[0, 1000], [1000, 1000], [2000, 1000]]), 409, "a slice that never arrived");
+    assert.deepEqual(missing.missing, [1000]);
+    // The slice at 1000 arrives twice: first a longer try, cut off on the phone's side, then the shorter one it was sent again as.
+    await expectStatus(await slice(1000, song.subarray(1000, 1500)), 200, "slice");
+    await expectStatus(await slice(1500, song.subarray(1500, 2000)), 200, "slice");
+    await expectStatus(await slice(1000, song.subarray(1000, 2000)), 200, "the longer copy, late");
+    await expectStatus(await join(3000, [[0, 1000], [1000, 500], [1500, 500], [2000, 1000]]), 200, "join");
+    // Its answer was lost, so the phone asks again: still yes.
+    await expectStatus(await join(3000, [[0, 1000], [1000, 500], [1500, 500], [2000, 1000]]), 200, "join again");
+    await expectStatus(await post(owner, `/api/split-jobs/${created.id}/queued`), 200, "mark queued");
+
+    const session = randomUUID();
+    const job = await claimJob(helper, session, created.id);
+    assert.ok(Buffer.from(await downloadSource(helper, job.sourceUrl, session)).equals(song));
+    await post(helper, `/api/split-jobs/${created.id}/fail`, { error: "only checking" }, { "x-split-session": session });
+    await owner.fetch(`/api/split-jobs/${created.id}`, { method: "DELETE" });
+
+    // A stranger can't put slices into someone else's song.
+    const other = await expectStatus(await createJob(owner, 1000), 200, "create job");
+    const res = await stranger.fetch(`/api/split-jobs/${other.id}/source?relay=${randomUUID()}&at=0`, { method: "PUT", body: "x" });
+    assert.equal(res.status, 404);
+    await owner.fetch(`/api/split-jobs/${other.id}`, { method: "DELETE" });
   });
 });

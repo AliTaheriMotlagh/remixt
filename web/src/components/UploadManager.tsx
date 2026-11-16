@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
-import { Music, Pause, Play } from "lucide-react";
+import { LoaderCircle, Music, Pause, Play } from "lucide-react";
 import { previewPlayer, usePreviewState } from "@/lib/client/previewPlayer";
 import Waveform from "./Waveform";
 import TagInput from "./TagInput";
@@ -503,7 +503,13 @@ function StemMiniRow({
         style={{ background: color }}
         aria-label={`${playing ? "Pause" : "Play"} ${label.toLowerCase()} of ${title}`}
       >
-        {playing ? <Pause className="h-4 w-4" fill="currentColor" /> : <Play className="ml-0.5 h-4 w-4" fill="currentColor" />}
+        {mine && preview.loading ? (
+          <LoaderCircle className="h-4 w-4 animate-spin" />
+        ) : playing ? (
+          <Pause className="h-4 w-4" fill="currentColor" />
+        ) : (
+          <Play className="ml-0.5 h-4 w-4" fill="currentColor" />
+        )}
       </button>
       <span className="w-12 shrink-0 text-xs font-semibold sm:w-14" style={{ color }}>
         {label}

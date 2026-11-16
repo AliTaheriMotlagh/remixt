@@ -143,6 +143,17 @@ export async function getJob(id: string): Promise<SplitJob | undefined> {
   return job;
 }
 
+/**
+ * A slice of the song has arrived: the job isn't abandoned. Written at most
+ * every few minutes, however many slices come.
+ */
+export async function stillUploading(job: SplitJob) {
+  await sql`
+    UPDATE split_jobs SET updated_at = now()
+    WHERE id = ${job.id} AND status = 'uploading' AND updated_at < now() - interval '5 minutes'
+  `;
+}
+
 /** The phone finished uploading the song: it joins the queue if the file is really there. */
 export async function markQueued(job: SplitJob): Promise<string | null> {
   const stored = await storedObject(job.source_key);
@@ -335,10 +346,12 @@ export async function jobsForOwner(ownerId: string): Promise<OwnerJob[]> {
   await ensureSplitQueueSchema();
   await reapStale();
   // A phone that never finished uploading (closed mid-way) leaves a job
-  // behind, and a failed song left undismissed for a week has been forgotten.
+  // behind — one nothing has been sent to for an hour (see stillUploading:
+  // a slow phone can take longer than that over one song) — and a failed
+  // song left undismissed for a week has been forgotten.
   const abandoned = await sql<SplitJob[]>`
     SELECT * FROM split_jobs WHERE owner_id = ${ownerId} AND (
-      (status = 'uploading' AND created_at < now() - interval '1 hour') OR
+      (status = 'uploading' AND updated_at < now() - interval '1 hour') OR
       (status = 'failed' AND updated_at < now() - interval '7 days')
     )
   `;

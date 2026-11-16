@@ -5,12 +5,14 @@ import { ImportError, importSong } from "@/lib/linkImport";
 import {
   cancelJob,
   createJob,
+  getJob,
   jobsForOwner,
   markQueued,
   MAX_SOURCE_BYTES,
   miningStats,
   queueStats,
   sourceExtension,
+  stillUploading,
   topMiners,
 } from "@/lib/splitQueue";
 import { createUploadTarget, putObject, storageProblem } from "@/lib/storage";
@@ -43,6 +45,8 @@ const bodySchema = z.union([
     size: z.number().int().positive(),
     tags,
     rightsConfirmed: rights,
+    // The job an earlier try at this same file was going into: carried on, if it's still there.
+    resume: z.string().uuid().optional(),
   }),
   // A link: fetched here, straight into the queue.
   z.object({ link: z.string().trim().min(1).max(2000), tags, rightsConfirmed: rights }),
@@ -94,7 +98,12 @@ export async function POST(req: NextRequest) {
       { status: 413 }
     );
   }
-  const job = await createJob(user.id, { title: body.title, filename: body.filename, tags: body.tags, ext });
+  // A try that was interrupted (a reload, the line going away) carries on
+  // into the same job, where the relay kept what it had been sent.
+  const earlier = body.resume ? await getJob(body.resume) : undefined;
+  const resumed = !!earlier && earlier.owner_id === user.id && earlier.status === "uploading" && earlier.filename === body.filename;
+  const job = resumed ? earlier : await createJob(user.id, { title: body.title, filename: body.filename, tags: body.tags, ext });
+  if (resumed) await stillUploading(job);
   const upload = await createUploadTarget(job.source_key, `/api/split-jobs/${job.id}/source`, MAX_SOURCE_BYTES);
-  return NextResponse.json({ id: job.id, upload });
+  return NextResponse.json({ id: job.id, upload, resumed });
 }

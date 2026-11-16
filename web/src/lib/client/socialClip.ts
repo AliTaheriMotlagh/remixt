@@ -3,7 +3,7 @@
 import { renderMixdown } from "./mixdown";
 import { MARK_BARS, MARK_BAR_WIDTH, MARK_GRADIENT, MARK_TILE_RADIUS } from "@/lib/brand";
 import { clipLineAt, MAX_CLIP_SECONDS, type ClipLine } from "@/lib/clipLyrics";
-import { CLIP_FONTS, CLIP_FORMATS, ELEMENT_ORDER, type ClipDesign, type ClipElement, type ElementId } from "@/lib/clipDesign";
+import { CLIP_FONTS, CLIP_FORMATS, CREDIT_LABELS, ELEMENT_ORDER, type ClipDesign, type ClipElement, type ElementId } from "@/lib/clipDesign";
 
 // A video of a stretch of the mix for Reels, TikTok, Shorts, Stories, X and
 // YouTube, drawn from a ClipDesign (lib/clipDesign.ts): its shape, its
@@ -321,6 +321,42 @@ function drawWords(f: Frame, el: ClipElement, size: number, maxLines: number, wi
   const rows = wrapText(ctx, text, Math.min(W * widthShare, 1500), maxLines);
   ctx.restore();
   return drawTextBlock(ctx, rows, el.x * W, el.y * H, size, el);
+}
+
+/** A credit: a small label ("VOCALS") in the element's second colour, over a name. */
+function drawCredit(f: Frame, el: ClipElement, label: string): Box | null {
+  const { ctx, W, H } = f;
+  const text = el.text.trim();
+  if (!text) return null;
+  const size = 38 * el.scale;
+  const small = size * 0.5;
+  ctx.save();
+  ctx.font = font(el, size);
+  const rows = wrapText(ctx, text, Math.min(W * 0.42, 900), 1);
+  ctx.restore();
+  const cx = el.x * W;
+  const cy = el.y * H;
+  // The name sits a little low, the label above it: the pair is centred on the element's place.
+  const name = drawTextBlock(ctx, rows, cx, cy + small * 0.62, size, el);
+  ctx.save();
+  ctx.font = font(el, small, 700);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const spaced = label.split("").join("\u200a");
+  const labelY = name.y - small * 0.75;
+  const labelW = ctx.measureText(spaced).width;
+  if (!el.plate) {
+    ctx.lineJoin = "round";
+    ctx.lineWidth = Math.max(2, small * 0.12);
+    ctx.strokeStyle = standOff(el.accent, 0.45);
+    ctx.strokeText(spaced, cx, labelY);
+  }
+  ctx.fillStyle = el.accent;
+  ctx.fillText(spaced, cx, labelY);
+  ctx.restore();
+  const w = Math.max(name.w, labelW);
+  const top = labelY - small * 0.6;
+  return { x: cx - w / 2, y: top, w, h: name.y + name.h - top };
 }
 
 function drawVisualizer(f: Frame, el: ClipElement): Box {
@@ -645,6 +681,10 @@ export function drawClipFrame(
         break;
       case "artist":
         boxes.artist = drawWords(f, el, 44 * s, 1, 0.8);
+        break;
+      case "vocalBy":
+      case "beatBy":
+        boxes[id] = drawCredit(f, el, CREDIT_LABELS[id]);
         break;
       case "caption":
         boxes.caption = drawWords(f, el, 52 * s, 3, 0.8);

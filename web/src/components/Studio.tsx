@@ -32,6 +32,7 @@ import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/rem
 import { useStudioStore } from "@/lib/client/studioStore";
 import { useStudioView } from "@/lib/client/studioView";
 import { useLyricsFollowVocals } from "@/lib/client/lyricsFollow";
+import { useLyrics } from "@/lib/client/lyricsStore";
 import { useLyricsFollowMix } from "@/lib/client/mixSongs";
 import { importHistory, resetHistory, undo } from "@/lib/client/studioHistory";
 import {
@@ -53,6 +54,13 @@ function formatAgo(timestamp: number) {
   const hours = Math.round(minutes / 60);
   if (hours < 24) return `${hours} h ago`;
   return new Date(timestamp).toLocaleDateString();
+}
+
+// For the rigs under scripts/ (and a console): the Studio's stores by name,
+// so a check can read the mix or set one up without clicking through the
+// page — `__remixt.studio.getState().lanes`. Development only.
+if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+  (window as unknown as { __remixt?: unknown }).__remixt = { studio: useStudioStore, view: useStudioView, lyrics: useLyrics, engine: audioEngine };
 }
 
 export default function Studio({ user }: { user: User | null }) {

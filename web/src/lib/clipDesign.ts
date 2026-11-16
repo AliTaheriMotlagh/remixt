@@ -20,15 +20,20 @@ export const CLIP_FORMATS: Record<ClipFormat, { label: string; hint: string; wid
 
 export const CLIP_FORMAT_ORDER: ClipFormat[] = ["story", "portrait", "square", "wide"];
 
-export type ElementId = "brand" | "title" | "artist" | "visualizer" | "photo" | "lyrics" | "caption" | "progress" | "link";
+export type ElementId = "brand" | "title" | "artist" | "vocalBy" | "beatBy" | "visualizer" | "photo" | "lyrics" | "caption" | "progress" | "link";
 
 /** Drawn in this order — later ones on top, and picked first by a tap. */
-export const ELEMENT_ORDER: ElementId[] = ["visualizer", "photo", "brand", "title", "artist", "caption", "lyrics", "progress", "link"];
+export const ELEMENT_ORDER: ElementId[] = ["visualizer", "photo", "brand", "title", "artist", "caption", "lyrics", "progress", "vocalBy", "beatBy", "link"];
+
+/** The small word over each credit's name. */
+export const CREDIT_LABELS = { vocalBy: "VOCALS", beatBy: "BEAT" } as const;
 
 export const ELEMENT_INFO: Record<ElementId, { label: string; text: boolean }> = {
   brand: { label: "Remixt logo", text: false },
   title: { label: "Song title", text: true },
   artist: { label: "Artist", text: true },
+  vocalBy: { label: "Vocal credit", text: true },
+  beatBy: { label: "Beat credit", text: true },
   visualizer: { label: "Visualizer", text: false },
   photo: { label: "Photo", text: false },
   lyrics: { label: "Lyrics", text: false },
@@ -105,6 +110,8 @@ const LAYOUTS: Record<ClipFormat, Record<ElementId, Spot>> = {
     brand: { x: 0.5, y: 0.085, scale: 1 },
     title: { x: 0.5, y: 0.225, scale: 1 },
     artist: { x: 0.5, y: 0.262, scale: 1 },
+    vocalBy: { x: 0.28, y: 0.885, scale: 1 },
+    beatBy: { x: 0.72, y: 0.885, scale: 1 },
     visualizer: { x: 0.5, y: 0.37, scale: 1 },
     photo: { x: 0.5, y: 0.37, scale: 1 },
     lyrics: { x: 0.5, y: 0.6, scale: 1 },
@@ -116,6 +123,8 @@ const LAYOUTS: Record<ClipFormat, Record<ElementId, Spot>> = {
     brand: { x: 0.5, y: 0.075, scale: 0.8 },
     title: { x: 0.5, y: 0.19, scale: 0.9 },
     artist: { x: 0.5, y: 0.238, scale: 0.9 },
+    vocalBy: { x: 0.28, y: 0.897, scale: 0.85 },
+    beatBy: { x: 0.72, y: 0.897, scale: 0.85 },
     visualizer: { x: 0.5, y: 0.36, scale: 0.8 },
     photo: { x: 0.5, y: 0.37, scale: 0.75 },
     lyrics: { x: 0.5, y: 0.62, scale: 0.9 },
@@ -127,6 +136,8 @@ const LAYOUTS: Record<ClipFormat, Record<ElementId, Spot>> = {
     brand: { x: 0.5, y: 0.085, scale: 0.7 },
     title: { x: 0.5, y: 0.2, scale: 0.8 },
     artist: { x: 0.5, y: 0.255, scale: 0.8 },
+    vocalBy: { x: 0.28, y: 0.9, scale: 0.75 },
+    beatBy: { x: 0.72, y: 0.9, scale: 0.75 },
     visualizer: { x: 0.5, y: 0.4, scale: 0.7 },
     photo: { x: 0.5, y: 0.41, scale: 0.6 },
     lyrics: { x: 0.5, y: 0.64, scale: 0.8 },
@@ -138,6 +149,8 @@ const LAYOUTS: Record<ClipFormat, Record<ElementId, Spot>> = {
     brand: { x: 0.1, y: 0.12, scale: 0.6 },
     title: { x: 0.5, y: 0.13, scale: 0.85 },
     artist: { x: 0.5, y: 0.205, scale: 0.85 },
+    vocalBy: { x: 0.13, y: 0.93, scale: 0.7 },
+    beatBy: { x: 0.36, y: 0.93, scale: 0.7 },
     visualizer: { x: 0.5, y: 0.4, scale: 0.75 },
     photo: { x: 0.17, y: 0.5, scale: 0.7 },
     lyrics: { x: 0.5, y: 0.64, scale: 0.85 },
@@ -168,6 +181,9 @@ function baseElements(format: ClipFormat): Record<ElementId, ClipElement> {
     brand: element({ ...spot.brand }),
     title: element({ ...spot.title }),
     artist: element({ ...spot.artist, color: "#c4c4d4", font: "modern" }),
+    // Who sings and whose beat it is: the label in the app's vocal and beat colours.
+    vocalBy: element({ ...spot.vocalBy, color: "#ffffff", accent: "#f472b6" }),
+    beatBy: element({ ...spot.beatBy, color: "#ffffff", accent: "#22d3ee" }),
     visualizer: element({ ...spot.visualizer, color: "#ec4899", accent: "#06b6d4", style: "bars" }),
     photo: element({ ...spot.photo, visible: false }),
     lyrics: element({ ...spot.lyrics, color: "#ffffff", accent: "#f472b6", style: "karaoke" }),
@@ -337,7 +353,10 @@ export function snapPosition(x: number, y: number): { x: number; y: number; snap
 }
 
 /** Text, filled in from the song, for elements the user hasn't typed into. */
-export function withWords(design: ClipDesign, words: { title: string; artist: string; link: string }): ClipDesign {
+export function withWords(
+  design: ClipDesign,
+  words: { title: string; artist: string; link: string; vocalBy?: string; beatBy?: string }
+): ClipDesign {
   const e = design.elements;
   return {
     ...design,
@@ -346,8 +365,26 @@ export function withWords(design: ClipDesign, words: { title: string; artist: st
       title: { ...e.title, text: e.title.text || words.title },
       artist: { ...e.artist, text: e.artist.text || words.artist },
       link: { ...e.link, text: e.link.text || words.link },
+      vocalBy: { ...e.vocalBy, text: e.vocalBy.text || (words.vocalBy ?? "") },
+      beatBy: { ...e.beatBy, text: e.beatBy.text || (words.beatBy ?? "") },
     },
   };
+}
+
+/**
+ * Who to credit on a clip: the vocal's artist and the beat's — when they
+ * aren't the same (one song remixed needs no "vocals by, beat by"; the
+ * artist line says it). `voices` and `beats` are the artists of what's
+ * heard, first one first.
+ */
+export function clipCredits(voices: string[], beats: string[]): { vocalBy: string; beatBy: string } {
+  const names = (list: string[]) => [...new Set(list.map((n) => n.trim()).filter(Boolean))];
+  const v = names(voices);
+  const b = names(beats);
+  const same = v.length > 0 && v.length === b.length && v.every((n) => b.some((m) => m.toLowerCase() === n.toLowerCase()));
+  if (!v.length || !b.length || same) return { vocalBy: "", beatBy: "" };
+  const join = (list: string[]) => (list.length > 2 ? `${list.slice(0, 2).join(", ")} +${list.length - 2}` : list.join(" & "));
+  return { vocalBy: join(v), beatBy: join(b) };
 }
 
 /**
@@ -399,6 +436,6 @@ export function readDesign(raw: unknown): ClipDesign | null {
 /** What's kept for next time: the look, not this song's words (the caption is kept: it's the user's own). */
 export function forStorage(design: ClipDesign): ClipDesign {
   const elements = { ...design.elements };
-  for (const id of ["title", "artist", "link"] as const) elements[id] = { ...elements[id], text: "" };
+  for (const id of ["title", "artist", "link", "vocalBy", "beatBy"] as const) elements[id] = { ...elements[id], text: "" };
   return { ...design, elements };
 }

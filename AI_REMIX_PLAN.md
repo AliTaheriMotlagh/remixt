@@ -1,6 +1,6 @@
 # AI producer: real remixer, engineer and mashup — handover plan
 
-Written 2026-11-15; status updated 2026-11-16 (see STATUS below).
+Written 2026-11-15; status updated 2026-11-16 (see STATUS below). The checks listed under Left are finished; what else is in flight is in `HANDOVER.md`.
 
 ## What the owner asked for
 
@@ -76,14 +76,22 @@ Stages 1–3 are built; most of the final pass is done. Uncommitted work on top 
 Measured on 4 real pairs (rig, Streaming master): whole song −13.3/−13.5/−13.6/−13.8 LUFS, peaks ≤ −1.26 dB, 0 clipped; mud
 −7.9→−10.5, −8.5→−11.1, −8.8→−10.2. Scores with Pro mix: 96, 69, ?, 93 (pair 2 is low for other reasons — check its score parts).
 
-### Left
-1. **Re-run pair 1 after the last change** (balancedLevels now stages the beat to BACKING_LUFS when measured): Make it sound good
-   alone was −9.8 LUFS / LRA 1.8 (squashed). Expect ~−15 LUFS and LRA back up. Steps files in the session scratchpad are gone —
-   rebuild from the example below (Pro mix switch: `{"switch":"^Pro mix"}`; master: `{"tab":"Style"},{"click":"button:has-text('Streaming')","settle":20000}`).
-2. Stage 1 rig checks not yet run: beat longer than vocal (unchanged), short loop beat, "Keep tracks whole" on, Keep then another style.
-3. Phone screenshots of Pro mix card, EngineerCard, Master to target, Mashup tab (`npm run shot -- /studio /tmp/s.png phone` or ai-drive.mjs `phone`).
-4. Full `npm test` (stop the `next dev -p 3100` first — they share `.next`).
-5. Commit. Optional: duet only appeared one way for Hichkas×Fadaei (the other direction found no turn for the host) — fine, but worth a look.
+### Left — all done on 2026-11-16 (second session)
+
+1. Pair 1 re-run, "Make it sound good" alone: −15.1 LUFS, LRA 2.9, peak −1.56 dB, 0 clipped, 4:47 (was −9.8 / LRA 1.8).
+   With Pro mix + Streaming master: −13.3 LUFS, peak −1.35 dB, 0 clipped, mud −10.8.
+2. Stage 1 rig checks:
+   - Beat longer than the vocal (Tehran Gonahkar over Kid Cudi): no repeat, one beat clip, as before.
+   - A 20 s loop beat (flows-a) under a 2:19 vocal: "Main part again" ×9 + "Ending", every verse kept, score 43 → 86.
+   - "Lock every line to the beat" off (tracks kept whole): no clips on either lane, no repeat — so the vocal sings on alone after the beat ends. That is what the option says it does; if it should repeat the beat anyway, `beatReach` in `aiIdeas.ts` is where.
+   - Keep, then Club: beat keeps "Main part again" + "Ending", 4:47, −8.8 LUFS, peak −2.4 dB, 0 clipped.
+3. Phone-width screenshots of the Pro mix card, the engineer card, Master it and the Mashup tab: all fit.
+   Found and fixed there: mastering while ideas were still being tried showed no result (the card is rebuilt when the trial is kept, and lost its numbers) — the result now lives outside the card (`useMastered` in `components/studio/ai/extras.tsx`).
+4. Mashup with two whole songs (Ye Rooze Khoob Miad + Yadegari): two vocal swaps, a duet, two DJ blends listed. Blend A → B exported: 6:52, −12.2 LUFS, peak −1.18 dB, 0 clipped.
+5. Still open, optional: the duet is offered one way only for some pairs (no turn found for the other host).
+
+The rig can now read the mix: `window.__remixt` (development only, set in `components/Studio.tsx`) holds the stores, e.g.
+`{"eval":"window.__remixt.studio.getState().lanes.length"}`; `{"viewport":[390,844]}` shrinks the page to a phone's width after a mix is set up.
 
 ## Original plan: still to do, in order
 

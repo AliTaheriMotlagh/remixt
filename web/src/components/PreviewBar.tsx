@@ -1,6 +1,6 @@
 "use client";
 
-import { Pause, Play, Square } from "lucide-react";
+import { LoaderCircle, Pause, Play, Square, X } from "lucide-react";
 import { previewPlayer, usePreviewState } from "@/lib/client/previewPlayer";
 import { kindColor, kindLabel } from "@/lib/stemKinds";
 
@@ -17,6 +17,33 @@ function formatTime(seconds: number) {
 export default function PreviewBar() {
   const state = usePreviewState();
 
+  // A stem that couldn't be played says so, rather than the button quietly doing nothing.
+  if (!state.current && state.error) {
+    return (
+      <div
+        data-previewbar
+        role="status"
+        className="fixed inset-x-0 z-50 border-t border-danger/40 bg-surface/95 backdrop-blur-md"
+        style={{
+          bottom: "var(--tabbar-h)",
+          paddingBottom: "max(0px, calc(env(safe-area-inset-bottom) - var(--tabbar-h)))",
+          paddingLeft: "env(safe-area-inset-left)",
+          paddingRight: "env(safe-area-inset-right)",
+        }}
+      >
+        <div className="mx-auto flex min-h-12 max-w-7xl items-center gap-3 px-4 py-2 text-sm sm:px-6">
+          <span className="min-w-0 flex-1 text-danger">{state.error}</span>
+          <button
+            onClick={() => previewPlayer.stop()}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted hover:text-foreground"
+            aria-label="Dismiss"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (!state.current) return null;
 
   const accent = kindColor(state.current.kind);
@@ -38,9 +65,15 @@ export default function PreviewBar() {
           onClick={() => previewPlayer.toggle(state.current!)}
           className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white"
           style={{ background: accent }}
-          aria-label={state.playing ? "Pause preview" : "Resume preview"}
+          aria-label={state.loading ? "Loading preview" : state.playing ? "Pause preview" : "Resume preview"}
         >
-          {state.playing ? <Pause className="fill-current" /> : <Play className="fill-current" />}
+          {state.loading ? (
+            <LoaderCircle className="animate-spin" />
+          ) : state.playing ? (
+            <Pause className="fill-current" />
+          ) : (
+            <Play className="fill-current" />
+          )}
         </button>
 
         <div className="min-w-0 flex-1">

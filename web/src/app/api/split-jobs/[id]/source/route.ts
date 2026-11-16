@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { getJob, isWorkerOf, MAX_SOURCE_BYTES, SESSION_HEADER } from "@/lib/splitQueue";
+import { getJob, isWorkerOf, MAX_SOURCE_BYTES, SESSION_HEADER, stillUploading } from "@/lib/splitQueue";
 import { serveObject, writeStorageStream } from "@/lib/storage";
 import { finishRelay, relaySession, takeRelayPart } from "@/lib/uploadRelay";
 
@@ -34,6 +34,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   const session = relaySession(req.nextUrl);
   if (session) {
     const { status, body } = await takeRelayPart(req, session, MAX_SOURCE_BYTES);
+    if (status === 200) await stillUploading(job);
     return NextResponse.json(body, { status });
   }
   if (!req.body) return NextResponse.json({ error: "Empty upload" }, { status: 400 });

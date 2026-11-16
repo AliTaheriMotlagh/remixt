@@ -2,6 +2,7 @@
 //   cd web && BASE_URL=http://localhost:3100 OUT_DIR=/tmp node scripts/ai-drive.mjs steps.json [desktop|phone]
 // Steps: {add:[tab,query]} {ai:true} {tab:"Style"} {switch:"regex"} {click:"selector"}
 //        {export:"name"} {shot:"name"} {wait:ms} {text:"selector"} {keep:true}
+//        {eval:"js"} (window.__remixt has the Studio's stores) {viewport:[390,844]}
 import { chromium } from "playwright-core";
 import fs from "node:fs";
 
@@ -79,6 +80,11 @@ for (const step of JSON.parse(stepsRaw.endsWith(".json") ? fs.readFileSync(steps
       await download.saveAs(`${out}${step.export}.wav`);
       await page.locator('[aria-label="Export"] button[aria-label="Close"]').first().click().catch(() => {});
       console.log(`exported ${step.export}.wav ${fs.statSync(`${out}${step.export}.wav`).size}`);
+    }
+    if (step.viewport) {
+      // A phone's width for what's already set up (the phone's own page asks for other taps to get here).
+      await page.setViewportSize({ width: step.viewport[0], height: step.viewport[1] });
+      await page.waitForTimeout(600);
     }
     if (step.text) console.log(JSON.stringify((await page.locator(step.text).first().innerText()).slice(0, 6000)));
     if (step.eval) console.log(JSON.stringify(await page.evaluate(step.eval)));

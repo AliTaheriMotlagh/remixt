@@ -5,6 +5,14 @@
 // DATABASE_URL in .env.local — local ones only; set TEST_DATABASE_URL to use
 // another), a temporary storage folder (local-disk storage, whatever
 // .env.local says), and a dev server of its own on a free port.
+//
+// Quicker ways to ask, when you don't need all of it:
+//
+//   npm test -- --unit                 only the tests that need no server (seconds, no database)
+//   npm test -- tests/a.test.ts …      only those files (a server only if one of them needs it)
+//   npm test -- --brief                says only what failed, and the totals
+//
+// They combine: `npm test -- --unit --brief` is the cheapest check there is.
 import { spawn } from "child_process";
 import fs from "fs";
 import net from "net";
@@ -79,6 +87,42 @@ async function waitFor(url, server, timeoutMs = 180_000) {
   throw new Error(`The dev server didn't answer at ${url} in time`);
 }
 
+// --- What to run ---------------------------------------------------------------
+
+const args = process.argv.slice(2);
+const flags = new Set(args.filter((a) => a === "--unit" || a === "--brief"));
+const named = args.filter((a) => a.endsWith(".test.ts")).map((a) => path.relative(root, path.resolve(a)));
+const passOn = args.filter((a) => !flags.has(a) && !a.endsWith(".test.ts"));
+
+/** A test file talks to the running app if it reads BASE_URL; the rest are plain logic. */
+const needsServer = (file) => fs.readFileSync(path.join(root, file), "utf8").includes("BASE_URL");
+let files = named.length
+  ? named
+  : fs
+      .readdirSync(path.join(root, "tests"))
+      .filter((f) => f.endsWith(".test.ts"))
+      .map((f) => path.join("tests", f));
+if (flags.has("--unit")) files = files.filter((f) => !needsServer(f));
+if (!files.length) {
+  console.error("No test files to run.");
+  process.exit(1);
+}
+
+function runTests(env) {
+  const reporter = flags.has("--brief") ? ["--test-reporter=./tests/support/brief.mjs", "--test-reporter-destination=stdout"] : [];
+  const tests = spawn(
+    process.execPath,
+    ["--import", "./tests/support/register.mjs", "--test", "--test-concurrency=1", ...reporter, ...files, ...passOn],
+    { cwd: root, env: { ...process.env, ...env }, stdio: "inherit" }
+  );
+  return new Promise((resolve) => tests.on("exit", (c) => resolve(c ?? 1)));
+}
+
+// Nothing here needs the app: no database, no server.
+if (!files.some(needsServer)) process.exit(await runTests({}));
+
+// --- The app under test ---------------------------------------------------------
+
 const databaseUrl = testDatabaseUrl();
 await prepareDatabase(databaseUrl);
 
@@ -131,16 +175,7 @@ try {
   console.log(`Starting a dev server for the tests on ${baseUrl}…`);
   // Asked for once first, so the tests don't wait on compiling it.
   await waitFor(`${baseUrl}/api/auth/me`, server);
-  const files = fs
-    .readdirSync(path.join(root, "tests"))
-    .filter((f) => f.endsWith(".test.ts"))
-    .map((f) => path.join("tests", f));
-  const tests = spawn(process.execPath, ["--import", "./tests/support/register.mjs", "--test", "--test-concurrency=1", ...files, ...process.argv.slice(2)], {
-    cwd: root,
-    env: { ...process.env, BASE_URL: baseUrl, DATABASE_URL: databaseUrl, STORAGE_DIR: storage },
-    stdio: "inherit",
-  });
-  code = await new Promise((resolve) => tests.on("exit", (c) => resolve(c ?? 1)));
+  code = await runTests({ BASE_URL: baseUrl, DATABASE_URL: databaseUrl, STORAGE_DIR: storage });
 } catch (err) {
   console.error(String(err));
   console.error(Buffer.concat(log).toString().slice(-4000));

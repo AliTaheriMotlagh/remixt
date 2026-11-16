@@ -24,8 +24,14 @@ export type ClipPart = {
   label: string;
   start: number;
   end: number;
-  kind: "loop" | "section" | "playhead" | "song" | "custom";
+  kind: "loop" | "section" | "hook" | "words" | "playhead" | "song" | "custom";
 };
+
+/**
+ * Where a line is sung (see vocalTime.sungAt): every place, and how fast
+ * the vocal plays there. Left out, a line is sung once, where it's timed.
+ */
+export type Places = (time: number) => { time: number; speed: number }[];
 
 /** Roughly how long a line takes to sing, in seconds. */
 function singLength(text: string) {
@@ -43,21 +49,25 @@ function timedLines(lines: LyricLine[]) {
  * The lines sung between `start` and `end` on the timeline, timed from the
  * clip's start. A line stays up until the next one comes in (a long gap
  * clears it a few seconds after it's sung); one that began just before the
- * clip is shown from its first frame.
+ * clip is shown from its first frame. With `places`, a line is shown
+ * wherever it's sung — every copy of its singing — and fills in at the
+ * speed the vocal plays there.
  */
-export function clipLyrics(lines: LyricLine[], start: number, end: number): ClipLine[] {
-  const timed = timedLines(lines);
+export function clipLyrics(lines: LyricLine[], start: number, end: number, places?: Places): ClipLine[] {
+  const timed = timedLines(lines)
+    .flatMap((line) => (places ? places(line.time) : [{ time: line.time, speed: 1 }]).map((at) => ({ ...at, text: line.text })))
+    .sort((a, b) => a.time - b.time);
   const out: ClipLine[] = [];
   for (let i = 0; i < timed.length; i++) {
     const at = timed[i].time;
     const next = timed[i + 1]?.time ?? Infinity;
-    const sing = Math.min(singLength(timed[i].text), Math.max(0.3, next - at));
+    const sing = Math.min(singLength(timed[i].text) / (timed[i].speed > 0 ? timed[i].speed : 1), Math.max(0.3, next - at));
     const until = Math.min(next, at + sing + 3);
     if (until <= start || at >= end) continue;
     // The tail of a line before the part, on screen for a blink at its start: left out.
     if (at < start && until - start < 1) continue;
     // A line under way when the clip starts keeps its real (negative) start, so it shows part filled.
-    out.push({ start: round(at - start), end: round(Math.min(end, until) - start), wipe: sing, text: timed[i].text });
+    out.push({ start: round(at - start), end: round(Math.min(end, until) - start), wipe: round(sing), text: timed[i].text });
   }
   return out;
 }
@@ -90,32 +100,72 @@ export function clampRange(start: number, end: number, duration: number): { star
 const round = (x: number) => Math.round(x * 100) / 100;
 
 /**
+ * The loudest `seconds` of the song, from its waveform (`peaks`, evenly
+ * spaced over `duration`) — as a rule the hook. Starts on a sung line when
+ * one comes in around there, so the first words aren't cut. Null when the
+ * song has no shape to go by.
+ */
+export function loudestStretch(peaks: number[], duration: number, seconds: number, lines: LyricLine[] = []): { start: number; end: number } | null {
+  if (peaks.length < 8 || duration <= seconds || !peaks.some((p) => p > 0)) return null;
+  const perSecond = peaks.length / duration;
+  const span = Math.max(1, Math.round(seconds * perSecond));
+  let sum = 0;
+  for (let i = 0; i < span; i++) sum += peaks[i] * peaks[i];
+  let best = sum;
+  let bestAt = 0;
+  for (let i = span; i < peaks.length; i++) {
+    sum += peaks[i] * peaks[i] - peaks[i - span] * peaks[i - span];
+    if (sum > best * 1.0001) {
+      best = sum;
+      bestAt = i - span + 1;
+    }
+  }
+  let start = bestAt / perSecond;
+  const near = timedLines(lines)
+    .map((l) => l.time - 0.5)
+    .filter((t) => Math.abs(t - start) <= 2)
+    .sort((a, b) => Math.abs(a - start) - Math.abs(b - start))[0];
+  if (near !== undefined) start = near;
+  return clampRange(start, start + seconds, duration);
+}
+
+/**
  * The parts of the song a clip can be made of, best first: the loop, the
- * song's sections from the timed lyrics (a little before each so the
- * first word isn't clipped), stretches from the playhead, and the whole
- * song when it's short enough.
+ * song's sections from the timed lyrics in the order they play (a little
+ * before each so the first word isn't clipped, until the next comes in),
+ * the loudest stretches when the song's shape is known (`peaks`),
+ * from the first words, stretches from the playhead, and the whole song
+ * when it's short enough.
  */
 export function clipParts({
   lines,
   loop,
   playhead,
   duration,
+  peaks = [],
 }: {
   lines: LyricLine[];
   loop: { enabled: boolean; start: number; end: number };
   playhead: number;
   duration: number;
+  /** The mix's waveform over `duration` (see mixPeaks), for the loudest stretches. */
+  peaks?: number[];
 }): ClipPart[] {
   if (duration <= 0) return [];
   const parts: ClipPart[] = [];
   if (loop.enabled && loop.end - loop.start >= 1) {
     parts.push({ id: "loop", label: "The loop", kind: "loop", ...clampRange(loop.start, loop.end, duration) });
   }
+  const sung = timedLines(lines);
   const seen = new Map<string, number>();
-  for (const section of sectionsOf(lines)) {
-    if (section.start === null) continue;
+  const sections = sectionsOf(lines)
+    .filter((s): s is typeof s & { start: number; last: number } => s.start !== null && s.last !== null)
+    .sort((a, b) => a.start - b.start);
+  for (const section of sections) {
     const from = Math.max(0, section.start - 0.5);
-    const to = section.end ?? Math.min(duration, section.start + 30);
+    // Until the next part comes in; the song's last part, until its last line has been sung and rung out.
+    const lastLine = sung.find((l) => l.time === section.last);
+    const to = Math.min(duration, section.end ?? section.last + (lastLine ? singLength(lastLine.text) : 2) + 4);
     const count = (seen.get(section.name) ?? 0) + 1;
     seen.set(section.name, count);
     parts.push({
@@ -124,6 +174,13 @@ export function clipParts({
       kind: "section",
       ...clampRange(from, to, duration),
     });
+  }
+  for (const seconds of [30, 15]) {
+    const loud = loudestStretch(peaks, duration, seconds, lines);
+    if (loud) parts.push({ id: `hook-${seconds}`, label: `The loudest ${seconds} s`, kind: "hook", ...loud });
+  }
+  if (sung.length && sung[0].time > 1) {
+    parts.push({ id: "words", label: "From the first words", kind: "words", ...clampRange(sung[0].time - 0.5, sung[0].time + 29.5, duration) });
   }
   const from = playhead >= duration - MIN_CLIP_SECONDS ? 0 : playhead;
   for (const seconds of [15, 30, 60]) {

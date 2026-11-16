@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ChevronDown, Loader2, Minus, Plus, Sparkles } from "lucide-react";
+import { create } from "zustand";
 import { keepTrial, useAiTrial } from "@/lib/client/aiTrial";
 import { masterFor } from "@/lib/client/aiIdeas";
 import type { Vibe } from "@/lib/client/aiControl";
@@ -151,17 +152,28 @@ function LoudnessMeter({ result }: { result: MasterResult }) {
  * checked by rendering again (see masterToTarget) — with the numbers
  * before and after. The presets stay, for mastering by ear.
  */
+/**
+ * What the last mastering measured, and whether one is running — kept
+ * outside the card. Mastering first keeps whatever is being tried, which
+ * rebuilds the panel (and this card with it): held in the card, the
+ * numbers were gone by the time they arrived, and mastering looked like it
+ * had done nothing.
+ */
+const useMastered = create<{ result: MasterResult | null; busy: string | null }>(() => ({ result: null, busy: null }));
+
 export function MasterIt({ vibes }: { vibes: Vibe[] }) {
   const master = useStudioStore((s) => s.master);
   const current = masterPresetOf(master);
   const pick = masterFor(vibes);
   const loudPick = pick === "club" || pick === "loud";
-  const [busy, setBusy] = useState<string | null>(null);
-  const [result, setResult] = useState<MasterResult | null>(null);
+  const busy = useMastered((s) => s.busy);
+  const result = useMastered((s) => s.result);
+  const setBusy = (id: string | null) => useMastered.setState({ busy: id });
+  const setResult = (done: MasterResult | null) => useMastered.setState({ result: done });
   const [error, setError] = useState<string | null>(null);
 
   async function toTarget(target: LoudnessTarget) {
-    if (busy) return;
+    if (useMastered.getState().busy) return;
     keepWhatsPlaying();
     setBusy(target.id);
     setError(null);
@@ -215,9 +227,10 @@ export function MasterIt({ vibes }: { vibes: Vibe[] }) {
           <LoudnessMeter result={shown} />
           <div className="grid grid-cols-3 gap-1.5 text-center tabular-nums">
             {[
-              { label: "Loudness", before: `${shown.before.lufs.toFixed(1)}`, after: `${shown.after.lufs.toFixed(1)} LUFS` },
-              { label: "Peak", before: `${shown.before.peakDb.toFixed(1)}`, after: `${shown.after.peakDb.toFixed(1)} dB` },
-              { label: "Punch (crest)", before: `${shown.before.crestDb.toFixed(1)}`, after: `${shown.after.crestDb.toFixed(1)} dB` },
+              // The unit goes with the name: beside the numbers it wrapped onto a line of its own on a phone.
+              { label: "Loudness, LUFS", before: `${shown.before.lufs.toFixed(1)}`, after: `${shown.after.lufs.toFixed(1)}` },
+              { label: "Peak, dB", before: `${shown.before.peakDb.toFixed(1)}`, after: `${shown.after.peakDb.toFixed(1)}` },
+              { label: "Punch (crest), dB", before: `${shown.before.crestDb.toFixed(1)}`, after: `${shown.after.crestDb.toFixed(1)}` },
             ].map((m) => (
               <div key={m.label} className="rounded-lg bg-background/60 px-1 py-1">
                 <p className="text-[9.5px] text-muted">{m.label}</p>

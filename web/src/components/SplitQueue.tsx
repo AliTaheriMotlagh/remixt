@@ -78,13 +78,18 @@ function stepOf(job: QueuedJob) {
   return job.status === "uploading" ? 0 : job.status === "queued" ? 1 : job.status === "working" ? 2 : 3;
 }
 
-function jobDetail(job: QueuedJob) {
+/** `rigs`: how many computers are helping right now (null: not known yet). */
+function jobDetail(job: QueuedJob, rigs: number | null) {
   switch (job.status) {
     case "uploading":
       return "Still being sent from your device…";
     case "queued": {
+      const place = job.position && job.position > 1 ? `#${job.position} in line` : "Next in line";
+      // Said plainly: with nobody helping, "waiting" could be for hours.
       const line =
-        job.position && job.position > 1 ? `#${job.position} in line — waiting for a computer` : "Next in line — waiting for a computer";
+        rigs === 0
+          ? `${place} — no computer is helping right now. It's split as soon as one is: open Remixt on a computer and switch on Help split to do it yourself`
+          : `${place} — waiting for a computer`;
       return job.attempts > 0 ? `${line} (trying again: ${job.error ?? "the last try didn't finish"})` : line;
     }
     case "working": {
@@ -145,7 +150,7 @@ function StepTracker({ job }: { job: QueuedJob }) {
   );
 }
 
-function QueuedSongRow({ job, now, onChanged }: { job: QueuedJob; now: number; onChanged: () => void }) {
+function QueuedSongRow({ job, now, rigs, onChanged }: { job: QueuedJob; now: number; rigs: number | null; onChanged: () => void }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -213,7 +218,7 @@ function QueuedSongRow({ job, now, onChanged }: { job: QueuedJob; now: number; o
         </div>
       </div>
       <StepTracker job={job} />
-      <p className={`mt-2 text-xs ${failed ? "text-danger" : "text-muted"}`}>{jobDetail(job)}</p>
+      <p className={`mt-2 text-xs ${failed ? "text-danger" : "text-muted"}`}>{jobDetail(job, rigs)}</p>
       {error && <p className="mt-1 text-xs text-danger">{error}</p>}
     </li>
   );
@@ -227,12 +232,14 @@ function QueuedSongRow({ job, now, onChanged }: { job: QueuedJob; now: number; o
  */
 export function QueuedSongs({ refreshKey, onFinished }: { refreshKey: number; onFinished: () => void }) {
   const [jobs, setJobs] = useState<QueuedJob[]>([]);
+  const [rigs, setRigs] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const known = useRef(new Set<string>());
 
   const load = useCallback(async () => {
     try {
-      const { jobs: next } = await fetchQueue();
+      const { jobs: next, stats } = await fetchQueue();
+      setRigs(stats.rigs);
       // A job that vanished from the list finished: its track is in the library now.
       const ids = new Set(next.map((j) => j.id));
       const finished = [...known.current].some((id) => !ids.has(id));
@@ -274,7 +281,7 @@ export function QueuedSongs({ refreshKey, onFinished }: { refreshKey: number; on
       </h3>
       <ul className="flex flex-col gap-2">
         {jobs.map((job) => (
-          <QueuedSongRow key={job.id} job={job} now={now} onChanged={load} />
+          <QueuedSongRow key={job.id} job={job} now={now} rigs={rigs} onChanged={load} />
         ))}
       </ul>
     </section>

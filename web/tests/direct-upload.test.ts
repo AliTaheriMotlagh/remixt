@@ -48,15 +48,15 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   };
   const failWith = sabotage(request);
   if (failWith) return answer(failWith, { error: { code: failWith === 403 ? "forbidden" : "unknown_error" } });
-  // This app's relay (lib/uploadRelay.ts), played here: slices, then a join.
+  // This app's relay (lib/uploadRelay.ts), played here: slices by where they start, then a join.
   if (url.pathname === "/relay") {
     const session = url.searchParams.get("relay")!;
     if (req.method === "PUT") {
-      relayParts.set(`${session}/${url.searchParams.get("part")}`, body);
+      relayParts.set(`${session}/${url.searchParams.get("at")}`, body);
       return answer(200, { ok: true });
     }
-    const count = Number(url.searchParams.get("parts"));
-    const slices = Array.from({ length: count }, (_, i) => relayParts.get(`${session}/${i}`));
+    const parts = (JSON.parse(body.toString()) as { parts: [number, number][] }).parts;
+    const slices = parts.map(([at, bytes]) => relayParts.get(`${session}/${at}`)?.subarray(0, bytes));
     if (slices.some((s) => !s)) return answer(409, { error: "Part of the upload is missing — try again" });
     stored.set("relayed", Buffer.concat(slices as Buffer[]));
     return answer(200, { ok: true });
@@ -281,8 +281,10 @@ describe("through this app, when the store can't be reached", () => {
     const progress = await run(relayed("stems/t9/vocals.mp3"), bytes);
     assert.ok(stored.get("relayed")?.equals(bytes));
     const slices = seen.filter((r) => r.path === "/relay" && r.method === "PUT");
-    assert.equal(slices.length, Math.ceil(bytes.length / RELAY_PART_BYTES));
+    // Cut to the line: small to begin with, then as big as a slice may be.
+    assert.ok(slices.length >= Math.ceil(bytes.length / RELAY_PART_BYTES));
     assert.ok(slices.every((r) => r.size <= RELAY_PART_BYTES));
+    assert.equal(slices.reduce((sum, r) => sum + r.size, 0), bytes.length);
     assert.equal(progress.at(-1), bytes.length);
     // Never reached the store, so it wasn't tried again and again first.
     assert.equal(seen.filter((r) => r.path.startsWith("/api/blob")).length, 0);

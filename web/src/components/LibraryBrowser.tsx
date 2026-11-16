@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Pause, Play, X } from "lucide-react";
+import { LoaderCircle, Pause, Play, X } from "lucide-react";
 import Waveform from "./Waveform";
 import ReportButton from "./ReportButton";
 import { previewPlayer, usePreviewState } from "@/lib/client/previewPlayer";
@@ -220,7 +220,13 @@ export default function LibraryBrowser({
                     style={{ background: accent }}
                     aria-label={isPlaying ? "Pause preview" : "Play preview"}
                   >
-                    {isPlaying ? <Pause className="fill-current" /> : <Play className="fill-current" />}
+                    {isCurrent && preview.loading ? (
+                      <LoaderCircle className="animate-spin" />
+                    ) : isPlaying ? (
+                      <Pause className="fill-current" />
+                    ) : (
+                      <Play className="fill-current" />
+                    )}
                   </button>
                   <Waveform
                     peaks={peaksById.get(stem.id) ?? []}

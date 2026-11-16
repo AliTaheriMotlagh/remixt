@@ -13,6 +13,19 @@ const SLICE = 4 * 1024 * 1024;
 const PARALLEL = 6;
 const ATTEMPTS = 3;
 
+/**
+ * For a download nobody is waiting on (a stem kept for later): how hard it
+ * may pull on the connection. Left out, a download takes all it can get.
+ */
+export type Pace = {
+  /** Slices in flight at once (default PARALLEL). */
+  parallel?: number;
+  /** Bytes a slice (default 4 MB): smaller ones give way sooner. */
+  slice?: number;
+  /** Awaited before each slice: resolves when it's fine to go on (nothing more urgent wants the line). */
+  before?: () => Promise<void>;
+};
+
 async function fetchRange(url: string, start: number, end: number) {
   for (let attempt = 1; ; attempt++) {
     try {
@@ -55,7 +68,11 @@ async function fetchWhole(url: string, onProgress?: (loaded: number, total: numb
  * file never changes under its id — so a song opened again, a draft
  * reopened, or a vocal's original beat listened to again costs no download.
  */
-export async function fetchStem(stemId: string, onProgress?: (loaded: number, total: number) => void): Promise<ArrayBuffer> {
+export async function fetchStem(
+  stemId: string,
+  onProgress?: (loaded: number, total: number) => void,
+  pace?: Pace
+): Promise<ArrayBuffer> {
   const kept = await cacheGet<Blob>("stem", stemId);
   if (kept) {
     try {
@@ -64,7 +81,7 @@ export async function fetchStem(stemId: string, onProgress?: (loaded: number, to
       // The browser lost the file behind it: download it again.
     }
   }
-  const bytes = await fetchInSlices(`/api/audio/stem/${stemId}`, onProgress);
+  const bytes = await fetchInSlices(`/api/audio/stem/${stemId}`, onProgress, pace);
   // Copied as it's put, so the caller can decode (and detach) `bytes` at once.
   void cachePut("stem", stemId, bytes, bytes.byteLength);
   return bytes;
@@ -88,15 +105,16 @@ function throughApp(url: string): string | null {
  */
 export async function fetchInSlices(
   url: string,
-  onProgress?: (loaded: number, total: number) => void
+  onProgress?: (loaded: number, total: number) => void,
+  pace: Pace = {}
 ): Promise<ArrayBuffer> {
   const fallback = throughApp(url);
-  if (fallback && viaApp) return fetchSlices(fallback, onProgress);
+  if (fallback && viaApp) return fetchSlices(fallback, onProgress, pace);
   try {
-    return await fetchSlices(url, onProgress);
+    return await fetchSlices(url, onProgress, pace);
   } catch (err) {
     if (!fallback) throw err;
-    const bytes = await fetchSlices(fallback, onProgress).catch(() => {
+    const bytes = await fetchSlices(fallback, onProgress, pace).catch(() => {
       throw err;
     });
     viaApp = true;
@@ -106,9 +124,11 @@ export async function fetchInSlices(
 
 async function fetchSlices(
   url: string,
-  onProgress?: (loaded: number, total: number) => void
+  onProgress: ((loaded: number, total: number) => void) | undefined,
+  { parallel = PARALLEL, slice = SLICE, before }: Pace
 ): Promise<ArrayBuffer> {
-  const first = await fetchRange(url, 0, SLICE - 1);
+  await before?.();
+  const first = await fetchRange(url, 0, slice - 1);
   const head = new Uint8Array(await first.arrayBuffer());
   // Redirected to a CDN (R2, a public Blob store): ask it directly for the
   // rest, rather than going through the redirect again for every slice.
@@ -135,16 +155,17 @@ async function fetchSlices(
   let loaded = head.length;
   onProgress?.(loaded, total);
   const starts: number[] = [];
-  for (let start = head.length; start < total; start += SLICE) starts.push(start);
+  for (let start = head.length; start < total; start += slice) starts.push(start);
 
   const next = async (): Promise<void> => {
     const start = starts.shift();
     if (start === undefined) return;
-    const end = Math.min(total, start + SLICE) - 1;
+    const end = Math.min(total, start + slice) - 1;
     // A server may answer with less than was asked for (a proxy that caps
     // its responses): whatever part it says it sent is kept, and the rest
     // asked for again. A body shorter than it claims was cut off: retried.
     for (let from = start, attempt = 1; from <= end; ) {
+      await before?.();
       const res = await fetchRange(source, from, end);
       const bytes = new Uint8Array(await res.arrayBuffer());
       const sent = /bytes (\d+)-(\d+)\//.exec(res.headers.get("content-range") ?? "");
@@ -163,6 +184,6 @@ async function fetchSlices(
     }
     return next();
   };
-  await Promise.all(Array.from({ length: Math.min(PARALLEL, starts.length) }, next));
+  await Promise.all(Array.from({ length: Math.min(parallel, starts.length) }, next));
   return out.buffer;
 }

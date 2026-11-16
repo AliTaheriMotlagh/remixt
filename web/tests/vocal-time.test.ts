@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { clipsOf, deleteClips, fitClips, moveClips, normaliseLane, splitClips, trimClipsAt, WHOLE } from "../src/lib/client/clipEdit.ts";
 import type { LaneClip, StudioLane } from "../src/lib/client/studioStore.ts";
-import { anchorAt, clipKeys, layOut, placeAnchor, placeOnStem, slideAlongVocal, startOnStem, stemOf, timelineOf, vocalShape } from "../src/lib/client/vocalTime.ts";
+import { anchorAt, clipKeys, layOut, placeAnchor, placeOnStem, slideAlongVocal, startOnStem, stemOf, sungAt, timelineOf, vocalShape } from "../src/lib/client/vocalTime.ts";
 
 function lane(id: string, opts: Partial<StudioLane> = {}): StudioLane {
   return normaliseLane({
@@ -213,5 +213,41 @@ describe("first line at the playhead, the rest on their words", () => {
       slid.map((x) => x.time),
       [6, 8, 10]
     );
+  });
+});
+
+describe("everywhere a line is sung", () => {
+  // Stem seconds 20–30 (the chorus) play at 20 s, and again at 80 s.
+  const clips: LaneClip[] = [
+    { from: 0, to: 60, at: 0 },
+    { from: 20, to: 30, at: 80 },
+  ];
+
+  test("a section pasted in again: the line is sung at both", () => {
+    const v = lane("v", { clips });
+    assert.deepEqual(sungAt([v], 22).map((s) => s.time), [22, 82]);
+  });
+
+  test("a doubled voice a moment behind is one singing, not two", () => {
+    const v = lane("v");
+    const double = lane("d", { stemId: v.stemId, offsetSeconds: 0.03 });
+    assert.deepEqual(sungAt([v, double], 22).map((s) => s.time), [22]);
+  });
+
+  test("a muted copy isn't sung", () => {
+    const v = lane("v", { clips: [clips[0], { ...clips[1], muted: true }] });
+    assert.deepEqual(sungAt([v], 22).map((s) => s.time), [22]);
+    const quiet = lane("q", { stemId: v.stemId, offsetSeconds: 100, muted: true });
+    assert.deepEqual(sungAt([lane("v"), quiet], 22).map((s) => s.time), [22]);
+  });
+
+  test("how fast the vocal plays there: its tempo and the clip's stretch", () => {
+    const v = lane("v", { tempoRatio: 1.25, clips: [{ from: 0, to: 60, at: 0, stretch: 1.2 }] });
+    const [only] = sungAt([v], 10);
+    near(only.speed, 1.5);
+  });
+
+  test("no vocal near: just where it is", () => {
+    assert.deepEqual(sungAt([lane("v", { offsetSeconds: 100 })], 5), [{ time: 5, speed: 1 }]);
   });
 });

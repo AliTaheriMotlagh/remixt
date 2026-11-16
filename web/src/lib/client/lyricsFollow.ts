@@ -32,6 +32,26 @@ export function rankFor(sheet: Pick<LyricSheet, "source" | "song">): (lane: Stud
 /** Moved by less than this, a line is left alone (times are kept to hundredths). */
 const STILL = 0.004;
 
+/**
+ * `anchors` (one per line of `written`) put in the order `text` reads back
+ * in. A sheet whose every line is timed is read in time order (see
+ * parseLyrics), which stops being the order it was written in the moment an
+ * edit moves a later line ahead of an earlier one — the chorus dragged to
+ * the front, time cut out of the song. Kept by line number alone, every
+ * line then had another line's place in the vocal, and the next edit sent
+ * the words to the wrong singing.
+ */
+function inReadingOrder(text: string, written: LyricLine[], anchors: (LineAnchor | null)[]): (LineAnchor | null)[] {
+  const key = (l: LyricLine) => `${l.time === null ? "" : Math.round(l.time * 100)}|${l.text}`;
+  const waiting = new Map<string, (LineAnchor | null)[]>();
+  written.forEach((line, i) => {
+    const list = waiting.get(key(line));
+    if (list) list.push(anchors[i]);
+    else waiting.set(key(line), [anchors[i]]);
+  });
+  return parseLyrics(text).map((line) => waiting.get(key(line))?.shift() ?? null);
+}
+
 /** Starts following the vocals; returns the stop. */
 export function startLyricsFollow(): () => void {
   // Anchors of each version of the sheet the follower wrote, so the next
@@ -70,7 +90,7 @@ export function startLyricsFollow(): () => void {
         return { ...line, time: Math.max(0, Math.round(a.time * 100) / 100) };
       });
       const result = moved ? serializeLyrics(out) : text;
-      next.set(result, to);
+      next.set(result, moved ? inReadingOrder(result, out, to) : to);
       return result;
     };
 

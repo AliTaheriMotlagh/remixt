@@ -1,7 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
-import { queueFile, queueLink, splitHelper } from "./splitQueue";
+import { queueFile, queueLink, splitHelper, type QueueResume } from "./splitQueue";
 import {
   fetchSongFromLink,
   foundBySearch,
@@ -78,6 +78,36 @@ function rememberInFlight(name: string | null) {
     else sessionStorage.removeItem(IN_FLIGHT_KEY);
   } catch {
     // Storage blocked — only the explanation is lost.
+  }
+}
+
+/**
+ * Where a song on its way to the queue has got to (see QueueResume), kept
+ * beside the song itself — in localStorage rather than with the file in
+ * IndexedDB, where every change would write the whole file out again.
+ */
+const resumeKey = (id: string) => `remixt.upload.resume.${id}`;
+
+function readResume(id: string): QueueResume | null {
+  try {
+    const kept = JSON.parse(localStorage.getItem(resumeKey(id)) ?? "null") as QueueResume | null;
+    return kept && typeof kept.jobId === "string" ? kept : null;
+  } catch {
+    return null;
+  }
+}
+
+/** How much of a song the relay has saved so far. */
+function savedBytes(id: string): number {
+  return readResume(id)?.relay?.sent.reduce((sum, [, bytes]) => sum + bytes, 0) ?? 0;
+}
+
+function writeResume(id: string, state: QueueResume | null) {
+  try {
+    if (state) localStorage.setItem(resumeKey(id), JSON.stringify(state));
+    else localStorage.removeItem(resumeKey(id));
+  } catch {
+    // Storage blocked or full: the next try just starts the song again.
   }
 }
 
@@ -533,6 +563,12 @@ class Uploads {
   private forget(id: string) {
     this.drop(id);
     void forgetUpload(id);
+    // A song given up on between tries leaves its half-sent job behind: that goes too.
+    const left = readResume(id);
+    if (left) {
+      writeResume(id, null);
+      void fetch(`/api/split-jobs/${left.jobId}`, { method: "DELETE" }).catch(() => {});
+    }
   }
 
   private fail(entry: Entry, error: string, at: number) {
@@ -595,17 +631,25 @@ class Uploads {
     for (;;) {
       const entry = this.entries.get(id);
       if (!entry || signal.aborted) return;
+      const savedBefore = savedBytes(id);
       try {
         await this.attempt(entry, signal);
         return;
       } catch (err) {
-        if (signal.aborted || isCancel(err)) return;
+        if (signal.aborted) return;
         const current = this.entries.get(id);
         if (!current) return;
-        const message = err instanceof Error ? err.message : "Upload failed";
-        if (isTransient(err) && current.transientFailures < AUTO_RETRIES) {
-          const wait = RETRY_DELAYS[current.transientFailures] ?? 30;
-          this.update(id, { transientFailures: current.transientFailures + 1 });
+        // "Aborted" with nobody having cancelled is a time limit somewhere
+        // inside: a failure like any other, tried again. (Taken for a
+        // cancel, the song sat at "working" for ever.)
+        const timedOut = isCancel(err);
+        const message = timedOut ? "That took too long — check your connection" : err instanceof Error ? err.message : "Upload failed";
+        // A try that got more of the song saved wasn't wasted (the next one
+        // carries on from there): it isn't held against the song.
+        const failures = savedBytes(id) > savedBefore ? 0 : current.transientFailures;
+        if ((timedOut || isTransient(err)) && failures < AUTO_RETRIES) {
+          const wait = RETRY_DELAYS[failures] ?? 30;
+          this.update(id, { transientFailures: failures + 1 });
           try {
             await countdown(wait, signal, (left) => this.update(id, { stage: { stage: "retrying", reason: message, inSeconds: left } }));
           } catch {
@@ -634,7 +678,10 @@ class Uploads {
           const queued = await queueLink(source.url, tags, report);
           name = queued.title;
         } else {
-          await queueFile(source.file, tags, report, signal);
+          await queueFile(source.file, tags, report, signal, {
+            resume: readResume(id),
+            onResume: (state) => writeResume(id, state),
+          });
         }
         // A computer in this browser that helps split can take it at once.
         splitHelper.wake();

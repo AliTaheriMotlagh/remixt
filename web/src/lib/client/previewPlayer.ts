@@ -28,20 +28,42 @@ export type PreviewTrack = {
 export type PreviewState = {
   current: PreviewTrack | null;
   playing: boolean;
+  /** Between the tap and the sound (finding the file, buffering), or stalled mid-play. */
+  loading: boolean;
+  /** Why the last stem asked for couldn't be played; gone when the next one starts. */
+  error: string | null;
   progress: number; // 0..1
   currentTime: number;
   duration: number;
 };
 
+/** A second tap this soon after the first is the same tap (a double tap), not a change of mind. */
+const DOUBLE_TAP_MS = 600;
+
 type Listener = (state: PreviewState) => void;
 
-class PreviewPlayer {
+/** What the player needs from the device's stem cache (tests give it their own). */
+type Cache = {
+  /** The stem's file, if this device keeps it. */
+  kept: (stemId: string) => Promise<Blob | null>;
+  /** Keep it for next time, when nothing more urgent wants the line. */
+  keepLater: (stemId: string) => void;
+};
+
+export class PreviewPlayer {
+  private cache: Cache;
+  constructor(cache: Cache = { kept: keptStem, keepLater }) {
+    this.cache = cache;
+  }
+
   private audio: HTMLAudioElement | null = null;
   private listeners = new Set<Listener>();
   private startListeners = new Set<() => void>();
   private state: PreviewState = {
     current: null,
     playing: false,
+    loading: false,
+    error: null,
     progress: 0,
     currentTime: 0,
     duration: 0,
@@ -65,6 +87,17 @@ class PreviewPlayer {
       audio.addEventListener("ended", () => this.stop());
       audio.addEventListener("pause", () => this.emit({ playing: false }));
       audio.addEventListener("play", () => this.emit({ playing: true }));
+      // Sound is actually coming out / it has run dry and is waiting for more.
+      audio.addEventListener("playing", () => this.emit({ loading: false }));
+      audio.addEventListener("waiting", () => this.state.current && this.emit({ loading: true }));
+      // The source gave out after it had started (the line dropped, the
+      // CDN hiccuped): carry on from the same place by the next way there.
+      audio.addEventListener("error", () => {
+        if (this.starting || !this.state.current) return;
+        const at = audio.currentTime;
+        this.source++;
+        void this.start(this.playCount, at);
+      });
       this.audio = audio;
     }
     return this.audio;
@@ -137,6 +170,10 @@ class PreviewPlayer {
     if (this.state.current?.stemId === track.stemId) {
       if (this.state.playing) {
         this.getAudio().pause();
+      } else if (this.state.loading) {
+        // Still on its way. Tapped again at once: the same tap, twice (it
+        // used to cancel the play it had just started). Later: a change of mind.
+        if (Date.now() - this.startedAt > DOUBLE_TAP_MS) this.stop();
       } else {
         this.claim();
         await this.getAudio().play().catch(() => this.stop());
@@ -148,47 +185,70 @@ class PreviewPlayer {
 
   async play(track: PreviewTrack) {
     this.claim();
-    const audio = this.getAudio();
     const playing = ++this.playCount;
-    this.emit({ current: track, progress: 0, currentTime: 0, duration: 0 });
+    this.startedAt = Date.now();
+    this.emit({ current: track, playing: false, loading: true, error: null, progress: 0, currentTime: 0, duration: 0 });
     // Kept on this device already: played from there — at once, and offline.
-    const kept = await keptStem(track.stemId);
+    const kept = await this.cache.kept(track.stemId);
     if (playing !== this.playCount) return;
-    this.setSource(kept ? this.objectUrl(kept) : `/api/audio/stem/${track.stemId}`);
-    audio.currentTime = 0;
+    // The ways to this stem, best first. The store's CDN can be blocked
+    // where this site isn't, so the last is through this app.
+    this.sources = [
+      ...(kept ? [URL.createObjectURL(playable(kept))] : []),
+      `/api/audio/stem/${track.stemId}`,
+      `/api/audio/stem/${track.stemId}?via=app`,
+    ];
+    this.source = 0;
+    if (await this.start(playing, 0)) {
+      if (track.keep && !kept) this.cache.keepLater(track.stemId);
+    }
+  }
+
+  /**
+   * Plays the current stem from `seconds` in, by the first of its sources
+   * (from `this.source` on) that works; false when none does. A copy kept
+   * on this device that won't play (the browser lost the file behind it, or
+   * can't read it) is no reason to play nothing: it's streamed instead.
+   */
+  private async start(playing: number, seconds: number): Promise<boolean> {
+    const audio = this.getAudio();
+    this.starting = true;
     try {
-      await audio.play();
-    } catch (err) {
-      if (playing !== this.playCount) return;
-      // The store's CDN can be blocked where this site isn't: through this app instead.
-      if (!kept && !(err instanceof DOMException && err.name === "NotAllowedError")) {
-        this.setSource(`/api/audio/stem/${track.stemId}?via=app`);
+      for (; this.source < this.sources.length; this.source++) {
+        this.setSource(this.sources[this.source]);
+        audio.currentTime = seconds;
         try {
           await audio.play();
-        } catch {
-          if (playing === this.playCount) this.stop();
-          return;
+          return true;
+        } catch (err) {
+          if (playing !== this.playCount) return false;
+          // The browser wants a tap first: another source won't change its mind.
+          if (err instanceof DOMException && err.name === "NotAllowedError") break;
         }
-      } else {
-        // Autoplay refusal or a stem that failed to load — don't leave the
-        // UI claiming something is playing.
-        this.stop();
-        return;
       }
+    } finally {
+      if (playing === this.playCount) this.starting = false;
     }
-    if (track.keep && !kept) void keepStem(track.stemId);
+    if (playing === this.playCount) {
+      // Don't leave the UI claiming something is playing.
+      this.stop();
+      this.emit({ error: "Couldn't play that — check your connection and try again" });
+    }
+    return false;
   }
 
   /** Bumped by every play, so a slow cache lookup can't start an older one. */
   private playCount = 0;
+  private startedAt = 0;
+  /** The ways to the current stem, and the one in use. */
+  private sources: string[] = [];
+  private source = 0;
+  /** While `start` is trying sources: their failures are its to handle, not the error event's. */
+  private starting = false;
   private url: string | null = null;
 
-  private objectUrl(blob: Blob) {
-    return URL.createObjectURL(blob);
-  }
-
   private setSource(src: string) {
-    if (this.url) URL.revokeObjectURL(this.url);
+    if (this.url && this.url !== src) URL.revokeObjectURL(this.url);
     this.url = src.startsWith("blob:") ? src : null;
     this.getAudio().src = src;
   }
@@ -205,6 +265,10 @@ class PreviewPlayer {
 
   stop() {
     this.playCount++;
+    this.starting = false;
+    // A kept copy that was lined up but never reached.
+    for (const src of this.sources) if (src.startsWith("blob:") && src !== this.url) URL.revokeObjectURL(src);
+    this.sources = [];
     if (this.audio) {
       this.audio.pause();
       this.audio.removeAttribute("src");
@@ -212,8 +276,31 @@ class PreviewPlayer {
     }
     if (this.url) URL.revokeObjectURL(this.url);
     this.url = null;
-    this.emit({ current: null, playing: false, progress: 0, currentTime: 0, duration: 0 });
+    this.emit({ current: null, playing: false, loading: false, error: null, progress: 0, currentTime: 0, duration: 0 });
   }
+
+  /** Nothing is playing or about to: resolves at once if so, else when it's so. */
+  untilQuiet(): Promise<void> {
+    const busy = () => this.state.playing || this.state.loading;
+    if (!busy()) return Promise.resolve();
+    return new Promise((resolve) => {
+      const stop = this.subscribe(() => {
+        if (busy()) return;
+        stop();
+        resolve();
+      });
+    });
+  }
+}
+
+/**
+ * A kept stem as something every browser will play. The cache keeps bare
+ * bytes, with no type — which Chrome works out for itself and Safari (so
+ * every browser on an iPhone) refuses to play: a stem played once, or
+ * opened in the Studio, then wouldn't play again. Stems are MP3s.
+ */
+export function playable(blob: Blob): Blob {
+  return blob.type ? blob : new Blob([blob], { type: "audio/mpeg" });
 }
 
 /** The stem's file, if this device keeps it (see stemFetch). */
@@ -226,19 +313,28 @@ async function keptStem(stemId: string): Promise<Blob | null> {
   }
 }
 
-/** Downloads a stem into the device's cache, once at a time per stem. */
-const keeping = new Set<string>();
-async function keepStem(stemId: string) {
-  if (keeping.has(stemId)) return;
-  keeping.add(stemId);
-  try {
+/**
+ * Keeps stems on this device for later (the Studio then opens them with no
+ * download) — one at a time, in small slices, and only while nothing is
+ * playing or loading: fetched alongside the stream, the copies took the
+ * line from the very thing being listened to, and after a few stems on a
+ * phone nothing would start at all.
+ */
+const toKeep: string[] = [];
+let keeping = false;
+function keepLater(stemId: string) {
+  if (!toKeep.includes(stemId)) toKeep.push(stemId);
+  if (keeping) return;
+  keeping = true;
+  void (async () => {
     const { fetchStem } = await import("./stemFetch");
-    await fetchStem(stemId);
-  } catch {
-    // Only the shortcut is lost: it streams again next time.
-  } finally {
-    keeping.delete(stemId);
-  }
+    const pace = { parallel: 1, slice: 512 * 1024, before: () => previewPlayer.untilQuiet() };
+    for (let id = toKeep.shift(); id; id = toKeep.shift()) {
+      // Only the shortcut is lost if it fails: it streams again next time.
+      await fetchStem(id, undefined, pace).catch(() => {});
+    }
+    keeping = false;
+  })();
 }
 
 export const previewPlayer = new PreviewPlayer();
@@ -246,6 +342,8 @@ export const previewPlayer = new PreviewPlayer();
 const SERVER_SNAPSHOT: PreviewState = {
   current: null,
   playing: false,
+  loading: false,
+  error: null,
   progress: 0,
   currentTime: 0,
   duration: 0,

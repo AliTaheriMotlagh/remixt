@@ -704,13 +704,21 @@ export type LyricSection = {
   name: string;
   /** The heading line, or the part's first line. */
   index: number;
-  /** When its first line is sung, and when the next part starts (null: not timed, or the song's end). */
+  /**
+   * When it's sung: its earliest line, and when the next part comes in
+   * after its last line (null: not timed, or nothing follows it). Read
+   * from where the lines play now, not the order they're written in — once
+   * the vocal has been rearranged (the chorus moved to the front, a verse
+   * cut out and put later) the two are different orders.
+   */
   start: number | null;
   end: number | null;
+  /** When its last line comes in (null: not timed). */
+  last: number | null;
   lines: number;
 };
 
-/** The song's parts, in order — for jumping to and looping one. */
+/** The song's parts, in the order they're written — for jumping to and looping one. */
 export function sectionsOf(lines: LyricLine[]): LyricSection[] {
   const headed = lines.some((l) => l.text && isSection(l.text));
   const out: LyricSection[] = [];
@@ -722,21 +730,23 @@ export function sectionsOf(lines: LyricLine[]): LyricSection[] {
     const breakHere = headed ? heading : !l.text;
     if (breakHere) {
       if (open && open.lines) out.push(open);
-      open = heading ? { name: sectionName(l.text), index: i, start: null, end: null, lines: 0 } : null;
+      open = heading ? { name: sectionName(l.text), index: i, start: null, end: null, last: null, lines: 0 } : null;
       continue;
     }
     if (!isSung(l)) continue;
-    if (!open) open = { name: headed ? "Intro" : `Verse ${++verse}`, index: i, start: null, end: null, lines: 0 };
+    if (!open) open = { name: headed ? "Intro" : `Verse ${++verse}`, index: i, start: null, end: null, last: null, lines: 0 };
     open.lines++;
-    if (open.start === null && l.time !== null) open.start = l.time;
+    if (l.time !== null) {
+      open.start = open.start === null ? l.time : Math.min(open.start, l.time);
+      open.last = open.last === null ? l.time : Math.max(open.last, l.time);
+    }
   }
   if (open && open.lines) out.push(open);
-  for (let k = 0; k < out.length; k++) {
-    for (let j = k + 1; j < out.length; j++) {
-      if (out[j].start !== null) {
-        out[k].end = out[j].start;
-        break;
-      }
+  for (const section of out) {
+    if (section.last === null) continue;
+    for (const other of out) {
+      if (other === section || other.start === null || other.start <= section.last) continue;
+      if (section.end === null || other.start < section.end) section.end = other.start;
     }
   }
   return out;

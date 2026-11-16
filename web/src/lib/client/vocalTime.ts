@@ -35,15 +35,22 @@ export function stemOf(lane: StudioLane, clip: LaneClip, t: number): number {
   return clip.reverse ? clip.to - into : clip.from + into;
 }
 
-const plays = (clip: LaneClip, src: number) => src >= clip.from - EDGE && src <= clip.to + EDGE;
+type Span = { from: number; to: number };
+/** The moment is in the clip, or a breath outside it. */
+const plays = (clip: Span, src: number) => src >= clip.from - EDGE && src <= clip.to + EDGE;
+/** The moment is in the clip. */
+const within = (clip: Span, src: number) => src >= clip.from && src <= clip.to;
 
 /** A line's place in a vocal: which lane and clip sing it, and when in the stem. `time` is where it last played on the timeline. */
 export type LineAnchor = { laneId: string; stemId: string; clipId: string; src: number; time: number };
 
-/** "lane|clip" for every clip of every lane — to tell clips an edit made from ones that were there. */
-export function clipKeys(lanes: StudioLane[]): Set<string> {
-  const out = new Set<string>();
-  for (const lane of lanes) for (const clip of clipsOf(lane)) out.add(`${lane.laneId}|${clipId(clip)}`);
+/**
+ * Every clip of every lane, by "lane|clip", with the stretch of its stem it
+ * plays — to tell what an edit made or changed from what was already there.
+ */
+export function clipKeys(lanes: StudioLane[]): Map<string, { from: number; to: number }> {
+  const out = new Map<string, { from: number; to: number }>();
+  for (const lane of lanes) for (const clip of clipsOf(lane)) out.set(`${lane.laneId}|${clipId(clip)}`, { from: clip.from, to: clip.to });
   return out;
 }
 
@@ -67,7 +74,10 @@ export function anchorAt(lanes: StudioLane[], t: number, rank: (lane: StudioLane
       const end = clipEnd(lane, clip);
       const gap = t < start ? start - t : t > end ? t - end : 0;
       if (gap > MAX_GAP) continue;
-      const key = [r, gap > 0 ? 1 : 0, lane.muted || clip.muted ? 1 : 0, gap];
+      // Where one clip ends as the next begins, a line is the start of what's coming, not the tail of what's been.
+      const ending = gap === 0 && end - t < 1e-3 && end - start > 1e-3 ? 1 : 0;
+      // …and where two overlap (a crossfade), of the one that came in last.
+      const key = [r, gap > 0 ? 1 : 0, lane.muted || clip.muted ? 1 : 0, ending, gap, gap === 0 ? t - start : 0];
       if (best && !before(key, best.key)) continue;
       best = { key, anchor: { laneId: lane.laneId, stemId: lane.stemId, clipId: clipId(clip), src: stemOf(lane, clip, t), time: t } };
     }
@@ -87,36 +97,62 @@ const originOf = (laneId: string) => {
 };
 
 /**
- * Where an anchored moment plays after an edit — the same clip if it
- * still plays it; else a clip the edit made that plays it (a split-off
- * half, AI Match's phrases, a section the AI redid), the one nearest where
- * it was; else carried with its clip (trimmed past it). `known` are the
- * clips there were before the edit (see clipKeys), so deleting a clip
- * doesn't send its words to an older copy elsewhere. Null when the clip
- * and its lane are gone — the line is left where it is.
+ * Where an anchored moment plays after an edit. In order:
+ *
+ *   - its own clip, if that still plays it;
+ *   - a clip the edit made, or grew to cover it, that plays it (a split-off
+ *     half, AI Match's phrases, a section the AI redid, two halves joined
+ *     again by an undo) — the one nearest where it was;
+ *   - with its own clip gone or trimmed past it, another clip that was
+ *     playing the moment all along (a copy of the chorus elsewhere): the
+ *     words go to the singing that's left — but the line stays tied to the
+ *     clip it was on, so undoing the edit brings it back;
+ *   - nobody singing it any more: carried along with its own clip, when
+ *     that was only trimmed past it.
+ *
+ * A clip counts as playing a moment a breath outside it (a line stamped
+ * just before the singing starts) only when no clip has the moment inside
+ * it: cut a vocal right before a line and the line belongs to the half
+ * that sings it, not the half that ends there. `known` are the clips there
+ * were before the edit and what each played (see clipKeys). Null when
+ * nothing plays the moment and its clip is gone — the line is left where
+ * it is.
  */
-export function placeAnchor(lanes: StudioLane[], anchor: LineAnchor, known: Set<string>): LineAnchor | null {
+export function placeAnchor(lanes: StudioLane[], anchor: LineAnchor, known: Map<string, { from: number; to: number }>): LineAnchor | null {
   const related = lanes.filter(
     (l) => isVoice(l) && (l.laneId === anchor.laneId || originOf(l.laneId) === originOf(anchor.laneId) || l.stemId === anchor.stemId)
   );
+  type Place = { lane: StudioLane; clip: LaneClip; inside: boolean; key: number[] };
   let same: { lane: StudioLane; clip: LaneClip } | null = null;
-  let made: { lane: StudioLane; clip: LaneClip; time: number; muted: boolean } | null = null;
+  let own: Place | null = null;
+  let made: Place | null = null;
+  let copy: Place | null = null;
+  const better = (a: Place, b: Place | null) => !b || before(a.key, b.key);
   for (const lane of related) {
     for (const clip of clipsOf(lane)) {
       const id = clipId(clip);
-      if (lane.laneId === anchor.laneId && id === anchor.clipId) {
-        same = { lane, clip };
-        if (plays(clip, anchor.src) && !clip.muted) return at(lane, clip, anchor.src, anchor);
+      const mine = lane.laneId === anchor.laneId && id === anchor.clipId;
+      if (mine) same = { lane, clip };
+      if (!plays(clip, anchor.src)) continue;
+      const inside = within(clip, anchor.src);
+      const muted = clip.muted || lane.muted ? 1 : 0;
+      // Best first: audible, the moment inside it, nearest where the line was.
+      const place: Place = { lane, clip, inside, key: [muted, inside ? 0 : 1, Math.abs(timelineOf(lane, clip, anchor.src) - anchor.time)] };
+      if (mine) {
+        if (!clip.muted) own = place;
         continue;
       }
-      if (known.has(`${lane.laneId}|${id}`) || !plays(clip, anchor.src)) continue;
-      const time = timelineOf(lane, clip, anchor.src);
-      const muted = !!(clip.muted || lane.muted);
-      if (!made || (made.muted && !muted) || (made.muted === muted && Math.abs(time - anchor.time) < Math.abs(made.time - anchor.time))) {
-        made = { lane, clip, time, muted };
-      }
+      const was = known.get(`${lane.laneId}|${id}`);
+      if (was && plays(was, anchor.src)) {
+        if (!muted && inside && better(place, copy)) copy = place;
+      } else if (better(place, made)) made = place;
     }
   }
+  // A clip with the moment inside it comes before any that only has it a breath outside.
+  if (own?.inside) return at(own.lane, own.clip, anchor.src, anchor);
+  if (made?.inside) return at(made.lane, made.clip, anchor.src, anchor);
+  if (copy) return { ...anchor, time: timelineOf(copy.lane, copy.clip, anchor.src) };
+  if (own) return at(own.lane, own.clip, anchor.src, anchor);
   if (made) return at(made.lane, made.clip, anchor.src, anchor);
   if (same) return at(same.lane, same.clip, anchor.src, anchor);
   return null;
@@ -124,6 +160,44 @@ export function placeAnchor(lanes: StudioLane[], anchor: LineAnchor, known: Set<
 
 function at(lane: StudioLane, clip: LaneClip, src: number, anchor: LineAnchor): LineAnchor {
   return { ...anchor, laneId: lane.laneId, stemId: lane.stemId, clipId: clipId(clip), src, time: timelineOf(lane, clip, src) };
+}
+
+/** Copies of a line closer together than this are one singing of it (a doubled voice, a harmony), not two. */
+const SAME_SINGING = 0.75;
+
+/** Somewhere a line is sung: when on the timeline, and how fast the vocal plays there (1: as recorded). */
+export type Sung = { time: number; speed: number };
+
+/**
+ * Everywhere the line at timeline second `time` is sung: there, and
+ * wherever else its moment of the vocal can be heard — a chorus pasted in
+ * again, a section the AI repeated. The sheet has the line once; someone
+ * watching a clip of the second chorus still wants its words. A line with
+ * no vocal near it is just where it is.
+ */
+export function sungAt(lanes: StudioLane[], time: number, rank?: (lane: StudioLane) => number): Sung[] {
+  const anchor = anchorAt(lanes, time, rank);
+  const speedOf = (lane: StudioLane, clip: LaneClip) => {
+    const { tempo, stretch } = speed(lane, clip);
+    return tempo * stretch;
+  };
+  const own = lanes.find((l) => l.laneId === anchor?.laneId);
+  const ownClip = own && clipsOf(own).find((c) => clipId(c) === anchor!.clipId);
+  const out: Sung[] = [{ time, speed: own && ownClip ? speedOf(own, ownClip) : 1 }];
+  if (!anchor) return out;
+  const copies: Sung[] = [];
+  for (const lane of lanes) {
+    if (!isVoice(lane) || lane.muted || lane.stemId !== anchor.stemId) continue;
+    for (const clip of clipsOf(lane)) {
+      if (clip.muted || anchor.src < clip.from || anchor.src > clip.to) continue;
+      if (lane.laneId === anchor.laneId && clipId(clip) === anchor.clipId) continue;
+      copies.push({ time: timelineOf(lane, clip, anchor.src), speed: speedOf(lane, clip) });
+    }
+  }
+  for (const copy of copies.sort((a, b) => a.time - b.time)) {
+    if (out.every((o) => Math.abs(o.time - copy.time) >= SAME_SINGING)) out.push(copy);
+  }
+  return out.sort((a, b) => a.time - b.time);
 }
 
 /** Everything about the vocal lanes that decides where their singing plays — not their level, effects or waveform. */
