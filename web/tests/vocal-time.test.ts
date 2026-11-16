@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { clipsOf, deleteClips, fitClips, moveClips, normaliseLane, splitClips, trimClipsAt, WHOLE } from "../src/lib/client/clipEdit.ts";
 import type { LaneClip, StudioLane } from "../src/lib/client/studioStore.ts";
-import { anchorAt, clipKeys, layOut, placeAnchor, placeOnStem, stemOf, timelineOf, vocalShape } from "../src/lib/client/vocalTime.ts";
+import { anchorAt, clipKeys, layOut, placeAnchor, placeOnStem, slideAlongVocal, startOnStem, stemOf, timelineOf, vocalShape } from "../src/lib/client/vocalTime.ts";
 
 function lane(id: string, opts: Partial<StudioLane> = {}): StudioLane {
   return normaliseLane({
@@ -167,5 +167,51 @@ describe("vocalShape", () => {
     const l = [lane("v")];
     assert.equal(vocalShape(l), vocalShape([{ ...l[0], volume: 0.3 }]));
     assert.notEqual(vocalShape(l), vocalShape([{ ...l[0], offsetSeconds: 1 }]));
+  });
+});
+
+describe("first line at the playhead, the rest on their words", () => {
+  // Lyrics timed to the recording: lines 4 s apart from 10 s.
+  const recording = [10, 14, 18, 22, 26, 30].map((time, i) => ({ time, text: `line ${i}` }));
+
+  test("a vocal sped up: every line lands, not just the first", () => {
+    const l = [lane("v", { offsetSeconds: 0, tempoRatio: 1.25 })];
+    // The singer's first line (10 s into the recording) plays at 8 s.
+    const placed = startOnStem(recording, l, 8)!;
+    assert.deepEqual(
+      placed.map((x) => x.time),
+      [8, 11.2, 14.4, 17.6, 20.8, 24]
+    );
+  });
+
+  test("a vocal cut into stretched phrases (AI Match)", () => {
+    const l = [
+      lane("v", {
+        offsetSeconds: 0,
+        clips: [
+          { id: "p1", from: 9, to: 17, at: 0 },
+          { id: "p2", from: 17, to: 25, at: 9, stretch: 0.9 },
+          { id: "p3", from: 25, to: 33, at: 19, stretch: 1.1 },
+        ],
+      }),
+    ];
+    const at = timelineOf(l[0], clipsOf(l[0])[0], 10);
+    const placed = startOnStem(recording, l, at)!;
+    for (const [i, line] of placed.entries()) {
+      const src = recording[i].time;
+      const clip = clipsOf(l[0]).find((c) => src >= c.from && src <= c.to)!;
+      near(line.time!, Math.round(timelineOf(l[0], clip, src) * 100) / 100);
+    }
+  });
+
+  test("timed lines slid along a sped-up vocal keep their places in the singing", () => {
+    const l = [lane("v", { offsetSeconds: 0, tempoRatio: 2 })];
+    // On the timeline: recording 10, 14, 18 → 5, 7, 9.
+    const lines = [5, 7, 9].map((time, i) => ({ time, text: `l${i}` }));
+    const slid = slideAlongVocal(lines, l, 6)!;
+    assert.deepEqual(
+      slid.map((x) => x.time),
+      [6, 8, 10]
+    );
   });
 });

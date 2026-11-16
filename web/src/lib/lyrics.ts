@@ -746,34 +746,41 @@ export function sectionsOf(lines: LyricLine[]): LyricSection[] {
  * How far to move lyrics timed to the original recording so they land on
  * the singing in `env` (a vocal stem that has been moved, trimmed or put
  * after an intro): the shift whose line starts best meet where phrases
- * start. Null when no shift lines up enough of them to trust it.
+ * start. With `scales` (e.g. 0.95…1.05), also how much faster or slower
+ * the singing is than the lyrics' timing — a version of the song a little
+ * quicker than the one the lyrics were timed to — so the last line lands
+ * as well as the first: a line at `t` goes to
+ * `pivot + (t - pivot) * scale + shift`, `pivot` being the first line's
+ * time. Null when no fit lines up enough of them to trust it.
  */
-export function alignToVoice(lines: LyricLine[], env: Envelope, { range = 60 }: { range?: number } = {}): { shift: number; matched: number; total: number } | null {
+export function alignToVoice(
+  lines: LyricLine[],
+  env: Envelope,
+  { range = 60, scales = [1] }: { range?: number; scales?: number[] } = {}
+): { shift: number; scale: number; pivot: number; matched: number; total: number } | null {
   const times = lines.filter((l) => isSung(l) && l.time !== null).map((l) => l.time!);
   const starts = voicedRuns(env).map(([s]) => s);
   if (times.length < 2 || starts.length < 2) return null;
-  const near = (t: number) => {
-    // Distance to the nearest phrase start (binary search; starts are in order).
-    let lo = 0;
-    let hi = starts.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (starts[mid] < t) lo = mid + 1;
-      else hi = mid;
-    }
-    return Math.min(Math.abs(starts[lo] - t), lo > 0 ? Math.abs(starts[lo - 1] - t) : Infinity);
-  };
-  const score = (shift: number) => times.reduce((sum, t) => sum + Math.exp(-((near(t + shift) / 0.25) ** 2)), 0);
+  const pivot = times[0];
+  const near = (t: number) => nearestGap(starts, t);
+  const score = (shift: number, scale: number) => times.reduce((sum, t) => sum + Math.exp(-((near(pivot + (t - pivot) * scale + shift) / 0.25) ** 2)), 0);
   // Coarse over the whole range, then fine around the best.
   let best = 0;
+  let bestScale = 1;
   let bestScore = -1;
   const all: number[] = [];
-  for (let s = -range; s <= range; s += 0.1) {
-    const v = score(s);
-    all.push(v);
-    if (v > bestScore + 1e-9 || (Math.abs(v - bestScore) < 1e-9 && Math.abs(s) < Math.abs(best))) {
-      bestScore = v;
-      best = s;
+  for (const scale of scales.length ? scales : [1]) {
+    for (let s = -range; s <= range; s += 0.1) {
+      const v = score(s, scale);
+      all.push(v);
+      const better =
+        v > bestScore + 1e-9 ||
+        (Math.abs(v - bestScore) < 1e-9 && Math.abs(scale - 1) + Math.abs(s) * 1e-3 < Math.abs(bestScale - 1) + Math.abs(best) * 1e-3);
+      if (better) {
+        bestScore = v;
+        best = s;
+        bestScale = scale;
+      }
     }
   }
   // A real fit stands well clear of what any shift scores: dense singing
@@ -781,14 +788,64 @@ export function alignToVoice(lines: LyricLine[], env: Envelope, { range = 60 }: 
   const mean = all.reduce((x, y) => x + y, 0) / all.length;
   const spread = Math.sqrt(all.reduce((x, y) => x + (y - mean) ** 2, 0) / all.length);
   if (spread === 0 || (bestScore - mean) / spread < 4) return null;
-  for (let s = best - 0.1; s <= best + 0.1; s += 0.01) {
-    const v = score(s);
-    if (v > bestScore) {
-      bestScore = v;
-      best = s;
+  const fineScales = scales.length > 1 ? [-0.002, -0.001, 0, 0.001, 0.002].map((d) => bestScale + d) : [bestScale];
+  const coarse = best;
+  for (const scale of fineScales) {
+    for (let s = coarse - 0.1; s <= coarse + 0.1; s += 0.01) {
+      const v = score(s, scale);
+      if (v > bestScore) {
+        bestScore = v;
+        best = s;
+        bestScale = scale;
+      }
     }
   }
-  const matched = times.filter((t) => near(t + best) <= 0.35).length;
+  const matched = times.filter((t) => near(pivot + (t - pivot) * bestScale + best) <= 0.35).length;
   if (matched < Math.max(2, Math.ceil(times.length * 0.4))) return null;
-  return { shift: round(best), matched, total: times.length };
+  return { shift: round(best), scale: Math.round(bestScale * 10000) / 10000, pivot, matched, total: times.length };
+}
+
+/** Distance from `t` to the nearest of `starts` (in order). */
+function nearestGap(starts: number[], t: number) {
+  let lo = 0;
+  let hi = starts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (starts[mid] < t) lo = mid + 1;
+    else hi = mid;
+  }
+  return Math.min(Math.abs(starts[lo] - t), lo > 0 ? Math.abs(starts[lo - 1] - t) : Infinity);
+}
+
+/** The lines moved by a fit from alignToVoice. */
+export function applyFit(lines: LyricLine[], fit: { shift: number; scale: number; pivot: number }): LyricLine[] {
+  return lines.map((l) => (l.time === null ? l : { ...l, time: Math.max(0, fit.pivot + (l.time - fit.pivot) * fit.scale + fit.shift) }));
+}
+
+/**
+ * Each sung line put on the start of the phrase it's closest to, when one
+ * starts within `max` seconds — the last bit of lining up, line by line,
+ * after the whole sheet has been fitted. Lines stay in order.
+ */
+export function snapToPhrases(lines: LyricLine[], env: Envelope, max = 0.3): LyricLine[] {
+  const starts = voicedRuns(env).map(([s]) => s);
+  if (!starts.length) return lines;
+  let last = -Infinity;
+  return lines.map((l) => {
+    if (l.time === null || !isSung(l)) return l;
+    let time = l.time;
+    let lo = 0;
+    let hi = starts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (starts[mid] < time) lo = mid + 1;
+      else hi = mid;
+    }
+    const candidates = [starts[lo], lo > 0 ? starts[lo - 1] : undefined].filter((x): x is number => x !== undefined && x > last + MIN_GAP);
+    const nearest = candidates.sort((a, b) => Math.abs(a - time) - Math.abs(b - time))[0];
+    if (nearest !== undefined && Math.abs(nearest - time) <= max) time = nearest;
+    time = Math.max(time, last + MIN_GAP);
+    last = time;
+    return { ...l, time };
+  });
 }

@@ -6,7 +6,7 @@
 
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { alignToVoice, nudgeLine, retimeLine, sectionsOf, type Envelope, type LyricLine } from "../src/lib/lyrics.ts";
+import { alignToVoice, applyFit, nudgeLine, snapToPhrases, retimeLine, sectionsOf, type Envelope, type LyricLine } from "../src/lib/lyrics.ts";
 import { geniusEmbedHtml, geniusSongId, lyricsFromGeniusEmbed } from "../src/lib/lyricsImport.ts";
 
 const sheet = (): LyricLine[] => [
@@ -105,6 +105,21 @@ describe("alignToVoice", () => {
   test("works when the vocal comes in earlier, too", () => {
     const fit = alignToVoice(lines, voice(original.map((t) => t - 4)));
     assert.ok(fit && Math.abs(fit.shift + 4) < 0.03);
+  });
+
+  test("finds a version sung faster than the lyrics were timed to, so the last line lands too", () => {
+    const sung = original.map((t) => 8 + (t - 8) / 1.04 + 3);
+    const scales = Array.from({ length: 25 }, (_, i) => 0.94 + i * 0.005);
+    const fit = alignToVoice(lines, voice(sung), { scales });
+    assert.ok(fit);
+    const placed = applyFit(lines, fit);
+    for (const [i, line] of placed.entries()) assert.ok(Math.abs(line.time! - sung[i]) < 0.1, `line ${i}: ${line.time} vs ${sung[i]}`);
+  });
+
+  test("each line set on the phrase it's nearest", () => {
+    const off = original.map((t, i) => ({ time: t + (i % 2 ? 0.2 : -0.15), text: `line ${i}` }));
+    const snapped = snapToPhrases(off, voice(original));
+    for (const [i, line] of snapped.entries()) assert.ok(Math.abs(line.time! - original[i]) < 0.03, `line ${i}: ${line.time}`);
   });
 
   test("gives up on singing that doesn't follow the lines", () => {

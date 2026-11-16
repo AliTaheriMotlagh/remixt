@@ -40,6 +40,7 @@ import {
 import { audioEngine } from "@/lib/client/audioEngine";
 import { browserKey, savedModelChoice, savedProvider } from "@/lib/client/coproducerChat";
 import { activeSheet, useLyrics } from "@/lib/client/lyricsStore";
+import { firstLineAt } from "@/lib/client/lyricsFollow";
 import { autoTimeSheet, timeFromLibrary, timeFromVoice, untimed, vocalLanes } from "@/lib/client/lyricsSources";
 import { laneName, useStudioStore } from "@/lib/client/studioStore";
 import { useStudioView } from "@/lib/client/studioView";
@@ -64,7 +65,6 @@ import {
   shiftLines,
   snapLines,
   spreadOverBars,
-  startAt,
   syllableTarget,
   type LineFit,
   type LyricLine,
@@ -634,7 +634,7 @@ function FitTools({ lines }: { lines: LyricLine[] }) {
         </div>
         <button
           disabled={!synced}
-          onClick={() => setLines(startAt(lines, useStudioStore.getState().playhead))}
+          onClick={() => setLines(firstLineAt(lines, activeSheet(useLyrics.getState()), useStudioStore.getState().playhead))}
           className={small}
           title="Move the whole sheet so its first line starts at the playhead"
         >
@@ -940,7 +940,7 @@ function SingTab({ lines, onEdit, onRecord, stage = false }: { lines: LyricLine[
           <div className="flex gap-1.5">
             <button
               onClick={() => {
-                setLines(startAt(lines, useStudioStore.getState().playhead));
+                setLines(firstLineAt(lines, sheet, useStudioStore.getState().playhead));
                 markAligned();
               }}
               className="h-8 rounded-lg bg-beat px-2.5 font-semibold text-white hover:opacity-90 max-lg:h-9"

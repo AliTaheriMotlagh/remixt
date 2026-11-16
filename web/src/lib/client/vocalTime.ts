@@ -183,3 +183,55 @@ export function layOut(lane: StudioLane, stem: { values: ArrayLike<number>; step
   }
   return { values, start, step: 1 / rate };
 }
+
+/** The vocal lane singing at timeline second `t` (or a breath from it), the one `rank` puts first, and the stem moment there. */
+export function vocalAt(lanes: StudioLane[], t: number, rank?: (lane: StudioLane) => number): { lane: StudioLane; src: number } | null {
+  const a = anchorAt(lanes, t, rank);
+  const lane = a && lanes.find((l) => l.laneId === a.laneId);
+  return lane ? { lane, src: a.src } : null;
+}
+
+/**
+ * Lines timed to a recording (seconds into its stem), moved along it so
+ * the first timed line is sung at timeline second `at` in `lane`, and every
+ * other line keeps its place in the recording — so with the vocal sped up,
+ * cut up or stretched (AI Match), each line still lands on its words, not
+ * just the first. Null when `lane` doesn't sing near `at`.
+ */
+export function startOnStem(lines: LyricLine[], lanes: StudioLane[], at: number, rank?: (lane: StudioLane) => number): LyricLine[] | null {
+  const first = lines.find((l) => l.time !== null)?.time;
+  const here = vocalAt(lanes, at, rank);
+  if (first === undefined || first === null || !here) return null;
+  const shift = here.src - first;
+  return placeOnStem(
+    lines.map((l) => (l.time === null ? l : { ...l, time: l.time + shift })),
+    here.lane
+  );
+}
+
+/**
+ * Lines timed on the timeline, moved together so the first timed one is at
+ * `at` — along the vocal they're sung on (each keeps its distance from the
+ * first in the recording, so they stay on their words however the vocal is
+ * cut or stretched). A line with no vocal under it moves as far as the
+ * first one does.
+ */
+export function slideAlongVocal(lines: LyricLine[], lanes: StudioLane[], at: number, rank?: (lane: StudioLane) => number): LyricLine[] | null {
+  const firstIndex = lines.findIndex((l) => l.time !== null);
+  if (firstIndex < 0) return null;
+  const firstTime = lines[firstIndex].time!;
+  const delta = at - firstTime;
+  const from = anchorAt(lanes, firstTime, rank);
+  const to = vocalAt(lanes, at, rank);
+  if (!from || !to || to.lane.laneId !== from.laneId) return null;
+  const lane = to.lane;
+  const shift = to.src - from.src;
+  const prefer = (l: StudioLane) => (l.laneId === lane.laneId ? 0 : 1);
+  return lines.map((line) => {
+    if (line.time === null) return line;
+    const a = anchorAt([lane], line.time, prefer);
+    if (!a) return { ...line, time: round(Math.max(0, line.time + delta)) };
+    const placed = placeOnStem([{ ...line, time: a.src + shift }], lane)[0];
+    return placed.time === null ? { ...line, time: round(Math.max(0, line.time + delta)) } : placed;
+  });
+}

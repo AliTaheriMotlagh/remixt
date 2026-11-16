@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect } from "react";
-import { parseLyrics, serializeLyrics, splitSongTitle } from "@/lib/lyrics";
+import { parseLyrics, serializeLyrics, splitSongTitle, startAt, type LyricLine } from "@/lib/lyrics";
 import { activeSheet, useLyrics, type LyricSheet } from "./lyricsStore";
 import { isTakeLane } from "./lyricsSources";
 import { songKey } from "./mixSongs";
 import { useStudioStore, type StudioLane } from "./studioStore";
-import { anchorAt, clipKeys, placeAnchor, vocalShape, type LineAnchor } from "./vocalTime";
+import { anchorAt, clipKeys, placeAnchor, slideAlongVocal, startOnStem, vocalShape, type LineAnchor } from "./vocalTime";
 
 // The words stay on the singing. Each timed line is tied to the moment of
 // the vocal it's sung on (lane, clip, seconds into the stem); when the
@@ -15,7 +15,7 @@ import { anchorAt, clipKeys, placeAnchor, vocalShape, type LineAnchor } from "./
 // wherever its moment plays now. Lines with no vocal near them stay put.
 
 /** Which vocal a sheet's words are of, best first: the song it was found for, a take for words written here. */
-function rankFor(sheet: LyricSheet): (lane: StudioLane) => number {
+export function rankFor(sheet: Pick<LyricSheet, "source" | "song">): (lane: StudioLane) => number {
   const own = sheet.source === "own" || sheet.source === "ai";
   return (lane) => {
     const take = isTakeLane(lane);
@@ -46,7 +46,8 @@ export function startLyricsFollow(): () => void {
     if (shape === vocalShape(previous.lanes)) return;
     const lyrics = useLyrics.getState();
     const sheet = activeSheet(lyrics);
-    if (!sheet) return;
+    // Still timed to the original recording (not lined up with this mix yet): those are moments of the recording, not of the timeline.
+    if (!sheet || ((sheet.source === "library" || sheet.source === "web") && !sheet.aligned)) return;
     if (sheet.id !== sheetId) {
       anchors = new Map();
       sheetId = sheet.id;
@@ -85,4 +86,19 @@ export function startLyricsFollow(): () => void {
 /** Keeps the open lyrics on the vocals while the Studio is open. */
 export function useLyricsFollowVocals() {
   useEffect(() => startLyricsFollow(), []);
+}
+
+/**
+ * The sheet moved so its first line comes in at `at` (the playhead) —
+ * along the vocal, so the other lines land on their words too, however
+ * the vocal has been sped up, cut or stretched. Lyrics still timed to the
+ * original recording are read as moments of it; timed ones keep their
+ * places in the singing. With no vocal at `at`, every line moves as far
+ * as the first.
+ */
+export function firstLineAt(lines: LyricLine[], sheet: Pick<LyricSheet, "source" | "song" | "aligned"> | null, at: number): LyricLine[] {
+  const lanes = useStudioStore.getState().lanes;
+  const rank = sheet ? rankFor(sheet) : undefined;
+  const original = !!sheet && (sheet.source === "library" || sheet.source === "web") && !sheet.aligned;
+  return (original ? startOnStem(lines, lanes, at, rank) : slideAlongVocal(lines, lanes, at, rank)) ?? startAt(lines, at);
 }

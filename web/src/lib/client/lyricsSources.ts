@@ -14,7 +14,8 @@ import {
   parseLyrics,
   plainText,
   serializeLyrics,
-  shiftLines,
+  applyFit,
+  snapToPhrases,
   splitSongTitle,
   type Envelope,
   type LyricLine,
@@ -122,12 +123,12 @@ export function vocalLanes(lanes: StudioLane[]): StudioLane[] {
 const RATE = 50;
 
 /**
- * A lane's loudness on the timeline, 50 times a second, as it plays in
- * the mix — through its clips (moved, trimmed, stretched, cut up by the
- * AI), so timing from it lands on the singing as edited. From its decoded
- * audio, or — when that isn't loaded — the waveform it draws (coarser).
+ * A vocal's loudness through its recording, 50 times a second (seconds
+ * into the stem, whatever has been done to it in the mix). From its
+ * decoded audio, or — when that isn't loaded — the waveform it draws
+ * (coarser).
  */
-export async function laneEnvelope(lane: StudioLane): Promise<Envelope> {
+export async function stemEnvelope(lane: StudioLane): Promise<Envelope> {
   let buffer: AudioBuffer | null = null;
   try {
     await audioEngine.ensureLane(lane.laneId, lane.stemId);
@@ -137,7 +138,7 @@ export async function laneEnvelope(lane: StudioLane): Promise<Envelope> {
   }
   if (!buffer) {
     const peaks = lane.peaks;
-    return layOut(lane, { values: peaks, step: lane.originalDuration / Math.max(1, peaks.length) }, RATE);
+    return { values: peaks, start: 0, step: lane.originalDuration / Math.max(1, peaks.length) };
   }
   const data = buffer.getChannelData(0);
   const size = Math.max(1, Math.floor(buffer.sampleRate / RATE));
@@ -148,7 +149,16 @@ export async function laneEnvelope(lane: StudioLane): Promise<Envelope> {
     for (let i = b * size; i < (b + 1) * size; i += 4) sum += data[i] * data[i];
     values[b] = Math.sqrt(sum / (size / 4));
   }
-  return layOut(lane, { values, step: size / buffer.sampleRate }, RATE);
+  return { values, start: 0, step: size / buffer.sampleRate };
+}
+
+/**
+ * A lane's loudness on the timeline, 50 times a second, as it plays in
+ * the mix — through its clips (moved, trimmed, stretched, cut up by the
+ * AI), so timing from it lands on the singing as edited.
+ */
+export async function laneEnvelope(lane: StudioLane): Promise<Envelope> {
+  return layOut(lane, await stemEnvelope(lane), RATE);
 }
 
 /** The mix's loudness at `rate` points a second, for drawing behind the lyrics: the lanes' waveforms, laid where they play. */
@@ -296,11 +306,23 @@ export async function timeFromVoice(lines: LyricLine[], lane: StudioLane): Promi
   return autoTime(lines, env, { from: lane.offsetSeconds, to: laneEnd(lane) });
 }
 
-/** Timed lines moved onto where a vocal lane sings them (see lyrics.alignToVoice). */
+/** How much quicker or slower than the lyrics' timing a recording may be sung (another version of the song). */
+const SCALES = Array.from({ length: 25 }, (_, i) => Math.round((0.94 + i * 0.005) * 1000) / 1000);
+
+/**
+ * Lines timed to the song's recording put where a vocal lane sings them.
+ * Lined up against the vocal's own recording — found where the singing
+ * starts, at the speed it's sung, each line then set on its phrase — and
+ * only then put on the timeline through the lane's clips. So with the vocal
+ * moved, sped up, or cut up and stretched (AI Match), every line lands on
+ * its words, not just the first.
+ */
 export async function alignWithVoice(lines: LyricLine[], lane: StudioLane): Promise<{ lines: LyricLine[]; matched: number; total: number } | null> {
-  const env = await laneEnvelope(lane);
-  const fit = alignToVoice(lines, env);
-  return fit ? { lines: Math.abs(fit.shift) < 0.02 ? lines : shiftLines(lines, fit.shift), matched: fit.matched, total: fit.total } : null;
+  const env = await stemEnvelope(lane);
+  const fit = alignToVoice(lines, env, { scales: SCALES });
+  if (!fit) return null;
+  const inRecording = snapToPhrases(applyFit(lines, fit), env);
+  return { lines: placeOnStem(inRecording, lane), matched: fit.matched, total: fit.total };
 }
 
 /** How a sheet got its times: kept as they came, borrowed from the library's timed copy, heard in the vocals — or none found. */
