@@ -31,6 +31,7 @@ import { detectMissingKeys, listenForBeats } from "@/lib/client/autoMatch";
 import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/remixLanes";
 import { useStudioStore } from "@/lib/client/studioStore";
 import { useStudioView } from "@/lib/client/studioView";
+import { useLyricsFollowVocals } from "@/lib/client/lyricsFollow";
 import { useLyricsFollowMix } from "@/lib/client/mixSongs";
 import { importHistory, resetHistory, undo } from "@/lib/client/studioHistory";
 import {
@@ -74,6 +75,8 @@ export default function Studio({ user }: { user: User | null }) {
   }, [userId]);
   // Found lyrics go with their song: a new song in the mix brings its own.
   useLyricsFollowMix();
+  // Timed words stay on the singing when the vocals are edited (by hand or by the AI).
+  useLyricsFollowVocals();
 
   // An invite link (/studio?join=<code>): join, then open the session.
   useEffect(() => {

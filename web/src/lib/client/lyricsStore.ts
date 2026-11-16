@@ -162,6 +162,12 @@ type LyricsState = {
   nudge: (index: number, delta: number) => void;
   /** Line `index` untimed. */
   untime: (index: number) => void;
+  /**
+   * The open sheet's times carried along with an edit to the vocals (and
+   * the versions Undo and Redo go back to, so they land on the singing
+   * too). Not an undo step of its own: undoing the edit brings them back.
+   */
+  follow: (text: string, past: string[], future: string[]) => void;
 };
 
 function persist(sheets: LyricSheet[], activeId: string | null) {
@@ -367,6 +373,10 @@ export const useLyrics = create<LyricsState>((set, get) => {
       const { lines } = get();
       if (lines[index]?.time === null) return;
       commit(serializeLyrics(lines.map((l, i) => (i === index ? { ...l, time: null } : l))), true);
+    },
+    follow: (text, past, future) => {
+      commit(text, false);
+      set({ past, future });
     },
   };
 });

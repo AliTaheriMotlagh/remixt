@@ -8,7 +8,8 @@ import { mixSongFor, sheetFitsMix, useMixSongs, type MixSong } from "@/lib/clien
 import { bringSongIn, useBringing } from "@/lib/client/songImport";
 import { useStudioStore } from "@/lib/client/studioStore";
 import { useStudioView } from "@/lib/client/studioView";
-import { formatClock, isSung, isSynced, parseLyrics, placeOnLane, serializeLyrics, splitSongTitle, type LyricsPage, type LyricsResult } from "@/lib/lyrics";
+import { placeOnStem } from "@/lib/client/vocalTime";
+import { formatClock, isSung, isSynced, parseLyrics, serializeLyrics, splitSongTitle, type LyricsPage, type LyricsResult } from "@/lib/lyrics";
 import { isLyricsLink, lyricsFromFile, lyricsFromHtml, lyricsLinkFrom, looksLikeHtml, type ImportedLyrics } from "@/lib/lyricsImport";
 import type { MusicPage } from "@/lib/musicPages";
 
@@ -364,7 +365,7 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
     let text = result.synced ?? result.plain ?? "";
     // The same recording as a lane in the mix: its times are put where that lane plays.
     const lane = result.synced ? laneOf(result, useStudioStore.getState().lanes) : null;
-    if (lane) text = serializeLyrics(placeOnLane(parseLyrics(text), lane.offsetSeconds, lane.tempoRatio));
+    if (lane) text = serializeLyrics(placeOnStem(parseLyrics(text), lane));
     await addTimed({ title: result.title, artist: result.artist, text, source: "" }, "library", { aligned: !!lane });
   }
 

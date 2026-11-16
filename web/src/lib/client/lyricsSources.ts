@@ -2,6 +2,7 @@
 
 import { audioEngine } from "./audioEngine";
 import { useStudioStore, type StudioLane } from "./studioStore";
+import { layOut, placeOnStem } from "./vocalTime";
 import {
   alignToVoice,
   autoTime,
@@ -11,7 +12,6 @@ import {
   isSynced,
   lineSimilarity,
   parseLyrics,
-  placeOnLane,
   plainText,
   serializeLyrics,
   shiftLines,
@@ -78,7 +78,9 @@ export async function findTimedVersion(title: string, artist: string, duration?:
 /** The mix lane playing a recording this long (within a few seconds) — the song the lyrics are timed to — if any. */
 export function laneOfRecording(result: { duration: number | null }, lanes: StudioLane[]) {
   if (!result.duration) return null;
-  return lanes.find((l) => l.artistName !== "You" && !l.clips && Math.abs(l.originalDuration - result.duration!) <= 3) ?? null;
+  const same = lanes.filter((l) => l.artistName !== "You" && Math.abs(l.originalDuration - result.duration!) <= 3);
+  // The vocal first: lyrics are its words, wherever its clips have been put.
+  return same.find((l) => l.kind === "vocals") ?? same[0] ?? null;
 }
 
 /**
@@ -97,13 +99,13 @@ export async function timeFromLibrary(
   // Times already there are replaced: this is asked for on purpose.
   const plain = isSynced(words) ? words.map((l) => ({ ...l, time: null })) : words;
   const lanes = useStudioStore.getState().lanes;
-  const song = lanes.find((l) => l.artistName !== "You" && !l.clips);
+  const song = lanes.find((l) => l.artistName !== "You");
   const timed = await findTimedVersion(title, artist, song?.originalDuration);
   if (!timed) return null;
   const borrowed = borrowTimes(plain, timed.lines);
   if (!borrowed) return null;
   const lane = laneOfRecording(timed, lanes);
-  const lines = lane ? placeOnLane(borrowed.lines, lane.offsetSeconds, lane.tempoRatio) : borrowed.lines;
+  const lines = lane ? placeOnStem(borrowed.lines, lane) : borrowed.lines;
   return { text: serializeLyrics(lines), aligned: !!lane, matched: borrowed.matched, total: borrowed.total };
 }
 
@@ -112,19 +114,20 @@ export function isTakeLane(lane: Pick<StudioLane, "kind" | "artistName" | "track
   return lane.kind === "vocals" && (lane.artistName === "You" || /— take \d+|^studio vocal/i.test(lane.trackTitle));
 }
 
-/** Vocal lanes in the mix whose singing can time lyrics: the song's own vocal stem, or a take. */
+/** Vocal lanes in the mix whose singing can time lyrics: the song's own vocal stem, or a take — as arranged, clips and all. */
 export function vocalLanes(lanes: StudioLane[]): StudioLane[] {
-  return lanes.filter((l) => l.kind === "vocals" && !l.clips && l.originalDuration > 0);
+  return lanes.filter((l) => l.kind === "vocals" && l.originalDuration > 0);
 }
 
 const RATE = 50;
 
 /**
- * A lane's loudness on the timeline, 50 times a second, from its decoded
- * audio — or, when that isn't loaded, from the waveform it draws (coarser).
+ * A lane's loudness on the timeline, 50 times a second, as it plays in
+ * the mix — through its clips (moved, trimmed, stretched, cut up by the
+ * AI), so timing from it lands on the singing as edited. From its decoded
+ * audio, or — when that isn't loaded — the waveform it draws (coarser).
  */
 export async function laneEnvelope(lane: StudioLane): Promise<Envelope> {
-  const tempo = lane.tempoRatio > 0 ? lane.tempoRatio : 1;
   let buffer: AudioBuffer | null = null;
   try {
     await audioEngine.ensureLane(lane.laneId, lane.stemId);
@@ -134,7 +137,7 @@ export async function laneEnvelope(lane: StudioLane): Promise<Envelope> {
   }
   if (!buffer) {
     const peaks = lane.peaks;
-    return { values: peaks, start: lane.offsetSeconds, step: lane.originalDuration / Math.max(1, peaks.length) / tempo };
+    return layOut(lane, { values: peaks, step: lane.originalDuration / Math.max(1, peaks.length) }, RATE);
   }
   const data = buffer.getChannelData(0);
   const size = Math.max(1, Math.floor(buffer.sampleRate / RATE));
@@ -145,7 +148,7 @@ export async function laneEnvelope(lane: StudioLane): Promise<Envelope> {
     for (let i = b * size; i < (b + 1) * size; i += 4) sum += data[i] * data[i];
     values[b] = Math.sqrt(sum / (size / 4));
   }
-  return { values, start: lane.offsetSeconds, step: size / buffer.sampleRate / tempo };
+  return layOut(lane, { values, step: size / buffer.sampleRate }, RATE);
 }
 
 /** The mix's loudness at `rate` points a second, for drawing behind the lyrics: the lanes' waveforms, laid where they play. */
@@ -382,7 +385,7 @@ export async function autoFindLyrics(song: { song: string; artist: string; lane:
     // Timed to the recording this lane plays: put where that lane plays in the mix, at its speed.
     const lane = laneOfRecording(pick, currentLanes());
     if (lane) {
-      const lines = placeOnLane(parseLyrics(pick.synced), lane.offsetSeconds, lane.tempoRatio);
+      const lines = placeOnStem(parseLyrics(pick.synced), lane);
       return { ...named, text: serializeLyrics(lines), how: "library", aligned: true, note: `Timed lyrics found — lined up with “${lane.name?.trim() || splitSongTitle(lane.trackTitle).song}”` };
     }
     const timed = await autoTimeSheet(pick.synced, named, onStep);
