@@ -30,6 +30,7 @@ import {
   Puzzle,
   Radio,
   Search,
+  Shuffle,
   SlidersHorizontal,
   SlidersVertical,
   Sparkles,
@@ -55,6 +56,7 @@ import {
   leadOf,
   mixSignature,
   prepareSession,
+  PRO_MIX_ID,
   rebaseSession,
   reworkIdeas,
   stretchKeyIdea,
@@ -93,13 +95,16 @@ import { clock, isWhole, useAiScope, type Scope } from "@/lib/client/aiScope";
 import { bestVersions, scoreMix, scoreWord } from "@/lib/client/mixScore";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { laneName, useStudioStore, type StudioLane } from "@/lib/client/studioStore";
-import { DEFAULT_TIMING, loadKeepWhole, loadSync, loadTiming, saveKeepWhole, saveSync, saveTiming, type Timing, type Vibe } from "@/lib/client/aiControl";
+import { DEFAULT_TIMING, loadKeepWhole, loadProMix, loadSync, loadTiming, saveKeepWhole, saveProMix, saveSync, saveTiming, type Timing, type Vibe } from "@/lib/client/aiControl";
 import AiScopeBar from "./AiScopeBar";
 import CoProducer from "./CoProducer";
 import MatchFinder from "./MatchFinder";
 import { useStudioView, type AiTab } from "@/lib/client/studioView";
 import { useKeepScreenOn } from "@/lib/client/wakeLock";
 import DropMap from "./ai/DropMap";
+import EngineerCard from "./ai/EngineerCard";
+import MashupMap from "./ai/MashupMap";
+import { mashableSongs } from "@/lib/client/mashup";
 import { Engines, FineTune, MasterIt } from "./ai/extras";
 import HarmonyCard from "./ai/HarmonyCard";
 import LineSync from "./ai/LineSync";
@@ -118,7 +123,12 @@ import WhatHappened from "./ai/WhatHappened";
 //   Timing   — when the vocal comes in, cutting into lines, gaps, song shape
 //   Drop     — the beat's energy and drop, and the moments made around it
 //   Harmony  — is it in tune (measured, note by note), key fixes, harmonies
-//   Style    — whole styles, sounds, mastering, fine-tuning
+//   Style    — whole styles, the mix engineer (Pro mix, measured, with
+//              pictures of what it did), sounds, mastering to a loudness
+//              target, fine-tuning
+//   Mashup   — with two or more songs in the mix: one's vocal over the
+//              other's beat, a duet taking turns, a DJ blend from one into
+//              the next, and a map of who plays when
 //   Ask AI   — a co-producer to talk to
 //
 // "What happened" says exactly what's changed — in a sentence per line, a
@@ -153,6 +163,7 @@ const TABS: { id: AiTab; label: string; icon: LucideIcon }[] = [
   { id: "drop", label: "Drop", icon: Zap },
   { id: "harmony", label: "Harmony", icon: Music },
   { id: "style", label: "Style", icon: Palette },
+  { id: "mashup", label: "Mashup", icon: Shuffle },
   { id: "ask", label: "Ask AI", icon: MessageCircle },
 ];
 
@@ -177,6 +188,7 @@ const IN_TAB: Record<AiTab, (i: Idea) => boolean> = {
   drop: (i) => i.kind === "moment" && !isLayer(i),
   harmony: (i) => i.id === "key-part" || isLayer(i) || i.id.startsWith("tune:"),
   style: (i) => i.kind === "full" || i.id.startsWith("sound-") || i.id === "fix-vocal-clash",
+  mashup: (i) => i.id.startsWith("mash-"),
   // The co-producer's own hands-on changes.
   ask: (i) => !!i.edits && i.id !== "key-part" && !i.id.startsWith("tune:"),
 };
@@ -349,15 +361,17 @@ export default function AiProducer() {
   const [keptVibes, setKeptVibes] = useState<Vibe[]>([]);
   /** Keep tracks whole: the AI never cuts them into clips. Read after mount (it's remembered per browser). */
   const [keepWhole, setKeepWhole] = useState(false);
+  /** Styles and sounds engineered from measurement (see IdeaOptions.proMix). Read after mount. */
+  const [proMix, setProMix] = useState(true);
   /** Who leads (a LEAD_SYNCS template every idea uses, see IdeaOptions.sync). */
   const [syncId, setSyncId] = useState("perfect");
   /** When the vocal comes in, and whether long gaps are closed. */
   const [timing, setTiming] = useState<Timing>(DEFAULT_TIMING);
   /** What the ideas are worked out with right now — read by a listen that started before a switch. */
-  const options = useRef({ keepWhole, sync: syncId, ...timing });
+  const options = useRef({ keepWhole, proMix, sync: syncId, ...timing });
   useEffect(() => {
-    options.current = { keepWhole, sync: syncId, ...timing };
-  }, [keepWhole, syncId, timing]);
+    options.current = { keepWhole, proMix, sync: syncId, ...timing };
+  }, [keepWhole, proMix, syncId, timing]);
   /** The control being worked on (an idea's id, "whole", "surprise"…), for its spinner; one at a time. */
   const [working, setWorking] = useState<string | null>(null);
   const workingRef = useRef(false);
@@ -382,6 +396,7 @@ export default function AiProducer() {
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect -- localStorage only exists after mount */
     setKeepWhole(loadKeepWhole());
+    setProMix(loadProMix());
     // The ready-made timing syncs are a "who leads" sync with timing of their own now.
     const saved = loadSync();
     const template = SYNC_TEMPLATES.find((t) => t.id === saved);
@@ -719,6 +734,15 @@ export default function AiProducer() {
       const done = applyOptions({ keepWhole: whole });
       if (done && done.on.length < before) notify("Some ideas only work by cutting the vocal — they're off while tracks are kept whole");
     });
+  }
+
+  /** The engineer on the styles and sounds, or their own sound alone: everything on is worked out again that way. */
+  function chooseProMix(on: boolean) {
+    if (on === proMix || !session || workingRef.current) return;
+    setProMix(on);
+    saveProMix(on);
+    options.current = { ...options.current, proMix: on };
+    soon("pro-mix", () => void applyOptions({ proMix: on }));
   }
 
   /**
@@ -1064,7 +1088,11 @@ export default function AiProducer() {
       moreMoments: ideas.filter((i) => i.kind === "moment" && !isLayer(i) && !GROUPED.has(i.id)),
       layers: ideas.filter(isLayer),
       styles: ranked(ideas.filter((i) => i.kind === "full")),
-      sounds: ideas.filter((i) => i.id.startsWith("sound-")),
+      sounds: ideas.filter((i) => i.id.startsWith("sound-") && i.id !== PRO_MIX_ID),
+      pro: byId.get(PRO_MIX_ID),
+      swaps: ideas.filter((i) => i.id.startsWith("mash-swap:")),
+      duets: ideas.filter((i) => i.id.startsWith("mash-duet:")),
+      blends: ideas.filter((i) => i.id.startsWith("mash-blend:")),
       cleanUp: ideas.filter((i) => i.id === "fix-vocal-clash"),
     };
   }, [ideas, personaId]);
@@ -1111,6 +1139,9 @@ export default function AiProducer() {
   const tune = trial?.ideas.find((i) => i.id.startsWith("tune:"));
   const syncOn = trying.find((i) => i.kind === "sync");
   const leaderIdea = lists.byId.get(`sync-${syncId}`);
+  const proOn = onIds.has(PRO_MIX_ID);
+  const songCount = mashableSongs(baseLanes).length;
+  const proPlan = (proOn ? trying.find((i) => i.id === PRO_MIX_ID)?.engineer : null) ?? lists.pro?.engineer ?? null;
 
   if (!open) return null;
 
@@ -1230,7 +1261,7 @@ export default function AiProducer() {
 
         {(ready || (!busy && lanes.length > 0)) && (
           <nav className={`flex shrink-0 gap-0.5 overflow-x-auto border-b ${sheet === "mini" ? "max-lg:hidden" : ""} border-border px-1.5 pb-1.5 sm:px-2 sm:pb-2`} aria-label="AI producer sections">
-            {TABS.map((t) => {
+            {TABS.filter((t) => t.id !== "mashup" || songCount >= 2 || tab === "mashup").map((t) => {
               const count = onIn(t.id);
               const here = tab === t.id && !explaining;
               return (
@@ -1407,6 +1438,27 @@ export default function AiProducer() {
                     <p className="line-clamp-2 text-[10.5px] leading-snug text-white/85">{autoOn ? lists.auto.short || "Every fix on" : "Speed, timing, key and volumes — every fix at once"}</p>
                   </div>
                   <Switch on={autoOn} onChange={act.fixAll} label={`Make it sound good: ${autoOn ? "on" : "off"}`} busy={working === lists.auto.id} disabled={!fits(lists.auto) || (working !== null && working !== lists.auto.id)} />
+                </div>
+              )}
+
+              {lists.pro && (
+                <div className={`flex items-center gap-3 rounded-2xl border p-3 transition-colors ${proOn ? "border-brand bg-brand/15" : "border-border bg-surface"}`}>
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand/20 text-xl text-brand-strong">
+                    {working === PRO_MIX_ID ? <Loader2 className="animate-spin" /> : <SlidersHorizontal />}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[13px] font-bold">Pro mix</p>
+                    <p className="line-clamp-2 text-[10.5px] leading-snug text-muted">
+                      {proOn ? "Every line measured and mixed — see what it did on the Style tab" : "Measured EQ, levels and space on every line — on top of the fixes"}
+                    </p>
+                  </div>
+                  <Switch
+                    on={proOn}
+                    onChange={() => act.toggle(lists.pro!)}
+                    label={`Pro mix: ${proOn ? "on" : "off"}`}
+                    busy={working === PRO_MIX_ID}
+                    disabled={!fits(lists.pro) || (working !== null && working !== PRO_MIX_ID)}
+                  />
                 </div>
               )}
 
@@ -1610,15 +1662,54 @@ export default function AiProducer() {
               ) : (
                 <p className="text-xs text-muted">Styles need a vocal and a beat the AI could match.</p>
               )}
+              {(lists.pro || session.tones?.size) && (
+                <Section icon={SlidersHorizontal} title="Mix engineer" hint="Every line measured at full quality, then mixed from what it measures">
+                  {lists.pro && sw(lists.pro, "Measured")}
+                  <SwitchRow
+                    title="Engineer every style and sound"
+                    hint={proMix ? "Styles keep their colour; the low end, mud, masking and levels are worked out from each line" : "Off: styles and sounds use their preset numbers as they are"}
+                    on={proMix}
+                    busy={working === "pro-mix"}
+                    disabled={working !== null && working !== "pro-mix"}
+                    onChange={chooseProMix}
+                  />
+                  {proPlan && <EngineerCard plan={proPlan} on={proOn} />}
+                </Section>
+              )}
               {lists.sounds.length > 0 && <Section icon={Sparkles} title="Sound" hint="Effects and levels on every line — one sound at a time">{lists.sounds.map((i) => sw(i))}</Section>}
               {lists.cleanUp.length > 0 && <Section icon={Bandage} title="Clean-up" hint="Small problems the AI spotted">{lists.cleanUp.map((i) => sw(i))}</Section>}
-              <Section icon={SlidersHorizontal} title="Master it" hint="The finishing touch on the whole mix — one undo">
+              <Section icon={SlidersHorizontal} title="Master it" hint="To a loudness target, measured and checked — one undo">
                 <MasterIt vibes={vibesNow} />
               </Section>
               {vocalLane && (
                 <Section icon={SlidersVertical} title="Fine-tune" hint="Small hands-on fixes — each one is a single undo">
                   <FineTune vocal={vocalLane} beat={beatLane} only="mix" />
                 </Section>
+              )}
+            </div>
+          )}
+
+          {ready && session && !explaining && tab === "mashup" && (
+            <div className="flex flex-col gap-4">
+              {songCount < 2 ? (
+                <div className="flex flex-col gap-2 rounded-xl border border-dashed border-border p-3 text-xs">
+                  <p className="font-semibold">Two songs make a mashup</p>
+                  <p className="text-muted">Add a second song — its vocal and its beat — and this plays them together: one&apos;s vocal over the other&apos;s music, a duet, or a DJ blend from one into the next.</p>
+                  <button onClick={() => useStudioView.getState().showLibrary("songs")} className="self-start rounded-lg bg-brand px-3 py-1.5 font-semibold text-white hover:bg-brand-strong">
+                    + Add a song
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <MashupMap lanes={lanes} duration={songLength} projectBpm={projectBpm} />
+                  {lists.swaps.length > 0 && <Section icon={Shuffle} title="Vocal swap" hint="One song's voice over the other's music — the rest of both muted">{lists.swaps.map((i) => sw(i))}</Section>}
+                  {lists.duets.length > 0 && <Section icon={Users} title="Duet" hint="Both singers over one beat, taking turns section by section">{lists.duets.map((i) => sw(i))}</Section>}
+                  {lists.blends.length > 0 && <Section icon={Disc3} title="DJ blend" hint="One song mixing into the next on its bar lines, at one speed and key">{lists.blends.map((i) => sw(i))}</Section>}
+                  {!lists.swaps.length && !lists.duets.length && !lists.blends.length && (
+                    <p className="text-xs text-muted">The songs couldn&apos;t be matched to each other (their tempos or bars weren&apos;t clear enough). Try another pair of songs.</p>
+                  )}
+                  <p className="text-[11px] text-muted">One at a time — each places the vocals itself. Pro mix, Master it and the drops stack on top.</p>
+                </>
               )}
             </div>
           )}

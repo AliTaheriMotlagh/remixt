@@ -2,7 +2,7 @@
 
 import { clipEnd, clipsOf, normaliseLane } from "./clipEdit";
 import { adviseShift, sourceAt, timelinesOf } from "./harmony";
-import { harmonyOf, ideaFits, keysNow, playedLoudness, recordingOf, type Idea, type Session } from "./aiIdeas";
+import { harmonyOf, heardBalance, ideaFits, keysNow, playedLoudness, recordingOf, type Idea, type Session } from "./aiIdeas";
 import { keyFit } from "./musicKey";
 import { beatLength, type StudioLane } from "./studioStore";
 import { isBacking } from "@/lib/stemKinds";
@@ -194,7 +194,17 @@ export function scoreMix(session: Session, lanes: StudioLane[]): MixScore {
     const vl = session.analyses.get(vocal.laneId)?.loudness ?? 0;
     // The beat as it plays: every line of its recording together.
     const bl = playedLoudness(session, recordingOf(lanes, beat));
-    if (vl > 0 && bl > 0) {
+    // Measured at full rate: as the ear hears them, through their effects, against where records put the voice.
+    const heardDb = heardBalance(session, lanes, vocal, beat);
+    if (heardDb !== null) {
+      parts.push({
+        id: "balance",
+        label: "Balance",
+        score: clamp01(1 - Math.max(0, Math.abs(heardDb) - 1.5) / 7),
+        weight: 0.1,
+        text: heardDb < -2.5 ? "the vocal is buried" : heardDb > 3.5 ? "the vocal is much louder than the beat" : "vocal sits where records put it",
+      });
+    } else if (vl > 0 && bl > 0) {
       const ratio = (vl * vocal.volume) / bl / 1.12;
       const off = Math.abs(Math.log(ratio));
       parts.push({

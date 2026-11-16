@@ -37,7 +37,7 @@ export type ProView = "arrange" | "mixer";
 export type LibraryTab = StemKind | "songs";
 
 /** A tab of the AI producer. */
-export type AiTab = "sync" | "timing" | "drop" | "harmony" | "style" | "ask";
+export type AiTab = "sync" | "timing" | "drop" | "harmony" | "style" | "mashup" | "ask";
 
 export const MIN_ZOOM = 1;
 export const MAX_ZOOM = 48;

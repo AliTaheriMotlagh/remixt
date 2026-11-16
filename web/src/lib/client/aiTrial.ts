@@ -259,7 +259,8 @@ function build(session: Session, baseline: Mix, ideas: Idea[], without: Record<s
         // Also works the duration out again for any lanes swapped in.
         useStudioStore.getState().applyLanePatches(kept.patches, kept.projectBpm);
       });
-      on.push(idea);
+      // The engineer's measurements as it worked them out on top of the others, for showing what it did.
+      on.push(compiled.engineer ? { ...idea, engineer: compiled.engineer } : idea);
     }
     if (!whole && on.length) {
       // Ideas that met the vocal and beat on a new tempo are played back at

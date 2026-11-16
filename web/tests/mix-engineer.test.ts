@@ -19,6 +19,7 @@ import {
   SUB,
   bandGains,
   bandShares,
+  compressorGainDb,
   db,
   engineerMix,
   fxPower,
@@ -100,6 +101,14 @@ const VOCAL_SHAPE = [  -30, -18,  -6,  -2,   0,  -4,  -12, -20];
 function lane(id: string, kind: EngineerLane["kind"], t: Tone, opts: Partial<EngineerLane> = {}): EngineerLane {
   return { laneId: id, kind, title: id, volume: 1, muted: false, fx: { ...DEFAULT_FX }, tone: t, song: id, layer: false, ...opts };
 }
+
+describe("the lane compressor's level", () => {
+  test("its automatic make-up gain lifts a quiet sound ~10 dB; a loud one less, since it's compressed more", () => {
+    assert.ok(Math.abs(compressorGainDb(-50) - 9.9) < 0.05, `${compressorGainDb(-50)}`);
+    assert.ok(compressorGainDb(-14) < compressorGainDb(-20));
+    assert.ok(compressorGainDb(-14) > 0, "still louder than without it");
+  });
+});
 
 describe("the engineer's decisions", () => {
   test("two beats never both keep their bass", () => {

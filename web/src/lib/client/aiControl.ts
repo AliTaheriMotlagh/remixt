@@ -73,6 +73,25 @@ export function saveKeepWhole(on: boolean) {
   }
 }
 
+const PRO_MIX_KEY = "remixt.aiProMix";
+
+/** Styles and sounds engineered from measurement (IdeaOptions.proMix) — on unless switched off. */
+export function loadProMix(): boolean {
+  try {
+    return localStorage.getItem(PRO_MIX_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+export function saveProMix(on: boolean) {
+  try {
+    localStorage.setItem(PRO_MIX_KEY, on ? "1" : "0");
+  } catch {
+    // Private mode or storage blocked: remembered for this visit only.
+  }
+}
+
 const SYNC_KEY = "remixt.aiSync";
 
 /** The sync template the person last chose (see SYNC_TEMPLATES) — remembered per browser. */

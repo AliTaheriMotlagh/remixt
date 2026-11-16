@@ -19,9 +19,12 @@ import {
   recompileIdea,
   studioIdeas,
   timingSignature,
+  heardBalance,
+  PRO_MIX_ID,
   type Idea,
   type Session,
 } from "../src/lib/client/aiIdeas.ts";
+import type { Tone } from "../src/lib/client/mixEngineer.ts";
 import {
   addFix,
   aspectsOfEdits,
@@ -762,5 +765,67 @@ describe("choosing one option keeps the others", () => {
     assert.ok(Math.abs(v.tempoRatio - 0.85) < 1e-9, "the style's speed stays");
     assert.ok(v.fx.reverb < 0.2, "the punch sound replaced the slowed reverb");
     revertTrial();
+  });
+});
+
+describe("the mix engineer in the ideas", () => {
+  /** A measurement with this shape (dB per band) at `lufs`. */
+  const tone = (shares: number[], lufs: number): Tone => {
+    const raw = shares.map((v) => 10 ** (v / 10));
+    const total = raw.reduce((a, b) => a + b, 0);
+    return { bands: raw.map((p) => (p / total) * 10 ** ((lufs + 0.691) / 10)), lufs, peakDb: -2, crestDb: 14, correlation: 0.8, active: 0.9, seconds: 120 };
+  };
+  const beat = lane("beat", "beat");
+  const other = lane("other-beat", "beat", { trackTitle: "another song" });
+  const vocal = lane("vocal", "vocals", { offsetSeconds: 8, originalDuration: 36 });
+  const measured = (options: Session["options"] = { vibe: "any" }): Session => ({
+    ...session([beat, other, vocal], { beat: 0.2, "other-beat": 0.2, vocal: 0.1 }),
+    options,
+    tones: new Map([
+      ["stem-beat", tone([0, 2, -2, -6, -6, -14, -18, -26], -10)],
+      ["stem-other-beat", tone([0, 2, -2, -6, -6, -14, -18, -26], -11)],
+      ["stem-vocal", tone([-30, -18, -4, -1, 0, -4, -14, -22], -20)],
+    ]),
+  });
+
+  test("Pro mix is offered once the lines are measured, never without", () => {
+    assert.ok(!studioIdeas(session([beat, vocal])).some((i) => i.id === PRO_MIX_ID));
+    const pro = studioIdeas(measured()).find((i) => i.id === PRO_MIX_ID)!;
+    assert.ok(pro, "offered");
+    assert.ok(pro.engineer, "with what it measured and did, for the pictures");
+    assert.deepEqual(pro.aspects.filter((a) => a !== "levels" && a !== "effects"), [], "it only touches levels and sound");
+    // Two beats: only one keeps its bass.
+    assert.ok(pro.patches["other-beat"].fx!.highpass >= 120);
+    assert.ok(pro.patches.beat.fx!.highpass <= 30);
+  });
+
+  test("it stacks on Make it sound good and works on top of it", () => {
+    const ideas = studioIdeas(measured());
+    const pro = ideas.find((i) => i.id === PRO_MIX_ID)!;
+    const auto = ideas.find((i) => i.id === "auto-good");
+    if (auto) assert.ok(compatible(auto, pro));
+    for (const style of ideas.filter((i) => i.kind === "full")) assert.ok(compatible(style, pro));
+  });
+
+  test("measured, Make it sound good puts the vocal where records put it, and the mix check agrees", () => {
+    const base = measured();
+    base.tones!.set("stem-vocal", tone([-30, -18, -4, -1, 0, -4, -14, -22], -15));
+    const fix = mixFix(base, ["balance"])!;
+    const after = base.lanes.map((l) => ({ ...l, ...fix.patches[l.laneId] }));
+    const off = heardBalance(base, after, after.find((l) => l.laneId === "vocal")!, after.find((l) => l.laneId === "beat")!)!;
+    assert.ok(Math.abs(off) < 0.1, `${off} dB from where records put it`);
+    assert.equal(checkMix(base, after).find((c) => c.id === "volume")!.status, "good");
+    // Shouting over it (a beat turned 10 dB down under it): flagged, as heard.
+    const loud = after.map((l) => (l.laneId === "beat" ? { ...l, volume: l.volume * 0.316 } : l));
+    assert.notEqual(checkMix(base, loud).find((c) => c.id === "volume")!.status, "good");
+  });
+
+  test("styles and sounds are engineered unless that's switched off — their colour kept either way", () => {
+    const on = studioIdeas(measured()).find((i) => i.id === "sound-lofi")!;
+    const off = studioIdeas(measured({ vibe: "any", proMix: false })).find((i) => i.id === "sound-lofi")!;
+    assert.equal(on.patches.vocal.fx!.lowpass, 7000, "the lo-fi colour stays");
+    assert.equal(off.patches.vocal.fx!.lowpass, 7000);
+    assert.ok(on.patches["other-beat"].fx!.highpass >= 120, "engineered: the second beat's lows cut");
+    assert.ok(off.patches["other-beat"].fx!.highpass < 120, "as the preset has it");
   });
 });

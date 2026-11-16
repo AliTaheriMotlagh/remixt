@@ -12,6 +12,9 @@ import { tempoFit } from "./matchFinder";
 import { clock, originOf, type Scope } from "./aiScope";
 import { adviseShift, harmonyStatus, pickShift, scanHarmony, worstStretch, type HarmonyScan, type HarmonyStretch } from "./harmony";
 import { bestKeyShift, keyFit, keyLabel, transposeKey } from "./musicKey";
+import { laneTones } from "./laneTones";
+import { heardSpans, mainBacking, mashableSongs, sameSong, type MixSong } from "./mashup";
+import { BACKING_LUFS, VOCAL_OFFSET_DB, bandGains, compressorGainDb, engineerMix, loudnessChange, type EngineerLane, type EngineerPlan, type Tone } from "./mixEngineer";
 import { pairPlanPatches, preparePair, type PairContext, type TempoChoice } from "./pairMatch";
 import {
   DEFAULT_FX,
@@ -29,6 +32,7 @@ import {
 } from "./studioStore";
 import type { IconName } from "@/components/Icon";
 import { isBacking } from "@/lib/stemKinds";
+import { splitSongTitle } from "@/lib/lyrics";
 
 // The AI producer. A vocal from one song over a beat from another rarely
 // sounds good as it lands: different speeds, clashing keys, lines that
@@ -42,7 +46,15 @@ import { isBacking } from "@/lib/stemKinds";
 //   Drops & moments    — the chorus on the drop, build-ups, drum drops,
 //                        stutters, swells — using the beat's own drums and
 //                        bass (split out by Demucs) when they're in the mix
+//   Pro mix            — the mix engineer (mixEngineer.ts): every line
+//                        measured at full rate and mixed from what it
+//                        measures; on by default inside the styles and sounds
+//   Mashup             — with two or more songs: one's vocal over another's
+//                        beat, a duet taking turns, a DJ blend between them
 //   More               — single arrangement, tempo and sound ideas
+//
+// A vocal longer than its beat keeps every section: the beat's main part
+// plays again under the rest (arrange.ts, "Making a beat last").
 //
 // It's all the studio's own analysis, running in the browser: no account,
 // no key, no model to install. Every idea is worked out from one starting
@@ -97,6 +109,8 @@ export type Idea = {
    * it is outside it (see aiScope.ts).
    */
   scope?: Scope;
+  /** The mix engineer's measurements and decisions, for the ideas it made (shown on the Style tab). */
+  engineer?: EngineerPlan;
 };
 
 export type LaneChange = { add: StudioLane[]; remove: string[] };
@@ -139,6 +153,12 @@ export type IdeaOptions = {
   entry?: Entry;
   /** Long instrumental gaps between the vocal's sections closed up — with any "who leads" sync. */
   tight?: boolean;
+  /**
+   * Styles and sounds engineered from measurement (see mixEngineer.ts):
+   * their colour kept, the low end, mud, masking and levels worked out
+   * from each line's own tone. On unless false; needs the tones measured.
+   */
+  proMix?: boolean;
 };
 
 /** What the ideas are worked out from — the mix as it was when asked. */
@@ -155,6 +175,14 @@ export type Session = {
   beatParts: LoadableStem[];
   /** Things worth telling the user (e.g. why there are no timing ideas). */
   notes: string[];
+  /** Each stem measured at full rate, by stem id, for the mix engineer (missing in sessions made by hand). */
+  tones?: Map<string, Tone>;
+  /**
+   * With two or more songs in the mix: each song's vocal matched to each
+   * song's beat (by pairKey), for the mashups — a vocal over the other
+   * song's beat, a duet, a DJ blend from one into the other.
+   */
+  pairs?: Map<string, PairContext>;
   signature: string;
   /** Where everything was on the timeline (see timingSignature). */
   timing: string;
@@ -220,6 +248,9 @@ export async function prepareSession(
     })
   );
 
+  // Full-rate measurements for the engineer: a moment per lane, kept per stem.
+  const tones = await laneTones(lanes).catch(() => new Map<string, Tone>());
+
   onStep("match");
   let pair: PairContext | null = null;
   if (vocal && beat) {
@@ -232,6 +263,22 @@ export async function prepareSession(
     notes.push(vocal ? "Add a beat to unlock timing, drop and style ideas." : "Add a vocal to unlock timing, drop and style ideas.");
   }
   const beatParts = beat && beat.kind === "beat" ? await findParts(beat).catch(() => []) : [];
+  // Songs together: every song's vocal matched to every song's beat (its own too, for its bars).
+  const songs = mashableSongs(lanes).slice(0, 3);
+  const pairs = new Map<string, PairContext>();
+  if (songs.length >= 2) {
+    if (pair) pairs.set(pairKey(pair.vocalLaneId, pair.beatLaneId), pair);
+    for (const singer of songs) {
+      for (const host of songs) {
+        const v = singer.vocals[0];
+        const b = mainBacking(host);
+        if (!v || !b || pairs.has(pairKey(v.laneId, b.laneId))) continue;
+        const matched = await preparePair(v.laneId, b.laneId).catch(() => null);
+        if (matched) pairs.set(pairKey(v.laneId, b.laneId), matched);
+      }
+    }
+    notes.push(`${songs.length} songs in the mix: the Mashup tab plays them together — one's vocal over another's beat, a duet, or a DJ blend.`);
+  }
   onStep("ideas");
   return {
     lanes,
@@ -243,6 +290,8 @@ export async function prepareSession(
     drop: pair ? findDrop(pair.structure) : null,
     beatParts,
     notes,
+    tones,
+    pairs,
     signature: mixSignature(lanes),
     timing: timingSignature(lanes, state.projectBpm),
     options,
@@ -345,6 +394,7 @@ class Draft {
       if ("tempoRatio" in p && Math.abs(p.tempoRatio! - before.tempoRatio) > 1e-4) found.add("tempo");
       if ("pitchSemitones" in p && p.pitchSemitones !== before.pitchSemitones) found.add("key");
       if ("volume" in p && Math.abs(p.volume! - before.volume) > 0.005) found.add("levels");
+      if ("muted" in p && p.muted !== before.muted) found.add("levels");
       if ("fx" in p && differs(p.fx, before.fx)) found.add("effects");
       if ("automation" in p && differs(p.automation, before.automation)) found.add("automation");
     }
@@ -929,11 +979,6 @@ function fixBeatKey(draft: Draft) {
 // --- Every lane in sync ---------------------------------------------------------------------
 
 /** The song a lane comes from, so a beat's own drums or a vocal's clean split follow it. */
-function sameSong(a: StudioLane, b: StudioLane) {
-  const title = (l: StudioLane) => l.trackTitle.replace(/\s*\(split\)$/i, "").trim().toLowerCase();
-  if (title(a) !== title(b)) return false;
-  return !a.bpm || !b.bpm || Math.abs(Math.log(a.bpm / b.bpm)) < 0.01;
-}
 
 /**
  * Every other lane brought into step with the vocal and beat the draft has
@@ -1080,7 +1125,37 @@ export function playedLoudness(session: Session, lanes: StudioLane[]) {
 }
 
 /**
- * Loudness-matched levels: the beat at 85% for headroom (its loudest line
+ * How loud a lane plays as the ear hears it (gated LUFS): its full-rate
+ * measurement through its EQ and compressor, at `volume` (its fader by
+ * default). Null when it wasn't measured, or is muted.
+ */
+export function heardLufs(session: Session, lane: StudioLane, volume = lane.volume): number | null {
+  const tone = session.tones?.get(lane.stemId);
+  if (!tone || lane.muted) return null;
+  const filtered = tone.lufs + loudnessChange(tone.bands, bandGains(lane.fx));
+  return filtered + (lane.fx.compress ? compressorGainDb(filtered) : 0) + 20 * Math.log10(Math.max(volume, 1e-3));
+}
+
+/** Lanes playing together, as the ear hears them (their powers add). Null unless every one was measured. */
+function heardTogether(session: Session, lanes: StudioLane[], volume: (l: StudioLane) => number = (l) => l.volume) {
+  const levels = lanes.filter((l) => !l.muted).map((l) => heardLufs(session, l, volume(l)));
+  if (!levels.length || levels.some((v) => v === null)) return null;
+  return 10 * Math.log10(levels.reduce<number>((total, v) => total + 10 ** ((v ?? -70) / 10), 0));
+}
+
+/**
+ * The vocal against the beat (every line of its recording), dB as heard,
+ * less where it should sit (VOCAL_OFFSET_DB, measured on real records):
+ * 0 is right, negative buried. Null without full-rate measurements.
+ */
+export function heardBalance(session: Session, lanes: StudioLane[], vocal: StudioLane, beat: StudioLane): number | null {
+  const v = heardLufs(session, vocal);
+  const b = heardTogether(session, recordingOf(lanes, beat));
+  return v === null || b === null ? null : v - b - VOCAL_OFFSET_DB;
+}
+
+/**
+ * Loudness-matched levels: the beat staged to BACKING_LUFS when measured (else at 85%, for headroom) (its loudest line
  * there, a song's other lines in proportion — the beat's own balance is
  * never touched), other songs' backing level with it, vocals riding ~1 dB
  * above it all.
@@ -1100,7 +1175,13 @@ function balancedLevels(session: Session): Map<string, number> {
   }
   const refGroup = groups.find((g) => g.includes(ref)) ?? [ref];
   const power = (group: StudioLane[], volume: (l: StudioLane) => number) => Math.sqrt(group.reduce((sum, l) => sum + (loud(l) * volume(l)) ** 2, 0));
-  const refScale = 0.85 / Math.max(1e-3, ...refGroup.map((l) => l.volume));
+  // Measured at full rate: staged to the engineer's level (the master takes it to its loudness from there),
+  // never past the faders; else its loudest line at 85% for headroom.
+  const staged = isBacking(ref.kind) ? heardTogether(session, refGroup) : null;
+  const refScale =
+    staged !== null
+      ? Math.min(10 ** ((BACKING_LUFS - staged) / 20), 1.5 / Math.max(1e-3, ...refGroup.map((l) => l.volume)))
+      : 0.85 / Math.max(1e-3, ...refGroup.map((l) => l.volume));
   for (const l of refGroup) levels.set(l.laneId, l.volume * refScale);
   /** How loud the beat plays at those levels: what everything else is matched to. */
   const target = power(refGroup, (l) => l.volume * refScale);
@@ -1113,7 +1194,13 @@ function balancedLevels(session: Session): Map<string, number> {
     for (const l of group) levels.set(l.laneId, l.volume * k);
   }
   const lift = isBacking(ref.kind) ? VOCAL_LIFT : 1;
-  for (const lane of heard) if (lane.kind === "vocals" && lane !== ref) levels.set(lane.laneId, (lift * target) / loud(lane));
+  // Measured at full rate: the vocal where records put it, as the ear hears it (through its EQ and compressor).
+  const heardBeat = isBacking(ref.kind) ? heardTogether(session, refGroup, (l) => levels.get(l.laneId)!) : null;
+  for (const lane of heard) {
+    if (lane.kind !== "vocals" || lane === ref) continue;
+    const atUnity = heardBeat !== null ? heardLufs(session, lane, 1) : null;
+    levels.set(lane.laneId, atUnity !== null ? 10 ** ((heardBeat! + VOCAL_OFFSET_DB - atUnity) / 20) : (lift * target) / loud(lane));
+  }
   // A very quiet vocal can't go past 150%: the backing comes down with it to keep the balance — but only so far.
   const loudestVocal = Math.max(0, ...heard.filter((l) => l.kind === "vocals").map((l) => levels.get(l.laneId)!));
   const cut = loudestVocal > 1.5 ? Math.min(loudestVocal / 1.5, MAX_BACKING_CUT) : 1;
@@ -1268,6 +1355,15 @@ function activeShare(analysis: StemAnalysis | undefined) {
   return on / span.length;
 }
 
+/** The pitch of a vocal's lowest sung notes (its 5th percentile), Hz — null when its melody wasn't followed. */
+function lowestNoteHz(analysis: StemAnalysis | undefined): number | null {
+  const midi = analysis?.melody?.midi;
+  if (!midi) return null;
+  const sung = Float32Array.from(midi.filter((m) => m > 0)).sort();
+  if (sung.length <= 50) return null;
+  return 440 * 2 ** ((sung[Math.floor(sung.length * 0.05)] - 69) / 12);
+}
+
 /**
  * A mix worked out from what was heard rather than a preset: the vocal's
  * high-pass just under its lowest notes (a deep voice keeps its body, a
@@ -1279,15 +1375,8 @@ function fittedRecipe(session: Session): MixRecipe {
   const bpm = session.projectBpm;
   const vocal = session.vocal ? session.analyses.get(session.vocal.laneId) : undefined;
   const beat = session.beat ? session.analyses.get(session.beat.laneId) : undefined;
-  let highpass = 110;
-  const midi = vocal?.melody?.midi;
-  if (midi) {
-    const sung = Float32Array.from(midi.filter((m) => m > 0)).sort();
-    if (sung.length > 50) {
-      const low = sung[Math.floor(sung.length * 0.05)];
-      highpass = Math.round(Math.min(170, Math.max(70, 0.6 * 440 * 2 ** ((low - 69) / 12))));
-    }
-  }
+  const lowest = lowestNoteHz(vocal);
+  const highpass = lowest ? Math.round(Math.min(170, Math.max(70, 0.6 * lowest))) : 110;
   const density = activeShare(vocal);
   const duck = density > 0.6 ? 0.15 : density < 0.3 ? 0.32 : 0.22;
   const quietVocal = !!vocal && !!beat && beat.loudness > 0 && vocal.loudness / beat.loudness < 0.5;
@@ -1316,6 +1405,7 @@ function fittedRecipe(session: Session): MixRecipe {
 }
 
 function applyMix(draft: Draft, levels: Map<string, number>, recipe: Pick<MixRecipe, "vocalDb" | "vocal" | "backing">) {
+  const engineered = draft.session.options.proMix !== false && !!draft.session.tones?.size;
   // Vocals by the lane they came from: a part of a vocal the AI worked on in
   // one section (see aiScope.ts) is still that vocal, and sits where it does.
   const singers: string[] = [];
@@ -1335,8 +1425,101 @@ function applyMix(draft: Draft, levels: Map<string, number>, recipe: Pick<MixRec
     const base = levels.get(lane.laneId) ?? lane.volume;
     const volume = Math.round(Math.min(1.5, base * 10 ** ((vocal ? recipe.vocalDb : 0) / 20)) * 100) / 100;
     draft.patch(lane.laneId, { volume, fx });
-    draft.lines.push(`${lane.trackTitle}: volume ${Math.round(volume * 100)}% · ${describeFx(fx)}`);
   }
+  // The style's colour kept, the engineer's corrections on top (low end, mud, masking, levels).
+  const plan = engineered ? engineer(draft, "on-style", recipe.vocalDb) : null;
+  for (const lane of draft.lanes.values()) {
+    if (leadOf(lane.laneId) || !(lane.laneId in draft.patches)) continue;
+    draft.lines.push(`${lane.trackTitle}: volume ${Math.round(lane.volume * 100)}% · ${describeFx(lane.fx)}`);
+  }
+  if (plan) draft.lines.push(...plan.lines.map((l) => `Engineer: ${l}`));
+}
+
+/** The lanes as the engineer reads them, a recording's lines sharing a song. */
+export function engineerLanes(session: Session, lanes: StudioLane[]): EngineerLane[] {
+  const songOf = (lane: StudioLane) => (lanes.find((l) => l.laneId === lane.laneId || (isBacking(l.kind) && isBacking(lane.kind) && sameSong(l, lane))) ?? lane).laneId;
+  return lanes.map((lane) => {
+    const analysis = session.analyses.get(originOf(lane.laneId)) ?? session.analyses.get(lane.laneId);
+    return {
+      laneId: lane.laneId,
+      kind: lane.kind,
+      title: laneName(lane),
+      volume: lane.volume,
+      muted: lane.muted,
+      fx: lane.fx,
+      tone: session.tones?.get(lane.stemId),
+      song: songOf(lane),
+      layer: !!leadOf(lane.laneId),
+      lowestNoteHz: lane.kind === "vocals" ? (lowestNoteHz(analysis) ?? undefined) : undefined,
+      spans: heardSpans(lane),
+      density: lane.kind === "vocals" ? activeShare(analysis) : undefined,
+    };
+  });
+}
+
+/** The engineer's plan for `lanes` (the session's, or the mix as it is now). Null without measurements. */
+export function engineerPlan(session: Session, lanes: StudioLane[] = session.lanes, mode: "full" | "on-style" = "full", vocalLiftDb = 0): EngineerPlan | null {
+  if (!session.tones?.size) return null;
+  return engineerMix({
+    lanes: engineerLanes(session, lanes),
+    bpm: session.projectBpm,
+    leadId: session.vocal?.laneId ?? null,
+    beatId: session.beat?.laneId ?? null,
+    mode,
+    vocalLiftDb,
+  });
+}
+
+/** The engineer's decisions put on the draft's lanes. */
+function engineer(draft: Draft, mode: "full" | "on-style", vocalLiftDb = 0): EngineerPlan | null {
+  const plan = engineerMix({
+    lanes: engineerLanes(draft.session, [...draft.lanes.values()]),
+    bpm: draft.bpm,
+    leadId: draft.session.vocal?.laneId ?? null,
+    beatId: draft.session.beat?.laneId ?? null,
+    mode,
+    vocalLiftDb,
+  });
+  if (!plan.lanes.length) return null;
+  for (const decision of plan.lanes) draft.patch(decision.laneId, { volume: decision.volume, fx: decision.fx });
+  return plan;
+}
+
+export const PRO_MIX_ID = "sound-pro";
+
+/**
+ * The engineer's whole mix as one switch: every line measured, the low
+ * end given to one bass line, the mud and the masking cleared, levels by
+ * role, the vocal's space timed to the tempo. Stacks on anything that
+ * places the vocal (Make it sound good, a style), working on top of it.
+ */
+function proMixIdea(session: Session): Idea | null {
+  if (!session.tones?.size) return null;
+  const draft = new Draft(session);
+  const plan = engineer(draft, "full");
+  if (!plan || draft.empty) return null;
+  for (const d of plan.lanes) {
+    const lane = draft.lane(d.laneId);
+    draft.lines.push(`${lane.trackTitle}: volume ${Math.round(d.volume * 100)}% · ${d.reasons.length ? d.reasons.join("; ") : describeFx(d.fx)}`);
+  }
+  draft.lines.unshift(...plan.lines);
+  const covered = plan.masking.find((m) => m.band === 5);
+  const why = [
+    plan.lowOwner ? "one bass line owns the low end" : null,
+    plan.mud.before > plan.mud.limit ? `the low-mid pile-up cut from ${plan.mud.before.toFixed(1)} to ${plan.mud.after.toFixed(1)} dB of the mix` : null,
+    covered && covered.before < 1 ? `the vocal's presence ${covered.before.toFixed(1)} → ${covered.after.toFixed(1)} dB over the backing` : null,
+  ].filter(Boolean);
+  const idea = draft.idea({
+    id: PRO_MIX_ID,
+    role: "engineer",
+    icon: "sliders-horizontal",
+    title: "Pro mix",
+    short: "Measured EQ, levels and space on every line",
+    why: `Every line measured at full quality and mixed from what it measures, the way an engineer would: ${why.length ? why.join(", ") : "levels by role, each line in its own space"}. It works on top of whatever places the vocal.`,
+    vibes: ["any", "radio", "club", "hard", "short", "chill", "lofi"],
+    listenAt: session.vocal ? Math.max(0, entryOf(draft.lane(session.vocal.laneId))) : 0,
+  });
+  return { ...idea, engineer: plan };
 }
 
 /** Sets each lane's volume to `levels`, nothing else. False if none changed. */
@@ -2115,12 +2298,14 @@ function soundIdeas(session: Session): Idea[] {
     return draft.idea({ id: `sound-${recipe.id}`, role: "engineer", icon: recipe.icon, title: recipe.title, short: recipe.short, why: recipe.why, vibes: recipe.vibes, listenAt });
   });
   // Worked out from the vocal and beat themselves: first, when there's a vocal to fit.
+  const pro = proMixIdea(session);
   if (hasVocal && session.vocal) {
     const recipe = fittedRecipe(session);
     const draft = new Draft(session);
     applyMix(draft, levels, recipe);
     ideas.unshift(draft.idea({ id: "sound-fitted", role: "engineer", icon: recipe.icon, title: recipe.title, short: recipe.short, why: recipe.why, vibes: recipe.vibes, listenAt }));
   }
+  if (pro) ideas.unshift(pro);
   return ideas;
 }
 
@@ -2534,6 +2719,284 @@ export function wholeIfAsked(session: Session, idea: Idea | null): Idea | null {
 }
 
 /** One family of ideas, worked out for a session. */
+// --- Songs together -----------------------------------------------------------------------------
+
+/** The key a vocal and beat are matched under in Session.pairs. */
+export function pairKey(vocalId: string, beatId: string) {
+  return `${vocalId}|${beatId}`;
+}
+
+/** A song's name for the switches: "Ye Rooze Khoob Miad", not "Hichkas - Ye Rooze Khoob Miad (Official)". */
+export function songName(song: MixSong) {
+  return splitSongTitle(song.title).song || song.title;
+}
+
+/** The session with another vocal and beat as its pair (they were matched when it listened). */
+function pairedOn(session: Session, vocal: StudioLane, beat: StudioLane): Session | null {
+  const pair = session.pairs?.get(pairKey(vocal.laneId, beat.laneId));
+  return pair ? { ...session, vocal, beat, pair, drop: findDrop(pair.structure) } : null;
+}
+
+/** Mutes every lane `keep` doesn't want (a layer goes with its lead); unmutes those it does that were muted. */
+function keepOnly(draft: Draft, keep: (lane: StudioLane) => boolean) {
+  for (const lane of draft.lanes.values()) {
+    const owner = draft.lanes.get(leadOf(lane.laneId) ?? lane.laneId) ?? lane;
+    const wanted = keep(owner);
+    if (lane.muted === !wanted) continue;
+    draft.patch(lane.laneId, { muted: !wanted });
+  }
+}
+
+/** `lane` (a line of `anchor`'s song) put back in step with `anchor`, wherever the draft moved it. */
+function follow(draft: Draft, lane: StudioLane, anchor: StudioLane) {
+  const was = draft.session.lanes.find((l) => l.laneId === lane.laneId);
+  const anchorWas = draft.session.lanes.find((l) => l.laneId === anchor.laneId);
+  const now = draft.lanes.get(anchor.laneId);
+  if (!was || !anchorWas || !now) return;
+  const p: LanePatch = {
+    tempoRatio: (was.tempoRatio * now.tempoRatio) / anchorWas.tempoRatio,
+    offsetSeconds: now.offsetSeconds + ((was.offsetSeconds - anchorWas.offsetSeconds) * anchorWas.tempoRatio) / now.tempoRatio,
+    pitchSemitones: was.pitchSemitones + (now.pitchSemitones - anchorWas.pitchSemitones),
+  };
+  // A beat made to last (its body played again): the song's other lines repeat with it.
+  if (JSON.stringify(was.clips ?? null) === JSON.stringify(anchorWas.clips ?? null)) p.clips = now.clips?.map((c) => ({ ...c })) ?? null;
+  draft.patch(lane.laneId, p);
+}
+
+/** One song's vocal over another's beat, everything fixed — the rest of both songs muted. */
+function vocalSwap(session: Session, singer: MixSong, host: MixSong): { draft: Draft; on: Session; dropAt: number | null } | null {
+  const vocal = singer.vocals[0];
+  const beat = mainBacking(host);
+  const on = vocal && beat ? pairedOn(session, vocal, beat) : null;
+  if (!on) return null;
+  const { draft, dropAt } = fixMix(on, new Set(ALL_FIXES), { onDrop: true });
+  // The host's own lines (drums, bass, melody) stay with its beat.
+  for (const lane of host.backing) if (lane.laneId !== beat!.laneId && !(lane.laneId in draft.patches)) follow(draft, lane, beat!);
+  return { draft, on, dropAt };
+}
+
+function swapIdea(session: Session, singer: MixSong, host: MixSong): Idea | null {
+  const made = vocalSwap(session, singer, host);
+  if (!made) return null;
+  const { draft, dropAt } = made;
+  const vocal = singer.vocals[0];
+  keepOnly(draft, (l) => l.laneId === vocal.laneId || host.backing.some((b) => b.laneId === l.laneId));
+  draft.lines.unshift(`Only “${songName(singer)}”'s vocal and “${songName(host)}”'s music play — the rest of both songs is muted`);
+  return draft.idea({
+    id: `mash-swap:${vocal.laneId}:${mainBacking(host)!.laneId}`,
+    kind: "idea",
+    role: "remixer",
+    icon: "shuffle",
+    title: `${songName(singer)} vocal × ${songName(host)} beat`,
+    short: "One song's voice over the other's music",
+    why: `“${songName(singer)}”'s vocal over “${songName(host)}”'s music, synced line by line — speeds matched, keys fixed, the chorus on the drop where there is one — and the parts of both songs that would clash muted.`,
+    listenAt: dropAt !== null ? Math.max(0, dropAt - 4 * draft.bar) : vocalListen(draft),
+  });
+}
+
+/** A vocal's share of a stretch of the timeline where it's actually singing (0..1), from its analysis. */
+function singingShare(session: Session, lane: StudioLane, from: number, to: number) {
+  const analysis = session.analyses.get(lane.laneId);
+  const energy = analysis?.energy;
+  if (!energy?.length || lane.clips?.length) return 0;
+  const sorted = Float32Array.from(energy).sort();
+  const loud = sorted[Math.floor(sorted.length * 0.95)] ?? 0;
+  if (!(loud > 0)) return 0;
+  const rate = analysis!.onsetRate;
+  let on = 0;
+  let all = 0;
+  for (let t = from; t < to; t += 0.1) {
+    const i = Math.round((t - lane.offsetSeconds) * lane.tempoRatio * rate);
+    all++;
+    if ((energy[i] ?? 0) > loud * 0.1) on++;
+  }
+  return all ? on / all : 0;
+}
+
+/**
+ * Two singers over one song's music, taking turns: the guest's sections
+ * laid on the host's bars, and section by section either the guest sings
+ * or the host's own vocal does — never both at once.
+ */
+function duetIdea(session: Session, guest: MixSong, host: MixSong): Idea | null {
+  const hostVocal = host.vocals[0];
+  if (!hostVocal) return null;
+  const made = vocalSwap(session, guest, host);
+  if (!made) return null;
+  const { draft } = made;
+  const guestVocal = draft.lane(guest.vocals[0].laneId);
+  follow(draft, hostVocal, mainBacking(host)!);
+  const host_ = draft.lane(hostVocal.laneId);
+  // The guest's sections: its clips grouped by their label (or a gap of over a bar).
+  const clips = clipsOf(guestVocal).filter((c) => !c.muted).sort((a, b) => a.at - b.at);
+  const sections: { clips: LaneClip[]; start: number; end: number; label: string }[] = [];
+  for (const c of clips) {
+    const start = clipStart(guestVocal, c);
+    const end = clipEnd(guestVocal, c);
+    const last = sections[sections.length - 1];
+    if (last && (c.label ? c.label === last.label : true) && start - last.end < draft.bar) {
+      last.clips.push(c);
+      last.end = end;
+    } else sections.push({ clips: [c], start, end, label: c.label ?? "" });
+  }
+  if (sections.length < 2) return null;
+  let turn: "guest" | "host" = "guest";
+  const hostSilent: { start: number; end: number }[] = [];
+  const guestMuted = new Set<LaneClip>();
+  const said: string[] = [];
+  for (const section of sections) {
+    const hostSings = singingShare(session, host_, section.start, section.end) > 0.4;
+    if (turn === "host" && hostSings) {
+      for (const c of section.clips) guestMuted.add(c);
+      said.push(`${clock(section.start)} ${songName(host)}`);
+      turn = "guest";
+    } else {
+      hostSilent.push({ start: section.start - 0.05, end: section.end + 0.25 });
+      said.push(`${clock(section.start)} ${songName(guest)}${section.label ? ` (${section.label})` : ""}`);
+      turn = "host";
+    }
+  }
+  if (!guestMuted.size) return null;
+  draft.patch(guestVocal.laneId, { clips: clipsOf(guestVocal).map((c) => (guestMuted.has(c) ? { ...c, muted: true } : c)) });
+  const points: AutoPoint[] = [{ t: 0, v: 1 }];
+  for (const s of hostSilent) points.push({ t: Math.max(0, s.start - 0.04), v: 1 }, { t: Math.max(0, s.start), v: 0 }, { t: s.end, v: 0 }, { t: s.end + 0.04, v: 1 });
+  draft.patch(host_.laneId, { automation: { ...host_.automation, volume: points } });
+  keepOnly(draft, (l) => l.laneId === guestVocal.laneId || l.laneId === hostVocal.laneId || host.backing.some((b) => b.laneId === l.laneId));
+  draft.lines.unshift(`Taking turns: ${said.join(" → ")}`);
+  return draft.idea({
+    id: `mash-duet:${guestVocal.laneId}:${hostVocal.laneId}`,
+    kind: "idea",
+    role: "remixer",
+    icon: "users",
+    title: `Duet: ${songName(guest)} + ${songName(host)}`,
+    short: "Both singers take turns over one beat",
+    why: `“${songName(guest)}”'s singer joins “${songName(host)}”: laid on its bars, the two take turns section by section — where the host sings their own part, the guest waits — so the voices never pile up.`,
+    listenAt: Math.max(0, sections[0].start - draft.bar),
+  });
+}
+
+/** A beat's bars as heard on the timeline (null when it's cut into clips: then its bars aren't one line). */
+function barsOn(lane: StudioLane, structure: BeatStructure) {
+  if (lane.clips?.length) return null;
+  return (bar: number) => lane.offsetSeconds + structure.grid.time(structure.downbeat + 4 * bar) / lane.tempoRatio;
+}
+
+/** The bars of a song's main backing, from any pair it was matched in. */
+function structureOf(session: Session, beat: StudioLane) {
+  for (const [key, pair] of session.pairs ?? []) if (key.endsWith(`|${beat.laneId}`)) return pair.structure;
+  return null;
+}
+
+/**
+ * A DJ blend from one song into the next: the second stretched to the
+ * first's tempo and moved into its key, started on a bar line 16 bars
+ * before the first one ends. Over those bars its drums and melody come in
+ * first, the bass lines swap half-way (when both songs have one of their
+ * own), the first song's vocal bows out, and its filter closes as it fades.
+ */
+function blendIdea(session: Session, from: MixSong, to: MixSong): Idea | null {
+  const a = mainBacking(from);
+  const b = mainBacking(to);
+  if (!a || !b || !a.bpm || !b.bpm) return null;
+  const sa = structureOf(session, a);
+  const sb = structureOf(session, b);
+  const barA = sa && barsOn(a, sa);
+  if (!sa || !sb || !barA) return null;
+  const draft = new Draft(session);
+  const target = a.bpm * a.tempoRatio;
+  const fit = tempoFit(target, b.bpm);
+  if (!fit || fit.stretch < 0.74 || fit.stretch > 1.35) return null;
+  const bar = (4 * 60) / target;
+  // 16 bars to blend over; 8 for a short song.
+  let length = 16;
+  let at = Math.floor((sa.endBar - length) / 4) * 4;
+  if (at < 8) {
+    length = 8;
+    at = Math.floor((sa.endBar - length) / 4) * 4;
+  }
+  if (at < 4) return null;
+  const T = barA(at);
+  const L = length * bar;
+  const mid = T + L / 2;
+  // Into the first song's key, the whole of the second song together.
+  const keyA = effectiveKey(a);
+  const keyB = effectiveKey(b);
+  const shift = keyA && keyB && (keyFit(keyB, keyA) === "far" || keyFit(keyB, keyA) === "clash") ? bestKeyShift(keyB, keyA).semitones : 0;
+  const bStart = T - sb.grid.time(sb.downbeat) / fit.stretch;
+  if (bStart < 0) return null;
+  for (const lane of to.lanes) {
+    if (leadOf(lane.laneId)) continue;
+    const offset = bStart + ((lane.offsetSeconds - b.offsetSeconds) * b.tempoRatio) / fit.stretch;
+    draft.patch(lane.laneId, { tempoRatio: fit.stretch, offsetSeconds: Math.max(0, offset), pitchSemitones: lane.pitchSemitones + shift, clips: null, muted: false });
+  }
+  const swapBass = from.backing.some((l) => l.kind === "bass") && to.backing.some((l) => l.kind === "bass");
+  const rise = (start: number, end: number): AutoPoint[] => [{ t: 0, v: 0 }, { t: start, v: 0 }, { t: end, v: 1 }];
+  const fall = (start: number, end: number): AutoPoint[] => [{ t: 0, v: 1 }, { t: start, v: 1 }, { t: end, v: 0 }];
+  for (const lane of from.lanes) {
+    if (leadOf(lane.laneId)) continue;
+    const now = draft.lane(lane.laneId);
+    if (lane.kind === "vocals") {
+      draft.patch(lane.laneId, { automation: { ...now.automation, volume: fall(T + L / 4, mid) } });
+      continue;
+    }
+    const volume = swapBass && lane.kind === "bass" ? fall(mid - 0.03, mid) : fall(mid, T + L);
+    draft.patch(lane.laneId, { automation: { ...now.automation, volume, filter: [{ t: 0, v: 1 }, { t: mid, v: 1 }, { t: T + L, v: 0.25 }] } });
+    // Nothing of it left after the blend (unless tracks are kept whole).
+    if (!session.options.keepWhole) {
+      const clips = trimAfter(draft.lane(lane.laneId), T + L + 0.05);
+      if (clips) draft.patch(lane.laneId, { clips });
+    }
+  }
+  for (const lane of to.lanes) {
+    if (leadOf(lane.laneId)) continue;
+    const now = draft.lane(lane.laneId);
+    const volume =
+      lane.kind === "vocals" ? rise(mid, mid + bar) : swapBass && lane.kind === "bass" ? rise(mid - 0.03, mid) : lane.kind === "beat" ? rise(T, mid) : rise(T, T + L / 4);
+    draft.patch(lane.laneId, { automation: { ...now.automation, volume, filter: undefined } });
+  }
+  draft.lines.unshift(
+    `“${songName(to)}” starts on bar ${at + 1} of “${songName(from)}” (${clock(T)}), at ${target.toFixed(0)} BPM${shift ? `, ${shift > 0 ? "+" : ""}${shift} st into its key` : ""}`,
+    swapBass
+      ? `Over ${length} bars: its drums and melody come in first, the bass lines swap at ${clock(mid)}, “${songName(from)}” closes and fades`
+      : `Over ${length} bars: it rises in while “${songName(from)}”'s vocal bows out, then “${songName(from)}” closes and fades by ${clock(T + L)}`
+  );
+  return draft.idea({
+    id: `mash-blend:${from.id}:${to.id}`,
+    kind: "idea",
+    role: "beatmaker",
+    icon: "disc-3",
+    title: `DJ blend: ${songName(from)} → ${songName(to)}`,
+    short: `${length} bars mixing one song into the next`,
+    why: `Like a DJ: “${songName(to)}” is matched to “${songName(from)}”'s speed and key and comes in on its bar line ${length} bars before the end — ${swapBass ? "drums and melody first, then the bass lines swap half-way" : "rising in"} — while “${songName(from)}” filters out and fades.`,
+    listenAt: Math.max(0, T - 2 * bar),
+  });
+}
+
+/** Every way of playing the songs in the mix together. */
+function mashupIdeas(session: Session): Idea[] {
+  const songs = mashableSongs(session.lanes).slice(0, 3);
+  if (songs.length < 2) return [];
+  const ideas: Idea[] = [];
+  // One that can't be worked out (a pair that didn't match well) never takes the others with it.
+  const add = (make: () => Idea | null) => {
+    try {
+      const idea = make();
+      if (idea) ideas.push(idea);
+    } catch {
+      // left out
+    }
+  };
+  for (const a of songs) {
+    for (const b of songs) {
+      if (a === b || !a.vocals.length || !b.backing.length) continue;
+      add(() => swapIdea(session, a, b));
+      add(() => duetIdea(session, a, b));
+    }
+  }
+  for (const a of songs) for (const b of songs) if (a !== b) add(() => blendIdea(session, a, b));
+  return ideas;
+}
+
 type IdeaSource = (session: Session) => Idea[];
 
 /** Every family of ideas, in the order they're listed. */
@@ -2551,6 +3014,7 @@ const SOURCES: IdeaSource[] = [
   layerIdeas,
   (session) => (session.pair ? arrangementIdeas(session) : []),
   soundIdeas,
+  mashupIdeas,
 ];
 
 /**
@@ -2845,7 +3309,22 @@ export function checkMix(session: Session, lanes: StudioLane[]): Check[] {
     // The beat as it plays: every line of its recording together. Parts swapped in carry the beat's level, so the beat's loudness still applies.
     const played = playedLoudness(session, recordingOf(lanes, ref));
     const bl = played > 0 ? played : (session.beat ? session.analyses.get(session.beat.laneId)?.loudness ?? 0 : 0) * ref.volume;
-    if (vl > 0 && bl > 0) {
+    const heardDb = heardBalance(session, lanes, vocal, ref);
+    if (heardDb !== null) {
+      checks.push({
+        id: "volume",
+        icon: "volume-2",
+        label: "Volume",
+        status: heardDb < -6 || heardDb > 7 ? "bad" : heardDb < -2.5 || heardDb > 3.5 ? "warn" : "good",
+        text:
+          heardDb < -2.5
+            ? `The vocal is buried under the beat (${Math.abs(heardDb).toFixed(1)} dB under where records put it)`
+            : heardDb > 3.5
+              ? `The vocal is much louder than the beat (${heardDb.toFixed(1)} dB over where records put it)`
+              : "Vocal and beat are balanced, as heard",
+        fix: "balance",
+      });
+    } else if (vl > 0 && bl > 0) {
       const ratio = (vl * vocal.volume) / bl / VOCAL_LIFT;
       checks.push({
         id: "volume",

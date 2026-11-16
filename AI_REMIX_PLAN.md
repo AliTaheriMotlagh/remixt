@@ -1,6 +1,6 @@
 # AI producer: real remixer, engineer and mashup — handover plan
 
-Written 2026-11-15 for the next session. Nothing here is committed yet.
+Written 2026-11-15; status updated 2026-11-16 (see STATUS below).
 
 ## What the owner asked for
 
@@ -54,7 +54,38 @@ Example steps file:
 
 Run: `cd web && npx next dev -p 3100` (port 3000 is another project), then `BASE_URL=http://localhost:3100 OUT_DIR=/tmp node scripts/ai-drive.mjs steps.json` and `node scripts/measure-wav.mjs /tmp/good.wav`. An export takes about 10 s.
 
-## Still to do, in order
+## STATUS 2026-11-16 (read this first)
+
+Stages 1–3 are built; most of the final pass is done. Uncommitted work on top of commit 44febb8:
+
+- **Stage 1 done**: `tests/beat-reprise.test.ts`, "main part plays again" wording (aiExplain), REPEAT band on DropMap.
+- **Stage 2 done**: `lib/client/mixEngineer.ts` (measure, engineerMix, compressor model, masterToTarget), `lib/client/laneTones.ts`
+  (full-rate tones per stem, `Session.tones`), new lane EQ `eqLowMid` (350 Hz bell) and `MasterFx.gain`.
+  Pro mix = idea `sound-pro` (switch under Make it sound good on Sync, and in Style → Mix engineer, with
+  `components/studio/ai/EngineerCard.tsx`). Option `proMix` ("Engineer every style and sound", on by default)
+  engineers every applyMix. MasterIt = "Master to target" (Streaming −14 / Loud −10) with meter; presets under "Presets, by ear".
+  Balance (Make it sound good fix, Mix check, score) uses heard loudness (`heardBalance`) when tones exist.
+- **Calibration (measured in the Studio)**: VOCAL_OFFSET_DB −1.5 (records: −1.3, −1.4, −2.5, +1.7, −3.9); BACKING_LUFS −17;
+  compressor model peaks at lufs+4 (vocal lands within 0.2 dB of aim).
+- **Stage 3 done**: `lib/client/mashup.ts` (songsOf, heardSpans, whoPlaysWhen), mashup ideas in aiIdeas
+  (`mash-swap:`, `mash-duet:`, `mash-blend:`; `Session.pairs` prepared in prepareSession), Mashup tab + `ai/MashupMap.tsx`.
+  Engineer won't cut a second beat's bass when the two barely overlap (blend).
+- Tests: ai-producer 53, ai-explain 19, mix-engineer 16, mashup 4, beat-reprise 8 — all pass. tsc clean; lint clean on touched files
+  (3 lint errors are pre-existing, in public/ vendored files).
+
+Measured on 4 real pairs (rig, Streaming master): whole song −13.3/−13.5/−13.6/−13.8 LUFS, peaks ≤ −1.26 dB, 0 clipped; mud
+−7.9→−10.5, −8.5→−11.1, −8.8→−10.2. Scores with Pro mix: 96, 69, ?, 93 (pair 2 is low for other reasons — check its score parts).
+
+### Left
+1. **Re-run pair 1 after the last change** (balancedLevels now stages the beat to BACKING_LUFS when measured): Make it sound good
+   alone was −9.8 LUFS / LRA 1.8 (squashed). Expect ~−15 LUFS and LRA back up. Steps files in the session scratchpad are gone —
+   rebuild from the example below (Pro mix switch: `{"switch":"^Pro mix"}`; master: `{"tab":"Style"},{"click":"button:has-text('Streaming')","settle":20000}`).
+2. Stage 1 rig checks not yet run: beat longer than vocal (unchanged), short loop beat, "Keep tracks whole" on, Keep then another style.
+3. Phone screenshots of Pro mix card, EngineerCard, Master to target, Mashup tab (`npm run shot -- /studio /tmp/s.png phone` or ai-drive.mjs `phone`).
+4. Full `npm test` (stop the `next dev -p 3100` first — they share `.next`).
+5. Commit. Optional: duet only appeared one way for Hichkas×Fadaei (the other direction found no turn for the host) — fine, but worth a look.
+
+## Original plan: still to do, in order
 
 ### 1. Finish Stage 1 (small)
 

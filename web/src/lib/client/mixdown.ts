@@ -9,7 +9,7 @@ import { exportTags, type ExportInfo } from "./exportMeta";
 import { encodeMp3, openMp3Stream, type PcmSink } from "./mp3";
 import { scheduleModulation } from "./modulation";
 import { downloadFile } from "./saveFile";
-import { getAudibleLaneIds, laneGain, laneName, resolveDelayTime, useStudioStore, type StudioLane } from "./studioStore";
+import { getAudibleLaneIds, laneGain, laneName, resolveDelayTime, useStudioStore, type MasterFx, type StudioLane } from "./studioStore";
 
 export type ExportRange = "full" | "loop";
 export type ExportFormat = "wav" | "mp3";
@@ -48,6 +48,8 @@ export type ExportOptions = {
   range?: ExportRange;
   /** An exact stretch of the timeline instead, in seconds (used by the social clip export). */
   span?: { start: number; end: number };
+  /** Rendered with this master in place of the mix's own (mastering tries settings this way before setting them). */
+  master?: MasterFx;
   format?: ExportFormat;
   /** Extra seconds rendered past the last lane so reverb/delay tails fit. */
   tailSeconds?: number;
@@ -287,7 +289,7 @@ async function bounceToFile(
 }
 
 /** The current project's mix, as a bounce — what's audible, with the master on it. */
-async function mixBounce({ range = "full", span, tailSeconds = 2.5, sampleRate = 44100, onProgress, signal }: ExportOptions = {}) {
+async function mixBounce({ range = "full", span, master: masterOverride, tailSeconds = 2.5, sampleRate = 44100, onProgress, signal }: ExportOptions = {}) {
   onProgress?.("Loading stems…");
   await loadForExport(signal);
 
@@ -314,7 +316,7 @@ async function mixBounce({ range = "full", span, tailSeconds = 2.5, sampleRate =
     ring: ringSeconds(lanes, state.projectBpm),
     sourceRates: sources.map((s) => s.buffer.sampleRate),
     build: (ctx, playhead) => {
-      const master = createMasterChain(ctx, ctx.destination, state.master);
+      const master = createMasterChain(ctx, ctx.destination, masterOverride ?? state.master);
       master.gain.gain.value = state.masterVolume;
       for (const { lane, buffer, clipBuffer } of sources) {
         const chain = createLaneChain(ctx, lane, state.projectBpm, master.input);

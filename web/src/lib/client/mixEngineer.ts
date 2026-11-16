@@ -378,6 +378,8 @@ export type EngineerLane = {
   lowestNoteHz?: number;
   /** For a vocal: share of its span that's singing, 0..1. */
   density?: number;
+  /** When it's heard on the timeline. Two backings that barely overlap (a DJ blend) can both keep their bass. */
+  spans?: { start: number; end: number }[];
 };
 
 export type EngineerInput = {
@@ -387,11 +389,15 @@ export type EngineerInput = {
   leadId?: string | null;
   beatId?: string | null;
   /**
-   * "full": the engineer's whole sound — tone, dynamics, space and levels.
-   * "on-style": a style's sound kept (its colour, its space), with the
-   * engineer's corrections on top: low end, mud, masking, levels, placement.
+   * Both start from each lane's own effects and never undo their colour
+   * (a style's low-pass, drive, room). "full" also gives the vocal its
+   * space (reverb and echo timed to the tempo) and the backing its dip
+   * under the voice where they have none; "on-style" leaves those to the
+   * style and only corrects: low end, mud, masking, levels, placement.
    */
   mode: "full" | "on-style";
+  /** dB the lead vocal sits over its usual place (a style that wants the voice upfront). */
+  vocalLiftDb?: number;
 };
 
 export type LaneDecision = {
@@ -426,8 +432,19 @@ export type EngineerPlan = {
   lines: string[];
 };
 
-/** A lead vocal while it sings sits this far under the backing, as the ear weighs them (LUFS of each, gated). */
-export const VOCAL_OFFSET_DB = -1;
+/**
+ * A lead vocal while it sings sits this far under the backing, as the ear
+ * weighs them (gated LUFS of each). Measured on the library's own songs —
+ * each record's separated vocal against its own beat: −1.3, −1.4, −2.5,
+ * +1.7 and −3.9 dB (median −1.4).
+ */
+export const VOCAL_OFFSET_DB = -1.5;
+/**
+ * Where the main backing is set (LUFS, gated) — gain staging: the mix
+ * comes out around −15 LUFS with room under the limiter, and the master
+ * takes it to its loudness target from there.
+ */
+export const BACKING_LUFS = -17;
 /** A second vocal (a feature, a harmony that isn't a layer) under the lead. */
 const SECOND_VOCAL_DB = -3;
 /** Another song's drums, bass or melody on their own, under the main backing. */
@@ -442,6 +459,32 @@ const LOW_ENERGY_DB = -15;
 const PRESENCE_CLEAR_DB = 1;
 
 const round = (value: number, step: number) => Math.round(value / step) * step;
+
+/**
+ * How much louder (dB) the lane compressor leaves a sound at `lufs`: its
+ * gain on the sound's syllables (~4 dB over its body), plus the make-up
+ * gain Web Audio's DynamicsCompressor adds by itself (0.6 of what it would
+ * take off a full-scale signal). Its settings are createLaneChain's:
+ * threshold −22 dB, knee 24 dB, ratio 4.
+ */
+export function compressorGainDb(lufs: number) {
+  const threshold = -22;
+  const knee = 24;
+  const ratio = 4;
+  const curve = (x: number) =>
+    x <= threshold - knee / 2 ? 0 : x >= threshold + knee / 2 ? (1 / ratio - 1) * (x - threshold) : ((1 / ratio - 1) * (x - threshold + knee / 2) ** 2) / (2 * knee);
+  // Syllables peak ~4 dB over a voice's gated loudness (checked in the Studio: a vocal set by this lands within 0.2 dB).
+  return curve(lufs + 4) - 0.6 * curve(0);
+}
+
+/** Whether `lane` is heard with `other` for over a third of its own length (always, when either's timing isn't known). */
+function playsWith(lane: EngineerLane, other: EngineerLane) {
+  if (!lane.spans || !other.spans) return true;
+  const own = lane.spans.reduce((s, x) => s + x.end - x.start, 0);
+  let shared = 0;
+  for (const x of lane.spans) for (const y of other.spans) shared += Math.max(0, Math.min(x.end, y.end) - Math.max(x.start, y.start));
+  return own <= 0 || shared > own / 3;
+}
 const clamp = (value: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, value));
 
 function roleOf(lane: EngineerLane, leadId: string | null): MixRole {
@@ -493,14 +536,7 @@ export function engineerMix(input: EngineerInput): EngineerPlan {
     (input.leadId && vocals.some((v) => v.laneId === input.leadId) ? input.leadId : null) ??
     [...vocals].sort((a, b) => b.tone!.lufs + 20 * Math.log10(b.volume || 1e-3) - (a.tone!.lufs + 20 * Math.log10(a.volume || 1e-3)))[0]?.laneId ??
     null;
-  const fx = new Map(work.map((l) => [l.laneId, { ...(mode === "full" ? DEFAULT_FX : l.fx) } as LaneFx]));
-  // Fades and pans a person or a style put on stay unless the engineer has reason to move them.
-  for (const l of work) {
-    const f = fx.get(l.laneId)!;
-    f.fadeIn = l.fx.fadeIn;
-    f.fadeOut = l.fx.fadeOut;
-    if (mode === "full") f.duck = 0;
-  }
+  const fx = new Map(work.map((l) => [l.laneId, { ...DEFAULT_FX, ...l.fx } as LaneFx]));
   const volume = new Map(work.map((l) => [l.laneId, l.volume]));
   const reasons = new Map<string, string[]>(work.map((l) => [l.laneId, []]));
   const say = (id: string, text: string) => reasons.get(id)?.push(text);
@@ -530,7 +566,7 @@ export function engineerMix(input: EngineerInput): EngineerPlan {
     } else if (keepsLows(l)) {
       cut = 30;
       why = l.laneId === owner!.laneId ? "keeps the low end — the one bass line in the mix (sub rumble under 30 Hz cleaned)" : "";
-    } else if (lowEnergy) {
+    } else if (lowEnergy && (!owner || playsWith(l, owner))) {
       cut = l.kind === "drums" ? 90 : l.kind === "other" ? 150 : 140;
       why = `low cut at ${cut} Hz: its bass would fight ${owner ? `“${owner.title}”` : "the beat"}'s`;
     }
@@ -548,7 +584,7 @@ export function engineerMix(input: EngineerInput): EngineerPlan {
       f.compress = true;
       say(v.laneId, `compressor on (its peaks stand ${Math.round(v.tone!.crestDb)} dB over its body — every word at one level)`);
     }
-    if (mode === "full" || f.eqHigh === 0) {
+    if (f.eqHigh === 0) {
       // A clear voice: highs ~10 dB under its mids. Dull (a separated vocal often is): lift; harsh: tame.
       const dullness = shares[HIGHS] - shares[MIDS];
       const lift = round(clamp((-10 - dullness) * 0.5, -2, 4), 0.5);
@@ -557,7 +593,7 @@ export function engineerMix(input: EngineerInput): EngineerPlan {
         say(v.laneId, lift > 0 ? `highs +${lift} dB — it measured dull (${Math.round(dullness)} dB under its mids)` : `highs ${lift} dB — it measured harsh`);
       }
     }
-    if (mode === "full") {
+    if (mode === "full" && f.reverb === 0 && f.delay === 0) {
       const dense = (v.density ?? 0.5) > 0.6;
       f.reverb = v.laneId === leadId ? (dense ? 0.1 : 0.15) : 0.18;
       f.reverbSize = decayOn(2 * beatLength(bpm), bpm);
@@ -573,14 +609,11 @@ export function engineerMix(input: EngineerInput): EngineerPlan {
   for (const l of work) {
     const f = fx.get(l.laneId)!;
     const role = roleOf(l, leadId);
-    if (role === "lead" || role === "bass" || role === "drums" || l.laneId === owner?.laneId) {
-      if (mode === "full") f.pan = 0;
-      continue;
-    }
+    if (role === "lead" || role === "bass" || role === "drums" || l.laneId === owner?.laneId) continue;
     const otherSong = !owner || l.song !== owner.song;
     if (role === "vocal" || (role === "melody" && otherSong)) {
       const pan = (side++ % 2 ? -1 : 1) * (role === "vocal" ? 0.3 : 0.35);
-      if (Math.abs(f.pan) < 0.05 || mode === "full") {
+      if (Math.abs(f.pan) < 0.05) {
         f.pan = pan;
         say(l.laneId, `panned ${pan < 0 ? "left" : "right"} ${Math.round(Math.abs(pan) * 100)}% — out of the lead's way`);
       }
@@ -588,7 +621,11 @@ export function engineerMix(input: EngineerInput): EngineerPlan {
   }
 
   // 4. Levels, by role, from loudness as the ear hears it (through the new filters).
-  const lufsNow = (l: EngineerLane) => l.tone!.lufs + loudnessChange(l.tone!.bands, bandGains(fx.get(l.laneId)!));
+  const lufsNow = (l: EngineerLane) => {
+    const f = fx.get(l.laneId)!;
+    const filtered = l.tone!.lufs + loudnessChange(l.tone!.bands, bandGains(f));
+    return filtered + (f.compress ? compressorGainDb(filtered) : 0);
+  };
   const groupLoudness = (lanes: EngineerLane[], level: (l: EngineerLane) => number) =>
     db(lanes.reduce((s, l) => s + fromDb(lufsNow(l)) * level(l) ** 2, 0));
   const songs = [...new Set(backing.map((l) => l.song))];
@@ -596,8 +633,9 @@ export function engineerMix(input: EngineerInput): EngineerPlan {
   let reference = 0;
   if (refSong !== undefined) {
     const group = backing.filter((l) => l.song === refSong);
-    // The main backing keeps its own balance, its loudest line at 85%.
-    const scale = 0.85 / Math.max(1e-3, ...group.map((l) => l.volume));
+    // The main backing keeps its own balance, set to the staging level (its loudest line no higher than the faders go).
+    const now = groupLoudness(group, (l) => l.volume);
+    const scale = Math.min(amp(BACKING_LUFS - now), MAX_VOLUME / Math.max(1e-3, ...group.map((l) => l.volume)));
     for (const l of group) volume.set(l.laneId, l.volume * scale);
     reference = groupLoudness(group, (l) => volume.get(l.laneId)!);
     for (const song of songs) {
@@ -609,12 +647,13 @@ export function engineerMix(input: EngineerInput): EngineerPlan {
     }
   } else if (vocals.length) {
     // A cappella: the lead at a steady level.
-    reference = -16 - VOCAL_OFFSET_DB;
+    reference = BACKING_LUFS;
   }
-  for (const v of vocals) {
-    const target = reference + VOCAL_OFFSET_DB + (v.laneId === leadId ? 0 : SECOND_VOCAL_DB);
-    volume.set(v.laneId, amp(target - lufsNow(v)));
-  }
+  const vocalTarget = (v: EngineerLane) => reference + VOCAL_OFFSET_DB + (v.laneId === leadId ? (input.vocalLiftDb ?? 0) : SECOND_VOCAL_DB);
+  const relevel = () => {
+    for (const v of vocals) volume.set(v.laneId, amp(vocalTarget(v) - lufsNow(v)));
+  };
+  relevel();
 
   // 5. The vocal's presence: where the backing covers it, the backing's mids come down by as much.
   const lead = work.find((l) => l.laneId === leadId);
@@ -643,27 +682,24 @@ export function engineerMix(input: EngineerInput): EngineerPlan {
     // Still covered: the vocal's own presence lifted, as much as is missing (a little goes a long way).
     const left = Math.min(...maskingNow().filter((m) => m.band !== HIGHS).map((m) => m.level));
     const vf = fx.get(lead.laneId)!;
-    if (left < PRESENCE_CLEAR_DB && (mode === "full" || vf.eqMid === 0)) {
-      const lift = round(clamp(PRESENCE_CLEAR_DB - left, 1, 2.5), 0.5);
-      vf.eqMid = Math.max(vf.eqMid, lift);
+    const lift = round(clamp(PRESENCE_CLEAR_DB - left, 1, 2.5), 0.5);
+    if (left < PRESENCE_CLEAR_DB && vf.eqMid < lift) {
+      vf.eqMid = lift;
       say(lead.laneId, `presence +${lift} dB around 1.4 kHz — the backing still covered it there`);
     }
     // The beat dips under the voice too, as much as it covered it — gently on a vocal that hardly stops.
     if (mode === "full") {
       const dense = (lead.density ?? 0.5) > 0.6;
       const duck = round(clamp((PRESENCE_CLEAR_DB - worst) * 0.06 + (dense ? 0.08 : 0.15), 0.1, 0.4), 0.01);
-      for (const l of backing) fx.get(l.laneId)!.duck = duck;
+      for (const l of backing) fx.get(l.laneId)!.duck = Math.max(fx.get(l.laneId)!.duck, duck);
       lines.push(`The backing dips ${Math.round(duck * 100)}% while the vocal sings${dense ? " (gently: it hardly stops)" : ""}.`);
     }
   } else if (mode === "full" && lead) {
-    for (const l of backing) fx.get(l.laneId)!.duck = (lead.density ?? 0.5) > 0.6 ? 0.1 : 0.15;
+    for (const l of backing) fx.get(l.laneId)!.duck = Math.max(fx.get(l.laneId)!.duck, (lead.density ?? 0.5) > 0.6 ? 0.1 : 0.15);
   }
 
   // 6. The low-mid pile-up: the lanes putting most into 250–500 Hz cut there with the 350 Hz bell,
   //    a step at a time, the vocals' levels kept (a cut makes a voice read quieter).
-  const relevel = () => {
-    for (const v of vocals) volume.set(v.laneId, amp(reference + VOCAL_OFFSET_DB + (v.laneId === leadId ? 0 : SECOND_VOCAL_DB) - lufsNow(v)));
-  };
   relevel();
   const mudShare = () => bandShares(sum([...rowsNow().values()]))[MUD];
   const mudBefore = bandShares(sum(all.map((l) => beforeRows.get(l.laneId)!)))[MUD];
@@ -690,7 +726,8 @@ export function engineerMix(input: EngineerInput): EngineerPlan {
 
   for (const v of vocals) {
     const role = v.laneId === leadId ? "the lead" : "a second voice";
-    say(v.laneId, `level: ${role}, ${Math.abs(VOCAL_OFFSET_DB + (v.laneId === leadId ? 0 : SECOND_VOCAL_DB))} dB under the beat as the ear weighs them, while it sings`);
+    const under = reference - vocalTarget(v);
+    say(v.laneId, `level: ${role}, ${Math.abs(under)} dB ${under >= 0 ? "under" : "over"} the beat as the ear weighs them, while it sings`);
   }
   if (owner) say(owner.laneId, "level: the reference everything is balanced against");
 
