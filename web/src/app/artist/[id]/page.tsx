@@ -11,7 +11,7 @@ import { invitePath } from "@/lib/referral";
 import FollowButton from "@/components/FollowButton";
 import { getArtistProgress, getFollowState } from "@/lib/social";
 import type { Metadata } from "next";
-import { JsonLd, pageMetadata } from "@/lib/seo";
+import { JsonLd, breadcrumbJsonLd, pageMetadata } from "@/lib/seo";
 import { absoluteUrl } from "@/lib/site";
 
 type ArtistRow = {
@@ -91,7 +91,7 @@ export default async function ArtistPage({
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 sm:py-12">
       <JsonLd
-        data={{
+        data={[{
           "@context": "https://schema.org",
           "@type": "ProfilePage",
           url: absoluteUrl(`/artist/${artist.id}`),
@@ -111,7 +111,9 @@ export default async function ArtistPage({
               image: cover ? absoluteUrl(cover) : undefined,
             };
           }),
-        }}
+        },
+        breadcrumbJsonLd([{ name: artist.artist_name, path: `/artist/${artist.id}` }]),
+        ]}
       />
       <div className="flex items-center gap-4">
         <span

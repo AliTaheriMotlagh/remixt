@@ -9,9 +9,11 @@ import PresenceHeartbeat from "@/components/PresenceHeartbeat";
 import InstallPrompt from "@/components/InstallPrompt";
 import UpdatePrompt from "@/components/UpdatePrompt";
 import { BackgroundActivity } from "@/components/UploadActivity";
+import FooterGate from "@/components/FooterGate";
+import SiteFooter from "@/components/SiteFooter";
 import { getCurrentUser } from "@/lib/auth";
 import { isAdmin } from "@/lib/admin";
-import { SITE_DESCRIPTION, SITE_NAME, SITE_TAGLINE, siteUrl } from "@/lib/site";
+import { SITE_CREATOR, SITE_DESCRIPTION, SITE_NAME, SITE_TAGLINE, siteUrl } from "@/lib/site";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -33,6 +35,8 @@ export const metadata: Metadata = {
   },
   description: SITE_DESCRIPTION,
   applicationName: SITE_NAME,
+  authors: [{ name: SITE_CREATOR.name, url: SITE_CREATOR.url }],
+  creator: SITE_CREATOR.name,
   category: "music",
   openGraph: {
     siteName: SITE_NAME,
@@ -45,6 +49,13 @@ export const metadata: Metadata = {
   formatDetection: { telephone: false, email: false, address: false },
   // Installed to an iPhone's home screen, it opens full-screen like an app.
   appleWebApp: { capable: true, title: SITE_NAME, statusBarStyle: "black" },
+  // Search consoles' ownership checks, as meta tags (Google also has its
+  // file in public/). Each is left out while its variable is unset.
+  verification: {
+    google: process.env.GOOGLE_SITE_VERIFICATION || undefined,
+    yandex: process.env.YANDEX_VERIFICATION || undefined,
+    other: process.env.BING_SITE_VERIFICATION ? { "msvalidate.01": process.env.BING_SITE_VERIFICATION } : undefined,
+  },
 };
 
 export const viewport: Viewport = {
@@ -79,6 +90,9 @@ export default async function RootLayout({
         <main id="main" className="flex min-w-0 flex-1 flex-col">
           {children}
         </main>
+        <FooterGate>
+          <SiteFooter />
+        </FooterGate>
         <PreviewBar />
         <PresenceHeartbeat />
         <InstallPrompt />

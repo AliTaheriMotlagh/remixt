@@ -1,10 +1,12 @@
+import Link from "next/link";
 import DjApp from "@/components/dj/DjApp";
 import { pageMetadata } from "@/lib/seo";
+import { toolPath } from "@/lib/tools";
 
 export const metadata = pageMetadata({
   title: "DJ decks: mix your songs on two decks",
   description:
-    "Two club-style decks in your browser for the songs in your library: sync, key, live stem kills, Auto-mix and an Auto DJ that keeps the set going, and set recording. Plus lessons, drills and gigs to learn DJing. Free.",
+    "Two club-style DJ decks in your browser for your own songs: sync, key match, stem kills, Auto-mix, an Auto DJ and set recording. Plus DJ lessons. Free.",
   path: "/dj",
 });
 
@@ -12,6 +14,31 @@ export default function DjPage() {
   return (
     <div className="mx-auto w-full max-w-7xl px-3 py-6 sm:px-5 sm:py-10">
       <DjApp />
+      {/* The decks only draw in the browser; this says what the page is to
+          anyone (and any search engine) reading it before they do. */}
+      <section className="mx-auto mt-14 max-w-3xl border-t border-border pt-10 text-sm text-muted">
+        <h2 className="text-lg font-bold text-foreground">Online DJ decks for the songs you split</h2>
+        <p className="mt-3">
+          Two decks with tempo sync, key matching and live stem kills: drop the vocal, the drums or the bass of either
+          song while it plays, because every song in your library is already split into stems. Auto-mix blends from one
+          deck to the other on the beat, and the Auto DJ picks the next song by tempo and key and keeps the set going.
+        </p>
+        <p className="mt-3">
+          Record a set and save it as an MP3 with its track list and cover. New to DJing? Learn to DJ has lessons, drills
+          and gigs, step by step.
+        </p>
+        <p className="mt-3">
+          No songs yet?{" "}
+          <Link href={toolPath("stem-splitter")} className="font-medium text-brand-strong hover:underline">
+            Split a song into stems
+          </Link>{" "}
+          or pick some from the{" "}
+          <Link href="/library" className="font-medium text-brand-strong hover:underline">
+            library
+          </Link>
+          .
+        </p>
+      </section>
     </div>
   );
 }

@@ -13,7 +13,7 @@ import { getRemixCredits } from "@/lib/credits";
 import { getArtistProgress, getComments } from "@/lib/social";
 import { coverUrl, ensureRemixStats, getRemixCard, getRemixStats, shareImageUrl } from "@/lib/models";
 import type { Metadata } from "next";
-import { JsonLd, pageMetadata } from "@/lib/seo";
+import { JsonLd, breadcrumbJsonLd, pageMetadata } from "@/lib/seo";
 import { SITE_NAME, absoluteUrl } from "@/lib/site";
 
 type RemixRow = {
@@ -82,7 +82,7 @@ export default async function RemixDetailPage({
     <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 sm:py-12">
       {remix.published && (
         <JsonLd
-          data={{
+          data={[{
             "@context": "https://schema.org",
             "@type": "MusicRecording",
             name: remix.title,
@@ -100,7 +100,12 @@ export default async function RemixDetailPage({
               { "@type": "InteractionCounter", interactionType: "https://schema.org/CommentAction", userInteractionCount: comments.length },
             ],
             isPartOf: { "@type": "WebSite", name: SITE_NAME, url: absoluteUrl("/") },
-          }}
+          },
+          breadcrumbJsonLd([
+            { name: "Remixes", path: "/remixes" },
+            { name: remix.title, path: `/remixes/${remix.id}` },
+          ]),
+          ]}
         />
       )}
       <div className="flex flex-wrap items-start justify-between gap-3">

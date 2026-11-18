@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { SITE_NAME, absoluteUrl } from "@/lib/site";
+import { SITE_CREATOR, SITE_NAME, absoluteUrl } from "@/lib/site";
 
 const DEFAULT_IMAGE = { url: "/opengraph-image", width: 1200, height: 630, alt: `${SITE_NAME} — remix vocals and beats from any song` };
 
@@ -50,6 +50,37 @@ export function JsonLd({ data }: { data: Record<string, unknown> | Record<string
   );
 }
 
+/**
+ * The trail shown above a result in search ("Remixt › Tools › Vocal
+ * remover"). Pass every step after the home page; the last one is this page.
+ */
+export function breadcrumbJsonLd(trail: { name: string; path: string }[]) {
+  const steps = [{ name: SITE_NAME, path: "/" }, ...trail];
+  return {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: steps.map((step, i) => ({
+      "@type": "ListItem",
+      position: i + 1,
+      name: step.name,
+      item: absoluteUrl(step.path),
+    })),
+  };
+}
+
+/** Questions and answers shown on the page, as structured data. Only for ones the page really shows. */
+export function faqJsonLd(faq: { q: string; a: string }[]) {
+  return {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity: faq.map((f) => ({
+      "@type": "Question",
+      name: f.q,
+      acceptedAnswer: { "@type": "Answer", text: f.a },
+    })),
+  };
+}
+
 export function organizationJsonLd() {
   return {
     "@context": "https://schema.org",
@@ -57,5 +88,6 @@ export function organizationJsonLd() {
     name: SITE_NAME,
     url: absoluteUrl("/"),
     logo: absoluteUrl("/remixt-logo/png/remixt-mark-1024.png"),
+    founder: { "@type": "Person", name: SITE_CREATOR.name, url: SITE_CREATOR.url, sameAs: SITE_CREATOR.sameAs },
   };
 }

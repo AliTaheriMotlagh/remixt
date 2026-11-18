@@ -250,3 +250,14 @@ Last run (2026-11-18 (5)): tsc clean; lint = the 3 old vendored errors (`public/
 - "Refresh request" missing on phones (version check time limit and retries).
 - Lyrics drifting off the vocal after edits.
 - AI producer stages 1–3: whole song survives, measured pro mix and mastering, songs together (two songs).
+
+---
+
+## SEO (2026-11-18)
+
+- [x] Tool pages for what people search: `/tools` hub + `/tools/{vocal-remover,acapella-extractor,karaoke-maker,stem-splitter,drum-extractor,bass-extractor,mashup-maker}` (content in `web/src/lib/tools.ts`; every claim must stay true of the app). JSON-LD: WebApplication, HowTo, FAQPage, BreadcrumbList.
+- [x] Site footer on content pages (`SiteFooter` + `FooterGate`, off in Studio/console/embeds: `showsFooter`), "Made by" link to the owner's site (`SITE_CREATOR` in `site.ts`, also Organization `founder` and `<meta name="author">`).
+- [x] Home: tools section + FAQ entry; `/dj` server-rendered intro; descriptions ≤160; sitemap adds tools, `/radio`, stations; breadcrumbs on remix/artist pages; `/llms.txt`; optional `GOOGLE_SITE_VERIFICATION` / `BING_SITE_VERIFICATION` / `YANDEX_VERIFICATION` meta tags.
+- Guards: `tests/seo.test.ts` (lengths, uniqueness, links, footer gate); `node scripts/seo-audit.mjs` crawls the live sitemap (0 failures; warnings: `/dj` and radio stations have their `<h1>` only after JS).
+- [ ] Production: set `PUBLIC_BASE_URL` to the real domain (canonicals/sitemap use it), submit `/sitemap.xml` in Google Search Console and Bing Webmaster Tools.
+- [ ] Next: Persian tool pages (e.g. «حذف صدای خواننده») with hreflang — the audience is largely Persian.

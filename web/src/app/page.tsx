@@ -49,6 +49,7 @@ import {
   type ArtistNumbers,
   type LeaderboardArtist,
 } from "@/lib/social";
+import ToolCards from "@/components/landing/ToolCards";
 import { JsonLd, organizationJsonLd, pageMetadata } from "@/lib/seo";
 import { SITE_DESCRIPTION, SITE_NAME, absoluteUrl } from "@/lib/site";
 
@@ -81,6 +82,10 @@ const FAQ = [
   {
     q: "Do I need to install anything?",
     a: "No. Remixt runs in your browser on a laptop, desktop or phone. The splitting model downloads once (about 200 MB) and is cached for next time.",
+  },
+  {
+    q: "What can a song be split into?",
+    a: "Vocals and the beat (everything but the voice), and the beat's own parts: drums, bass and melody. Use them as an acapella, an instrumental, a karaoke track or a drumless practice track.",
   },
   {
     q: "Does my song get uploaded?",
@@ -208,7 +213,7 @@ export default async function Home() {
           <div className="flex flex-col items-center text-center lg:items-start lg:text-left">
             <OnlineBadge initial={presence} />
             <h1 className="mt-6 text-4xl font-black tracking-tight text-balance sm:text-6xl">
-              Split any song.
+              Split any song.{" "}
               <br />
               <span className="bg-gradient-to-r from-vocals via-brand-strong to-beat bg-clip-text text-transparent">
                 Remix it your way.
@@ -636,6 +641,20 @@ export default async function Home() {
               ))}
             </div>
           )}
+        </div>
+      </section>
+
+      {/* Tools: one link per thing people search for ----------------------- */}
+      <section className="border-b border-border">
+        <div className="mx-auto max-w-6xl px-4 py-14 sm:px-6 sm:py-20">
+          <SectionHeading
+            eyebrow="Free tools"
+            title="Take any song apart"
+            lead="One AI splitter, many uses: remove the vocals, keep only the vocals, or pull out the drums and bass."
+          />
+          <div className="mt-10">
+            <ToolCards />
+          </div>
         </div>
       </section>
 

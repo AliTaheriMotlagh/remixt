@@ -3,6 +3,7 @@ import sql from "@/lib/db";
 import { ensureSchema } from "@/lib/schema";
 import { coverUrl, ensureRemixStats } from "@/lib/models";
 import { absoluteUrl } from "@/lib/site";
+import { TOOL_PAGES, toolPath } from "@/lib/tools";
 
 // Rebuilt at most once an hour: new remixes and artists show up without
 // every crawler visit hitting the database.
@@ -16,7 +17,11 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: absoluteUrl("/remixes"), lastModified: now, changeFrequency: "hourly", priority: 0.9 },
     { url: absoluteUrl("/library"), lastModified: now, changeFrequency: "daily", priority: 0.8 },
     { url: absoluteUrl("/studio"), lastModified: now, changeFrequency: "monthly", priority: 0.8 },
+    { url: absoluteUrl("/tools"), changeFrequency: "monthly", priority: 0.8 },
+    // The tool pages answer the searches people make most ("vocal remover"…).
+    ...TOOL_PAGES.map((t) => ({ url: absoluteUrl(toolPath(t.slug)), changeFrequency: "monthly" as const, priority: 0.9 })),
     { url: absoluteUrl("/live"), lastModified: now, changeFrequency: "hourly", priority: 0.7 },
+    { url: absoluteUrl("/radio"), lastModified: now, changeFrequency: "hourly", priority: 0.7 },
     { url: absoluteUrl("/dj"), lastModified: now, changeFrequency: "monthly", priority: 0.6 },
     { url: absoluteUrl("/examples"), lastModified: now, changeFrequency: "monthly", priority: 0.6 },
     { url: absoluteUrl("/challenges"), lastModified: now, changeFrequency: "weekly", priority: 0.7 },
@@ -60,6 +65,18 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     }
   } catch {
     // Database unreachable: still serve the main pages.
+  }
+  try {
+    // Stations on their own: the radio's tables may not exist yet, and that
+    // mustn't drop the remixes above.
+    const stations = await sql<{ slug: string; created_at: Date }[]>`
+      SELECT slug, created_at FROM radio_stations ORDER BY created_at LIMIT 1000
+    `;
+    for (const s of stations) {
+      pages.push({ url: absoluteUrl(`/radio/${s.slug}`), lastModified: s.created_at, changeFrequency: "daily", priority: 0.5 });
+    }
+  } catch {
+    // No radio yet.
   }
   return pages;
 }

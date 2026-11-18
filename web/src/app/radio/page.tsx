@@ -4,7 +4,7 @@ import { pageMetadata } from "@/lib/seo";
 
 export const metadata = pageMetadata({
   title: "Radio: vote on what plays next",
-  description: "Live radio stations of songs and remixes on Remixt. Everyone hears the same moment; listeners vote on the next song and send requests. Start your own station, embed it, or broadcast it on YouTube Live.",
+  description: "Live radio of songs and remixes: everyone hears the same moment, listeners vote on the next song and send requests. Start, embed or broadcast your own.",
   path: "/radio",
 });
 
