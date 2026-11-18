@@ -120,7 +120,7 @@ function masterSpan() {
   const length = Math.min(20, Math.max(4, duration));
   const choruses = lanes
     .filter((l) => l.kind === "vocals" && !l.muted)
-    .flatMap((l) => clipsOf(l).filter((c) => c.label === "Chorus" && !c.muted).map((c) => clipStart(l, c)));
+    .flatMap((l) => clipsOf(l).filter((c) => /chorus/i.test(c.label ?? "") && !c.muted).map((c) => clipStart(l, c)));
   const at = choruses.length ? Math.min(...choruses) : duration * 0.45;
   const start = Math.max(0, Math.min(at, duration - length));
   return { start, end: start + length };

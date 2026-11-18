@@ -87,26 +87,13 @@ Today only remixes have covers (`remixes.cover_key`, uploaded by the owner, `lib
 
 ## Session 2026-11-18 — where it stopped (read first)
 
-Nothing committed yet; all work below is in the tree. Unit tests: 726 passed before phase 5; new-song tests 12/12 since. tsc + lint clean on touched files at last check.
+Committed on branch `plan-phases-1-5` (not merged to main). Next: phase 5 leftovers below, then phases 6–8. Unit tests: 726 passed before phase 5; new-song tests 12/12 since. tsc + lint clean on touched files at last check.
 
 **Phase 5 status (in progress):**
 - Done: `newSong.ts` planner (tested, `tests/new-song.test.ts`), builder `newSongIdea` in `aiIdeas.ts` (id `new-song`, listed in the Mashup tab), `steadyStructure` in `arrange.ts`, `newSongLyrics.ts` (chorus from repeated lyric lines), song map + tools `components/studio/ai/NewSongMap.tsx` (swap singer/beat per part, try again, longer/shorter, more of a singer, drops on a beat, Undo), tweaks in `IdeaOptions.newSong`, `MasterIt` shown under the map.
-- Rig run, 3 songs (Ye Rooze Khoob, Kid Cudi, Dorcci — vocal + beat each): 3:50 at 93 BPM, score 70 → 94, Dorcci left out (would need 18% faster — said in notes). Before mastering −10.7 LUFS / peak −0.36; after "Streaming" master −12.5 LUFS / peak −0.86 / 0 clipped. **Not yet within −14 ±1 and peak < −1 dB**: masterToTarget measures only the loudest span; check why whole-song LUFS lands 1.5 dB hot (maybe measure span vs whole, or the limiter ceiling). Also the rig's `{"keep":true}` timed out after mastering (MasterIt keeps the trial itself — drop that step).
-- To do: fix mastering numbers; run with 4 songs; check no section cut mid-line and drops on bar lines (from clips); "lyrics of the new song" (one merged sheet timed to new places) not built; phone label per phase 3 (`deviceFeatures` newSong) is set but unmeasured.
+- Rig run, 3 songs (Ye Rooze Khoob, Kid Cudi, Dorcci — vocal + beat each): 3:50 at 93 BPM, score 70 → 94, Dorcci left out (would need 18% faster — said in notes). After "Streaming" master: **−14.2 LUFS, peak −1.14 dB, 0 clipped ✓** (fixed: `masterSpan` in `ai/extras.tsx` only matched clips labelled exactly "Chorus"; it now matches any chorus label).
+- To do: run with 4 songs; check by numbers that no section is cut mid-line and every drop starts on a bar line; one merged lyric sheet for the new song (not built); measure "new song" on the emulated phone (`scripts/phone-measure.mjs`) and set its label from that.
 - Rig steps file used: tracks above, then `{"ai":true},{"tab":"Mashup"},{"switch":"^A new song from everything"},{"wait":12000},{"stop":true},{"click":"button:visible:has-text('Streaming')"},{"wait":45000},{"export":"x"}`.
-
-**Ready-to-paste commit message (phases 1–4 + phase 5 so far):**
-```
-Clip editor, lyrics fit/editing, background play, device notices, song artwork, new song from everything
-
-- Clip editor: lyrics follow the edited vocal, loudest-part picks, vocal/beat credits, waveform part picker, export in the background with a progress chip, song artwork as background
-- Lyrics: search ranked against the vocal; timed sheets edited as words only, times kept
-- Duet works both ways (duetTurns fallback)
-- Background play: listening mode renders remix/embed mixes to an <audio> element; hidden page no longer pauses the Studio; Library plays on as a queue with lock-screen next/previous
-- deviceClass, feature labels and one "continue on a computer" notice
-- Song covers: read from file tags (ID3/M4A/FLAC/Ogg) or the music page, drawn fallback, shown across Library/Studio/DJ/lock screen; remix covers built from the songs
-- A new song from everything: planner, builder, song map and tools
-```
 
 ---
 
