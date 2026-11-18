@@ -12,6 +12,8 @@ Written 2026-11-17. Last commit at that time: `0fee2ca` (all earlier work commit
 
 ## What's left (2026-11-18 (5)) — all of it needs you, a device or hardware
 
+**0. Production storage is down (2026-11-19).** Every Vercel Blob store in team alan-f3ab is *suspended* (Hobby limits; remixt-blob held 963 MB / 527 files). Stems and covers answer 500, the Studio says "Couldn't load the audio". Lift it (upgrade the team, or wait for the reset — see the store's Usage page), then deploy and use Admin → Storage to delete unused files and the biggest unused songs. Consider moving stems to Cloudflare R2 (10 GB free, no download fees; the app already supports `R2_BUCKET`) — copying needs the store readable again.
+
 Everything that could be done and checked from this computer is done. Open:
 1. **Real phones** (Phase 2, 3, 9): iPhone (installed PWA + Safari tab) and Android Chrome — lock, switch app, home, a call; AI features' timings; a remix tune-in with nothing kept. For the radio: lock the screen through a song change, take a call, unplug headphones (see Phase 9 "Radio on phones").
 2. **A signed-in account** (Phase 4, 7): a tagged MP3 upload shows its cover after splitting; the lazy cover fill on a real library; every page signed in with data and as a new empty account.

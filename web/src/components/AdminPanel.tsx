@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Heart, Play } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import type { StorageReport } from "@/lib/storageReport";
 
 type Overview = {
   users: number;
@@ -91,7 +92,7 @@ type AdminResult = {
   sender_email: string | null;
 };
 
-type Tab = "reports" | "users" | "songs" | "remixes" | "challenges" | "results" | "cleanup";
+type Tab = "reports" | "users" | "songs" | "remixes" | "challenges" | "results" | "storage" | "cleanup";
 
 function formatDate(value: string) {
   return new Date(value).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
@@ -147,6 +148,7 @@ export default function AdminPanel({ adminId }: { adminId: string }) {
     { id: "remixes", label: "Remixes" },
     { id: "challenges", label: "Challenges" },
     { id: "results", label: "Shared results" },
+    { id: "storage", label: "Storage" },
     { id: "cleanup", label: "Clean up" },
   ];
 
@@ -206,6 +208,7 @@ export default function AdminPanel({ adminId }: { adminId: string }) {
         {tab === "remixes" && <RemixesTab onChange={refreshOverview} />}
         {tab === "challenges" && <ChallengesTab />}
         {tab === "results" && <ResultsTab />}
+        {tab === "storage" && <StorageTab onChange={refreshOverview} />}
         {tab === "cleanup" && <CleanupTab onChange={refreshOverview} />}
       </div>
     </div>
@@ -789,6 +792,252 @@ function ResultsTab() {
             </Row>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+function formatSize(bytes: number) {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(2)} GB`;
+  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(1)} MB`;
+  if (bytes >= 1e3) return `${Math.round(bytes / 1e3)} KB`;
+  return `${bytes} B`;
+}
+
+/**
+ * What's in storage, how near the plan's limit it is, and ways to make
+ * room: delete leftover files nothing uses, the shared results (worked out
+ * again by browsers), or the songs taking the most space.
+ */
+function StorageTab({ onChange }: { onChange: () => void }) {
+  const [report, setReport] = useState<StorageReport | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [version, setVersion] = useState(0);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null);
+  const [showAll, setShowAll] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const res = await fetch("/api/admin/files").catch(() => null);
+      const data = await res?.json().catch(() => null);
+      if (cancelled) return;
+      if (res?.ok) {
+        setReport(data);
+        setLoadError(null);
+      } else setLoadError(data?.error ?? "Couldn't read storage");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [version]);
+
+  async function removeFiles(body: object, label: string, question: string) {
+    if (!confirm(question)) return;
+    setBusy(label);
+    setMessage(null);
+    const res = await fetch("/api/admin/files", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).catch(() => null);
+    const data = await res?.json().catch(() => null);
+    setBusy(null);
+    setMessage(
+      res?.ok
+        ? { text: `Deleted ${data.deleted} file(s)${data.bytes ? `, ${formatSize(data.bytes)} freed` : ""}.`, ok: true }
+        : { text: data?.error ?? "Delete failed", ok: false }
+    );
+    setVersion((v) => v + 1);
+  }
+
+  async function removeSong(song: StorageReport["songs"][number]) {
+    const uses = song.usedInRemixes ? `\n\nIt's used in ${song.usedInRemixes} remix(es); they'll lose those lanes.` : "";
+    if (!confirm(`Delete “${song.title}” by ${song.artist} (${formatSize(song.bytes)})?${uses}\n\nThis can't be undone.`)) return;
+    setBusy(song.id);
+    setMessage(null);
+    const error = await send(`/api/admin/tracks/${song.id}`, { method: "DELETE" });
+    setBusy(null);
+    setMessage(error ? { text: error, ok: false } : { text: `Deleted “${song.title}”, ${formatSize(song.bytes)} freed.`, ok: true });
+    setVersion((v) => v + 1);
+    onChange();
+  }
+
+  if (loadError) {
+    return (
+      <div className="rounded-xl border border-danger/40 bg-danger/5 p-5">
+        <p className="font-medium text-danger">{loadError}</p>
+        <p className="mt-2 text-sm text-muted">
+          While the store refuses, songs can&apos;t play or upload and nothing can be deleted here. On Vercel&apos;s
+          Hobby plan a store is suspended once the team goes over a monthly limit (storage, operations or data
+          transfer): see the store&apos;s Usage page in the Vercel dashboard. Upgrading the team, or the limit
+          resetting, brings it back.
+        </p>
+        <button onClick={() => setVersion((v) => v + 1)} className={`${plainButton} mt-3`}>
+          Try again
+        </button>
+      </div>
+    );
+  }
+  if (!report) return <p className="text-sm text-muted">Reading storage… (every file is listed, this can take a moment)</p>;
+
+  const share = report.limit ? report.total / report.limit : null;
+  const results = report.groups.find((g) => g.id === "results");
+  const songs = showAll ? report.songs : report.songs.slice(0, 15);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="rounded-xl border border-border bg-surface p-5">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <p className="font-medium">
+            {formatSize(report.total)}
+            {report.limit && <span className="text-muted"> of {formatSize(report.limit)}</span>}
+            <span className="ml-2 text-xs text-muted">
+              {report.files} files · {report.backend === "blob" ? "Vercel Blob" : report.backend === "r2" ? "Cloudflare R2" : "this server's disk"}
+            </span>
+          </p>
+          <button onClick={() => setVersion((v) => v + 1)} className={plainButton}>
+            Refresh
+          </button>
+        </div>
+        {share !== null && (
+          <>
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-surface-raised">
+              <div
+                className={`h-full rounded-full ${share >= 0.9 ? "bg-danger" : share >= 0.75 ? "bg-brand-strong" : "bg-success"}`}
+                style={{ width: `${Math.min(100, share * 100)}%` }}
+              />
+            </div>
+            {share >= 0.8 && (
+              <p className="mt-2 text-sm text-danger">
+                {Math.round(share * 100)}% full. When the plan&apos;s limit is crossed the store is suspended, and
+                no song plays until it&apos;s back. Make room below.
+              </p>
+            )}
+          </>
+        )}
+        {report.brokenSongs > 0 && (
+          <p className="mt-2 text-sm text-danger">{report.brokenSongs} ready song(s) have stems missing from storage and can&apos;t play.</p>
+        )}
+        <div className="mt-4 flex flex-col divide-y divide-border text-sm">
+          {report.groups.map((g) => (
+            <div key={g.id} className="flex items-center justify-between gap-3 py-1.5">
+              <span className="min-w-0 truncate">{g.label}</span>
+              <span className="shrink-0 tabular-nums text-muted">
+                {g.files} · <span className="text-foreground">{formatSize(g.bytes)}</span>
+                {g.leftoverFiles > 0 && <span className="text-danger"> · {formatSize(g.leftoverBytes)} unused</span>}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {message && <p className={`text-sm ${message.ok ? "text-success" : "text-danger"}`}>{message.text}</p>}
+
+      <div className="rounded-xl border border-border bg-surface p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="font-medium">Unused files</p>
+            <p className="text-sm text-muted">
+              Files no song, cover or result points at: songs deleted while their files stayed, replaced covers,
+              link downloads never used. Deleting them breaks nothing.
+            </p>
+          </div>
+          <button
+            onClick={() =>
+              removeFiles(
+                { leftovers: true },
+                "leftovers",
+                `Delete all ${report.leftoverCount} unused file(s) (${formatSize(report.leftoverBytes)})?`
+              )
+            }
+            disabled={!report.leftoverCount || busy !== null}
+            className={dangerButton}
+          >
+            {busy === "leftovers" ? "Deleting…" : `Delete all (${formatSize(report.leftoverBytes)})`}
+          </button>
+        </div>
+        {report.leftoverCount === 0 ? (
+          <p className="mt-3 text-sm text-muted">None — every file is in use.</p>
+        ) : (
+          <div className="mt-3 flex max-h-80 flex-col gap-1 overflow-y-auto">
+            {report.leftovers.map((f) => (
+              <div key={f.key} className="flex items-center justify-between gap-3 rounded-lg px-2 py-1 text-xs hover:bg-surface-hover">
+                <span className="min-w-0 truncate font-mono" title={f.key}>
+                  {f.key}
+                </span>
+                <span className="flex shrink-0 items-center gap-2 tabular-nums text-muted">
+                  {formatSize(f.size)} · {formatDate(f.uploadedAt)}
+                  <button
+                    onClick={() => removeFiles({ keys: [f.key] }, f.key, `Delete ${f.key} (${formatSize(f.size)})?`)}
+                    disabled={busy !== null}
+                    className="rounded px-1.5 py-0.5 text-danger hover:bg-danger/10 disabled:opacity-50"
+                  >
+                    {busy === f.key ? "…" : "Delete"}
+                  </button>
+                </span>
+              </div>
+            ))}
+            {report.leftoverCount > report.leftovers.length && (
+              <p className="px-2 text-xs text-muted">…and {report.leftoverCount - report.leftovers.length} more (Delete all includes them).</p>
+            )}
+          </div>
+        )}
+      </div>
+
+      {results && results.files > 0 && (
+        <div className="rounded-xl border border-border bg-surface p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="font-medium">Shared beats and analysis</p>
+              <p className="text-sm text-muted">
+                {results.files} file(s), {formatSize(results.bytes)}. Browsers work them out again the next time a
+                stem is opened — only slower the first time, on phones above all.
+              </p>
+            </div>
+            <button
+              onClick={() =>
+                removeFiles({ results: true }, "results", `Delete all ${results.files} shared result(s) (${formatSize(results.bytes)})?`)
+              }
+              disabled={busy !== null}
+              className={dangerButton}
+            >
+              {busy === "results" ? "Deleting…" : "Delete all"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="rounded-xl border border-border bg-surface p-5">
+        <p className="font-medium">Biggest songs</p>
+        <p className="text-sm text-muted">Deleting a song deletes its stems; remixes that use it lose those lanes.</p>
+        <div className="mt-3 flex flex-col gap-2">
+          {songs.map((song) => (
+            <Row key={song.id}>
+              <div className="min-w-0">
+                <p className="truncate font-medium">
+                  {song.title}
+                  <span className="ml-2 tabular-nums text-sm text-muted">{formatSize(song.bytes)}</span>
+                  {song.missing > 0 && <span className="ml-2 text-xs text-danger">{song.missing} stem file(s) missing</span>}
+                </p>
+                <p className="truncate text-xs text-muted">
+                  {song.artist} · {formatDate(song.createdAt)}
+                  {song.usedInRemixes > 0 && ` · in ${song.usedInRemixes} remixes`}
+                  {song.status !== "ready" && ` · ${song.status === "processing" ? "uploading" : song.status}`}
+                </p>
+              </div>
+              <button onClick={() => removeSong(song)} disabled={busy !== null} className={dangerButton}>
+                {busy === song.id ? "Deleting…" : "Delete"}
+              </button>
+            </Row>
+          ))}
+        </div>
+        {report.songs.length > songs.length && (
+          <button onClick={() => setShowAll(true)} className={`${plainButton} mt-3`}>
+            Show {report.songs.length - songs.length} more
+          </button>
+        )}
       </div>
     </div>
   );

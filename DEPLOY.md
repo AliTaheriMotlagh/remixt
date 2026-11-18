@@ -164,6 +164,11 @@ git push -u origin main
 2. **Connect** it to the project, with Production, Preview and Development
    ticked. Vercel adds `BLOB_READ_WRITE_TOKEN`; the app sees it, works out
    whether the store is public or private, and stores stems there.
+   (Optionally set `BLOB_ACCESS` to `public` or `private` to say it
+   outright.) Watch the store's **Usage** on the Hobby plan: once it's
+   over its monthly operation limit, Blob refuses uploads, so new songs,
+   takes and covers can't be saved until the month resets or the plan
+   changes.
 
 ### 5. Redeploy and finish
 

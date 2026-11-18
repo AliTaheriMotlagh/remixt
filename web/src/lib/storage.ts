@@ -45,17 +45,49 @@ export function storageProblem(): string | null {
 
 type BlobAccess = "public" | "private";
 let blobAccessCheck: Promise<BlobAccess> | null = null;
+const ACCESS_MARKER = ".remixt/access-check.txt";
+
+/**
+ * A stored blob's URL read without the token: a public store hands it
+ * over, a private one refuses. Null when the answer says neither.
+ */
+async function accessOf(url: string): Promise<BlobAccess | null> {
+  try {
+    const res = await fetch(url, { headers: { Range: "bytes=0-0" }, cache: "no-store" });
+    void res.body?.cancel();
+    if (res.ok) return "public";
+    if (res.status === 401 || res.status === 403) return "private";
+  } catch {
+    // Unreachable just now: no answer either way.
+  }
+  return null;
+}
 
 /**
  * Whether the connected Blob store is public or private. It's fixed when
  * the store is created, the two need different handling, and uploading
- * with the wrong one is rejected — so find out by writing a tiny marker
- * file once per server instance rather than trusting a setting.
+ * with the wrong one is rejected. BLOB_ACCESS says it outright; otherwise
+ * it's read off a blob already stored (`sampleUrl`, or the marker file),
+ * once per server instance. Only a store with nothing in it yet is
+ * probed by writing — playing a stem must never depend on a write
+ * succeeding, since a store over its plan's operation limit refuses
+ * writes while it still serves reads.
  */
-function blobAccess(): Promise<BlobAccess> {
+function blobAccess(sampleUrl?: string): Promise<BlobAccess> {
+  const set = process.env.BLOB_ACCESS?.trim().toLowerCase();
+  if (set === "public" || set === "private") return Promise.resolve(set);
   blobAccessCheck ??= (async () => {
+    if (sampleUrl) {
+      const seen = await accessOf(sampleUrl);
+      if (seen) return seen;
+    }
+    const marker = await head(ACCESS_MARKER, { token: blobToken }).catch(() => null);
+    if (marker) {
+      const seen = await accessOf(marker.url);
+      if (seen) return seen;
+    }
     const probe = (access: BlobAccess) =>
-      put(".remixt/access-check.txt", "ok", {
+      put(ACCESS_MARKER, "ok", {
         access,
         token: blobToken,
         addRandomSuffix: false,
@@ -188,7 +220,7 @@ export async function storedObject(key: string): Promise<{ size: number; url: st
       const blob = await head(key, { token: blobToken });
       // A private store's URLs need the secret token, so they're useless
       // to a browser — those stems are served by serveBlobRange instead.
-      const isPublic = (await blobAccess()) === "public";
+      const isPublic = (await blobAccess(blob.url)) === "public";
       return { size: blob.size, url: isPublic ? blob.url : null };
     } catch {
       return null;
@@ -246,7 +278,7 @@ export async function serveBlobRange(key: string, rangeHeader: string | null): P
   }
   const end = Math.min(wanted, size - 1, start + MAX_SLICE - 1);
 
-  const isPrivate = (await blobAccess()) === "private";
+  const isPrivate = (await blobAccess(blob.url)) === "private";
   const upstream = await fetch(blob.url, {
     headers: { ...(isPrivate ? { Authorization: `Bearer ${blobToken}` } : {}), Range: `bytes=${start}-${end}` },
     cache: "no-store",
@@ -444,7 +476,7 @@ export async function readObject(key: string): Promise<Buffer | null> {
     } catch {
       return null;
     }
-    const isPrivate = (await blobAccess()) === "private";
+    const isPrivate = (await blobAccess(blob.url)) === "private";
     const res = await fetch(blob.url, {
       headers: isPrivate ? { Authorization: `Bearer ${blobToken}` } : {},
       cache: "no-store",
@@ -495,6 +527,101 @@ export async function serveObject(
   const remote = publicUrl(key);
   if (remote) return Response.redirect(remote, 302);
   return serveStorageFile(key, rangeHeader);
+}
+
+export type StoredFile = { key: string; size: number; uploadedAt: Date };
+
+/** The storage key behind what a row holds: a key already, or a Blob / R2 URL from older builds. */
+export function keyOfFileUrl(fileUrl: string): string {
+  if (!/^https?:\/\//.test(fileUrl)) return fileUrl;
+  const base = r2?.publicUrl;
+  if (base && fileUrl.startsWith(`${base}/`)) return fileUrl.slice(base.length + 1).split("/").map(decodeURIComponent).join("/");
+  try {
+    return new URL(fileUrl).pathname.slice(1).split("/").map(decodeURIComponent).join("/");
+  } catch {
+    return fileUrl;
+  }
+}
+
+/** How much the store holds before its plan stops it, when known: STORAGE_LIMIT_GB, else Vercel Blob Hobby's 1 GB. */
+export function storageLimitBytes(): number | null {
+  const set = Number(process.env.STORAGE_LIMIT_GB);
+  if (set > 0) return set * 1e9;
+  return blobToken ? 1e9 : null;
+}
+
+export function storageBackend(): "blob" | "r2" | "local" {
+  return blobToken ? "blob" : r2 ? "r2" : "local";
+}
+
+function xmlText(value: string) {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * Every file in storage, for the admin's Storage tab. A Blob store is
+ * listed a thousand at a time (each page is one of the plan's "advanced"
+ * operations), so `max` stops a runaway listing.
+ */
+export async function listStoredFiles(max = 20000): Promise<StoredFile[]> {
+  const out: StoredFile[] = [];
+  if (blobToken) {
+    let cursor: string | undefined;
+    do {
+      const page = await list({ token: blobToken, cursor, limit: 1000 });
+      for (const b of page.blobs) out.push({ key: b.pathname, size: b.size, uploadedAt: new Date(b.uploadedAt) });
+      cursor = page.hasMore ? page.cursor : undefined;
+    } while (cursor && out.length < max);
+    return out;
+  }
+  if (r2) {
+    let token: string | undefined;
+    do {
+      const url = new URL(`${r2.endpoint}/${r2.bucket}`);
+      url.searchParams.set("list-type", "2");
+      url.searchParams.set("max-keys", "1000");
+      if (token) url.searchParams.set("continuation-token", token);
+      const res = await r2.client.fetch(url.toString());
+      if (!res.ok) throw new Error(`storage LIST failed (HTTP ${res.status})`);
+      const xml = await res.text();
+      for (const [, item] of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
+        const key = /<Key>([\s\S]*?)<\/Key>/.exec(item)?.[1];
+        if (!key) continue;
+        out.push({
+          key: xmlText(key),
+          size: Number(/<Size>(\d+)<\/Size>/.exec(item)?.[1] ?? 0),
+          uploadedAt: new Date(/<LastModified>([^<]+)<\/LastModified>/.exec(item)?.[1] ?? 0),
+        });
+      }
+      const truncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
+      token = truncated ? xmlText(/<NextContinuationToken>([^<]+)</.exec(xml)?.[1] ?? "") || undefined : undefined;
+    } while (token && out.length < max);
+    return out;
+  }
+  const entries = await readdir(/* turbopackIgnore: true */ STORAGE_DIR, { recursive: true, withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isFile() || out.length >= max) continue;
+    const full = path.join(entry.parentPath, entry.name);
+    const info = await stat(/* turbopackIgnore: true */ full).catch(() => null);
+    if (info) out.push({ key: path.relative(STORAGE_DIR, full).split(path.sep).join("/"), size: info.size, uploadedAt: info.mtime });
+  }
+  return out;
+}
+
+/** Deletes many stored files by key: a Blob store takes them a batch per call. */
+export async function deleteObjects(keys: string[]): Promise<void> {
+  if (blobToken) {
+    for (let i = 0; i < keys.length; i += 500) await del(keys.slice(i, i + 500), { token: blobToken });
+    return;
+  }
+  for (let i = 0; i < keys.length; i += 10) {
+    await Promise.all(keys.slice(i, i + 10).map((key) => deleteObject(key)));
+  }
 }
 
 /**

@@ -53,10 +53,12 @@ export async function deleteTracks(trackIds: string[]): Promise<number> {
  * next browser to open the stem works it out again and sends a new one.
  */
 export async function deleteStemResults(
-  which: { stemId: string; kind: string } | { userId: string } | { outdated: Record<string, number> }
+  which: { stemId: string; kind: string } | { userId: string } | { outdated: Record<string, number> } | { all: true }
 ): Promise<number> {
   const rows =
-    "stemId" in which
+    "all" in which
+      ? await sql<{ storage_key: string }[]>`DELETE FROM stem_results RETURNING storage_key`
+      : "stemId" in which
       ? await sql<{ storage_key: string }[]>`
           DELETE FROM stem_results WHERE stem_id = ${which.stemId} AND kind = ${which.kind} RETURNING storage_key
         `
