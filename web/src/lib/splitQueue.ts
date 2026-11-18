@@ -51,6 +51,8 @@ export type SplitJob = {
   worker_id: string | null;
   /** Which of the helper's tabs has it (a tab that reloads gets it straight back). */
   worker_session: string | null;
+  /** The song's cover picture, for the track it becomes. */
+  cover_key?: string | null;
   heartbeat_at: Date | null;
   progress: number;
   stage: string | null;
@@ -93,6 +95,8 @@ export function ensureSplitQueueSchema(): Promise<void> {
     // XP the helper earned for it (see lib/mining.ts). Splits from before
     // rewards had bonuses were all worth the base 10.
     await sql`ALTER TABLE split_jobs ADD COLUMN IF NOT EXISTS reward INTEGER NOT NULL DEFAULT 10`;
+    // The song's cover, read from its file (or its page) when it was queued; the track gets it (see .../track).
+    await sql`ALTER TABLE split_jobs ADD COLUMN IF NOT EXISTS cover_key TEXT`;
     // Helpers' tabs that have asked for work lately — "rigs online".
     await sql`
       CREATE TABLE IF NOT EXISTS split_rigs (

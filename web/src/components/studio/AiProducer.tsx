@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { StudioDeviceNotice } from "@/components/DeviceNotice";
 import {
   Activity,
   ArrowRight,
@@ -57,6 +58,7 @@ import {
   mixSignature,
   prepareSession,
   PRO_MIX_ID,
+  NEW_SONG_ID,
   rebaseSession,
   reworkIdeas,
   stretchKeyIdea,
@@ -104,6 +106,8 @@ import { useKeepScreenOn } from "@/lib/client/wakeLock";
 import DropMap from "./ai/DropMap";
 import EngineerCard from "./ai/EngineerCard";
 import MashupMap from "./ai/MashupMap";
+import NewSongMap from "./ai/NewSongMap";
+import type { NsTweaks } from "@/lib/client/newSong";
 import { mashableSongs } from "@/lib/client/mashup";
 import { Engines, FineTune, MasterIt } from "./ai/extras";
 import HarmonyCard from "./ai/HarmonyCard";
@@ -368,10 +372,12 @@ export default function AiProducer() {
   /** When the vocal comes in, and whether long gaps are closed. */
   const [timing, setTiming] = useState<Timing>(DEFAULT_TIMING);
   /** What the ideas are worked out with right now — read by a listen that started before a switch. */
-  const options = useRef({ keepWhole, proMix, sync: syncId, ...timing });
+  /** The person's changes to a new song from everything (its map's tools, see newSong.ts). */
+  const [newSongTweaks, setNewSongTweaks] = useState<NsTweaks>({});
+  const options = useRef<Omit<Session["options"], "vibe">>({ keepWhole, proMix, sync: syncId, ...timing, newSong: newSongTweaks });
   useEffect(() => {
-    options.current = { keepWhole, proMix, sync: syncId, ...timing };
-  }, [keepWhole, proMix, syncId, timing]);
+    options.current = { keepWhole, proMix, sync: syncId, ...timing, newSong: newSongTweaks };
+  }, [keepWhole, proMix, syncId, timing, newSongTweaks]);
   /** The control being worked on (an idea's id, "whole", "surprise"…), for its spinner; one at a time. */
   const [working, setWorking] = useState<string | null>(null);
   const workingRef = useRef(false);
@@ -569,6 +575,8 @@ export default function AiProducer() {
     setExpanded(null);
     setVocalId("");
     setBeatId("");
+    // A new mix: the last new song's changes don't carry over.
+    setNewSongTweaks({});
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [emptyMix, unrelated]);
 
@@ -719,6 +727,14 @@ export default function AiProducer() {
     const on = putBackOn(rebased, all, [...wasOn, ...add.filter((id) => !wasOn.includes(id))], was);
     keepPlace(bpm);
     return { session: rebased, ideas: all, on };
+  }
+
+  /** The person's changes to the new song (its map's tools): worked out again, and kept on. */
+  function tweakNewSong(next: NsTweaks) {
+    if (!session || workingRef.current) return;
+    setNewSongTweaks(next);
+    options.current = { ...options.current, newSong: next };
+    applyOptions({ newSong: next }, { add: [NEW_SONG_ID] });
   }
 
   /** Whole tracks or cut into lines: everything on is worked out again that way. */
@@ -1093,6 +1109,7 @@ export default function AiProducer() {
       swaps: ideas.filter((i) => i.id.startsWith("mash-swap:")),
       duets: ideas.filter((i) => i.id.startsWith("mash-duet:")),
       blends: ideas.filter((i) => i.id.startsWith("mash-blend:")),
+      newSong: byId.get(NEW_SONG_ID),
       cleanUp: ideas.filter((i) => i.id === "fix-vocal-clash"),
     };
   }, [ideas, personaId]);
@@ -1132,6 +1149,7 @@ export default function AiProducer() {
     );
   };
   const ready = !!session && !busy && !missing;
+  const newSongOn = trying.find((i) => i.id === NEW_SONG_ID);
   const score = total?.total ?? null;
   const autoOn = !!lists.auto && onIds.has(lists.auto.id);
   const keyFix = fixState("key");
@@ -1701,6 +1719,20 @@ export default function AiProducer() {
                 </div>
               ) : (
                 <>
+                  <StudioDeviceNotice feature="mashup" songs={songCount} />
+                  {lists.newSong && (
+                    <Section icon={Sparkles} title="A new song from everything" hint="Every song in the mix made into one: who sings when, which beat under which part, drops on the choruses">
+                      <StudioDeviceNotice feature="newSong" songs={songCount} />
+                      {sw(lists.newSong)}
+                      {newSongOn?.song && (
+                        <>
+                          <NewSongMap map={newSongOn.song} tweaks={newSongTweaks} onTweak={tweakNewSong} busy={!!working} />
+                          {/* Pro mix (on by default) engineers it; mastering by measurement finishes it. */}
+                          <MasterIt vibes={vibesNow} />
+                        </>
+                      )}
+                    </Section>
+                  )}
                   <MashupMap lanes={lanes} duration={songLength} projectBpm={projectBpm} />
                   {lists.swaps.length > 0 && <Section icon={Shuffle} title="Vocal swap" hint="One song's voice over the other's music — the rest of both muted">{lists.swaps.map((i) => sw(i))}</Section>}
                   {lists.duets.length > 0 && <Section icon={Users} title="Duet" hint="Both singers over one beat, taking turns section by section">{lists.duets.map((i) => sw(i))}</Section>}

@@ -1,5 +1,6 @@
 "use client";
 
+import { attachJobCover, attachTrackCover } from "./songCovers";
 import { useSyncExternalStore } from "react";
 import { queueFile, queueLink, splitHelper, type QueueResume } from "./splitQueue";
 import {
@@ -678,10 +679,12 @@ class Uploads {
           const queued = await queueLink(source.url, tags, report);
           name = queued.title;
         } else {
-          await queueFile(source.file, tags, report, signal, {
+          const jobId = await queueFile(source.file, tags, report, signal, {
             resume: readResume(id),
             onResume: (state) => writeResume(id, state),
           });
+          // Its cover, from the original file (the queue may get a smaller copy without tags).
+          void attachJobCover(jobId, source.file);
         }
         // A computer in this browser that helps split can take it at once.
         splitHelper.wake();
@@ -695,6 +698,7 @@ class Uploads {
         }
         const { id: madeId, existing } = await uploadSong(file, report, { tags, signal, keepPrivate });
         trackId = madeId;
+        if (!existing) void attachTrackCover(madeId, file);
         if (existing) {
           note = existing.mine
             ? `Already in your library as “${existing.title}” — nothing to split`

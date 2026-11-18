@@ -15,6 +15,8 @@ export function ensureSchema(): Promise<void> {
     // Featured example songs (the /examples page shows them first, with their credit).
     await sql`ALTER TABLE tracks ADD COLUMN IF NOT EXISTS featured_example BOOLEAN NOT NULL DEFAULT false`;
     await sql`ALTER TABLE tracks ADD COLUMN IF NOT EXISTS example_credit TEXT`;
+    // A song's cover picture (see app/api/tracks/[id]/cover).
+    await sql`ALTER TABLE tracks ADD COLUMN IF NOT EXISTS cover_key TEXT`;
     // What one browser worked out from a stem, for every other browser (see lib/stemResults.ts).
     await sql`
       CREATE TABLE IF NOT EXISTS stem_results (

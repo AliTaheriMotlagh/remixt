@@ -58,7 +58,14 @@ export default function RemixDetailPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [remixId]);
 
-  useEffect(() => () => audioEngine.stop(), []);
+  // Listening mode: the finished mix keeps playing with the screen locked or in another app (see renderedPlayback.ts).
+  useEffect(() => {
+    audioEngine.setListening(true);
+    return () => {
+      audioEngine.stop();
+      audioEngine.setListening(false);
+    };
+  }, []);
 
   // On the lock screen, this remix is by its artist (not the stems'
   // artists), with its cover.

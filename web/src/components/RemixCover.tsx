@@ -1,18 +1,37 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Camera, Headphones } from "lucide-react";
 import { uploadCover } from "@/lib/client/coverImage";
+import { mixCoverUrl } from "@/lib/client/exportMeta";
+import { useStudioStore } from "@/lib/client/studioStore";
 
-/** The square picture at the top of a remix page; its owner can change or remove it. */
-export default function RemixCover({ remixId, src, title, editable }: { remixId: string; src: string | null; title: string; editable: boolean }) {
+const NO_LANES: never[] = [];
+
+/**
+ * The square picture at the top of a remix page; its owner can change or
+ * remove it. Without one, the songs in the remix with its title (the
+ * mix's lanes, once the player has loaded them) — what its exports carry.
+ */
+export default function RemixCover({ remixId, src, title, artist = "", editable }: { remixId: string; src: string | null; title: string; artist?: string; editable: boolean }) {
   const router = useRouter();
   const input = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const shown = preview ?? src;
+  // This remix's lanes only — not whatever the Studio had before the player loaded it.
+  const lanes = useStudioStore((s) => (s.sourceRemix?.id === remixId ? s.lanes : NO_LANES));
+  const [drawn, setDrawn] = useState<string | null>(null);
+  useEffect(() => {
+    if (src || !lanes.length) return;
+    let live = true;
+    void mixCoverUrl(lanes, title, artist).then((url) => live && setDrawn(url));
+    return () => {
+      live = false;
+    };
+  }, [src, lanes, title, artist]);
+  const shown = preview ?? src ?? drawn;
 
   async function pick(file: File | undefined) {
     if (!file) return;

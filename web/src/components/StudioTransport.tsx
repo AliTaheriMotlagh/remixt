@@ -744,6 +744,7 @@ export default function StudioTransport({
             title={title.trim() || defaultTitle || "Untitled remix"}
             artist={artistName ?? user?.artist_name ?? "Remixt"}
             remixId={savedId ?? (viewing ? remixId : null)}
+            me={user?.artist_name ?? "You"}
           />
           {!viewing && (
             <Popover align="right" title="Clear the Studio — start over" label={<><Trash2 /><span className="hidden 2xl:inline">Clear</span></>}>

@@ -226,3 +226,40 @@ describe("keeping stems for later", () => {
     assert.equal(quiet, true);
   });
 });
+
+describe("playing on through a list", () => {
+  const list: PreviewTrack[] = [vocals, beat, { stemId: "s3", title: "Other", artist: "Them", kind: "vocals" }];
+
+  test("when a stem ends, the next in the list plays; after the last, it stops", async () => {
+    const { it, audio } = player();
+    await it.toggle(list[1], list);
+    audio().fire("ended");
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(it.getState().current?.stemId, "s3");
+    audio().fire("ended");
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(it.getState().current, null);
+  });
+
+  test("next and previous step through the list; previous part-way restarts the stem", async () => {
+    const { it, audio } = player();
+    await it.toggle(list[0], list);
+    await it.next();
+    assert.equal(it.getState().current?.stemId, "s2");
+    audio().currentTime = 40;
+    await it.previous();
+    assert.equal(it.getState().current?.stemId, "s2", "restarted, not skipped back");
+    assert.equal(audio().currentTime, 0);
+    await it.previous();
+    assert.equal(it.getState().current?.stemId, "s1");
+  });
+
+  test("a stem played on its own forgets the list", async () => {
+    const { it, audio } = player();
+    await it.toggle(list[0], list);
+    await it.play({ stemId: "elsewhere", title: "X", artist: "Y", kind: "beat" });
+    audio().fire("ended");
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(it.getState().current, null);
+  });
+});

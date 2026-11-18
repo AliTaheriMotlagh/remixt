@@ -1,5 +1,6 @@
 "use client";
 
+import SongArt from "@/components/SongArt";
 import { useRef, useState, type PointerEvent as RPointerEvent, type ReactNode } from "react";
 import { ChevronLeft, ChevronRight, FolderOpen, Loader2, Pause, Play, Power, RotateCcw } from "lucide-react";
 import type { DemoStem } from "@/lib/client/demoSongDefs";
@@ -185,6 +186,7 @@ export default function DeckPanel({
         <span className="flex size-8 shrink-0 items-center justify-center rounded-lg text-sm font-black text-black" style={{ background: accent }} aria-hidden>
           {id}
         </span>
+        {t && <SongArt stemId={t.coverStemId} title={t.title} artist={t.artist} className="size-8 rounded-lg" />}
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-bold leading-tight">{t ? t.title : loading ? "Loading…" : "Empty deck"}</p>
           <p className="truncate text-[11px] text-muted">

@@ -14,6 +14,7 @@ import {
   ImagePlus,
   Layers,
   Minus,
+  Music2,
   Palette,
   Pause,
   Play,
@@ -34,17 +35,20 @@ import { canShareFile, downloadFile, linksLeaveApp, saveFile } from "@/lib/clien
 import {
   drawClipPreview,
   drawClipThumb,
-  makeSocialClip,
   previewLevels,
   recordsMp4,
   type Box,
   type ClipContent,
   type Photo,
-  type SocialClip,
 } from "@/lib/client/socialClip";
+import { useClipJob } from "@/lib/client/clipJob";
+import { groupPeaks, laneCredits } from "@/lib/client/clipSources";
+import { rankFor } from "@/lib/client/lyricsFollow";
+import { mixArtPicture } from "@/lib/client/mixArt";
+import { mixPeaks } from "@/lib/client/mixPeaks";
 import { useStudioStore } from "@/lib/client/studioStore";
 import { useStudioView } from "@/lib/client/studioView";
-import { useKeepScreenOn } from "@/lib/client/wakeLock";
+import { sungAt } from "@/lib/client/vocalTime";
 import {
   applyTemplate,
   clampScale,
@@ -70,7 +74,7 @@ import {
   type ClipFormat,
   type ElementId,
 } from "@/lib/clipDesign";
-import { clampRange, clipLyrics, clipParts, defaultPart, lineRange, MAX_CLIP_SECONDS, MIN_CLIP_SECONDS, type ClipPart } from "@/lib/clipLyrics";
+import { clampRange, clipLyrics, clipParts, defaultPart, lineRange, MAX_CLIP_SECONDS, MIN_CLIP_SECONDS, type ClipPart, type Places } from "@/lib/clipLyrics";
 import { formatClock, isSung, sectionsOf } from "@/lib/lyrics";
 import { shortPath } from "@/lib/shareLinks";
 import { togglePlay } from "./LyricsPanel";
@@ -90,9 +94,10 @@ import { togglePlay } from "./LyricsPanel";
 //     size, a backing plate so it reads over anything, its style.
 //   - Undo and Redo for every change; the look is kept for the next clip.
 //
-// Making it records in real time; then it's shared straight to an app
-// (the share sheet: Instagram, TikTok, X, WhatsApp…), saved, or posted
-// with a ready caption.
+// Making it records in real time, in the background (clipJob.ts): the
+// editor can be closed meanwhile, and the clip button says how far it is.
+// Then it's shared straight to an app (the share sheet: Instagram, TikTok,
+// X, WhatsApp…), saved, or posted with a ready caption.
 
 type Range = { start: number; end: number };
 type Tab = "part" | "design" | "edit";
@@ -277,8 +282,44 @@ function Slider({
   );
 }
 
-/** The song as a bar: the chosen part highlighted, its edges and middle draggable, the sung lines as ticks. */
-function RangeBar({ range, duration, ticks, onChange }: { range: Range; duration: number; ticks: number[]; onChange: (range: Range) => void }) {
+/** One waveform row as a filled shape (mirrored about its middle), drawn across the bar. */
+function WaveRow({ peaks, className }: { peaks: number[]; className: string }) {
+  const path = useMemo(() => {
+    if (!peaks.length || !peaks.some((p) => p > 0)) return "";
+    const n = peaks.length;
+    const top = peaks.map((p, i) => `${((i + 0.5) / n) * 100},${50 - Math.max(0.04, p) * 46}`);
+    const bottom = peaks.map((p, i) => `${((i + 0.5) / n) * 100},${50 + Math.max(0.04, p) * 46}`).reverse();
+    return `M0,50 L${top.join(" L")} L100,50 L${bottom.join(" L")} Z`;
+  }, [peaks]);
+  return (
+    <svg viewBox="0 0 100 100" preserveAspectRatio="none" className={`h-full w-full ${className}`} aria-hidden>
+      {path ? <path d={path} fill="currentColor" /> : <line x1="0" y1="50" x2="100" y2="50" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" />}
+    </svg>
+  );
+}
+
+type Band = { name: string; start: number; end: number };
+
+/**
+ * The song as a bar: the song's parts (verse, chorus…) across the top, the
+ * vocals' and the beat's waveforms under them, the chosen part
+ * highlighted with its edges and middle draggable, the sung lines as ticks.
+ */
+function RangeBar({
+  range,
+  duration,
+  ticks,
+  shape,
+  bands,
+  onChange,
+}: {
+  range: Range;
+  duration: number;
+  ticks: number[];
+  shape: { vocals: number[]; beat: number[] };
+  bands: Band[];
+  onChange: (range: Range) => void;
+}) {
   const bar = useRef<HTMLDivElement>(null);
   const drag = useRef<{ mode: "start" | "end" | "move"; x: number; range: Range } | null>(null);
   const playhead = useStudioStore((s) => Math.round(s.playhead * 4) / 4);
@@ -315,11 +356,35 @@ function RangeBar({ range, duration, ticks, onChange }: { range: Range; duration
       onPointerMove={move}
       onPointerUp={up}
       onPointerCancel={up}
-      className="relative h-12 touch-none select-none rounded-xl bg-background"
+      className="relative h-[5.5rem] touch-none select-none overflow-hidden rounded-xl bg-background"
       aria-label="The part of the song in the clip"
     >
+      {/* The song's parts, from the timed lyrics */}
+      <div className="absolute inset-x-0 top-0 h-4" aria-hidden>
+        {bands.map((b, i) => (
+          <span
+            key={i}
+            className={`absolute top-0 flex h-4 items-center overflow-hidden whitespace-nowrap border-l border-background px-1 text-[9px] font-semibold uppercase leading-none tracking-wide ${i % 2 ? "bg-surface-hover text-muted" : "bg-surface-raised text-foreground/80"}`}
+            style={{ left: pct(b.start), width: `calc(${pct(b.end)} - ${pct(b.start)})` }}
+            title={b.name}
+          >
+            {b.name}
+          </span>
+        ))}
+      </div>
+      {/* The vocals over the beat */}
+      <div className="absolute inset-x-0 bottom-0 top-4 flex flex-col" aria-hidden>
+        <div className="relative min-h-0 flex-1">
+          <WaveRow peaks={shape.vocals} className="text-vocals/55" />
+          <span className="absolute left-1 top-0.5 text-[9px] font-semibold text-vocals">Vocals</span>
+        </div>
+        <div className="relative min-h-0 flex-1 border-t border-border/60">
+          <WaveRow peaks={shape.beat} className="text-beat/55" />
+          <span className="absolute left-1 top-0.5 text-[9px] font-semibold text-beat">Beat</span>
+        </div>
+      </div>
       {ticks.map((t, i) => (
-        <span key={i} className="absolute bottom-1.5 top-1.5 w-px bg-vocals/40" style={{ left: pct(t) }} aria-hidden />
+        <span key={i} className="absolute bottom-1.5 top-5 w-px bg-vocals/40" style={{ left: pct(t) }} aria-hidden />
       ))}
       <span className="absolute bottom-0 top-0 w-0.5 bg-foreground/60" style={{ left: pct(playhead) }} aria-hidden />
       <div
@@ -380,20 +445,36 @@ type Drag =
   | { kind: "scale"; id: ElementId; cx: number; cy: number; dist: number; scale: number }
   | { kind: "pinch"; id: ElementId; dist: number; scale: number };
 
-export default function ClipDialog({ title, artist, remixId }: { title: string; artist: string; remixId: string | null }) {
+export default function ClipDialog({ title, artist, remixId, me }: { title: string; artist: string; remixId: string | null; me: string }) {
   const ask = useStudioView((s) => s.clip);
   const closeClip = useStudioView((s) => s.closeClip);
   const duration = useStudioStore((s) => s.duration);
+  const lanes = useStudioStore((s) => s.lanes);
   const lines = useLyrics((s) => s.lines);
   const sheet = useLyrics(activeSheet);
 
+  // Where each line is sung on the edited vocal — every copy of it — so a clip of the second chorus still has its words.
+  const places = useMemo<Places | undefined>(() => (sheet ? (t: number) => sungAt(lanes, t, rankFor(sheet)) : undefined), [lanes, sheet]);
+
   // --- The part ---
+  const peaks = useMemo(() => (ask ? mixPeaks(lanes, duration, 600) : []), [ask, lanes, duration]);
+  const shape = useMemo(() => (ask ? groupPeaks(lanes, duration, 240) : { vocals: [], beat: [] }), [ask, lanes, duration]);
   const parts = useMemo<ClipPart[]>(() => {
     const s = useStudioStore.getState();
-    const found = clipParts({ lines, loop: { enabled: s.loopEnabled, start: s.loopStart, end: s.loopEnd }, playhead: s.playhead, duration });
+    const found = clipParts({ lines, loop: { enabled: s.loopEnabled, start: s.loopStart, end: s.loopEnd }, playhead: s.playhead, duration, peaks });
     if (ask?.part) found.unshift({ id: "asked", label: ask.part.label, kind: "custom", ...clampRange(ask.part.start, ask.part.end, duration) });
     return found;
-  }, [ask, lines, duration]);
+  }, [ask, lines, duration, peaks]);
+  const bands = useMemo<Band[]>(
+    () =>
+      sectionsOf(lines)
+        .filter((x) => x.start !== null)
+        .map((x) => {
+          const part = parts.find((p) => p.id === `section-${x.index}`);
+          return { name: x.name, start: part?.start ?? x.start!, end: part?.end ?? x.end ?? x.start! + 8 };
+        }),
+    [lines, parts]
+  );
 
   const [partId, setPartId] = useState<string | null>(null);
   const [range, setRange] = useState<Range>({ start: 0, end: 0 });
@@ -401,7 +482,7 @@ export default function ClipDialog({ title, artist, remixId }: { title: string; 
   const sungLines = useMemo(() => lines.map((l, i) => ({ l, i })).filter(({ l }) => l.time !== null && isSung(l)), [lines]);
   const [fromLine, setFromLine] = useState<number | null>(null);
   const [toLine, setToLine] = useState<number | null>(null);
-  const words = useMemo(() => clipLyrics(lines, range.start, range.end), [lines, range]);
+  const words = useMemo(() => clipLyrics(lines, range.start, range.end, places), [lines, range, places]);
   const length = range.end - range.start;
 
   // --- The look ---
@@ -415,16 +496,31 @@ export default function ClipDialog({ title, artist, remixId }: { title: string; 
   const songArtist = (sheet?.artist && /^untitled/i.test(title) ? sheet.artist : artist).trim();
   const link = `${typeof window === "undefined" ? "" : window.location.host}${remixId ? shortPath(remixId) : ""}`;
 
-  // A fresh ask (opened again, or on another take) starts on its part, with this song's words.
+  // The clip being made (or made) in the background.
+  const job = useClipJob();
+  const working = job.stage !== null;
+  const clip = job.result;
+
+  // A fresh ask (opened again, or on another take) starts on its part, with this song's words and credits —
+  // or, while a clip is being made or waits to be shared, on that clip's part and look.
   if (ask && ask.id !== askId) {
     setAskId(ask.id);
-    const first = ask.part ? parts[0] : defaultPart(parts, useStudioStore.getState().playhead);
-    setPartId(first?.id ?? null);
-    setRange(first ? { start: first.start, end: first.end } : clampRange(0, 30, duration));
     setFromLine(null);
     setToLine(null);
     setSelected(null);
-    set((d) => withWords(d, { title: songTitle, artist: songArtist, link }), false);
+    const made = (working || clip) && !ask.part ? job.made : null;
+    if (made) {
+      setPartId(parts.find((p) => p.start === made.range.start && p.end === made.range.end)?.id ?? null);
+      setRange(made.range);
+      set(made.design, false);
+    } else {
+      const first = ask.part ? parts[0] : defaultPart(parts, useStudioStore.getState().playhead);
+      setPartId(first?.id ?? null);
+      setRange(first ? { start: first.start, end: first.end } : clampRange(0, 30, duration));
+      const credits = laneCredits(lanes, me);
+      // Words and credits are this song's: what an earlier clip said is cleared first (the caption is the user's own and stays).
+      set((d) => withWords(forStorage(d), { title: songTitle, artist: songArtist, link, ...credits }), false);
+    }
   }
 
   const content = useMemo<ClipContent>(
@@ -440,21 +536,12 @@ export default function ClipDialog({ title, artist, remixId }: { title: string; 
   }, [design]);
 
   // --- Making it ---
-  const [stage, setStage] = useState<{ label: string; fraction: number } | null>(null);
-  const [clip, setClip] = useState<{ clip: SocialClip; url: string } | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const error = photoError ?? job.error;
   const [notice, setNotice] = useState<string | null>(null);
   const [hearing, setHearing] = useState(false);
   const [previewT, setPreviewT] = useState(0);
-  const abort = useRef<AbortController | null>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
-  const working = stage !== null;
-  useKeepScreenOn("social-clip", working);
-
-  useEffect(() => () => abort.current?.abort(), []);
-  useEffect(() => () => {
-    if (clip) URL.revokeObjectURL(clip.url);
-  }, [clip]);
 
   // A new part starts the preview on its first sung words.
   const stillT = useMemo(() => {
@@ -697,7 +784,23 @@ export default function ClipDialog({ title, artist, remixId }: { title: string; 
         setSelected("photo");
       }
     } catch {
-      setError("That picture couldn't be opened — try a JPG or PNG.");
+      setPhotoError("That picture couldn't be opened — try a JPG or PNG.");
+    }
+  }
+
+  /** The songs' own artwork (their covers, or pictures drawn from them) as the photo — behind everything, or as the card. */
+  async function takeArtwork(target: "background" | "card") {
+    const art = await mixArtPicture(useStudioStore.getState().lanes);
+    if (!art) {
+      setPhotoError("No songs in the mix to take artwork from.");
+      return;
+    }
+    setPhotoError(null);
+    setPhoto(art);
+    if (target === "background") set((d) => ({ ...d, background: { ...d.background, kind: "photo" } }));
+    else {
+      set((d) => setElement(d, "photo", { visible: true }));
+      setSelected("photo");
     }
   }
 
@@ -736,51 +839,37 @@ export default function ClipDialog({ title, artist, remixId }: { title: string; 
     setHearing(false);
   }
 
+  /** Closes the editor. A clip being made carries on (the clip button shows how far); a finished one waits there. */
   function close() {
-    if (working) return;
     stopHearing();
-    setClip(null);
-    setError(null);
+    setPhotoError(null);
     setNotice(null);
+    if (job.error) job.dismiss();
     closeClip();
   }
 
-  async function make() {
+  /** Done with the finished clip: forgotten, and the editor closed. */
+  function done() {
+    job.dismiss();
+    close();
+  }
+
+  function make() {
     // Made inside the tap, or iOS won't let it play the soundtrack.
     const audioContext = new AudioContext();
     void audioContext.resume();
     stopHearing();
     setSelected(null);
-    const controller = new AbortController();
-    abort.current = controller;
-    setError(null);
+    setPhotoError(null);
     setNotice(null);
-    setClip(null);
-    setStage({ label: "Starting…", fraction: 0 });
-    try {
-      const made = await makeSocialClip({
-        audioContext,
-        start: range.start,
-        end: range.end,
-        design,
-        content,
-        canvas: canvas.current ?? undefined,
-        onProgress: (label, fraction) => setStage({ label, fraction }),
-        signal: controller.signal,
-      });
-      setClip({ clip: made, url: URL.createObjectURL(made.blob) });
-    } catch (err) {
-      if (!(err instanceof DOMException && err.name === "AbortError")) setError(err instanceof Error ? err.message : "Couldn't make the clip");
-    } finally {
-      setStage(null);
-      abort.current = null;
-      void audioContext.close();
-    }
+    void job.start({ audioContext, range, design, content });
   }
 
   const fileName = () => `${fileSafeName(`${design.elements.artist.text || songArtist} - ${design.elements.title.text || songTitle}`)}.${clip?.clip.extension ?? "mp4"}`;
   const clipFile = () => (clip ? new File([clip.clip.blob], fileName(), { type: clip.clip.blob.type }) : null);
-  const caption = `${design.elements.title.text || songTitle}${songArtist ? ` — ${design.elements.artist.text || songArtist}` : ""} 🎧 remixed on Remixt${remixId ? ` ${location.protocol}//${link}` : ""} #remix #remixt`;
+  const credited = design.elements.vocalBy.text.trim() && design.elements.beatBy.text.trim() ? `${design.elements.vocalBy.text.trim()} × ${design.elements.beatBy.text.trim()}` : "";
+  const byLine = credited || design.elements.artist.text || songArtist;
+  const caption = `${design.elements.title.text || songTitle}${byLine ? ` — ${byLine}` : ""} 🎧 remixed on Remixt${remixId ? ` ${location.protocol}//${link}` : ""} #remix #remixt`;
 
   async function shareTo(where: "any" | "save" | "x" | "instagram" | "tiktok" | "youtube" | "whatsapp") {
     const file = clipFile();
@@ -862,7 +951,7 @@ export default function ClipDialog({ title, artist, remixId }: { title: string; 
         {!sections && <p className="text-[11px] text-muted">Time the lyrics to pick the song&apos;s parts (verse, chorus…) here.</p>}
       </Section>
       <Section title="Fine tune">
-        <RangeBar range={range} duration={Math.max(1, duration)} ticks={ticks} onChange={custom} />
+        <RangeBar range={range} duration={Math.max(1, duration)} ticks={ticks} shape={shape} bands={bands} onChange={custom} />
         <div className="flex flex-wrap gap-x-5 gap-y-2">
           <Nudge label="Starts" value={range.start} onChange={(d) => custom(clampRange(Math.min(range.end - MIN_CLIP_SECONDS, range.start + d), range.end, duration))} />
           <Nudge label="Ends" value={range.end} onChange={(d) => custom(clampRange(range.start, Math.max(range.start + MIN_CLIP_SECONDS, range.end + d), duration))} />
@@ -922,11 +1011,11 @@ export default function ClipDialog({ title, artist, remixId }: { title: string; 
         <Segmented
           label="Background"
           value={bg.kind}
-          onChange={(kind) => (kind === "photo" && !photo ? pickPhoto("background") : set((d) => ({ ...d, background: { ...d.background, kind } })))}
+          onChange={(kind) => (kind === "photo" && !photo ? void takeArtwork("background") : set((d) => ({ ...d, background: { ...d.background, kind } })))}
           options={[
             { id: "gradient", label: "Gradient" },
             { id: "solid", label: "Colour" },
-            { id: "photo", label: "Photo" },
+            { id: "photo", label: "Picture" },
           ]}
         />
         {bg.kind === "gradient" && (
@@ -945,9 +1034,14 @@ export default function ClipDialog({ title, artist, remixId }: { title: string; 
         {bg.kind === "solid" && <ColorRow label="Colour" value={bg.colors[0]} onChange={(c) => set((d) => ({ ...d, background: { ...d.background, colors: [c, c, c] } }))} />}
         {bg.kind === "photo" && (
           <div className="flex flex-col gap-2.5">
-            <button onClick={() => pickPhoto("background")} className="flex h-10 items-center justify-center gap-2 rounded-xl border border-dashed border-border text-xs font-semibold text-muted hover:border-vocals hover:text-foreground">
-              <ImagePlus className="h-4 w-4" /> {photo ? "Choose another photo" : "Choose a photo"}
-            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={() => void takeArtwork("background")} className="flex h-10 items-center justify-center gap-2 rounded-xl border border-border text-xs font-semibold text-muted hover:border-vocals hover:text-foreground">
+                <Music2 className="h-4 w-4" /> Song artwork
+              </button>
+              <button onClick={() => pickPhoto("background")} className="flex h-10 items-center justify-center gap-2 rounded-xl border border-dashed border-border text-xs font-semibold text-muted hover:border-vocals hover:text-foreground">
+                <ImagePlus className="h-4 w-4" /> Your photo
+              </button>
+            </div>
             <Slider label="Darken" value={bg.dim} min={0} max={0.85} step={0.05} onStart={checkpoint} onChange={(v) => set((d) => ({ ...d, background: { ...d.background, dim: v } }), false)} shown={`${Math.round(bg.dim * 100)}%`} />
             <Slider label="Blur" value={bg.blur} min={0} max={40} step={1} onStart={checkpoint} onChange={(v) => set((d) => ({ ...d, background: { ...d.background, blur: v } }), false)} shown={`${bg.blur}`} />
           </div>
@@ -958,9 +1052,17 @@ export default function ClipDialog({ title, artist, remixId }: { title: string; 
         <Switch
           on={design.elements.photo.visible && !!photo}
           onChange={(on) => (on && !photo ? pickPhoto("card") : set((d) => setElement(d, "photo", { visible: on })))}
-          label="Show a photo card"
-          hint={photo ? "Your photo as a square on the video — drag it where you want it" : "Cover art or a selfie, as a square on the video"}
+          label="Show a picture card"
+          hint={photo ? "The picture as a square on the video — drag it where you want it" : "The songs' artwork, or a photo of your own, as a square on the video"}
         />
+        <div className="grid grid-cols-2 gap-2">
+          <button onClick={() => void takeArtwork("card")} className="flex h-10 items-center justify-center gap-2 rounded-xl border border-border text-xs font-semibold text-muted hover:border-vocals hover:text-foreground">
+            <Music2 className="h-4 w-4" /> Song artwork
+          </button>
+          <button onClick={() => pickPhoto("card")} className="flex h-10 items-center justify-center gap-2 rounded-xl border border-dashed border-border text-xs font-semibold text-muted hover:border-vocals hover:text-foreground">
+            <ImagePlus className="h-4 w-4" /> Your photo
+          </button>
+        </div>
       </Section>
     </div>
   );
@@ -1118,7 +1220,7 @@ export default function ClipDialog({ title, artist, remixId }: { title: string; 
 
       {/* Top bar */}
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border px-2 sm:px-4">
-        <button onClick={close} disabled={working} className="flex h-10 w-10 items-center justify-center rounded-xl text-muted hover:bg-surface-hover hover:text-foreground disabled:opacity-30" aria-label="Close the clip editor">
+        <button onClick={close} className="flex h-10 w-10 items-center justify-center rounded-xl text-muted hover:bg-surface-hover hover:text-foreground" aria-label={working ? "Close — the clip keeps recording" : "Close the clip editor"} title={working ? "Close — the clip keeps recording; the clip button shows how far it is" : undefined}>
           <X className="h-5 w-5" />
         </button>
         <div className="flex min-w-0 items-center gap-2">
@@ -1142,7 +1244,7 @@ export default function ClipDialog({ title, artist, remixId }: { title: string; 
                 <Redo2 className="h-[18px] w-[18px]" />
               </button>
               <button
-                onClick={() => void make()}
+                onClick={make}
                 disabled={length < MIN_CLIP_SECONDS || duration <= 0}
                 className="ml-1 flex h-10 items-center gap-1.5 rounded-xl bg-gradient-to-r from-vocals to-brand px-4 text-sm font-bold text-white shadow-lg shadow-vocals/25 hover:opacity-95 disabled:opacity-40"
               >
@@ -1151,7 +1253,7 @@ export default function ClipDialog({ title, artist, remixId }: { title: string; 
             </>
           )}
           {clip && (
-            <button onClick={() => setClip(null)} className="flex h-10 items-center gap-1.5 rounded-xl border border-border px-3 text-xs font-semibold text-muted hover:text-foreground">
+            <button onClick={job.dismiss} className="flex h-10 items-center gap-1.5 rounded-xl border border-border px-3 text-xs font-semibold text-muted hover:text-foreground">
               <ArrowLeft className="h-4 w-4" /> Edit
             </button>
           )}
@@ -1173,7 +1275,11 @@ export default function ClipDialog({ title, artist, remixId }: { title: string; 
                 onPointerUp={onStageUp}
                 onPointerCancel={onStageUp}
               >
-                <canvas ref={canvas} className="block h-full w-full rounded-xl bg-black shadow-2xl ring-1 ring-white/10" aria-label="The clip — tap something on it to change it" />
+                {working && job.canvas ? (
+                  <MountCanvas canvas={job.canvas} />
+                ) : (
+                  <canvas ref={canvas} className="block h-full w-full rounded-xl bg-black shadow-2xl ring-1 ring-white/10" aria-label="The clip — tap something on it to change it" />
+                )}
                 {guides.x && <span className="pointer-events-none absolute bottom-0 top-0 w-px bg-vocals" style={{ left: shownW / 2 }} aria-hidden />}
                 {guides.y && <span className="pointer-events-none absolute left-0 right-0 h-px bg-vocals" style={{ top: shownH / 2 }} aria-hidden />}
                 {handle && (
@@ -1189,15 +1295,15 @@ export default function ClipDialog({ title, artist, remixId }: { title: string; 
                 {working && (
                   <div className="absolute inset-x-3 bottom-3 rounded-xl bg-black/75 p-3 text-white backdrop-blur" role="status">
                     <div className="flex items-center justify-between gap-2 text-xs font-semibold">
-                      <span>{stage?.label}</span>
-                      <span className="tabular-nums">{Math.round((stage?.fraction ?? 0) * 100)}%</span>
+                      <span>{job.stage?.label}</span>
+                      <span className="tabular-nums">{Math.round((job.stage?.fraction ?? 0) * 100)}%</span>
                     </div>
                     <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/20">
-                      <div className="h-full bg-gradient-to-r from-vocals to-beat transition-[width]" style={{ width: `${(stage?.fraction ?? 0) * 100}%` }} />
+                      <div className="h-full bg-gradient-to-r from-vocals to-beat transition-[width]" style={{ width: `${(job.stage?.fraction ?? 0) * 100}%` }} />
                     </div>
                     <div className="mt-2 flex items-center justify-between gap-2">
-                      <span className="text-[11px] text-white/70">Records in real time — keep this open</span>
-                      <button onClick={() => abort.current?.abort()} className="rounded-lg border border-white/30 px-2.5 py-1 text-[11px] font-semibold hover:border-danger hover:text-danger">
+                      <span className="text-[11px] text-white/70">Records in real time. You can close this and keep working — leaving the page pauses it.</span>
+                      <button onClick={job.cancel} className="rounded-lg border border-white/30 px-2.5 py-1 text-[11px] font-semibold hover:border-danger hover:text-danger">
                         Stop
                       </button>
                     </div>
@@ -1281,10 +1387,10 @@ export default function ClipDialog({ title, artist, remixId }: { title: string; 
               </Section>
               {clip.clip.extension === "webm" && <p className="text-[11px] text-muted">This browser records WebM. TikTok, X and YouTube take it; for Instagram, Safari or a recent Chrome make MP4.</p>}
               <div className="mt-auto flex gap-2">
-                <button onClick={() => setClip(null)} className="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-xl border border-border text-xs font-semibold text-muted hover:text-foreground">
+                <button onClick={job.dismiss} className="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-xl border border-border text-xs font-semibold text-muted hover:text-foreground">
                   <ArrowLeft className="h-4 w-4" /> Keep editing
                 </button>
-                <button onClick={close} className="flex h-10 flex-1 items-center justify-center rounded-xl border border-border text-xs font-semibold text-muted hover:text-foreground">
+                <button onClick={done} className="flex h-10 flex-1 items-center justify-center rounded-xl border border-border text-xs font-semibold text-muted hover:text-foreground">
                   Done
                 </button>
               </div>
@@ -1319,6 +1425,20 @@ export default function ClipDialog({ title, artist, remixId }: { title: string; 
     </div>,
     document.body
   );
+}
+
+/** The clip job's own canvas (what it records), shown where the preview was while it records. */
+function MountCanvas({ canvas }: { canvas: HTMLCanvasElement }) {
+  const holder = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = holder.current;
+    if (!el) return;
+    el.appendChild(canvas);
+    return () => {
+      if (canvas.parentNode === el) el.removeChild(canvas);
+    };
+  }, [canvas]);
+  return <div ref={holder} className="h-full w-full" aria-label="The clip, as it records" />;
 }
 
 function FormatButton({ format, on, onPick }: { format: ClipFormat; on: boolean; onPick: () => void }) {

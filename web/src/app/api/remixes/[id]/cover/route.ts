@@ -3,6 +3,7 @@ import { getCurrentUser } from "@/lib/auth";
 import sql from "@/lib/db";
 import { ensureRemixStats } from "@/lib/models";
 import { deleteObject, putObject, serveObject } from "@/lib/storage";
+import { imageExtension } from "@/lib/imageType";
 
 // A remix's cover picture. The Studio/remix page shrinks it in the browser
 // (a square JPEG or PNG, well under the limit) before it's sent here.
@@ -15,13 +16,6 @@ async function remixRow(id: string): Promise<Row | undefined> {
   await ensureRemixStats();
   const [row] = await sql<Row[]>`SELECT owner_id, published, cover_key FROM remixes WHERE id = ${id}`;
   return row;
-}
-
-/** JPEG or PNG, told by the file's first bytes rather than what the browser claims. */
-function imageExtension(bytes: Buffer): ".jpg" | ".png" | null {
-  if (bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return ".jpg";
-  if (bytes.length > 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return ".png";
-  return null;
 }
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {

@@ -20,6 +20,8 @@ export type BrowserEntry = {
   source: TrackSource;
   title: string;
   artist: string;
+  /** A stem of a library song, for its cover (see SongArt); demo songs have none and get a drawn one. */
+  coverStemId?: string;
   genre: string;
   /** Null until known (a library song with no stored tempo, before analysis). */
   bpm: number | null;

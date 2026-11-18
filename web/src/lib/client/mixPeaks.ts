@@ -7,13 +7,15 @@ import { clipSpan, clipsOf, getAudibleLaneIds, type StudioLane } from "./studioS
  * (no audio needs to load): every audible lane's level at each point of
  * the timeline — through its offset, tempo and clips — summed, then
  * scaled to 0..1. Good enough to see the song's shape and scrub it.
+ * With `only`, just those lanes (the vocals, the beat).
  */
-export function mixPeaks(lanes: StudioLane[], duration: number, points = 400): number[] {
+export function mixPeaks(lanes: StudioLane[], duration: number, points = 400, only?: (lane: StudioLane) => boolean): number[] {
   if (!(duration > 0) || lanes.length === 0) return [];
+  // Who's heard is decided over every lane (a soloed beat silences the vocals), then `only` picks some of those.
   const audible = getAudibleLaneIds(lanes);
   const out = new Array<number>(points).fill(0);
   for (const lane of lanes) {
-    if (!audible.has(lane.laneId) || !lane.peaks.length || !(lane.originalDuration > 0)) continue;
+    if (!audible.has(lane.laneId) || (only && !only(lane)) || !lane.peaks.length || !(lane.originalDuration > 0)) continue;
     const perSecond = lane.peaks.length / lane.originalDuration;
     for (const clip of clipsOf(lane)) {
       const start = lane.offsetSeconds + clip.at / lane.tempoRatio;

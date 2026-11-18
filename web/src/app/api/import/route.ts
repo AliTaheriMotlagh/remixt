@@ -28,8 +28,14 @@ export async function POST(req: NextRequest) {
     const song = await importSong(parsed.data.url, AbortSignal.timeout((maxDuration - 30) * 1000));
     const id = `${randomUUID()}.${song.ext}`;
     await putObject(`imports/${user.id}/${id}`, song.bytes);
+    // The page's picture, for a file with no cover of its own: fetched by the browser like the song, and put on the track.
+    let coverId: string | null = null;
+    if (song.cover) {
+      coverId = `${randomUUID()}${song.cover.ext}`;
+      await putObject(`imports/${user.id}/${coverId}`, song.cover.data).catch(() => (coverId = null));
+    }
     after(() => sweepOld("imports/", 60 * 60 * 1000).catch(() => {}));
-    return NextResponse.json({ id, title: song.title, size: song.bytes.length, foundBySearch: song.foundBySearch });
+    return NextResponse.json({ id, title: song.title, size: song.bytes.length, foundBySearch: song.foundBySearch, coverId });
   } catch (err) {
     if (err instanceof ImportError) {
       return NextResponse.json({ error: err.message }, { status: 422 });

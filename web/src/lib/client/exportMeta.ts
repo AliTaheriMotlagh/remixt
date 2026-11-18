@@ -13,6 +13,7 @@ import { SITE_NAME } from "@/lib/site";
 import { kindLabel } from "@/lib/stemKinds";
 import { creditLine, id3Key, type AudioTags, type TrackCredit } from "./audioTags";
 import { effectiveKey, keyReference, type StudioLane } from "./studioStore";
+import { drawCollage, mixArtSongs, songImages } from "./mixArt";
 
 /** What the person exporting knows about the remix. */
 export type ExportInfo = {
@@ -94,9 +95,14 @@ function wrap(ctx: CanvasRenderingContext2D, text: string, width: number, maxLin
   return kept;
 }
 
-/** Square cover art in the Remixt look: the mark, the title, the artist and the site. */
-async function drawCover({ title, subtitle, artist }: { title: string; subtitle?: string; artist: string }): Promise<Cover | null> {
+/**
+ * Square cover art in the Remixt look: the mark, the title, the artist and
+ * the site — over the songs in the mix (their covers, or pictures drawn
+ * from them; see mixArt.ts), or the Remixt gradient when there are none.
+ */
+async function drawCover({ title, subtitle, artist, lanes = [] }: { title: string; subtitle?: string; artist: string; lanes?: StudioLane[] }): Promise<Cover | null> {
   const size = 800;
+  const pictures = await songImages(mixArtSongs(lanes)).catch(() => []);
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = size;
   const ctx = canvas.getContext("2d");
@@ -104,13 +110,16 @@ async function drawCover({ title, subtitle, artist }: { title: string; subtitle?
   try {
     ctx.fillStyle = "#0b0b10";
     ctx.fillRect(0, 0, size, size);
-    const [from, via, to] = MARK_GRADIENT;
-    const glow = ctx.createLinearGradient(0, 0, size, size);
-    glow.addColorStop(0, `${from}cc`);
-    glow.addColorStop(0.55, `${via}88`);
-    glow.addColorStop(1, `${to}cc`);
-    ctx.fillStyle = glow;
-    ctx.fillRect(0, 0, size, size);
+    if (pictures.length) drawCollage(ctx, pictures, 0, 0, size);
+    else {
+      const [from, via, to] = MARK_GRADIENT;
+      const glow = ctx.createLinearGradient(0, 0, size, size);
+      glow.addColorStop(0, `${from}cc`);
+      glow.addColorStop(0.55, `${via}88`);
+      glow.addColorStop(1, `${to}cc`);
+      ctx.fillStyle = glow;
+      ctx.fillRect(0, 0, size, size);
+    }
     // Darken the lower half so the type reads on any part of the gradient.
     const shade = ctx.createLinearGradient(0, size * 0.35, 0, size);
     shade.addColorStop(0, "rgba(0,0,0,0)");
@@ -179,7 +188,7 @@ export async function exportTags(
   const url = info.remixId ? new URL(shortPath(info.remixId), location.origin).href : undefined;
   const cover =
     (info.cover ? await fetchCover(info.cover) : null) ??
-    (await drawCover({ title: info.title, artist: info.artist, subtitle: part ?? (credits.length ? creditLine(credits.slice(0, 2)) : undefined) }));
+    (await drawCover({ title: info.title, artist: info.artist, lanes, subtitle: part ?? (credits.length ? creditLine(credits.slice(0, 2)) : undefined) }));
   return {
     title,
     artist: info.artist,
@@ -196,4 +205,21 @@ export async function exportTags(
     siteName: SITE_NAME,
     cover: cover ?? undefined,
   };
+}
+
+const mixCovers = new Map<string, Promise<string | null>>();
+
+/**
+ * The cover a remix without one of its own shows (its page, the lock
+ * screen): the songs in it with its title — what its exports are tagged
+ * with too. A blob URL, made once per mix and title.
+ */
+export function mixCoverUrl(lanes: StudioLane[], title: string, artist: string): Promise<string | null> {
+  const key = `${title}|${artist}|${mixArtSongs(lanes).map((s) => s.stemId).join(",")}`;
+  let made = mixCovers.get(key);
+  if (!made) {
+    made = drawCover({ title, artist, lanes }).then((cover) => (cover ? URL.createObjectURL(new Blob([cover.data as BlobPart], { type: cover.mime })) : null));
+    mixCovers.set(key, made);
+  }
+  return made;
 }

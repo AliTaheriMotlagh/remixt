@@ -9,6 +9,7 @@ import { beforeEach, describe, test } from "node:test";
 import {
   checkMix,
   compatible,
+  duetTurns,
   findDrop,
   fixesOf,
   fixGroups,
@@ -827,5 +828,25 @@ describe("the mix engineer in the ideas", () => {
     assert.equal(off.patches.vocal.fx!.lowpass, 7000);
     assert.ok(on.patches["other-beat"].fx!.highpass >= 120, "engineered: the second beat's lows cut");
     assert.ok(off.patches["other-beat"].fx!.highpass < 120, "as the preset has it");
+  });
+});
+
+describe("duet turns", () => {
+  test("the host takes every other section where it really sings", () => {
+    assert.deepEqual(duetTurns([0.9, 0.8, 0.9, 0.7]), [false, true, false, true]);
+  });
+
+  test("a host whose singing falls between the guest's sections still gets turns: its strongest, never two in a row", () => {
+    // Strict alternation finds none (the host's odd sections are near silent).
+    const turns = duetTurns([0.5, 0.1, 0.3, 0.05, 0.35, 0.25]);
+    assert.ok(turns.some(Boolean), "the duet is offered this way round too");
+    assert.equal(turns[0], false, "the guest opens");
+    for (let i = 1; i < turns.length; i++) assert.ok(!(turns[i] && turns[i - 1]), "never two host turns in a row");
+    assert.ok(turns.filter(Boolean).length <= 3);
+    assert.equal(turns[4], true, "the host's strongest section");
+  });
+
+  test("a host that barely sings over the guest's sections gets no duet", () => {
+    assert.deepEqual(duetTurns([0.1, 0.05, 0.1]), [false, false, false]);
   });
 });

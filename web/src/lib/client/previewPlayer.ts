@@ -11,6 +11,11 @@ import { kindLabel, type StemKind } from "@/lib/stemKinds";
 // audio playing with the stop button unmounted and no way to reach it.
 // Routing every preview through one module means there is always exactly
 // one thing playing and always somewhere to stop it (see PreviewBar).
+//
+// A stem played from a list (the Library) remembers that list as its
+// queue: when it ends the next one plays, and the lock screen's next and
+// previous buttons step through it — so the Library keeps playing with the
+// phone locked or another app open.
 
 export type PreviewTrack = {
   stemId: string;
@@ -84,7 +89,12 @@ export class PreviewPlayer {
       audio.addEventListener("loadedmetadata", () => {
         this.emit({ duration: audio.duration || 0 });
       });
-      audio.addEventListener("ended", () => this.stop());
+      // The next in the queue, if there is one; else done.
+      audio.addEventListener("ended", () => {
+        const next = this.neighbour(1);
+        if (next) void this.play(next);
+        else this.stop();
+      });
       audio.addEventListener("pause", () => this.emit({ playing: false }));
       audio.addEventListener("play", () => this.emit({ playing: true }));
       // Sound is actually coming out / it has run dry and is waiting for more.
@@ -126,12 +136,25 @@ export class PreviewPlayer {
   /** The lock screen / media notification (see mediaSession). */
   private reportNowPlaying() {
     const { current, playing, currentTime, duration } = this.state;
+    // The song's picture on the lock screen: made once, then the report is made again with it.
+    if (current && this.art?.stemId !== current.stemId && typeof document !== "undefined") {
+      const stemId = current.stemId;
+      this.art = { stemId, url: null };
+      void import("./mixArt")
+        .then(({ songArtworkUrl }) => songArtworkUrl({ stemId, title: current.title, artist: current.artist, peaks: [] }))
+        .then((url) => {
+          if (this.art?.stemId !== stemId || !url) return;
+          this.art = { stemId, url };
+          this.reportNowPlaying();
+        });
+    }
     setNowPlaying(
       "preview",
       current && {
         title: current.title,
         artist: current.artist,
         album: `${kindLabel(current.kind)} · Remixt`,
+        artwork: this.art?.stemId === current.stemId ? this.art.url : null,
         playing,
         position: currentTime,
         duration,
@@ -143,8 +166,38 @@ export class PreviewPlayer {
         seekTo: (seconds) => {
           if (duration > 0) this.seek(seconds / duration);
         },
+        next: this.neighbour(1) ? () => void this.next() : undefined,
+        previous: this.neighbour(-1) || current ? () => void this.previous() : undefined,
       }
     );
+  }
+
+  /** The lock screen's picture of the current stem's song (see reportNowPlaying). */
+  private art: { stemId: string; url: string | null } | null = null;
+
+  /** The list the current stem was played from (the Library's, as shown), to go on with. */
+  private queue: PreviewTrack[] = [];
+
+  /** The stem `step` places from the current one in its queue, if any. */
+  private neighbour(step: 1 | -1): PreviewTrack | null {
+    const id = this.state.current?.stemId;
+    if (!id) return null;
+    const at = this.queue.findIndex((t) => t.stemId === id);
+    if (at < 0) return null;
+    return this.queue[at + step] ?? null;
+  }
+
+  /** On to the next stem in the queue (nothing when it's the last). */
+  async next() {
+    const next = this.neighbour(1);
+    if (next) await this.play(next);
+  }
+
+  /** Back to the start of this stem, or — at its start already — the one before it. */
+  async previous() {
+    const before = this.neighbour(-1);
+    if (before && (this.audio?.currentTime ?? 0) < 3) await this.play(before);
+    else this.seek(0);
   }
 
   /**
@@ -166,7 +219,9 @@ export class PreviewPlayer {
     return this.state.playing && this.state.current?.stemId === stemId;
   }
 
-  async toggle(track: PreviewTrack) {
+  /** Plays or pauses `track`; `queue`, the list it's in, is what plays after it (see next). */
+  async toggle(track: PreviewTrack, queue?: PreviewTrack[]) {
+    if (queue) this.queue = queue.slice();
     if (this.state.current?.stemId === track.stemId) {
       if (this.state.playing) {
         this.getAudio().pause();
@@ -183,7 +238,10 @@ export class PreviewPlayer {
     await this.play(track);
   }
 
-  async play(track: PreviewTrack) {
+  async play(track: PreviewTrack, queue?: PreviewTrack[]) {
+    if (queue) this.queue = queue.slice();
+    // Played on its own (not from the list it was queued from): no queue.
+    else if (!this.queue.some((t) => t.stemId === track.stemId)) this.queue = [];
     this.claim();
     const playing = ++this.playCount;
     this.startedAt = Date.now();

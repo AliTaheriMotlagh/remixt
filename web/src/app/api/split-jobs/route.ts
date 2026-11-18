@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
-import { ImportError, importSong } from "@/lib/linkImport";
+import sql from "@/lib/db";
+import { embeddedCover, ImportError, importSong } from "@/lib/linkImport";
 import {
   cancelJob,
   createJob,
@@ -82,6 +83,14 @@ export async function POST(req: NextRequest) {
     } catch (err) {
       await cancelJob(job);
       throw err;
+    }
+    // Its cover: from the file's own tags, else the page it was on.
+    const cover = (await embeddedCover(song.bytes)) ?? song.cover ?? null;
+    if (cover) {
+      const key = `job-covers/${job.id}${cover.ext}`;
+      await putObject(key, cover.data)
+        .then(() => sql`UPDATE split_jobs SET cover_key = ${key} WHERE id = ${job.id}`)
+        .catch(() => {});
     }
     const error = await markQueued(job);
     if (error) return NextResponse.json({ error }, { status: 409 });

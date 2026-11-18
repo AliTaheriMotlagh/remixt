@@ -22,6 +22,8 @@ export type TrackInfo = {
   id: string;
   title: string;
   artist: string;
+  /** A stem of a library song, for its cover (see SongArt). */
+  coverStemId?: string;
   genre: string;
   bpm: number;
   key: MusicalKey;

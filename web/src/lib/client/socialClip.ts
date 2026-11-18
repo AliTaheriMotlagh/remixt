@@ -803,19 +803,45 @@ export async function makeSocialClip({
   const startedAt = audioContext.currentTime + 0.1;
   source.start(startedAt);
 
+  // A hidden page stops drawing frames (no animation frames) while the
+  // sound would play on: the video would freeze and fall behind. So the
+  // recording and the soundtrack wait together, and carry on together.
+  // The clock is the AudioContext's, which stands still while suspended.
+  const onVisibility = () => {
+    if (document.hidden) {
+      if (recorder.state === "recording") recorder.pause();
+      void audioContext.suspend().catch(() => {});
+    } else {
+      void audioContext.resume().catch(() => {});
+      if (recorder.state === "paused") recorder.resume();
+    }
+  };
+  document.addEventListener("visibilitychange", onVisibility);
+
   await new Promise<void>((resolve, reject) => {
     let raf = 0;
+    // The frame loop runs on animation frames, which stop while hidden; a
+    // timer notices a cancel then too.
+    const watch = setInterval(() => {
+      if (signal.aborted) {
+        cancelAnimationFrame(raf);
+        clearInterval(watch);
+        reject(new DOMException("Cancelled", "AbortError"));
+      }
+    }, 250);
     const tick = () => {
       if (signal.aborted) {
         cancelAnimationFrame(raf);
+        clearInterval(watch);
         reject(new DOMException("Cancelled", "AbortError"));
         return;
       }
       const elapsed = Math.max(0, audioContext.currentTime - startedAt);
       const progress = Math.min(1, elapsed / mix.duration);
       drawClipFrame(draw, design, content, { levels, t: elapsed, progress });
-      onProgress("Recording the video…", progress);
+      onProgress(audioContext.state === "suspended" ? "Paused — come back to this page to finish" : "Recording the video…", progress);
       if (elapsed >= mix.duration) {
+        clearInterval(watch);
         resolve();
         return;
       }
@@ -823,6 +849,7 @@ export async function makeSocialClip({
     };
     raf = requestAnimationFrame(tick);
   }).finally(() => {
+    document.removeEventListener("visibilitychange", onVisibility);
     try {
       source.stop();
     } catch {

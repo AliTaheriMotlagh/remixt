@@ -25,6 +25,7 @@ import {
   type TopMiner,
 } from "@/lib/mining";
 import { describeStage } from "@/lib/client/uploads";
+import { FEATURES } from "@/lib/client/deviceFeatures";
 
 // The split queue's screens: what a phone sees instead of "use a
 // computer", the list of songs waiting for a helper, and the mining rig
@@ -38,6 +39,7 @@ export function QueueNotice({ onTryAnyway }: { onTryAnyway: () => void }) {
       <p className="font-semibold">
         <Smartphone /> <ArrowRight className="text-muted" /> <Laptop /> A computer splits it for you
       </p>
+      <p className="mt-1 text-xs text-muted">{FEATURES.split.slow}</p>
       <ol className="mt-2 grid gap-1.5 text-muted sm:grid-cols-3 sm:gap-3">
         <li>
           <span className="font-semibold text-foreground">1.</span> Pick songs — as many as you like. They&apos;re sent to the split queue.

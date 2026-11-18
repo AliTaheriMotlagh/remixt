@@ -1,5 +1,6 @@
 "use client";
 
+import SongArt from "@/components/SongArt";
 import { useEffect, useMemo, useState } from "react";
 import { CheckIcon, Drum, Guitar, Layers, Mic, Pause, Piano, Play, Plus, type LucideIcon } from "lucide-react";
 import Waveform from "./Waveform";
@@ -16,6 +17,8 @@ type StemWithTrack = SongStem & {
   peaks_json: string;
   track_duration: number | null;
   track_bpm: number | null;
+  /** The song has a cover picture (else SongArt draws one). */
+  track_has_cover?: boolean;
 };
 
 type ListedStem = StemWithTrack & { peaks: number[] };
@@ -361,6 +364,7 @@ export default function StudioLibraryPanel() {
                   >
                     {previewing && preview.playing ? <Pause className="fill-current" /> : <Play className="fill-current" />}
                   </button>
+                  <SongArt stemId={stem.id} title={stem.track_title} artist={stem.artist_name} hasCover={stem.track_has_cover} className="h-6 w-6 rounded pointer-coarse:h-9 pointer-coarse:w-9" />
                   <span dir="auto" className="min-w-0 flex-1 truncate text-xs font-medium">
                     {stem.track_title}
                   </span>

@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState, type ComponentType } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { ArrowLeft, Check, ChevronDown, ClipboardPaste, Clock, Download, ExternalLink, FileText, Globe, Link2, Loader2, Music2, PenLine, Search, Sparkles, Trash2 } from "lucide-react";
 import { useLyrics, type LyricSheet } from "@/lib/client/lyricsStore";
-import { autoTimeSheet, importLyrics, importLyricsLink, laneOfRecording, searchLyrics, type SearchAnswer, type SongHint } from "@/lib/client/lyricsSources";
-import { mixSongFor, sheetFitsMix, useMixSongs, type MixSong } from "@/lib/client/mixSongs";
+import { autoTimeSheet, importLyrics, importLyricsLink, isTakeLane, laneOfRecording, searchLyrics, stemEnvelope, type SearchAnswer, type SongHint } from "@/lib/client/lyricsSources";
+import { mixSongFor, sheetFitsMix, songKey, useMixSongs, type MixSong } from "@/lib/client/mixSongs";
+import { rankByVoice, voiceProfile, type VoiceFit, type VoiceProfile } from "@/lib/lyricsFit";
 import { bringSongIn, useBringing } from "@/lib/client/songImport";
 import { useStudioStore } from "@/lib/client/studioStore";
 import { useStudioView } from "@/lib/client/studioView";
@@ -63,7 +64,22 @@ function QuickAction({ icon: Icon, label, onClick, tone }: { icon: ComponentType
   );
 }
 
-function ResultRow({ result, onUse, matchesMix, busy, best = false }: { result: LyricsResult; onUse: () => void; matchesMix: boolean; busy: boolean; best?: boolean }) {
+function ResultRow({
+  result,
+  onUse,
+  matchesMix,
+  busy,
+  best = false,
+  fit = null,
+}: {
+  result: LyricsResult;
+  onUse: () => void;
+  matchesMix: boolean;
+  busy: boolean;
+  best?: boolean;
+  /** How well it fits the song's vocal in the mix (see lyricsFit.ts). */
+  fit?: VoiceFit | null;
+}) {
   const [open, setOpen] = useState(false);
   const usable = !!(result.plain || result.synced);
   return (
@@ -92,6 +108,16 @@ function ResultRow({ result, onUse, matchesMix, busy, best = false }: { result: 
             {matchesMix && (
               <span className="flex items-center gap-1 rounded-full bg-brand/15 px-1.5 py-px text-[10px] font-semibold text-brand-strong" title="Same length as the song in your mix — likely the same recording">
                 <Music2 className="h-3 w-3" /> Your song
+              </span>
+            )}
+            {fit && fit.score >= 0.75 && (
+              <span className="rounded-full bg-success/15 px-1.5 py-px text-[10px] font-semibold text-success" title={`Checked against the vocal in your mix: ${fit.why}`}>
+                Fits the vocal
+              </span>
+            )}
+            {fit && fit.score < 0.35 && (
+              <span className="rounded-full bg-foreground/10 px-1.5 py-px text-[10px] text-muted" title="Checked against the vocal in your mix">
+                {fit.why.charAt(0).toUpperCase() + fit.why.slice(1)}
               </span>
             )}
           </span>
@@ -212,6 +238,28 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
   /** The newest search: an older one answering late (the mix's song, looked up on opening) doesn't replace it. */
   const searchId = useRef(0);
   const isLink = isLyricsLink(query);
+
+  // The song's own vocal in the mix, heard once: results are ranked by how well they fit its singing.
+  const vocalLane = useMemo(() => {
+    if (!forSong) return null;
+    return lanes.find((l) => l.kind === "vocals" && !isTakeLane(l) && l.originalDuration > 0 && songKey(splitSongTitle(l.trackTitle).song, splitSongTitle(l.trackTitle).artist) === forSong.key) ?? null;
+  }, [forSong, lanes]);
+  const [voice, setVoice] = useState<{ stemId: string; profile: VoiceProfile | null } | null>(null);
+  const vocalStem = vocalLane?.stemId ?? null;
+  useEffect(() => {
+    if (!vocalLane || voice?.stemId === vocalLane.stemId) return;
+    let live = true;
+    const lane = vocalLane;
+    void stemEnvelope(lane)
+      .then((env) => live && setVoice({ stemId: lane.stemId, profile: voiceProfile(env, lane.originalDuration) }))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+    // Heard again only for another vocal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vocalStem]);
+  const voiceNow = voice && voice.stemId === vocalStem ? voice.profile : null;
 
   /**
    * A new sheet from words that came in from anywhere, timed on the way
@@ -416,10 +464,13 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
   // The ones for the song in the mix first.
   const fits = (s: LyricSheet) => mixSongs.length > 0 && sheetFitsMix(s, mixSongs) === true;
   const saved = [...matching.filter(fits), ...matching.filter((s) => !fits(s))];
-  const bestIsMix = !!results?.[0] && (!!results[0].synced && !!laneOf(results[0], lanes));
+  const ranked = useMemo(() => rankByVoice(results ?? [], voiceNow), [results, voiceNow]);
+  const voiceFits = useMemo(() => new Map(ranked.map((r) => [r.result.id, r.fit])), [ranked]);
+  const sorted = useMemo(() => ranked.map((r) => r.result), [ranked]);
+  const bestIsMix = !!sorted[0] && ((!!sorted[0].synced && !!laneOf(sorted[0], lanes)) || (voiceFits.get(sorted[0].id)?.score ?? 0) >= 0.75);
   // The library not sure it has the song, and the music sites with pages for it: those first.
   const sitesFirst = sites.length > 0 && !sure && !bestIsMix;
-  const shownResults = results ? (sitesFirst && !allResults ? results.slice(0, 4) : results) : [];
+  const shownResults = sitesFirst && !allResults ? sorted.slice(0, 4) : sorted;
   const sitesBlock = sites.length > 0 && (
     <>
       <p className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-muted">On Iranian music sites · lyrics, and the song</p>
@@ -579,7 +630,7 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
           {!searching && results && results.length > 0 && (
             <ul className="flex flex-col gap-1.5">
               {shownResults.map((r, i) => (
-                <ResultRow key={r.id} result={r} best={i === 0 && !sitesFirst && (bestIsMix || !!forSong || sure)} busy={!!importing} onUse={() => void use(r)} matchesMix={!!r.synced && !!laneOf(r, lanes)} />
+                <ResultRow key={r.id} result={r} fit={voiceFits.get(r.id) ?? null} best={i === 0 && !sitesFirst && (bestIsMix || !!forSong || sure)} busy={!!importing} onUse={() => void use(r)} matchesMix={!!r.synced && !!laneOf(r, lanes)} />
               ))}
             </ul>
           )}

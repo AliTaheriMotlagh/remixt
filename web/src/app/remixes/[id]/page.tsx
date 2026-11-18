@@ -105,7 +105,7 @@ export default async function RemixDetailPage({
       )}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-4">
-          <RemixCover remixId={remix.id} src={coverUrl(remix.id, remix.cover_key)} title={remix.title} editable={isOwner} />
+          <RemixCover remixId={remix.id} src={coverUrl(remix.id, remix.cover_key)} title={remix.title} artist={remix.artist_name} editable={isOwner} />
           <div className="min-w-0 pt-1">
           <h1 className="text-2xl font-bold">{remix.title}</h1>
           <p className="mt-1 text-sm text-muted">

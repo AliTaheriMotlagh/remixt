@@ -2,7 +2,9 @@
 
 import { ALL_ASPECTS, type Aspect, type Vibe } from "./aiControl";
 import type { StemAnalysis } from "./analysis";
-import { beatBody, beatLifts, isReprise, repriseClips, repriseFor, sectionBars, type BeatStructure, type Reprise } from "./arrange";
+import { beatBody, beatLifts, isReprise, placeVocal, repriseClips, repriseFor, sectionBars, steadyStructure, type BeatStructure, type Reprise } from "./arrange";
+import { chromaMatch, planNewSong, type NsBeat, type NsPlan, type NsSection, type NsTweaks, type NsVocal } from "./newSong";
+import { lineKey, stemLyrics } from "./newSongLyrics";
 import { analyzeLane, suggestMatches } from "./autoMatch";
 import { gatePattern, pumpPattern, spliceAutomation } from "./automationPatterns";
 import { findParts } from "./beatParts";
@@ -97,6 +99,8 @@ export type Idea = {
    * on their own. Undoing the idea puts the beat back.
    */
   lanes?: LaneChange;
+  /** A new song from everything (NEW_SONG_ID): its plan, the songs' names and a line sung in each part, for the song map. */
+  song?: NewSongMap;
   /**
    * A change the co-producer made by hand (Ask AI) rather than an idea the
    * studio worked out: applied on top of everything else, to wherever the
@@ -159,9 +163,14 @@ export type IdeaOptions = {
    * from each line's own tone. On unless false; needs the tones measured.
    */
   proMix?: boolean;
+  /** The person's changes to a new song from everything (the tools under its map, see newSong.ts). */
+  newSong?: NsTweaks;
 };
 
 /** What the ideas are worked out from — the mix as it was when asked. */
+/** What the song map shows of a new song from everything. */
+export type NewSongMap = { plan: NsPlan; names: Record<string, string>; lines: Record<number, string> };
+
 export type Session = {
   lanes: StudioLane[];
   projectBpm: number;
@@ -2814,6 +2823,38 @@ function singingShare(session: Session, lane: StudioLane, from: number, to: numb
 }
 
 /**
+ * Who sings each of the guest's sections in a duet (true: the host), from
+ * how much the host sings over each (0–1). Turns alternate, the guest
+ * first, and the host takes its turn where it really sings (over 40%).
+ * When that gives the host no turn at all — its singing falls between the
+ * guest's sections — the host gets the sections it sings most in (over
+ * 15%), never two in a row, at most half of them. All false: no duet.
+ */
+export function duetTurns(shares: number[]): boolean[] {
+  const host = shares.map(() => false);
+  let turn: "guest" | "host" = "guest";
+  shares.forEach((share, i) => {
+    if (turn === "host" && share > 0.4) {
+      host[i] = true;
+      turn = "guest";
+    } else turn = "host";
+  });
+  if (host.some(Boolean)) return host;
+  const picks = shares
+    .map((share, i) => ({ share, i }))
+    .filter(({ share, i }) => i > 0 && share > 0.15)
+    .sort((a, b) => b.share - a.share);
+  let count = 0;
+  for (const { i } of picks) {
+    if (count >= Math.floor(shares.length / 2)) break;
+    if (host[i - 1] || host[i + 1]) continue;
+    host[i] = true;
+    count++;
+  }
+  return host;
+}
+
+/**
  * Two singers over one song's music, taking turns: the guest's sections
  * laid on the host's bars, and section by section either the guest sings
  * or the host's own vocal does — never both at once.
@@ -2840,22 +2881,19 @@ function duetIdea(session: Session, guest: MixSong, host: MixSong): Idea | null 
     } else sections.push({ clips: [c], start, end, label: c.label ?? "" });
   }
   if (sections.length < 2) return null;
-  let turn: "guest" | "host" = "guest";
+  const hostTurns = duetTurns(sections.map((section) => singingShare(session, host_, section.start, section.end)));
   const hostSilent: { start: number; end: number }[] = [];
   const guestMuted = new Set<LaneClip>();
   const said: string[] = [];
-  for (const section of sections) {
-    const hostSings = singingShare(session, host_, section.start, section.end) > 0.4;
-    if (turn === "host" && hostSings) {
+  sections.forEach((section, i) => {
+    if (hostTurns[i]) {
       for (const c of section.clips) guestMuted.add(c);
       said.push(`${clock(section.start)} ${songName(host)}`);
-      turn = "guest";
     } else {
       hostSilent.push({ start: section.start - 0.05, end: section.end + 0.25 });
       said.push(`${clock(section.start)} ${songName(guest)}${section.label ? ` (${section.label})` : ""}`);
-      turn = "host";
     }
-  }
+  });
   if (!guestMuted.size) return null;
   draft.patch(guestVocal.laneId, { clips: clipsOf(guestVocal).map((c) => (guestMuted.has(c) ? { ...c, muted: true } : c)) });
   const points: AutoPoint[] = [{ t: 0, v: 1 }];
@@ -2972,6 +3010,239 @@ function blendIdea(session: Session, from: MixSong, to: MixSong): Idea | null {
   });
 }
 
+// --- A new song from everything -----------------------------------------------------------
+//
+// Every song in the mix made into one new song (see newSong.ts for the
+// plan): each vocal's sections and each beat's bars, from what was heard
+// when the songs were matched pair by pair (Session.pairs), planned into
+// intro → verses → choruses on drops → bridge → final chorus → outro, then
+// laid out here: each beat cut on bar lines at the new song's tempo and
+// key, each vocal's sections placed phrase by phrase on the new song's bars.
+
+export const NEW_SONG_ID = "new-song";
+
+/** A vocal's sections as the plan needs them: length, loudness, notes, whether it's a chorus, its first line. */
+function sectionsForPlan(pair: PairContext, lane: StudioLane): NsSection[] {
+  const { heard, vocalAnalysis: a } = pair;
+  const lines = stemLyrics(lane);
+  const counts = new Map<string, number>();
+  for (const l of lines) counts.set(lineKey(l.text), (counts.get(lineKey(l.text)) ?? 0) + 1);
+  const raw = heard.sections.map((section, index) => {
+    let energy = 0;
+    let frames = 0;
+    const chroma = new Array<number>(12).fill(0);
+    for (const p of section.phrases) {
+      for (let i = Math.floor(p.start * a.onsetRate); i < p.end * a.onsetRate && i < a.energy.length; i++) {
+        energy += a.energy[i];
+        frames++;
+      }
+      for (let f = Math.floor(p.start * a.chromaRate); f < p.end * a.chromaRate && f * 12 + 11 < a.chroma.length; f++) {
+        for (let k = 0; k < 12; k++) chroma[k] += a.chroma[f * 12 + k];
+      }
+    }
+    const first = section.phrases[0]?.start ?? 0;
+    const last = section.phrases[section.phrases.length - 1]?.end ?? first;
+    const sung = lines.filter((l) => l.at >= first - 0.6 && l.at < last);
+    const repeated = sung.filter((l) => (counts.get(lineKey(l.text)) ?? 0) >= 2).length;
+    return {
+      index,
+      bars: Math.max(1, Math.ceil(section.end - section.start - 0.01)),
+      energy: frames ? energy / frames : 0,
+      chroma,
+      lyricChorus: sung.length >= 2 ? repeated / sung.length >= 0.5 : null,
+      line: sung[0]?.text,
+    };
+  });
+  const loudest = Math.max(...raw.map((r) => r.energy), 1e-9);
+  const median = [...raw].map((r) => r.energy).sort((x, y) => x - y)[Math.floor(raw.length / 2)] ?? 0;
+  const byLyrics = raw.some((r) => r.lyricChorus !== null);
+  return raw.map((r) => ({
+    index: r.index,
+    bars: r.bars,
+    energy: r.energy / loudest,
+    chroma: r.chroma,
+    line: r.line,
+    // A chorus: its lines come back (the lyrics, when they're timed) — else its notes do, at full voice.
+    chorus: byLyrics
+      ? r.lyricChorus === true
+      : r.energy >= median && raw.some((o) => o !== r && o.energy >= median * 0.8 && chromaMatch(o.chroma, r.chroma) >= 0.92),
+  }));
+}
+
+/** The pair a vocal (or a beat) was heard in: with its own song's other half first, else any. */
+function pairWith(session: Session, vocal: StudioLane | null, beat: StudioLane | null): PairContext | null {
+  for (const [key, pair] of session.pairs ?? []) {
+    const [v, b] = key.split("|");
+    if ((!vocal || v === vocal.laneId) && (!beat || b === beat.laneId)) return pair;
+  }
+  return null;
+}
+
+/** What the plan is made from: each song's lead vocal and main beat, with the pair each was heard in. */
+function newSongInput(session: Session, songs: MixSong[], spineId?: string) {
+  const vocals: { input: NsVocal; lane: StudioLane; pair: PairContext; song: MixSong }[] = [];
+  const beats: { input: NsBeat; lane: StudioLane; pair: PairContext; song: MixSong }[] = [];
+  for (const song of songs) {
+    const vocal = song.vocals[0];
+    const beat = mainBacking(song);
+    if (vocal) {
+      const spine = spineId ? draftLane(session, spineId) : null;
+      const pair = (spine && pairWith(session, vocal, spine)) ?? (beat && pairWith(session, vocal, beat)) ?? pairWith(session, vocal, null);
+      if (pair?.heard.sections.length) {
+        // Sung over its own beat, a vocal is in that beat's key — read more surely from a whole beat than from a voice.
+        const own = beat ? pairWith(session, vocal, beat) ?? pairWith(session, null, beat) : null;
+        vocals.push({
+          input: { id: vocal.laneId, song: songName(song), bpm: pair.reading, key: own?.beatKey ?? pair.vocalKey, sections: sectionsForPlan(pair, vocal) },
+          lane: vocal,
+          pair,
+          song,
+        });
+      }
+    }
+    if (beat) {
+      const pair = pairWith(session, null, beat);
+      if (pair) {
+        const { structure } = pair;
+        beats.push({
+          input: { id: beat.laneId, song: songName(song), bpm: pair.beatBpm, key: pair.beatKey, introBars: structure.introBars, endBar: structure.endBar, barEnergy: structure.barEnergy },
+          lane: beat,
+          pair,
+          song,
+        });
+      }
+    }
+  }
+  return { vocals, beats };
+}
+
+function draftLane(session: Session, id: string) {
+  return session.lanes.find((l) => l.laneId === id) ?? null;
+}
+
+/** Cuts land this long before the bar line, so a clip's fade-in is over when the kick lands. */
+const NEW_SONG_CUT = 0.012;
+
+/** A new song from every song in the mix — null with fewer than two songs, or nothing usable. */
+export function newSongIdea(session: Session): Idea | null {
+  const songs = mashableSongs(session.lanes).slice(0, 4);
+  if (songs.length < 2) return null;
+  const tweaks = session.options.newSong ?? {};
+  let input = newSongInput(session, songs);
+  let plan: NsPlan;
+  try {
+    plan = planNewSong({ vocals: input.vocals.map((v) => v.input), beats: input.beats.map((b) => b.input), tweaks });
+    // The vocals heard again against the spine, so their bars are counted at its tempo (half or double time settled).
+    const spine = plan.slots.find((s) => s.name === "Intro")?.beat?.id;
+    if (spine) {
+      input = newSongInput(session, songs, spine);
+      plan = planNewSong({ vocals: input.vocals.map((v) => v.input), beats: input.beats.map((b) => b.input), tweaks });
+    }
+  } catch {
+    return null;
+  }
+
+  const draft = new Draft(session);
+  draft.projectBpm = plan.bpm;
+  const bar = draft.bar;
+  const partOf = (id: string) => plan.parts.find((p) => p.id === id);
+
+  // --- The beats: each cut on bar lines, at the new tempo, in the new key ---
+  const playing = new Set<string>();
+  for (const b of input.beats) {
+    const part = partOf(b.lane.laneId);
+    const slots = plan.slots.filter((s) => s.beat?.id === b.lane.laneId);
+    if (!part?.used || !slots.length) continue;
+    const { structure, beatBpm } = b.pair;
+    const ratio = part.speed;
+    // Bars of the new song per bar of this beat: 2 for a beat counted at half time.
+    const per = Math.max(0.25, Math.round(((240 / beatBpm / ratio) / bar) * 4) / 4);
+    const src = (n: number) => structure.grid.time(structure.downbeat + 4 * n);
+    const body = { from: Math.max(0, Math.min(structure.introBars, structure.endBar - 8)), to: structure.endBar };
+    const clips: LaneClip[] = [];
+    for (const slot of slots) {
+      // The bar before a drop: the beat stops, a breath of silence.
+      let left = (slot.bars - (slot.build ? 1 : 0)) / per;
+      let at = slot.start * bar;
+      let from = slot.beat!.fromBar;
+      while (left > 0.01) {
+        if (from >= body.to) from = body.from;
+        const run = Math.min(left, body.to - from);
+        clips.push({ from: Math.max(0, src(from) - NEW_SONG_CUT), to: src(from + run) - NEW_SONG_CUT, at: Math.max(0, at - NEW_SONG_CUT) * ratio, label: slot.label });
+        at += run * per * bar;
+        left -= run;
+        from += run;
+      }
+    }
+    // The song's other lines (its drums, bass and melody) play the same cuts.
+    for (const lane of b.song.backing) {
+      draft.patch(lane.laneId, {
+        tempoRatio: ratio,
+        offsetSeconds: 0,
+        pitchSemitones: lane.kind === "drums" ? 0 : part.semitones,
+        clips: clips.map((c) => ({ ...c })),
+        muted: false,
+      });
+      playing.add(lane.laneId);
+    }
+  }
+
+  // --- The vocals: each section placed phrase by phrase on the new song's bars ---
+  const timeline = steadyStructure(plan.bpm, plan.bars + 8);
+  for (const v of input.vocals) {
+    const part = partOf(v.lane.laneId);
+    const placements = plan.slots.flatMap((slot) => slot.vocals.filter((x) => x.id === v.lane.laneId).map((x) => ({ slot, x })));
+    if (!part?.used || !placements.length) continue;
+    const { heard } = v.pair;
+    // One section per placement, cut to the bars it has — whole lines only.
+    const sections = placements.map(({ x }) => {
+      const section = heard.sections[x.section];
+      const phrases = section.phrases.filter((p) => p.bar - section.bar + (p.endBeat - p.startBeat + p.inBeats) / 4 <= x.bars + 0.25);
+      return { ...section, phrases: phrases.length ? phrases : section.phrases.slice(0, 1) };
+    });
+    const ratio = plan.bpm / v.pair.reading;
+    const placed = placeVocal(
+      { analysis: v.pair.vocalAnalysis, bpm: v.pair.reading, tempoRatio: ratio, offsetSeconds: 0, title: songName(v.song), duration: v.lane.originalDuration, guide: v.pair.guide ?? undefined },
+      { analysis: { ...v.pair.beatAnalysis, onsets: new Float32Array(1), lowOnsets: new Float32Array(1) }, bpm: plan.bpm, tempoRatio: 1, offsetSeconds: 0, title: "the new song", duration: plan.seconds },
+      timeline,
+      { ...heard, sections },
+      placements.map(({ slot, x }, i) => ({ section: i, bar: slot.start + x.at })),
+      0,
+      placements.map(({ slot }) => slot.label)
+    );
+    if (!placed) continue;
+    draft.patch(v.lane.laneId, { tempoRatio: ratio, pitchSemitones: part.semitones, offsetSeconds: placed.offsetSeconds, clips: placed.clips, muted: false });
+    playing.add(v.lane.laneId);
+  }
+  if (![...playing].some((id) => draft.lane(id).kind === "vocals")) return null;
+  keepOnly(draft, (lane) => playing.has(lane.laneId));
+
+  const clockAt = (b: number) => clock(b * bar);
+  draft.lines.push(
+    `${Math.round(plan.seconds / 60)}:${String(Math.round(plan.seconds % 60)).padStart(2, "0")} at ${Math.round(plan.bpm)} BPM${plan.key ? ` in ${keyLabel(plan.key)}` : ""}, from ${songs.length} songs`,
+    ...plan.notes,
+    ...plan.slots.map((s) => `${clockAt(s.start)} ${s.label}: ${s.why}`)
+  );
+  const firstDrop = plan.slots.find((s) => s.drop);
+  const singers = new Set(plan.slots.flatMap((s) => s.vocals.map((x) => x.id))).size;
+  const lineOf = new Map(input.vocals.map((v) => [v.lane.laneId, v.input.sections]));
+  const idea = draft.idea({
+    id: NEW_SONG_ID,
+    kind: "idea",
+    role: "remixer",
+    icon: "sparkles",
+    title: "A new song from everything",
+    short: `${singers} singer${singers === 1 ? "" : "s"}, one song: verses, drops, a bridge and a final chorus`,
+    why: `Every song in the mix heard and made into one: one tempo and key, choruses on the drops, verses passed round the singers, beats changing on 8- and 16-bar lines with a breath before each drop. Each part says why below.`,
+    listenAt: firstDrop ? Math.max(0, (firstDrop.start - 4) * bar) : 0,
+  });
+  idea.song = {
+    plan,
+    names: Object.fromEntries([...input.vocals, ...input.beats].map((x) => [x.lane.laneId, songName(x.song)])),
+    lines: Object.fromEntries(plan.slots.map((s, i) => [i, s.vocals.map((x) => lineOf.get(x.id)?.find((sec) => sec.index === x.section)?.line ?? "").filter(Boolean)[0] ?? ""])),
+  };
+  return idea;
+}
+
 /** Every way of playing the songs in the mix together. */
 function mashupIdeas(session: Session): Idea[] {
   const songs = mashableSongs(session.lanes).slice(0, 3);
@@ -2994,6 +3265,7 @@ function mashupIdeas(session: Session): Idea[] {
     }
   }
   for (const a of songs) for (const b of songs) if (a !== b) add(() => blendIdea(session, a, b));
+  add(() => newSongIdea(session));
   return ideas;
 }
 

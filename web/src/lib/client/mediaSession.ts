@@ -23,6 +23,9 @@ export type NowPlaying = {
   pause: () => void;
   stop: () => void;
   seekTo: (seconds: number) => void;
+  /** Lock-screen next / previous track, when there's a list to step through. */
+  next?: () => void;
+  previous?: () => void;
 };
 
 type Owner = "preview" | "mix";
@@ -95,11 +98,27 @@ function setHandlers(session: MediaSession) {
   });
 }
 
+let stepping = { next: false, previous: false };
+
+/** Next / previous track buttons only while there's somewhere to step to (a handler shows the button). */
+function setStepping(session: MediaSession) {
+  const want = { next: !!current?.next, previous: !!current?.previous };
+  if (want.next === stepping.next && want.previous === stepping.previous) return;
+  stepping = want;
+  try {
+    session.setActionHandler("nexttrack", want.next ? () => current?.next?.() : null);
+    session.setActionHandler("previoustrack", want.previous ? () => current?.previous?.() : null);
+  } catch {
+    // unsupported here
+  }
+}
+
 function apply() {
   const session = mediaSession();
   if (!session) return;
   current = owners.preview ?? owners.mix;
   setHandlers(session);
+  setStepping(session);
 
   if (!current) {
     if (lastKey) {

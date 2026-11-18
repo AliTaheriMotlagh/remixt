@@ -63,6 +63,12 @@ export default function EmbedPlayer({
     };
   }, [remixId, title, loadRemix]);
 
+  // Listening mode: the finished mix keeps playing with the screen locked or in another app (see renderedPlayback.ts).
+  useEffect(() => {
+    audioEngine.setListening(true);
+    return () => audioEngine.setListening(false);
+  }, []);
+
   // On the lock screen, this remix is by its artist (not the stems'
   // artists), with its cover.
   useEffect(() => {

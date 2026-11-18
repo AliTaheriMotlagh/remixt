@@ -1,5 +1,6 @@
 "use client";
 
+import { linkCovers } from "./songCovers";
 import { useSyncExternalStore } from "react";
 import { upload, type Send, type UploadTarget } from "./directUpload";
 import { fetchInSlices } from "./stemFetch";
@@ -661,6 +662,8 @@ export async function fetchSongFromLink(
     const file = new File([bytes], `${data.title}.${ext}`);
     // Looked up by name (a streaming service's link, or YouTube's): say so.
     if (data.foundBySearch) foundBySearch.add(file);
+    // The song's page had a picture (and the file none of its own): the track's cover.
+    if (typeof data.coverId === "string") linkCovers.set(file, data.coverId);
     return file;
   } finally {
     void fetch(url, { method: "DELETE" }).catch(() => {});

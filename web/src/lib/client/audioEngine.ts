@@ -16,6 +16,7 @@ import { scheduleModulation } from "./modulation";
 import { renderPitchTempo, stretchEngine } from "./pitchTempo";
 import { keepRender, keptRender, renderId } from "./renderCache";
 import { previewPlayer } from "./previewPlayer";
+import { keyKeeper, RenderedPlayback } from "./renderedPlayback";
 import { keepScreenOn } from "./wakeLock";
 import { deviceGb, isConstrainedDevice } from "./device";
 import { getPlayingRemix, setNowPlaying } from "./mediaSession";
@@ -361,6 +362,61 @@ class AudioEngine {
   private micActive = false;
   /** A tap on the mix for visuals (the live party's lights and crowd). */
   private analyser: AnalyserNode | null = null;
+  /** Listening mode: the finished mix rendered and played by an <audio> element (see renderedPlayback.ts). */
+  private rendered = Object.assign(new RenderedPlayback(), {
+    // A call or another app's audio paused it: the mix pauses with it.
+    onLost: () => {
+      if (this.onRendered && useStudioStore.getState().isPlaying) this.pause();
+    },
+    onEnded: () => {
+      if (this.onRendered) this.stop();
+    },
+  });
+  /** Whether what's heard right now is the rendered file rather than the live engine. */
+  private onRendered = false;
+  private mixKey = keyKeeper();
+  /** The context stopped while the page was hidden, with the mix playing: tried again when it's back in view. */
+  private heldInBackground = false;
+
+  /**
+   * Listening mode, for a page that plays a finished mix (a remix's page,
+   * the embed): plays keep going in the background (see renderedPlayback.ts).
+   * Off when the page goes.
+   */
+  setListening(on: boolean) {
+    if (this.rendered.enabled === on) return;
+    if (!on) {
+      if (this.onRendered) this.pause();
+      this.rendered.drop();
+    }
+    this.rendered.enabled = on;
+  }
+
+  /** Whether the rendered file of the mix is what's playing (listening mode). */
+  isOnRenderedMix() {
+    return this.onRendered;
+  }
+
+  /**
+   * The mix changed while its rendered file played (a stem muted in the
+   * mixer): carry on, from the same spot, on the live engine — which plays
+   * what the mix is now.
+   */
+  leaveRenderedMix() {
+    if (!this.onRendered) return;
+    if (this.mixKey(useStudioStore.getState()) === this.renderedKey) return;
+    const at = this.rendered.time();
+    this.playRequest++;
+    this.rendered.pause();
+    this.onRendered = false;
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+    useStudioStore.getState()._setPlaybackState(false, at);
+    void this.play({ join: true }).catch(() => {});
+  }
+  private renderedKey = "";
 
   /**
    * The mix's spectrum, for visuals. Taken before the master fader, so a
@@ -430,11 +486,32 @@ class AudioEngine {
       // and the play button reflect what's actually heard; the next tap
       // on play resumes from there.
       ctx.addEventListener("statechange", () => {
-        if (this.ctx !== ctx) return;
-        if (ctx.state !== "running" && useStudioStore.getState().isPlaying) this.pause();
+        if (this.ctx !== ctx || this.onRendered) return;
+        if (ctx.state === "running" || !useStudioStore.getState().isPlaying) return;
+        // Only hidden (the screen locked, another app, the home screen): the
+        // audio clock stands still with the sound, so the mix can carry on
+        // from the very spot when the page is back — see resumeAfterHidden.
+        // A call (page in view) or another app taking the audio stops it for real.
+        if (typeof document !== "undefined" && document.hidden) {
+          this.heldInBackground = true;
+          return;
+        }
+        this.pause();
       });
     }
     return this.ctx;
+  }
+
+  /** Back in view after the phone stopped the audio while hidden: carry on, or pause if it won't start again. */
+  resumeAfterHidden() {
+    if (!this.heldInBackground) return;
+    this.heldInBackground = false;
+    const ctx = this.ctx;
+    if (!ctx || !useStudioStore.getState().isPlaying || this.onRendered) return;
+    if (ctx.state === "running") return;
+    void Promise.race([ctx.resume().catch(() => {}), new Promise((resolve) => setTimeout(resolve, 800))]).then(() => {
+      if (this.ctx === ctx && ctx.state !== "running" && useStudioStore.getState().isPlaying) this.pause();
+    });
   }
 
   /**
@@ -1090,6 +1167,19 @@ class AudioEngine {
     // library preview that's still running. Done before resuming, since on
     // iOS a playing <audio> element can hold the context interrupted.
     previewPlayer.stop();
+    this.heldInBackground = false;
+
+    // Listening mode: the rendered mix when it's ready (and is this mix); else the live engine, with the element
+    // unlocked in this tap so playback can move over to the file once it's rendered.
+    if (this.rendered.enabled) {
+      const key = this.mixKey(useStudioStore.getState());
+      if (this.rendered.readyFor(key)) {
+        // The live engine kept ready too (unlocked in this tap), for a switch back.
+        void this.unlock().catch(() => {});
+        if (await this.playRendered(request, key)) return;
+        if (request !== this.playRequest) return;
+      } else this.rendered.prime();
+    }
     // What the lock screen and Dynamic Island hold on to (see
     // nowPlayingAnchor); started here, still inside the tap. Not while
     // recording, which has the phone's audio set up for the microphone.
@@ -1192,9 +1282,75 @@ class AudioEngine {
     this.startMetronome(playhead);
     this.startStandIns();
     this.tick();
+    if (this.rendered.enabled) this.handOverWhenRendered(request);
+  }
+
+  /** Where play starts: the playhead, or the start when it's at the end, or the loop's start when it's outside the loop. */
+  private startPoint() {
+    const state = useStudioStore.getState();
+    let playhead = state.playhead;
+    if (state.duration > 0 && playhead >= state.duration) playhead = 0;
+    if (state.loopEnabled && (playhead < state.loopStart || playhead >= state.loopEnd)) playhead = state.loopStart;
+    return playhead;
+  }
+
+  /** Plays the rendered mix (listening mode). False when it couldn't, and the live engine should. */
+  private async playRendered(request: number, key: string): Promise<boolean> {
+    const playhead = this.startPoint();
+    const ok = await this.rendered.start(playhead);
+    if (request !== this.playRequest) {
+      if (ok) this.rendered.pause();
+      return true;
+    }
+    if (!ok) return false;
+    this.stopAllSources();
+    this.onRendered = true;
+    this.renderedKey = key;
+    useStudioStore.getState()._setPlaybackState(true, playhead);
+    this.tick();
+    return true;
+  }
+
+  /**
+   * While the live engine plays in listening mode: the mix is rendered, and
+   * once it's ready playback moves to it at the same spot (unless the mix
+   * changed, or play was stopped, meanwhile).
+   */
+  private handOverWhenRendered(request: number) {
+    const key = this.mixKey(useStudioStore.getState());
+    void this.rendered.ensure(key).then(async (ready) => {
+      const live = () => request === this.playRequest && !this.onRendered && useStudioStore.getState().isPlaying && !!this.ctx;
+      if (!ready || !live() || this.mixKey(useStudioStore.getState()) !== key) return;
+      if (!(await this.rendered.start(this.timelineAt(this.ctx!.currentTime)))) return;
+      if (!live()) {
+        this.rendered.pause();
+        return;
+      }
+      // In step with the live mix, then the live mix goes quiet.
+      this.rendered.seek(this.timelineAt(this.ctx!.currentTime));
+      this.stopAllSources();
+      this.stopMetronome();
+      this.stopStandIns();
+      stopNowPlayingAnchor();
+      this.onRendered = true;
+      this.renderedKey = key;
+    });
   }
 
   pause() {
+    if (this.onRendered) {
+      this.playRequest++;
+      const at = this.rendered.time();
+      this.rendered.pause();
+      this.onRendered = false;
+      stopNowPlayingAnchor();
+      if (this.rafId !== null) {
+        cancelAnimationFrame(this.rafId);
+        this.rafId = null;
+      }
+      useStudioStore.getState()._setPlaybackState(false, at);
+      return;
+    }
     this.playRequest++;
     const ctx = this.ctx;
     const elapsed = ctx
@@ -1217,6 +1373,8 @@ class AudioEngine {
   /** Stop: silence everything and return the playhead to the start. */
   stop() {
     this.playRequest++;
+    this.rendered.pause();
+    this.onRendered = false;
     this.stopAllSources();
     this.stopMetronome();
     this.stopStandIns();
@@ -1677,10 +1835,17 @@ class AudioEngine {
   }
 
   private tick = () => {
-    if (!this.ctx) return;
-    const elapsed = this.ctx.currentTime - this.startedAtContextTime;
-    const playhead = this.startedAtPlayhead + Math.max(0, elapsed);
+    const rendered = this.onRendered;
+    if (!rendered && !this.ctx) return;
+    const playhead = rendered ? this.rendered.time() : this.startedAtPlayhead + Math.max(0, this.ctx!.currentTime - this.startedAtContextTime);
     const { duration, loopEnabled, loopStart, loopEnd } = useStudioStore.getState();
+
+    if (rendered && loopEnabled && loopEnd > loopStart && playhead >= loopEnd) {
+      this.rendered.seek(loopStart);
+      useStudioStore.getState()._setPlaybackState(true, loopStart);
+      this.rafId = requestAnimationFrame(this.tick);
+      return;
+    }
 
     if (loopEnabled && loopEnd > loopStart && playhead >= loopEnd) {
       useStudioStore.getState()._setPlaybackState(true, loopStart);
@@ -1705,6 +1870,24 @@ renderQueue.yieldTo = { busy: () => audioEngine.onStandIns(), renders: RENDERS_B
 /** Whether the mix has played since it was last stopped — only then is it on the lock screen. */
 let mixOnLockScreen = false;
 
+let mixArt: { key: string; url: string | null } | null = null;
+
+/** The mix's drawn cover for the lock screen, once it's made (null until then — the Remixt mark shows). */
+function drawnMixCover(lanes: StudioLane[], title: string, artist: string): string | null {
+  const key = `${title}|${artist}|${lanes.map((l) => l.stemId).join(",")}`;
+  if (mixArt?.key === key) return mixArt.url;
+  mixArt = { key, url: null };
+  void import("./exportMeta")
+    .then(({ mixCoverUrl }) => mixCoverUrl(lanes, title, artist))
+    .then((url) => {
+      if (mixArt?.key !== key || !url) return;
+      mixArt = { key, url };
+      reportMixNowPlaying(useStudioStore.getState());
+    })
+    .catch(() => {});
+  return null;
+}
+
 /** Tells the lock screen / media notification about the mix (see mediaSession). */
 function reportMixNowPlaying(state: ReturnType<typeof useStudioStore.getState>) {
   if (state.isPlaying) mixOnLockScreen = true;
@@ -1714,11 +1897,15 @@ function reportMixNowPlaying(state: ReturnType<typeof useStudioStore.getState>) 
   }
   const artists = [...new Set(state.lanes.map((l) => l.artistName))];
   const remix = getPlayingRemix();
+  const title = state.sourceRemix?.title ?? state.challenge?.title ?? "Untitled mix";
+  const artist = remix?.artist ?? artists.slice(0, 3).join(" × ");
+  const own = remix ? remix.cover : state.sourceRemix?.cover;
   setNowPlaying("mix", {
-    title: state.sourceRemix?.title ?? state.challenge?.title ?? "Untitled mix",
-    artist: remix?.artist ?? artists.slice(0, 3).join(" × "),
+    title,
+    artist,
     album: "Remixt",
-    artwork: remix ? remix.cover : state.sourceRemix?.cover,
+    // No cover of its own: the songs in it, with its title (made once, then reported again with it).
+    artwork: own ?? drawnMixCover(state.lanes, title, artist),
     playing: state.isPlaying,
     position: state.playhead,
     duration: state.duration,
@@ -1726,6 +1913,8 @@ function reportMixNowPlaying(state: ReturnType<typeof useStudioStore.getState>) 
     pause: () => audioEngine.pause(),
     stop: () => audioEngine.stop(),
     seekTo: (seconds) => audioEngine.seek(seconds),
+    // The lock screen's "previous": from the top (a mix is one track — there's no next).
+    previous: () => audioEngine.seek(0),
   });
 }
 
@@ -1735,8 +1924,14 @@ previewPlayer.onStart(() => audioEngine.pause());
 
 // A call or another app's audio paused the lock screen's player: pause the mix with it.
 onNowPlayingAnchorLost(() => {
-  if (useStudioStore.getState().isPlaying) audioEngine.pause();
+  if (useStudioStore.getState().isPlaying && !audioEngine.isOnRenderedMix()) audioEngine.pause();
 });
+
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) audioEngine.resumeAfterHidden();
+  });
+}
 
 if (typeof window !== "undefined") {
   const lastTransforms = new Map<string, { tempo: number; pitch: number }>();
@@ -1775,6 +1970,10 @@ if (typeof window !== "undefined") {
   subscribeMix((state, prevState) => {
     if (state.isPlaying !== prevState.isPlaying) keepScreenOn("mix", state.isPlaying);
     reportMixNowPlaying(state);
+    // Listening to the rendered mix, and the mix just changed: back to the live engine for what it is now.
+    if (audioEngine.isOnRenderedMix() && (state.lanes !== prevState.lanes || state.master !== prevState.master || state.masterVolume !== prevState.masterVolume || state.projectBpm !== prevState.projectBpm || state.crossfader !== prevState.crossfader)) {
+      audioEngine.leaveRenderedMix();
+    }
 
     // The playhead moves every frame while playing; none of what follows
     // depends on it. Re-applying every lane's settings 60 times a second
@@ -1867,4 +2066,11 @@ if (typeof window !== "undefined") {
       }
     }
   });
+}
+
+// The engine and the mix's store on every page that plays a mix (a remix's page, the embed), for the
+// test scripts — the Studio adds its other stores (see Studio.tsx). Development only.
+if (typeof window !== "undefined" && process.env.NODE_ENV === "development") {
+  const w = window as unknown as { __remixt?: Record<string, unknown> };
+  w.__remixt = { ...w.__remixt, studio: useStudioStore, engine: audioEngine };
 }

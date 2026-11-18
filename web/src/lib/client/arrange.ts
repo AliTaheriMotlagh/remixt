@@ -982,3 +982,24 @@ export function repriseClips(structure: BeatStructure, reprise: Reprise, duratio
   if (duration - cut(structure, body.to) > 0.05) clips.push({ from: cut(structure, body.to), to: duration, at: cut(played, body.to + extra), label: ENDING_LABEL });
   return clips;
 }
+
+/**
+ * Bars at one steady tempo from the start of the timeline: what a song put
+ * together from several beats (each stretched to that tempo and cut on bar
+ * lines — see newSongIdea) plays to. Vocals are placed on it like on a beat.
+ */
+export function steadyStructure(bpm: number, bars: number): BeatStructure {
+  const period = 60 / bpm;
+  const beats = Math.max(8, bars * 4 + 8);
+  const times = new Float64Array(beats);
+  for (let i = 0; i < beats; i++) times[i] = i * period;
+  return {
+    grid: new BeatGrid(times, period),
+    downbeat: 0,
+    bars,
+    barEnergy: new Array(bars).fill(1),
+    introBars: 0,
+    endBar: bars,
+    downbeatConfidence: 1,
+  };
+}

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { LoaderCircle, Pause, Play, X } from "lucide-react";
+import SongArt from "./SongArt";
 import Waveform from "./Waveform";
 import ReportButton from "./ReportButton";
 import { previewPlayer, usePreviewState } from "@/lib/client/previewPlayer";
@@ -21,6 +22,7 @@ type StemWithTrack = {
   track_bpm: number | null;
   artist_name: string;
   artist_id: string;
+  track_has_cover?: boolean;
 };
 
 function formatDuration(seconds: number | null) {
@@ -89,13 +91,11 @@ export default function LibraryBrowser({
     );
   }, [all, tab, tag, query]);
 
+  const asTrack = (stem: StemWithTrack) => ({ stemId: stem.id, title: stem.track_title, artist: stem.artist_name, kind: stem.kind });
+
   function togglePreview(stem: StemWithTrack) {
-    void previewPlayer.toggle({
-      stemId: stem.id,
-      title: stem.track_title,
-      artist: stem.artist_name,
-      kind: stem.kind,
-    });
+    // The list as shown is the queue: it plays on through it, and the lock screen can skip.
+    void previewPlayer.toggle(asTrack(stem), filtered.map(asTrack));
   }
 
   function handleAddToStudio(stem: StemWithTrack) {
@@ -172,14 +172,17 @@ export default function LibraryBrowser({
             return (
               <div key={stem.id} className="rounded-xl border border-border bg-surface p-4">
                 <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <h2 className="truncate font-medium">{stem.track_title}</h2>
-                    <Link
-                      href={`/artist/${stem.artist_id}`}
-                      className="text-xs text-muted hover:text-brand-strong hover:underline"
-                    >
-                      {stem.artist_name}
-                    </Link>
+                  <div className="flex min-w-0 items-center gap-3">
+                    <SongArt stemId={stem.id} title={stem.track_title} artist={stem.artist_name} peaks={peaksById.get(stem.id)} hasCover={stem.track_has_cover} className="h-11 w-11 rounded-lg" />
+                    <div className="min-w-0">
+                      <h2 className="truncate font-medium">{stem.track_title}</h2>
+                      <Link
+                        href={`/artist/${stem.artist_id}`}
+                        className="text-xs text-muted hover:text-brand-strong hover:underline"
+                      >
+                        {stem.artist_name}
+                      </Link>
+                    </div>
                   </div>
                   <span className="shrink-0 text-xs text-muted">
                     {formatDuration(stem.track_duration)}

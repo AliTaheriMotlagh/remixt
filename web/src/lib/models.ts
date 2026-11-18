@@ -19,6 +19,8 @@ export type TrackRow = {
   tags?: string[];
   /** "private": a take only its owner (and whom they share it with) sees. */
   visibility?: "public" | "private";
+  /** The song's cover picture, if it has one (see app/api/tracks/[id]/cover). */
+  cover_key?: string | null;
 };
 
 export type StemRow = {
@@ -40,6 +42,8 @@ export type StemWithTrack = StemRow & {
   track_private?: boolean;
   /** The viewer's own. */
   track_mine?: boolean;
+  /** The song has a cover picture (served by /api/stems/<id>/cover). */
+  track_has_cover?: boolean;
 };
 
 export async function getTrackById(id: string): Promise<TrackRow | undefined> {
@@ -82,7 +86,7 @@ export async function getStemsByKindWithArtist(
   await ensureSchema();
   return sql<StemWithTrack[]>`
     SELECT stems.*, tracks.title as track_title, tracks.tags as track_tags, tracks.duration as track_duration,
-           tracks.bpm as track_bpm, users.artist_name, users.id as artist_id,
+           tracks.bpm as track_bpm, users.artist_name, users.id as artist_id, tracks.cover_key IS NOT NULL AS track_has_cover,
            tracks.visibility <> 'public' AS track_private, tracks.owner_id = ${viewerId ?? ""} AS track_mine
     FROM stems
     JOIN tracks ON tracks.id = stems.track_id
@@ -100,7 +104,7 @@ export async function getLibraryStems(viewerId: string | null): Promise<StemWith
   await ensureSchema();
   return sql<StemWithTrack[]>`
     SELECT stems.*, tracks.title as track_title, tracks.tags as track_tags, tracks.duration as track_duration,
-           tracks.bpm as track_bpm, users.artist_name, users.id as artist_id,
+           tracks.bpm as track_bpm, users.artist_name, users.id as artist_id, tracks.cover_key IS NOT NULL AS track_has_cover,
            tracks.featured_example AS track_featured, tracks.example_credit AS track_credit,
            tracks.visibility <> 'public' AS track_private, tracks.owner_id = ${viewerId ?? ""} AS track_mine
     FROM stems
@@ -114,7 +118,7 @@ export async function getLibraryStems(viewerId: string | null): Promise<StemWith
 export async function getStemById(id: string): Promise<StemWithTrack | undefined> {
   const rows = await sql<StemWithTrack[]>`
     SELECT stems.*, tracks.title as track_title, '{}'::text[] as track_tags, tracks.duration as track_duration,
-           tracks.bpm as track_bpm, users.artist_name, users.id as artist_id
+           tracks.bpm as track_bpm, users.artist_name, users.id as artist_id, tracks.cover_key IS NOT NULL AS track_has_cover
     FROM stems
     JOIN tracks ON tracks.id = stems.track_id
     JOIN users ON users.id = tracks.owner_id

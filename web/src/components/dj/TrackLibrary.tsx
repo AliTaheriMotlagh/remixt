@@ -1,5 +1,6 @@
 "use client";
 
+import SongArt from "@/components/SongArt";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowDownUp, Library, Loader2, Music2, RefreshCw, Search, X } from "lucide-react";
@@ -206,6 +207,7 @@ export default function TrackLibrary({
                   disabled={loadingId !== null}
                   className={`flex w-full items-center gap-3 rounded-xl border bg-surface p-2.5 text-left hover:bg-surface-hover disabled:opacity-60 ${f?.compatible ? "border-success/60" : "border-border"}`}
                 >
+                  <SongArt stemId={t.coverStemId} title={t.title} artist={t.artist} className="h-11 w-11 rounded-lg" />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-bold">{t.title}</p>
                     <p className="truncate text-xs text-muted">

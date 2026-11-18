@@ -47,6 +47,7 @@ import { useStudioView } from "@/lib/client/studioView";
 import LyricsPicker from "./LyricsPicker";
 import { useMixSongs } from "@/lib/client/mixSongs";
 import LyricsTimeline from "./LyricsTimeline";
+import { rewordSheet, wordsOf } from "@/lib/lyricsEdit";
 import {
   barAt,
   beatSeconds,
@@ -1150,19 +1151,41 @@ export function BigPrompter({ lines, onClose }: { lines: LyricLine[]; onClose: (
 
 function EditTab({ onDone }: { onDone: () => void }) {
   const sheet = useLyrics(activeSheet);
+  const lines = useLyrics((s) => s.lines);
   const setText = useLyrics((s) => s.setText);
   const rename = useLyrics((s) => s.rename);
   const checkpoint = useLyrics((s) => s.checkpoint);
   const clear = useLyrics((s) => s.clear);
   const [pasteError, setPasteError] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
+  // A timed sheet is edited as its words alone — each line keeps its time (lyricsEdit.ts); "Show times" edits the stamps too.
+  const timed = isSynced(lines);
+  const [showTimes, setShowTimes] = useState(false);
+  const wordsOnly = timed && !showTimes;
+  // What's in the box while the words are edited: kept as typed (a new empty row, a space at the end), and taken
+  // again from the sheet when it changes some other way (Undo, the AI, timing).
+  const [draft, setDraft] = useState<{ text: string; sheet: string } | null>(null);
   if (!sheet) return null;
   const canPaste = typeof navigator !== "undefined" && !!navigator.clipboard?.readText;
+  const boxText = wordsOnly ? (draft && draft.sheet === sheet.text ? draft.text : wordsOf(lines)) : sheet.text;
+
+  /** The box's text changed to `text`: the sheet follows (in words mode, with every line's time kept). */
+  function write(text: string) {
+    if (!sheet) return;
+    const next = text.slice(0, 20_000);
+    if (!wordsOnly) {
+      setText(next);
+      return;
+    }
+    const sheetText = rewordSheet(sheet.text, next);
+    setDraft({ text: next, sheet: sheetText });
+    setText(sheetText);
+  }
 
   /** A section heading ("[Chorus]") on its own line where the cursor is, a blank line before it. */
   function insertSection(name: string) {
     if (!sheet) return;
-    const text = sheet.text;
+    const text = boxText;
     const el = box.current;
     const at = el && document.activeElement === el ? el.selectionStart : text.length;
     const lineStart = text.lastIndexOf("\n", Math.max(0, at - 1)) + 1;
@@ -1171,7 +1194,7 @@ function EditTab({ onDone }: { onDone: () => void }) {
     const gap = !before.trim() ? "" : before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
     const block = `${gap}[${name}]\n`;
     checkpoint();
-    setText((before + block + text.slice(start)).slice(0, 20_000));
+    write(before + block + text.slice(start));
     requestAnimationFrame(() => {
       const pos = (before + block).length;
       el?.focus();
@@ -1185,7 +1208,7 @@ function EditTab({ onDone }: { onDone: () => void }) {
       const text = (await navigator.clipboard.readText()).trim();
       if (!text) return;
       checkpoint();
-      setText((sheet.text.trim() ? `${sheet.text.trimEnd()}\n\n${text}` : text).slice(0, 20_000));
+      write(boxText.trim() ? `${boxText.trimEnd()}\n\n${text}` : text);
       setPasteError(false);
     } catch {
       setPasteError(true);
@@ -1225,17 +1248,31 @@ function EditTab({ onDone }: { onDone: () => void }) {
           </button>
         ))}
       </div>
+      {timed && (
+        <div className="flex items-center justify-between gap-2 rounded-lg bg-background/60 px-3 py-2">
+          <p className="min-w-0 text-[11px] leading-snug text-muted">
+            {wordsOnly ? "Just the words — every line keeps its time. A new line goes between the lines around it." : "Each line's time is in front of it, like [01:02.50]."}
+          </p>
+          <button
+            onClick={() => setShowTimes((v) => !v)}
+            aria-pressed={showTimes}
+            className={`flex h-9 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-semibold transition-colors ${showTimes ? "border-vocals text-vocals" : "border-border text-muted hover:text-foreground"}`}
+          >
+            <Clock /> {showTimes ? "Hide times" : "Show times"}
+          </button>
+        </div>
+      )}
       <textarea
         ref={box}
-        value={sheet.text}
+        value={boxText}
         onFocus={checkpoint}
-        onChange={(e) => setText(e.target.value.slice(0, 20_000))}
+        onChange={(e) => write(e.target.value)}
         dir="auto"
         rows={12}
         spellCheck={false}
         placeholder={"One line of lyrics per line.\nLeave an empty line between verses.\n[Chorus] on its own line marks a section.\n\nTimes (optional) go first, like this:\n[00:12.50] First line"}
         aria-label="Lyrics"
-        className="min-h-48 w-full resize-y rounded-xl border border-border bg-background px-3 py-2.5 font-mono text-[13px] leading-relaxed max-lg:text-base"
+        className={`min-h-48 w-full resize-y rounded-xl border border-border bg-background px-3 py-2.5 leading-relaxed max-lg:text-base ${wordsOnly ? "text-sm" : "font-mono text-[13px]"}`}
       />
       <div className="flex flex-wrap items-center gap-2">
         {canPaste && (

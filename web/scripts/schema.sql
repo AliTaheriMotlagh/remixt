@@ -194,6 +194,7 @@ CREATE TABLE IF NOT EXISTS split_jobs (
 CREATE INDEX IF NOT EXISTS idx_split_jobs_status ON split_jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_split_jobs_owner ON split_jobs(owner_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_split_jobs_worker ON split_jobs(worker_id) WHERE status = 'done';
+ALTER TABLE split_jobs ADD COLUMN IF NOT EXISTS cover_key TEXT;
 
 -- Who's online right now, for the live counts on the home page (see
 -- src/lib/presence.ts, which also creates this on first use). One row per
@@ -208,6 +209,8 @@ CREATE INDEX IF NOT EXISTS idx_presence_last_seen ON presence(last_seen);
 
 -- Remix covers (a picture the owner uploads) and referrals (who invited whom).
 ALTER TABLE remixes ADD COLUMN IF NOT EXISTS cover_key TEXT;
+-- A song's cover picture: from the file's own tags, or the music site it came from (lib/client/audioCover.ts).
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS cover_key TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by TEXT REFERENCES users(id) ON DELETE SET NULL;
 
 -- Live sessions: an artist performs a published remix and listeners (guests

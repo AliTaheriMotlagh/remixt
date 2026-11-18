@@ -63,6 +63,8 @@ export function libraryEntry(song: LibrarySong): BrowserEntry {
     source: "library",
     title: song.title,
     artist: song.artist,
+    // Its cover is served by any of its stems.
+    coverStemId: song.stems.vocals?.id ?? Object.values(song.stems)[0]?.id,
     genre: song.tags[0] ?? "Your library",
     bpm: s?.bpm ?? song.bpm,
     key: s?.key ?? null,
@@ -163,6 +165,8 @@ async function buildLibraryTrack(song: LibrarySong, ctx: BaseAudioContext, onSta
     id: libraryTrackId(song.trackId),
     title: song.title,
     artist: song.artist,
+    // Its cover is served by any of its stems.
+    coverStemId: song.stems.vocals?.id ?? Object.values(song.stems)[0]?.id,
     genre: song.tags[0] ?? "Your library",
     bpm,
     key: a.key,

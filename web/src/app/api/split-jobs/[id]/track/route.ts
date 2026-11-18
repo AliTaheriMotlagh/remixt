@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import sql from "@/lib/db";
 import { attachTrack, getJob, isWorkerOf, SESSION_HEADER } from "@/lib/splitQueue";
 import { createTrackForUpload, splitTrackSchema } from "@/lib/trackUpload";
 
@@ -27,6 +28,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     recording: false,
   });
   if ("error" in created) return NextResponse.json({ error: created.error }, { status: 400 });
+  // The cover found when it was queued (its file's tags, or its page) is the song's.
+  if (job.cover_key) await sql`UPDATE tracks SET cover_key = ${job.cover_key} WHERE id = ${created.id}`;
   await attachTrack(job.id, created.id);
   return NextResponse.json(created);
 }

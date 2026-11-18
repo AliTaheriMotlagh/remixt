@@ -6,7 +6,9 @@ import { isIP } from "net";
 import os from "os";
 import path from "path";
 import { isYouTubeLink, YOUTUBE_UNAVAILABLE } from "./linkHosts";
-import { audioLinksFrom, isAudioUrl, pageTitleOf, pageTitleParts } from "./musicPages";
+import { audioLinksFrom, isAudioUrl, pageImageOf, pageTitleOf, pageTitleParts } from "./musicPages";
+import { readCover } from "./audioCover";
+import { imageExtension } from "./imageType";
 
 // Gets a song from a link — YouTube, SoundCloud, Bandcamp, Vimeo, a direct
 // MP3 URL, anything yt-dlp knows — on the server, since a browser isn't
@@ -292,7 +294,12 @@ export async function importSong(raw: string, signal?: AbortSignal): Promise<Imp
   if (isAudioUrl(link)) return { ...(await withRetry(() => downloadAudioFile(link, { signal }), signal)), foundBySearch: false };
   if (!isStreamingLink(link) && !isYouTubeLink(link) && !YTDLP_SITE.test(new URL(link).hostname)) {
     const fromPage = await songOnPage(link, signal);
-    if (fromPage) return { ...fromPage, foundBySearch: false };
+    if (fromPage) {
+      // The file's own cover is read where it's split; the page's picture is kept for a file with none.
+      const { coverUrl, ...song } = fromPage;
+      const cover = coverUrl && !(await embeddedCover(song.bytes)) ? await fetchCoverImage(coverUrl, signal) : null;
+      return { ...song, cover, foundBySearch: false };
+    }
   }
   let target = link;
   if (isStreamingLink(link)) {
@@ -429,7 +436,7 @@ export async function downloadAudioFile(link: string, { signal, referer, title }
  * The song on a web page that links its audio file (a music site's song
  * page), downloaded — or null when the page has none, for yt-dlp to try.
  */
-async function songOnPage(link: string, signal?: AbortSignal): Promise<ImportedSong | null> {
+async function songOnPage(link: string, signal?: AbortSignal): Promise<(ImportedSong & { coverUrl: string | null }) | null> {
   let html = "";
   let pageUrl = link;
   try {
@@ -439,7 +446,7 @@ async function songOnPage(link: string, signal?: AbortSignal): Promise<ImportedS
     // The link was a file after all (no extension in its address).
     if (res.ok && /^audio\//i.test(type)) {
       void res.body?.cancel();
-      return withRetry(() => downloadAudioFile(url, { signal }), signal);
+      return { ...(await withRetry(() => downloadAudioFile(url, { signal }), signal)), coverUrl: null };
     }
     if (!res.ok || !/html/i.test(type)) {
       void res.body?.cancel();
@@ -454,11 +461,12 @@ async function songOnPage(link: string, signal?: AbortSignal): Promise<ImportedS
   if (!files.length) return null;
   const { title, artist } = pageTitleParts(pageTitleOf(html));
   const name = [artist, title].filter(Boolean).join(" - ");
+  const coverUrl = pageImageOf(html, pageUrl);
   let lastError: unknown = null;
   // The best quality first; if that copy is gone, the next.
   for (const file of files.slice(0, 3)) {
     try {
-      return await withRetry(() => downloadAudioFile(file.url, { signal, referer: pageUrl, title: name }), signal);
+      return { ...(await withRetry(() => downloadAudioFile(file.url, { signal, referer: pageUrl, title: name }), signal)), coverUrl };
     } catch (err) {
       if (signal?.aborted) throw err;
       lastError = err;
@@ -471,7 +479,39 @@ export type ImportedSong = {
   bytes: Buffer;
   title: string;
   ext: string;
+  /** The song's cover from the page it was on, when the file has none of its own (see songCover). */
+  cover?: SongCover | null;
 };
+
+/** A cover picture, as a JPEG or PNG. */
+export type SongCover = { ext: ".jpg" | ".png"; data: Buffer };
+
+/** The most a cover picture can weigh. */
+const MAX_COVER_BYTES = 1024 * 1024;
+
+/** A picture at `url` (a public host only), when it's a JPEG or PNG of a sensible size. */
+export async function fetchCoverImage(url: string, signal?: AbortSignal): Promise<SongCover | null> {
+  try {
+    const { res } = await fetchPublic(url, { signal, accept: "image/jpeg,image/png,image/*;q=0.5" });
+    if (!res.ok) {
+      void res.body?.cancel();
+      return null;
+    }
+    const data = await readCapped(res, MAX_COVER_BYTES);
+    const ext = imageExtension(data);
+    return ext ? { ext, data } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The picture inside the song's own file (its tags), as a JPEG or PNG. */
+export async function embeddedCover(bytes: Uint8Array): Promise<SongCover | null> {
+  const picture = await readCover(new Blob([bytes as Uint8Array<ArrayBuffer>]));
+  if (!picture || picture.data.length > MAX_COVER_BYTES) return null;
+  const ext = imageExtension(picture.data);
+  return ext ? { ext, data: Buffer.from(picture.data) } : null;
+}
 
 /**
  * Downloads the audio behind `link` (already passed through checkLink).

@@ -1,5 +1,6 @@
 "use client";
 
+import SongArt from "@/components/SongArt";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ClipboardPaste,
@@ -297,6 +298,7 @@ function LaneHeader({ lane, focused }: { lane: StudioLane; focused: boolean }) {
         className={`absolute inset-y-1.5 left-0 rounded-r transition-all ${focused ? "w-1.5" : "w-1"}`}
         style={{ background: accent }}
       />
+      <SongArt stemId={lane.stemId} title={lane.trackTitle} peaks={lane.peaks} className="ml-1.5 h-7 w-7 rounded-md max-sm:hidden" />
       <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
         <p className="flex items-center gap-1 truncate text-[12.5px] font-medium leading-tight" title={lane.name ? `${lane.name} — ${lane.trackTitle}` : lane.trackTitle}>
           {isRendering && <span className="h-1.5 w-1.5 shrink-0 animate-pulse-glow rounded-full bg-brand-strong" title="Re-rendering pitch/tempo" />}

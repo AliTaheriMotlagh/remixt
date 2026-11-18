@@ -83,6 +83,22 @@ export function audioLinksFrom(html: string, pageUrl: string): AudioLink[] {
     .map(({ url, kbps }) => ({ url, kbps }));
 }
 
+/** The page's picture (Open Graph's, else Twitter's) as an absolute address — on a song's page, its cover. */
+export function pageImageOf(html: string, pageUrl: string): string | null {
+  for (const name of ["og:image", "og:image:url", "og:image:secure_url", "twitter:image"]) {
+    const tag = new RegExp(`<meta[^>]+(?:property|name)=["']${name.replace(/:/g, "\\:")}["'][^>]*>`, "i").exec(html)?.[0];
+    const content = tag && /content=["']([^"']+)["']/i.exec(tag)?.[1];
+    if (!content) continue;
+    try {
+      const url = new URL(decodeEntities(content.trim()), pageUrl);
+      if (/^https?:$/.test(url.protocol)) return url.href;
+    } catch {
+      // not an address
+    }
+  }
+  return null;
+}
+
 /** The page's own title: Open Graph's, else <title>. */
 export function pageTitleOf(html: string): string {
   const og = /<meta[^>]+property=["']og:title["'][^>]*>/i.exec(html)?.[0];

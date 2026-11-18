@@ -1,6 +1,6 @@
 # AI producer: real remixer, engineer and mashup — handover plan
 
-Written 2026-11-15; status updated 2026-11-16 (see STATUS below). The checks listed under Left are finished; what else is in flight is in `HANDOVER.md`.
+Written 2026-11-15; status updated 2026-11-16 (see STATUS below). **Finished — kept as history and measurements.** Everything still open, including the next AI work ("a new song from everything"), is in `PLAN.md`.
 
 ## What the owner asked for
 

@@ -354,6 +354,22 @@ export async function renderMixdown(options: ExportOptions = {}): Promise<AudioB
   return renderWhole(bounce, onProgress && ((f) => onProgress("Rendering mix…", f)), signal);
 }
 
+/**
+ * The whole mix as a WAV, rendered a piece at a time on every device so
+ * only one piece is in memory — for listening mode (renderedPlayback.ts),
+ * which plays it through an <audio> element.
+ */
+export async function renderMixWav(options: Pick<ExportOptions, "signal" | "onProgress"> = {}): Promise<Blob> {
+  const { bounce } = await mixBounce(options);
+  const sink = wavSink(bounce.sampleRate);
+  try {
+    await renderInPieces(bounce, sink, options.onProgress && ((f) => options.onProgress!("Rendering mix…", f)), options.signal);
+    return await sink.finish();
+  } finally {
+    sink.cancel();
+  }
+}
+
 /** Interleaves channels as 16-bit PCM. */
 function pcm16(channelData: Float32Array[], frames: number): ArrayBuffer {
   const channels = channelData.length;

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Puzzle, X } from "lucide-react";
 import { Icon } from "@/components/Icon";
+import { StudioDeviceNotice, useDeviceClass } from "@/components/DeviceNotice";
 import { placeStems, siblingStems } from "@/lib/client/beatParts";
 import { SPLIT_KINDS, canSplitHere, defaultKinds, splitLane, type SplitKind } from "@/lib/client/laneSplit";
 import { useSplitter, type UploadStage } from "@/lib/client/splitter";
@@ -17,6 +18,7 @@ import { useKeepScreenOn } from "@/lib/client/wakeLock";
 // lays the parts on the timeline exactly where the lane is.
 
 export default function SplitLaneDialog() {
+  const device = useDeviceClass();
   const laneId = useStudioView((s) => s.splitLaneId);
   const setSplitLane = useStudioView((s) => s.setSplitLane);
   const notify = useStudioView((s) => s.notify);
@@ -165,7 +167,13 @@ export default function SplitLaneDialog() {
 
         {error && <p className="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">{error}</p>}
         {!instant && !canSplitHere() && (
-          <p className="rounded-lg bg-amber-400/10 px-3 py-2 text-xs text-amber-400">Splitting runs the model on your device and needs a computer — open the Studio on one.</p>
+          <>
+            <StudioDeviceNotice feature="laneSplit" />
+            {/* A computer short of memory: the notice (phones and tablets) doesn't cover it. */}
+            {device?.kind === "computer" && (
+              <p className="rounded-lg bg-amber-400/10 px-3 py-2 text-xs text-amber-400">Splitting runs the model on this computer, and it has too little memory for it — open the Studio on another.</p>
+            )}
+          </>
         )}
 
         <div className="flex gap-2">
