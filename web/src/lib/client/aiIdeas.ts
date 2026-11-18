@@ -34,7 +34,8 @@ import {
 } from "./studioStore";
 import type { IconName } from "@/components/Icon";
 import { isBacking } from "@/lib/stemKinds";
-import { splitSongTitle } from "@/lib/lyrics";
+import { splitSongTitle, type LyricLine } from "@/lib/lyrics";
+import { linesInEveryPlay } from "./vocalTime";
 
 // The AI producer. A vocal from one song over a beat from another rarely
 // sounds good as it lands: different speeds, clashing keys, lines that
@@ -169,7 +170,13 @@ export type IdeaOptions = {
 
 /** What the ideas are worked out from — the mix as it was when asked. */
 /** What the song map shows of a new song from everything. */
-export type NewSongMap = { plan: NsPlan; names: Record<string, string>; lines: Record<number, string> };
+export type NewSongMap = {
+  plan: NsPlan;
+  names: Record<string, string>;
+  lines: Record<number, string>;
+  /** The new song's words: every sung line of every singer, timed to where it plays now (empty when no song had timed lyrics). */
+  sheet: LyricLine[];
+};
 
 export type Session = {
   lanes: StudioLane[];
@@ -273,7 +280,8 @@ export async function prepareSession(
   }
   const beatParts = beat && beat.kind === "beat" ? await findParts(beat).catch(() => []) : [];
   // Songs together: every song's vocal matched to every song's beat (its own too, for its bars).
-  const songs = mashableSongs(lanes).slice(0, 3);
+  // Four songs: the new song from everything takes up to four (the other mashups use the first three).
+  const songs = mashableSongs(lanes).slice(0, 4);
   const pairs = new Map<string, PairContext>();
   if (songs.length >= 2) {
     if (pair) pairs.set(pairKey(pair.vocalLaneId, pair.beatLaneId), pair);
@@ -3215,6 +3223,8 @@ export function newSongIdea(session: Session): Idea | null {
   }
   if (![...playing].some((id) => draft.lane(id).kind === "vocals")) return null;
   keepOnly(draft, (lane) => playing.has(lane.laneId));
+  // One lyric sheet for the new song: each singer's timed lines, at every place they're sung now.
+  const sheet = linesInEveryPlay(input.vocals.filter((v) => playing.has(v.lane.laneId)).map((v) => ({ lane: draft.lane(v.lane.laneId), lines: stemLyrics(v.lane) })));
 
   const clockAt = (b: number) => clock(b * bar);
   draft.lines.push(
@@ -3239,6 +3249,7 @@ export function newSongIdea(session: Session): Idea | null {
     plan,
     names: Object.fromEntries([...input.vocals, ...input.beats].map((x) => [x.lane.laneId, songName(x.song)])),
     lines: Object.fromEntries(plan.slots.map((s, i) => [i, s.vocals.map((x) => lineOf.get(x.id)?.find((sec) => sec.index === x.section)?.line ?? "").filter(Boolean)[0] ?? ""])),
+    sheet,
   };
   return idea;
 }

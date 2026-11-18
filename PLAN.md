@@ -98,61 +98,64 @@ Today only remixes have covers (`remixes.cover_key`, uploaded by the owner, `lib
 
 ---
 
-## Session 2026-11-18 — where it stopped (read first)
+## Clips — artwork and visualizers (2026-11-18)
 
-Committed on branch `plan-phases-1-5` (not merged to main). Next: phase 5 leftovers below, then phases 6–8. Unit tests: 726 passed before phase 5; new-song tests 12/12 since. tsc + lint clean on touched files at last check.
+- [x] A new clip starts with the songs' artwork as its background (`ClipDialog`): the vocal's and the beat's covers — one picture when they're the same song, side by side or a grid when not (`mixArtSongs` up to 9, `drawCollage` 3×3 for 5–9). Card or "Your photo" still selectable. Checked in Chrome (Hichkas vocal + Kid Cudi beat: two halves).
+- [x] Four more clip visualizers (`socialClip.ts`, `clipDesign.ts`): LED dots, Spectrum (filled, glowing, mirrored), Pulse rings, Sun rays. Not yet looked at in an exported video.
 
-**Phase 5 status (in progress):**
-- Done: `newSong.ts` planner (tested, `tests/new-song.test.ts`), builder `newSongIdea` in `aiIdeas.ts` (id `new-song`, listed in the Mashup tab), `steadyStructure` in `arrange.ts`, `newSongLyrics.ts` (chorus from repeated lyric lines), song map + tools `components/studio/ai/NewSongMap.tsx` (swap singer/beat per part, try again, longer/shorter, more of a singer, drops on a beat, Undo), tweaks in `IdeaOptions.newSong`, `MasterIt` shown under the map.
-- Rig run, 3 songs (Ye Rooze Khoob, Kid Cudi, Dorcci — vocal + beat each): 3:50 at 93 BPM, score 70 → 94, Dorcci left out (would need 18% faster — said in notes). After "Streaming" master: **−14.2 LUFS, peak −1.14 dB, 0 clipped ✓** (fixed: `masterSpan` in `ai/extras.tsx` only matched clips labelled exactly "Chorus"; it now matches any chorus label).
-- To do: run with 4 songs; check by numbers that no section is cut mid-line and every drop starts on a bar line; one merged lyric sheet for the new song (not built); measure "new song" on the emulated phone (`scripts/phone-measure.mjs`) and set its label from that.
-- Rig steps file used: tracks above, then `{"ai":true},{"tab":"Mashup"},{"switch":"^A new song from everything"},{"wait":12000},{"stop":true},{"click":"button:visible:has-text('Streaming')"},{"wait":45000},{"export":"x"}`.
+## Phase 5 — a new song from everything in the mix (done 2026-11-18)
 
----
+Several songs in the Studio → one new song: who sings when, which beat under which part, drops on choruses, one tempo and key, mixed and mastered, with tools to improve it.
 
-## Phase 5 — a new song from everything in the mix
-
-Goal: put several songs in the Studio (several vocals, several beats, with or without lyrics). The AI hears all of it and builds **one new, listenable song**: who sings when, which beat plays under which part, real drops, keys that agree, mixed and mastered. Then the user can improve it with tools.
-
-What exists to build on:
-- One vocal over one beat: `pairMatch.ts`, `arrange.ts` (sections, drops, beat reprise so the whole song survives).
-- Two songs: `mashup.ts` and the `mash-swap` / `mash-duet` / `mash-blend` ideas in `aiIdeas.ts` (pairs only).
-- Mix and master by measurement: `mixEngineer.ts`, `laneTones.ts`, Master to target.
-- Lyrics with timing that follow edits: `lyricsFollow.ts`, `vocalTime.ts`, `sungAt`.
-
-Steps:
-- [ ] **Inventory**: list every vocal and beat in the mix with tempo, key, sections (`hearVocal`), energy, and lyrics if timed (which lines are a chorus, which are verses: repeated lines = chorus).
-- [ ] **Compatibility**: score every vocal against every beat (tempo stretch needed, key distance after shifting, energy). Choose one tempo and key for the new song; drop a part only if it would sound bad, and say why.
-- [ ] **Song plan** (`newSong.ts`, pure, tested): intro → verse → build → drop/chorus → verse → bridge → final chorus → outro, about 3–4 minutes. Fill each slot from the best vocal section (lyrics: choruses on drops, verses on calmer parts) and the best beat for its energy. Beat changes only on 8- or 16-bar lines, with a build before each drop (filter rise, a bar of silence, or a riser).
-- [ ] **Harmony**: shift parts to the shared key (`matchOptions.ts` key logic); where two vocals overlap (chorus doubling, call-and-response), allow it only when their notes agree (chroma against chroma), otherwise take turns.
-- [ ] **Lyrics of the new song**: one lyric sheet built from the lines that are actually sung, timed to the new places (`sungAt`), so Live, clips and the lyric view show the new song correctly.
-- [ ] **Mix and master**: run `engineerMix` and Master to target on the result.
-- [ ] **Show it**: a song map (sections across, one row per source song, drops marked, lyric line under each part) — extends `MashupMap.tsx`. Every decision has a plain sentence ("Chorus of song B on the drop at 1:12, because it is the loudest part and its key matches").
-- [ ] **Tools to make it better**: swap a section's source, move a drop, longer/shorter, "more of singer A", regenerate one part only. Each is undoable (history exists).
-- [ ] **Check by numbers** with the rig (`scripts/ai-drive.mjs`, `scripts/measure-wav.mjs`): 3 and 4 songs; length 3–4 min, −14 LUFS ±1, peak under −1 dB, no clipping, no section cut mid-line, every drop on a bar line.
-- [ ] Phones: label it per phase 3.
+- [x] Plan (`newSong.ts`, tested), builder `newSongIdea` (`aiIdeas.ts`, Mashup tab), song map + tools (`ai/NewSongMap.tsx`: swap singer/beat per part, try again, longer/shorter, more of a singer, drops on a beat, Undo), `MasterIt` under the map.
+- [x] Hearing covers 4 songs now (`prepareSession` pairs; swap/duet/blend ideas still use the first 3).
+- [x] One lyric sheet for the new song: `linesInEveryPlay` (`vocalTime.ts`, tested) puts each singer's timed lines at every place they're sung; `newSongSheet.ts` opens it as "A new song" while the idea is on, rewrites it on a tweak, keeps it on Keep, and on switch-off reopens the old sheet with its old times. Checked in Chrome.
+- [x] Checked by numbers (rig + `check.js`-style eval of `__remixt.aiTrial`): 4 songs (Ye Rooze Khoob, Kid Cudi, Tofanag Abpaash, Tehran Gonahkar) → 3:50 at 93 BPM, Tehran left out (18% faster, said in notes). Every drop's beat starts 12 ms before its bar line (the planned fade-in lead), no section runs past its part (no line cut by the next part). After "Streaming": **−14.4 LUFS, peak −1.14 dB, 0 clipped ✓**. 3 songs earlier: −14.2 LUFS, peak −1.14 dB.
+- [x] Phone (emulated, `NEWSONG=3|4 node scripts/phone-measure.mjs`): hearing 10–14 s, building ~1 s, export 27–67 s, page peak ≈1.1 GB (3 songs) / 1.2 GB (4). Label: slow (memory warning) from 2 songs, computer-only from 4 (`deviceFeatures.ts`).
+- Rig steps: add `{"add":["Vocals",song]},{"add":["Beats",song]}` per song, then `{"ai":true},{"tab":"Mashup"},{"switch":"^A new song from everything","settle":15000},{"stop":true},{"click":"button:visible:has-text('Streaming')"},{"wait":45000},{"export":"x"}`. `window.__remixt.aiTrial` (dev only) has the trial: the idea's `song.plan` and `song.sheet`.
 
 ---
 
-## Phase 6 — DJ section that is real, not a simulation
+## Phase 6 — DJ section that is real (done 2026-11-18, two device checks left)
 
-What's simulated today (found 2026-11-17):
-- `crowd.ts` — a made-up crowd energy meter with random requests ("drop the vocals!").
-- `aiDj.ts` — the back-to-back "AI DJ" only picks synthesised demo songs (`demoSongs.ts`), never your library.
-- `scenarios.ts`, `curriculum.ts`, `MissionSession.tsx` — training missions and a "flight school".
-- `DjHome.tsx` says a 4-deck controller isn't simulated, only 2 channels.
-
-Real parts that work: the engine (`djEngine.ts`: key lock, scratching, headphone cue, MIDI in `djMidi.ts`), library songs as tracks (`djLibraryTracks.ts`), beat grid and sections (`djLibrary.ts`), auto-mix (`autoMix.ts`).
-
-Steps (following Decision 2):
-- [ ] `/dj` opens the real decks with the Library tab first; demo songs only when the library is empty.
-- [ ] AI DJ / auto-mix picks from the library (tempo, key, energy), with demo songs only as a fallback.
-- [ ] Crowd meter and requests only inside missions, labelled as a game. Outside missions, show real measurements instead: tempo difference, beat drift, key clash, clipping on the master.
-- [ ] Training moves under "Learn", reachable from `/dj`, not in the way.
-- [ ] Record a set and save it as a mix (WAV/MP3 with the songs' covers and a track list).
-- [ ] Check with real songs: two library songs synced by auto-mix for 3 minutes, beats stay together (measure drift), no clicks at loop points, MIDI controller still works.
+Decision 2 taken as recommended.
+- [x] `/dj` opens on the decks (`DjApp.tsx`: engine made on arrival, the first tap unlocks sound) with two library songs that fit (`openingPair` in `djLibrary.ts`, tested: newest full song ≥ 90 s + best tempo/key fit). Demo songs only when the library has fewer than two, and the page says so. Nav, home page and page title say "DJ decks".
+- [x] Auto DJ (`EasyDecks.tsx`, switch under Auto-mix): picks the next library song (`pickNext`, tested: tempo incl. half/double time, key, never twice), loads it on the free deck and starts Auto-mix ~112 beats before the playing song ends. The missions' AI DJ (`aiDj.ts`) picks from the library too; demo songs as fallback.
+- [x] Crowd and requests already lived only in missions (`scenarioRunner`, `MissionPanel`). The free decks show real readings: tempo gap / beat offset (ms), key fit, and now the master (peak dB, limiter gain reduction via `DjEngine.limiting()`, clipping).
+- [x] Training under "Learn to DJ" (`DjHome.tsx` is the Learn page; says the crowd is part of the game).
+- [x] Set recording: the engine keeps a set list while recording (song the room hears most, `noteSetList`); after Stop: the list, "Save as MP3" (`djSetExport.ts`: tagged title/credits/comment with the list, 800 px cover collage of the songs; up to 20 min), "As recorded" and "Track list" (.txt).
+- [x] Checked with real songs (`node scripts/dj-check.mjs 3`): opened on two full library songs in 7 s; Ye Rooze Khoob (93 BPM) + Tofanag (97 BPM) synced and played 3 min: 0 ms drift (engine positions); the Auto DJ started the transition by itself near the end and loaded the next song; set list 0:00 / 0:47; MP3 with cover and list (ffprobe).
+- [ ] Not checked: clicks at loop points (needs listening or a recorded-loop analysis), a MIDI controller (needs the hardware).
 
 ---
+
+## Phase 9 — Radio (asked 2026-11-18)
+
+A real radio station in the app: everyone hears the same song at the same moment, listeners vote on what plays next and send requests, the owner runs playlists and a console, with reports. Usable in the app, embedded in other apps and games, and broadcast to YouTube Live.
+
+How it works (like the live rooms, `lib/live.ts`): no media server. The server keeps each station's schedule (queue items with `starts_at`); every listener's browser plays the item at `now − starts_at` through the Studio engine in listening mode (rendered to an `<audio>` element, so it keeps playing with the screen locked). Songs from the library and published remixes both play. The schedule moves on lazily when anyone asks (feed polling), under an advisory lock, so it runs on Postgres on any host.
+
+- [x] Schema (created on first use, `ensureRadioSchema`): `radio_stations`, `radio_queue` (also the play history), `radio_playlist`, `radio_requests`, `radio_votes`, `radio_listeners`.
+- [x] `lib/radioPick.ts` (pure, `tests/radio.test.ts` 11/11): order DJ queue → vote winner → most-requested (then oldest) → playlist rotation (rest = min(12, size−1)) → library; vote choices (requests first, then playlist, then library); clock helpers.
+- [x] `lib/radio.ts`: tick under `pg_try_advisory_xact_lock` (library read before the transaction — holding the lock while taking more pool connections deadlocked the feed; fixed), gapless start or "now" after 30 s of silence; votes per round; requests (per-listener limit, open/review/off, "Me too" counts); listeners by heartbeat; reports + CSV play log. House station `remixt-radio` (no owner, admins run it, plays the whole public library).
+- [x] API under `/api/radio` (stations, feed, vote, request, search, play payload, console actions, report/CSV, public CORS `/now`).
+- [x] Pages: `/radio`, `/radio/[slug]`, `/radio/[slug]/console` (owner or admin: On air + Skip + queue, Requests accept/turn down, Playlist, Settings, Reports with CSV, Share), `/radio/[slug]/embed`, `/radio/[slug]/broadcast` (tunes itself in; OBS). Site chrome hidden on embed/broadcast (`lib/bareView.ts`). "Radio" in the nav (DJ moved under "More" on tablets so the header fits).
+- [x] Crossfades on the beat (like a streaming app's automix): the server picks the next song 90 s before the end (`NEXT_LEAD_SECONDS`) and starts it a crossfade early — `crossfadeFor` (tested): tempos within 6% (half/double time count) blend 8 bars of the outgoing tempo (4 when slow), else a quick 2 bars, unknown tempo 6 s, ≤ 16 s and ≤ a third of either song. Equal-power gains. Feed has `now`, `upcoming`, `fading`. Items carry `bpm` (tracks.bpm, a remix's projectBpm).
+- [x] Player (`radioDeck.ts`): every song is rendered to a WAV in the tab and played by `<audio>` (keeps going with the screen locked); two decks crossfade through Web Audio gains + analyser (visualizer); iPhone (element volume is fixed there) switches at the crossfade start. Songs: their stems summed directly (≈4 s, 2 s cached). Remixes: the Studio mixdown (`renderMixWav` with a span) — tune-in shows "Getting the remix ready… n%". Clock: NTP-style, the quickest of the last 12 round trips. Lock screen: Media Session metadata + play/pause.
+- [x] Checked (`OWNER_ID=<id> SHORTEN=1 node scripts/radio-check.mjs`): two tabs −26/−88 ms from the station clock; at the change the voted song came in over a 6 s equal-power blend (0.9/0.08 → 0.03/0.9) in both tabs; after it, both within 23 ms of the station (2 ms apart).
+- [x] Always on, anywhere: `/radio/[slug]/embed?autoplay=1` starts by itself where sound is allowed (OBS, game web views, kiosks) and retunes after a drop; `postMessage` API — `{type:"remixt-radio", action:"play"|"pause"|"volume", value}` in, `{type:"remixt-radio:state", playing, now, next, listeners}` out (checked: `node scripts/radio-embed-check.mjs`). The broadcast view retunes itself too. Share card lists all of it.
+- [ ] **Remix mixdown is slow**: a 3:53 song through `renderMixWav` took 26 s (45 s with stems cached!) in one tab; 100 s with two tabs. No worklets in the chain — profile `mixBounce`/`renderInPieces` (pieces of 40 s + 12 s lead-ins; master chain per piece). Until then a remix tune-in waits for its render, and a phone may not have the next remix ready in 90 s (it then joins it late).
+- Later: a plain audio stream URL (Icecast-style) needs remixes rendered on the server — not possible while remixes exist only as lanes.
+
+## Phase 10 — Remove one singer from a song (done 2026-11-18)
+
+In the Studio: vocal lane menu → "Remove a singer…" (`RemoveSingerDialog.tsx`; logic in `lib/client/singerParts.ts`, `tests/singer-parts.test.ts` 10/10).
+- [x] By lyrics: Genius-style headers (`[Verse 2: 2 Chainz]`, `[Chorus: A & B]`, `(Name)`) → sections with performers; pick a singer; parts sung together are flagged (taking them out takes both voices there). Found lyrics still timed to the recording are mapped through the lane's clips (`onTimeline`).
+- [x] By voice: phrases from the vocal's loudness (≤ 3 s pieces), a fingerprint per phrase (16-band spectral shape, voiced share, pitch spread, median pitch), k-means 2–4 from several starts, kept only when the silhouette is ≥ 0.22 and no group is under 8% of the phrases; Voice 1 sings most; each voice can be listened to.
+- [x] By hand: tap parts on the strip, or tick lyric sections.
+- [x] Remove: keep the music (vocal clips cut, 30 ms fades on new edges; a lane with nothing left is muted) or cut the time out of the whole song (widened to whole bars, markers shifted). Lyric lines inside go. One undo step (`startNewStep` before and after).
+- [x] Checked on "Kid Cudi – Can't Believe It (Ft 2 Chainz)": no names in its lyrics; by voice → 2 voices (silhouette 0.44), Voice 2 = mostly 1:41–2:13 (the featured verse) plus two short intro bits; taking it out left 9 clips, all faded. The first version heard one voice (an odd phrase became its own group) — fixed by the several starts and the minimum group size.
+- [ ] Not checked in the browser: undo after the cut, the "cut the time out" path, a sheet with Genius headers, phones/iPad screenshots of the dialog (it's a bottom sheet under 640 px).
 
 ## Phase 7 — every page works and makes sense
 
@@ -168,6 +171,9 @@ For each page, on phone and computer:
 ---
 
 ## Phase 8 — checks before every commit
+
+Last run (2026-11-18, end of session): tsc clean; lint = the 3 old vendored errors; unit tests 803 passed, 1 failed — `demo-songs` "is quick enough" (3.06 s against its limit) under the full parallel run; it passes alone. Full `npm test` (with the server) not run this session.
+
 
 - [ ] `cd web && npx tsc --noEmit && npm run lint && npm test -- --brief` (stop any `next dev` in `web/` first; they share `.next`).
 - [ ] Each phase adds unit tests for its pure parts (`newSong.ts`, `deviceClass`, tag reader, DJ library pick).

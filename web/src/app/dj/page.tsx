@@ -2,9 +2,9 @@ import DjApp from "@/components/dj/DjApp";
 import { pageMetadata } from "@/lib/seo";
 
 export const metadata = pageMetadata({
-  title: "DJ simulator: learn to mix with two decks",
+  title: "DJ decks: mix your songs on two decks",
   description:
-    "A flight simulator for DJing: club players, a controller or turntables, with jog wheels, hot cues, key lock, isolator EQs and live stem kills. Lessons, drills and checkrides from beatmatching to real gigs, with your own songs or ours. Free, in your browser.",
+    "Two club-style decks in your browser for the songs in your library: sync, key, live stem kills, Auto-mix and an Auto DJ that keeps the set going, and set recording. Plus lessons, drills and gigs to learn DJing. Free.",
   path: "/dj",
 });
 

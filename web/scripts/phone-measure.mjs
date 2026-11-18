@@ -3,6 +3,7 @@
 // on phones / computer only" labels (lib/client/deviceFeatures.ts).
 //
 //   cd web && node scripts/phone-measure.mjs [cpu-slowdown=4] [phone|desktop]
+//   NEWSONG=3 (or 4): that many whole songs, and "A new song from everything" instead of Make it sound good.
 //
 // Needs the app running (BASE_URL, default http://localhost:3000) with the
 // test songs in its library. Memory is the page's renderer process (RSS),
@@ -79,10 +80,20 @@ async function add(tab, query) {
   await page.waitForTimeout(1200);
   await page.getByRole("button", { name: /^Add .* to the mix$/ }).first().click();
 }
-await measure("load two songs", async () => {
-  await add("Vocals", "Ye Rooze Khoob");
-  await add("Beats", "Kid Cudi");
-  await page.waitForFunction(() => window.__remixt?.studio.getState().lanes.length === 2, null, { timeout: 120_000 });
+const newSong = Number(process.env.NEWSONG ?? 0);
+const songs = ["Ye Rooze Khoob", "Kid Cudi", "Tofanag", "Tehran Gonahkar"].slice(0, newSong);
+await measure(newSong ? `load ${newSong} whole songs` : "load two songs", async () => {
+  if (newSong) {
+    for (const song of songs) {
+      await add("Vocals", song);
+      await add("Beats", song);
+    }
+  } else {
+    await add("Vocals", "Ye Rooze Khoob");
+    await add("Beats", "Kid Cudi");
+  }
+  const lanes = newSong ? newSong * 2 : 2;
+  await page.waitForFunction((n) => window.__remixt?.studio.getState().lanes.length === n, lanes, { timeout: 120_000 });
 });
 if (phone) await page.setViewportSize({ width: 390, height: 844 });
 await page.waitForTimeout(800);
@@ -99,7 +110,13 @@ await measure("AI producer: hearing the songs (prepareSession)", async () => {
   await page.locator("text=Make it sound good").first().waitFor({ timeout: 600_000 });
 });
 
-await measure("Make it sound good + Pro mix", async () => {
+if (newSong)
+  await measure(`A new song from everything (${newSong} songs)`, async () => {
+    await page.locator('nav[aria-label="AI producer sections"] button', { hasText: "Mashup" }).first().click();
+    await page.getByRole("switch", { name: /^A new song from everything/i }).first().click();
+    await page.waitForFunction(() => window.__remixt.aiTrial.getState().trial?.ideas.some((i) => i.id === "new-song"), null, { timeout: 600_000 });
+  });
+else await measure("Make it sound good + Pro mix", async () => {
   await page.getByRole("switch", { name: /^Make it sound good/i }).first().click();
   await page.waitForTimeout(1500);
   await page.getByRole("button", { name: /Keep it/ }).first().waitFor({ timeout: 600_000 });

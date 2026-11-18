@@ -535,6 +535,23 @@ export default function ClipDialog({ title, artist, remixId, me }: { title: stri
     return () => clearTimeout(timer);
   }, [design]);
 
+  // A new clip starts with the songs' artwork behind it: the vocal's and the beat's cover — one picture when
+  // they're the same song, side by side (or a grid) when they're not. It can go on a card instead, or "Your photo" replaces it.
+  const opened = !!ask;
+  useEffect(() => {
+    if (!opened || photo) return;
+    let cancelled = false;
+    void mixArtPicture(useStudioStore.getState().lanes).then((art) => {
+      if (cancelled || !art) return;
+      setPhoto((current) => current ?? art);
+      set((d) => (d.elements.photo.visible || d.background.kind === "photo" ? d : { ...d, background: { ...d.background, kind: "photo" } }));
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per opening
+  }, [opened]);
+
   // --- Making it ---
   const [photoError, setPhotoError] = useState<string | null>(null);
   const error = photoError ?? job.error;

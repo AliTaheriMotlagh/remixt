@@ -97,6 +97,9 @@ type ViewState = {
   /** The lane being split with Demucs (its dialog is open), if any. */
   splitLaneId: string | null;
   setSplitLane: (laneId: string | null) => void;
+  /** The vocal lane a singer is being taken out of (its dialog is open), if any. */
+  removeSingerLaneId: string | null;
+  setRemoveSinger: (laneId: string | null) => void;
   /** The social clip dialog is open (see SocialClipButton), on a part when one was asked for. */
   clip: ClipAsk | null;
   openClip: (part?: ClipAsk["part"]) => void;
@@ -178,6 +181,8 @@ export const useStudioView = create<ViewState>((set) => ({
   askAi: (text) => set({ aiOpen: true, aiTab: { id: Date.now(), tab: "ask" }, aiQuestion: { id: Date.now(), text } }),
   splitLaneId: null,
   setSplitLane: (splitLaneId) => set({ splitLaneId }),
+  removeSingerLaneId: null,
+  setRemoveSinger: (removeSingerLaneId) => set({ removeSingerLaneId }),
   clip: null,
   openClip: (part) => set({ clip: { id: Date.now(), part } }),
   closeClip: () => set({ clip: null }),

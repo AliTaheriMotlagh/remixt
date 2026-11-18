@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
-import { ArrowLeft, Sparkles } from "lucide-react";
+import { ArrowLeft, GraduationCap, Sparkles } from "lucide-react";
 import { DjEngine } from "@/lib/client/dj/djEngine";
-import { loadAnyTrack, retainTracks } from "@/lib/client/dj/djLibraryTracks";
+import { openingPair } from "@/lib/client/dj/djLibrary";
+import { libraryEntries, loadAnyTrack, retainTracks } from "@/lib/client/dj/djLibraryTracks";
 import { ALL_SCENARIOS, scenarioById } from "@/lib/client/dj/curriculum";
 import { GEAR, applyGear, gearById, gearStore, type GearId, type GearProfile } from "@/lib/client/dj/gear";
 import { progressStore } from "@/lib/client/dj/progress";
@@ -22,13 +23,22 @@ function OpenDecks({ engine, practice, initialView, gear, onGear }: { engine: Dj
   const [assist, setAssist] = useState(practice);
   const [view, setView] = useState<View>(initialView);
   const [busy, setBusy] = useState(false);
+  const [from, setFrom] = useState<"library" | "demo" | null>(null);
   const quickStart = useCallback(async () => {
     setBusy(true);
     try {
+      // Two songs from your library that fit together; the demo songs only when it has fewer than two.
+      const library = await libraryEntries()
+        .then((r) => r.entries)
+        .catch(() => []);
+      const pair = openingPair(library);
+      setFrom(pair ? "library" : "demo");
       await engine.applySetup(
         {
           tempoRange: 16,
-          decks: { A: { trackId: "warehouse-lights", startBar: 8 }, B: { trackId: "golden-hour", startBar: 8 } },
+          decks: pair
+            ? { A: { trackId: pair[0].id, startBar: 0 }, B: { trackId: pair[1].id, startBar: 0 } }
+            : { A: { trackId: "warehouse-lights", startBar: 8 }, B: { trackId: "golden-hour", startBar: 8 } },
           crossfader: -1,
         },
         (id) => loadAnyTrack(id, engine.ctx)
@@ -79,7 +89,7 @@ function OpenDecks({ engine, practice, initialView, gear, onGear }: { engine: Dj
           disabled={busy}
           className="flex min-h-10 items-center gap-1.5 rounded-xl border border-border bg-surface px-3 text-sm font-semibold hover:bg-surface-hover disabled:opacity-60"
         >
-          <Sparkles /> {busy ? "Loading two songs…" : "Reload the two demo songs"}
+          <Sparkles /> {busy ? (from === "demo" ? "Loading two demo songs…" : "Loading two songs from your library…") : from === "demo" ? "Reload the two demo songs" : "Two songs that fit"}
         </button>
         {view === "pro" && (
           <label className="flex min-h-10 items-center gap-1.5 text-xs text-muted">
@@ -103,7 +113,8 @@ function OpenDecks({ engine, practice, initialView, gear, onGear }: { engine: Dj
         </>
       )}
       <p className="text-xs text-muted">
-        Every song here comes as separate vocals, drums, bass and melody, so you can mute any of them live. Remixt splits any song you{" "}
+        {from === "demo" ? "Your library has fewer than two songs, so these are two demo songs made for practice. " : "The decks play songs from your library, split into their parts, so you can mute any of them live. "}
+        Remixt splits any song you{" "}
         <Link href="/upload" className="font-semibold text-brand-strong underline">
           upload
         </Link>{" "}
@@ -120,7 +131,8 @@ export default function DjApp() {
   const gearId = useSyncExternalStore(gearStore.subscribe, gearStore.getSnapshot, gearStore.getServerSnapshot);
   const gear = gearById(gearId);
   const [engine, setEngine] = useState<DjEngine | null>(null);
-  const [mode, setMode] = useState<Mode | null>(null);
+  // The decks first; null is the Learn page (lessons, drills, gigs).
+  const [mode, setMode] = useState<Mode | null>({ kind: "free", view: "easy" });
   const [error, setError] = useState<string | null>(null);
   const engineRef = useRef<DjEngine | null>(null);
 
@@ -134,6 +146,35 @@ export default function DjApp() {
     []
   );
 
+  /** The engine, made once. Made without a tap its sound waits (suspended) for the first one: every control unlocks it. */
+  const engineNow = useCallback(() => {
+    let e = engineRef.current;
+    if (!e) {
+      try {
+        e = new DjEngine({ quantize: true });
+      } catch {
+        setError("Your browser couldn't start audio. Try a different browser.");
+        return null;
+      }
+      engineRef.current = e;
+      setEngine(e);
+      // For the rigs under scripts/ (dj-check.mjs): the engine by name. Development only.
+      if (process.env.NODE_ENV !== "production") {
+        const w = window as unknown as { __remixtDj?: DjEngine; __remixtDjLoad?: (deck: "A" | "B", id: string) => Promise<void> };
+        w.__remixtDj = e;
+        w.__remixtDjLoad = async (deck, id) => e!.loadTrack(deck, await loadAnyTrack(id, e!.ctx));
+      }
+    }
+    return e;
+  }, []);
+
+  // Arriving: straight onto the decks. The audio engine is outside React; it's made here, once, on the client.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- creating the external audio engine on arrival
+    const e = engineNow();
+    if (e) applyGear(e, gearById(gearStore.getSnapshot()));
+  }, [engineNow]);
+
   // Changing gear in free play applies at once.
   useEffect(() => {
     if (engine && mode && mode.kind !== "scenario") applyGear(engine, gear);
@@ -142,32 +183,25 @@ export default function DjApp() {
   // Entering is a click or tap, so the browser lets the audio context start.
   const enter = (next: Mode) => {
     setError(null);
-    let e = engineRef.current;
-    if (!e) {
-      try {
-        e = new DjEngine({ quantize: true });
-      } catch {
-        setError("Your browser couldn't start audio. Try a different browser.");
-        return;
-      }
-      engineRef.current = e;
-      setEngine(e);
-    }
+    const e = engineNow();
+    if (!e) return;
     e.unlock();
     applyGear(e, gear);
     setMode(next);
     window.scrollTo({ top: 0 });
   };
 
+  /** To the Learn page: the decks stop and let go of their songs. */
   const leave = () => {
     engineRef.current?.dispose();
     engineRef.current = null;
     retainTracks([]);
     setEngine(null);
     setMode(null);
+    window.scrollTo({ top: 0 });
   };
 
-  if (!mode || !engine) {
+  if (!mode) {
     return (
       <div className="min-w-0">
         <DjHome
@@ -185,6 +219,15 @@ export default function DjApp() {
       </div>
     );
   }
+  if (!engine) {
+    return error ? (
+      <p role="alert" className="text-sm text-danger">
+        {error}
+      </p>
+    ) : (
+      <p className="text-sm text-muted">Setting up the decks…</p>
+    );
+  }
 
   const scenario = mode.kind === "scenario" ? scenarioById(mode.id) : undefined;
   // "Next" stays within the same kind of exercise (the next lesson, drill, gig…).
@@ -192,14 +235,23 @@ export default function DjApp() {
   const index = scenario ? siblings.indexOf(scenario) : -1;
 
   return (
-    <div className="flex min-w-0 flex-col gap-3">
+    <div className="flex min-w-0 flex-col gap-3" onPointerDownCapture={() => engine.unlock()}>
       <div className="flex items-center gap-2">
-        <button type="button" onClick={leave} className="flex min-h-10 items-center gap-1.5 rounded-lg border border-border px-3 text-sm font-medium hover:bg-surface-hover">
-          <ArrowLeft /> Menu
-        </button>
-        <span className="truncate text-sm font-semibold text-muted">
-          {mode.kind === "free" ? "Open decks" : mode.kind === "practice" ? "Practice" : scenario?.title}
-        </span>
+        {mode.kind === "free" ? (
+          <>
+            <h1 className="truncate text-lg font-bold">DJ decks</h1>
+            <button type="button" onClick={leave} className="ml-auto flex min-h-10 items-center gap-1.5 rounded-lg border border-border px-3 text-sm font-medium hover:bg-surface-hover">
+              <GraduationCap /> Learn to DJ
+            </button>
+          </>
+        ) : (
+          <>
+            <button type="button" onClick={leave} className="flex min-h-10 items-center gap-1.5 rounded-lg border border-border px-3 text-sm font-medium hover:bg-surface-hover">
+              <ArrowLeft /> Learn
+            </button>
+            <span className="truncate text-sm font-semibold text-muted">{mode.kind === "practice" ? "Practice" : scenario?.title}</span>
+          </>
+        )}
       </div>
       {mode.kind === "scenario" && scenario ? (
         <MissionSession

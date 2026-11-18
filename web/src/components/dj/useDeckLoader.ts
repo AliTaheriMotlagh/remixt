@@ -13,7 +13,7 @@ export function useDeckLoader(engine: DjEngine) {
   const [error, setError] = useState<string | null>(null);
 
   const pick = useCallback(
-    async (deck: DeckId, trackId: string) => {
+    async (deck: DeckId, trackId: string): Promise<boolean> => {
       setLoadingId(trackId);
       setLibrary(null);
       setError(null);
@@ -23,8 +23,10 @@ export function useDeckLoader(engine: DjEngine) {
         engine.loadTrack(deck, track);
         // Free the decoded audio of songs no deck holds any more.
         retainTracks([engine.deckTrack("A")?.info.id, engine.deckTrack("B")?.info.id]);
+        return true;
       } catch (err) {
         setError(err instanceof Error && err.message ? `Couldn't load that track: ${err.message}` : "Couldn't load that track. Try again.");
+        return false;
       } finally {
         setLoadingId(null);
         setStage((s) => ({ ...s, [deck]: null }));

@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { User } from "@/lib/auth";
 import { MORE_LINKS, NavIcon, TAB_LINKS, isActive, type NavLink } from "./navLinks";
+import { isBareView } from "@/lib/bareView";
 
 /**
  * Phones and small tablets: the main sections as a tab bar along the
@@ -28,7 +29,7 @@ export default function MobileTabBar({ user, isAdmin = false }: { user: User | n
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [moreOpen]);
 
-  if (pathname?.startsWith("/embed/")) return null;
+  if (isBareView(pathname)) return null;
 
   const moreLinks: NavLink[] = [
     ...MORE_LINKS,

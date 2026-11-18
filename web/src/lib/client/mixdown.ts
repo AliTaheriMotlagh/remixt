@@ -359,7 +359,7 @@ export async function renderMixdown(options: ExportOptions = {}): Promise<AudioB
  * only one piece is in memory — for listening mode (renderedPlayback.ts),
  * which plays it through an <audio> element.
  */
-export async function renderMixWav(options: Pick<ExportOptions, "signal" | "onProgress"> = {}): Promise<Blob> {
+export async function renderMixWav(options: Pick<ExportOptions, "signal" | "onProgress" | "span" | "tailSeconds"> = {}): Promise<Blob> {
   const { bounce } = await mixBounce(options);
   const sink = wavSink(bounce.sampleRate);
   try {

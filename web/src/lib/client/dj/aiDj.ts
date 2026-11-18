@@ -1,7 +1,8 @@
 "use client";
 
 // The AI DJ for back-to-back sets: it plays one deck. While your deck plays
-// on its own, it picks a demo song that fits (closest tempo, then key),
+// on its own, it picks a song that fits (closest tempo, then key) — from
+// your library when it has songs, else the demo songs —
 // cues it on the first beat in its headphones, waits for your next phrase
 // line, starts it synced with its low cut, swaps the bass half way and
 // takes the crossfader over 16 bars. Then it's your turn. Driven by tick()
@@ -11,8 +12,8 @@ import type { DjEngine } from "./djEngine";
 import { beatIndex } from "./djControls";
 import { DJ_TRACKS } from "./djTrackInfo";
 import type { LoadedTrack } from "./djTracks";
-import { keyFit, type MusicalKey } from "../musicKey";
-import { tempoGap } from "./djLibrary";
+import type { MusicalKey } from "../musicKey";
+import { entryFromTrack, pickNext, type BrowserEntry } from "./djLibrary";
 import { otherDeck, type DeckId } from "./djTypes";
 
 type Phase = "idle" | "loading" | "ready" | "blending" | "done";
@@ -29,7 +30,9 @@ export class AiDj {
   constructor(
     private readonly engine: DjEngine,
     deck: DeckId,
-    private readonly load: (id: string) => Promise<LoadedTrack>
+    private readonly load: (id: string) => Promise<LoadedTrack>,
+    /** The songs it may play (your library); the demo songs when this gives fewer than two. */
+    private readonly songs: () => Promise<BrowserEntry[]> = async () => []
   ) {
     this.deck = deck;
   }
@@ -102,13 +105,9 @@ export class AiDj {
   private async prepare(bpm: number, playing: { id: string; key: MusicalKey }) {
     this.phase = "loading";
     this.status = "The AI DJ is choosing a track…";
-    const pick = DJ_TRACKS.filter((t) => !this.played.has(t.id) && t.id !== playing.id)
-      .map((t) => {
-        const fit = keyFit(t.key, playing.key);
-        const keyScore = fit === "same" || fit === "relative" ? 0 : fit === "neighbour" ? 0.02 : fit === "far" ? 0.06 : 0.12;
-        return { t, s: tempoGap(t.bpm, bpm) + keyScore };
-      })
-      .sort((a, b) => a.s - b.s)[0]?.t;
+    const library = await this.songs().catch(() => [] as BrowserEntry[]);
+    const pool = library.length >= 2 ? library : DJ_TRACKS.map(entryFromTrack);
+    const pick = pickNext(pool, { id: playing.id, bpm, key: playing.key }, this.played);
     if (!pick) {
       this.phase = "done";
       this.status = "The AI DJ has run out of tracks. Keep going!";

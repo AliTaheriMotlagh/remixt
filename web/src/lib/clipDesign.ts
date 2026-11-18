@@ -51,12 +51,16 @@ export const CLIP_FONTS: Record<ClipFont, { label: string; family: string; weigh
   mono: { label: "Mono", family: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", weight: 600 },
 };
 
-export type VisualizerStyle = "bars" | "mirror" | "wave" | "circle";
+export type VisualizerStyle = "bars" | "mirror" | "wave" | "circle" | "dots" | "spectrum" | "pulse" | "rays";
 export const VISUALIZER_STYLES: { id: VisualizerStyle; label: string }[] = [
   { id: "bars", label: "Bars" },
   { id: "mirror", label: "Mirror" },
   { id: "wave", label: "Wave" },
   { id: "circle", label: "Circle" },
+  { id: "dots", label: "LED dots" },
+  { id: "spectrum", label: "Spectrum" },
+  { id: "pulse", label: "Pulse rings" },
+  { id: "rays", label: "Sun rays" },
 ];
 
 export type LyricsStyle = "karaoke" | "lines" | "words";

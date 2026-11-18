@@ -13,7 +13,7 @@ import { SITE_NAME } from "@/lib/site";
 import { kindLabel } from "@/lib/stemKinds";
 import { creditLine, id3Key, type AudioTags, type TrackCredit } from "./audioTags";
 import { effectiveKey, keyReference, type StudioLane } from "./studioStore";
-import { drawCollage, mixArtSongs, songImages } from "./mixArt";
+import { drawCollage, mixArtSongs, songImages, type ArtSong } from "./mixArt";
 
 /** What the person exporting knows about the remix. */
 export type ExportInfo = {
@@ -100,9 +100,10 @@ function wrap(ctx: CanvasRenderingContext2D, text: string, width: number, maxLin
  * the site — over the songs in the mix (their covers, or pictures drawn
  * from them; see mixArt.ts), or the Remixt gradient when there are none.
  */
-async function drawCover({ title, subtitle, artist, lanes = [] }: { title: string; subtitle?: string; artist: string; lanes?: StudioLane[] }): Promise<Cover | null> {
+/** A cover in the Remixt look: the songs' pictures (from `songs`, else the lanes') under the title. */
+export async function drawCover({ title, subtitle, artist, lanes = [], songs }: { title: string; subtitle?: string; artist: string; lanes?: StudioLane[]; songs?: ArtSong[] }): Promise<Cover | null> {
   const size = 800;
-  const pictures = await songImages(mixArtSongs(lanes)).catch(() => []);
+  const pictures = await songImages(songs ?? mixArtSongs(lanes)).catch(() => []);
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = size;
   const ctx = canvas.getContext("2d");

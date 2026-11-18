@@ -8,6 +8,7 @@ import { splitHelper, useSplitHelper } from "@/lib/client/splitQueue";
 import { useSplitter } from "@/lib/client/splitter";
 import { describeStage, timeLeftText, uploads, useUploads, useUploadSummary, type UploadItem } from "@/lib/client/uploads";
 import { ProgressBar } from "./SplitQueue";
+import { isBareView } from "@/lib/bareView";
 
 // The songs being added to the library: the list on the Upload page, and
 // the tray in the corner of every other page, so the user can go anywhere
@@ -167,7 +168,7 @@ export function BackgroundActivity({ signedIn, userId }: { signedIn: boolean; us
   // would make it stutter — so no new songs for others start there.
   useEffect(() => {
     const audioPage =
-      pathname.startsWith("/studio") || pathname.startsWith("/remixes/") || pathname.startsWith("/embed/");
+      pathname.startsWith("/studio") || pathname.startsWith("/remixes/") || isBareView(pathname);
     splitHelper.setPageReason(audioPage ? "you're on a page that plays music" : null);
   }, [pathname]);
 
@@ -181,7 +182,7 @@ export function BackgroundActivity({ signedIn, userId }: { signedIn: boolean; us
     return () => clearTimeout(timer);
   }, [latestFinish]);
 
-  if (!signedIn || pathname.startsWith("/embed/") || pathname.startsWith("/upload")) return null;
+  if (!signedIn || isBareView(pathname) || pathname.startsWith("/upload")) return null;
 
   const active = items.filter((i) => i.status === "working" || i.status === "waiting");
   const current = active.find((i) => i.status === "working");

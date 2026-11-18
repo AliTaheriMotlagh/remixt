@@ -636,6 +636,14 @@ class AudioEngine {
     await promise;
   }
 
+  /**
+   * Downloads and decodes stems ahead of time — the radio's next song while
+   * this one plays — so lanes that use them later load at once.
+   */
+  async warmStems(stemIds: string[]) {
+    await Promise.all(stemIds.map((id) => this.decodedStem(id).catch(() => null)));
+  }
+
   /** A stem's decoded audio: kept from before (a lane that came back), or downloaded and decoded. */
   private decodedStem(stemId: string): Promise<DecodedStem> {
     const kept = this.decoded.get(stemId);

@@ -12,6 +12,7 @@ import {
   LogOut,
   Menu,
   Radio,
+  RadioTower,
   Shield,
   SlidersVertical,
   Trophy,
@@ -26,6 +27,7 @@ export type NavIconName =
   | "studio"
   | "remixes"
   | "live"
+  | "radio"
   | "dj"
   | "examples"
   | "challenges"
@@ -50,7 +52,8 @@ export const NAV_LINKS: NavLink[] = [
   { href: "/studio", label: "Studio", icon: "studio" },
   { href: "/remixes", label: "Remixes", icon: "remixes" },
   { href: "/live", label: "Live", icon: "live" },
-  { href: "/dj", label: "DJ", icon: "dj" },
+  { href: "/radio", label: "Radio", icon: "radio" },
+  { href: "/dj", label: "DJ", icon: "dj", wideOnly: true },
   { href: "/upload", label: "Upload", icon: "upload" },
   { href: "/examples", label: "Examples", icon: "examples", wideOnly: true },
   { href: "/challenges", label: "Challenges", icon: "challenges", wideOnly: true },
@@ -68,7 +71,8 @@ export const TAB_LINKS: NavLink[] = [
 export const MORE_LINKS: NavLink[] = [
   { href: "/", label: "Home", icon: "home" },
   { href: "/live", label: "Live sessions", icon: "live" },
-  { href: "/dj", label: "DJ simulator", icon: "dj" },
+  { href: "/radio", label: "Radio", icon: "radio" },
+  { href: "/dj", label: "DJ decks", icon: "dj" },
   { href: "/examples", label: "Splitting & matching examples", icon: "examples" },
   { href: "/challenges", label: "Challenges", icon: "challenges" },
   { href: "/leaderboard", label: "Top artists & remixes", icon: "top" },
@@ -87,6 +91,7 @@ const ICONS: Record<NavIconName, LucideIcon> = {
   studio: SlidersVertical,
   remixes: AudioLines,
   live: Radio,
+  radio: RadioTower,
   dj: Disc3,
   examples: FlaskConical,
   challenges: Flag,

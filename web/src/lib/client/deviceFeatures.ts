@@ -32,6 +32,12 @@ type Entry = {
  * producer hearing both songs 4.4 s (a computer takes ~47 s — it runs the
  * neural beat model, which phones skip), Make it sound good + Pro mix 2 s,
  * a WAV export 13 s; the page peaked at about 650 MB.
+ *
+ * A new song from everything, same phone (NEWSONG=3/4 node scripts/phone-measure.mjs):
+ * hearing three or four whole songs 10–14 s, building the song about 1 s,
+ * its WAV export 27–67 s — time is fine; memory isn't: the page peaked at
+ * about 1.1 GB with three songs and 1.2 GB with four, near what an iPhone
+ * gives a page. So: slow (a warning) from two songs, computer-only from four.
  */
 export const FEATURES: Record<FeatureId, Entry> = {
   split: {
@@ -59,7 +65,7 @@ export const FEATURES: Record<FeatureId, Entry> = {
     phone: "slow",
     tablet: "works",
     heavyFrom: 4,
-    slow: "Building a new song from several songs takes a while on a phone, and with many songs an older phone may reload the page.",
+    slow: "A new song from several songs holds all of them in memory at once — about 1 GB with three — so an older phone may reload the page. Save your remix first.",
     computer: "Four or more songs at once is more than a phone can hold — build it on a computer.",
   },
   proMix: { name: "Pro mix", phone: "works", tablet: "works" },

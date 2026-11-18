@@ -67,7 +67,7 @@ export default function ExamplesLab() {
         <p className="mt-2 text-sm text-muted">
           Want to practise mixing live?{" "}
           <Link href="/dj" className="font-semibold text-brand-strong underline">
-            Try the DJ simulator
+            Try the DJ decks
           </Link>
           .
         </p>

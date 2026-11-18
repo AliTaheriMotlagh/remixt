@@ -17,6 +17,7 @@ import {
   Pencil,
   Play,
   Puzzle,
+  UserMinus,
   RectangleHorizontal,
   Repeat,
   Scissors,
@@ -298,6 +299,16 @@ export function laneMenu(lane: StudioLane): MenuItem[] {
       hint: lane.kind === "vocals" ? "clean vocal" : "drums · bass · melody",
       onSelect: () => useStudioView.getState().setSplitLane(lane.laneId),
     },
+    ...(lane.kind === "vocals"
+      ? [
+          {
+            label: "Remove a singer…",
+            icon: UserMinus,
+            hint: "a featured verse, a chorus singer",
+            onSelect: () => useStudioView.getState().setRemoveSinger(lane.laneId),
+          },
+        ]
+      : []),
     { type: "separator" },
     ...trackModeItems(lane),
     { label: "Select all its clips", icon: SquareDashed, onSelect: () => clips.selectLaneClips(lane.laneId) },

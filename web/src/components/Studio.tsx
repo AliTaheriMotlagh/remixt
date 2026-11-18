@@ -17,6 +17,7 @@ import VocalStudio from "./studio/vocal/VocalStudio";
 import { ModeChooser, ModeSwitch } from "./studio/ModePicker";
 import AiProducer from "./studio/AiProducer";
 import SplitLaneDialog from "./studio/SplitLaneDialog";
+import RemoveSingerDialog from "./studio/RemoveSingerDialog";
 import ContextMenuHost from "./studio/ContextMenu";
 import StudioNotice from "./studio/StudioNotice";
 import LiveStudioBar, { GoLiveStudioButton } from "./live/LiveStudioBar";
@@ -32,6 +33,8 @@ import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/rem
 import { useStudioStore } from "@/lib/client/studioStore";
 import { useStudioView } from "@/lib/client/studioView";
 import { useLyricsFollowVocals } from "@/lib/client/lyricsFollow";
+import { useNewSongSheet } from "@/lib/client/newSongSheet";
+import { useAiTrial } from "@/lib/client/aiTrial";
 import { useLyrics } from "@/lib/client/lyricsStore";
 import { useLyricsFollowMix } from "@/lib/client/mixSongs";
 import { importHistory, resetHistory, undo } from "@/lib/client/studioHistory";
@@ -60,7 +63,7 @@ function formatAgo(timestamp: number) {
 // so a check can read the mix or set one up without clicking through the
 // page — `__remixt.studio.getState().lanes`. Development only.
 if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
-  (window as unknown as { __remixt?: unknown }).__remixt = { studio: useStudioStore, view: useStudioView, lyrics: useLyrics, engine: audioEngine };
+  (window as unknown as { __remixt?: unknown }).__remixt = { studio: useStudioStore, view: useStudioView, lyrics: useLyrics, engine: audioEngine, aiTrial: useAiTrial };
 }
 
 export default function Studio({ user }: { user: User | null }) {
@@ -85,6 +88,7 @@ export default function Studio({ user }: { user: User | null }) {
   useLyricsFollowMix();
   // Timed words stay on the singing when the vocals are edited (by hand or by the AI).
   useLyricsFollowVocals();
+  useNewSongSheet();
 
   // An invite link (/studio?join=<code>): join, then open the session.
   useEffect(() => {
@@ -574,6 +578,7 @@ export default function Studio({ user }: { user: User | null }) {
       )}
       <AiProducer />
       <SplitLaneDialog />
+      <RemoveSingerDialog />
       <ContextMenuHost />
       <StudioNotice />
     </div>

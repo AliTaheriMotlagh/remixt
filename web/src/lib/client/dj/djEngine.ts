@@ -358,7 +358,9 @@ export const SAMPLE_KINDS: { kind: SampleKind; label: string }[] = [
   { kind: "crash", label: "Crash" },
 ];
 
-export type RecordingResult = { blob: Blob; mime: string; seconds: number };
+/** A song in a recorded set: when it took over the room (seconds into the recording). */
+export type SetListEntry = { id: string; at: number; title: string; artist: string; coverStemId?: string };
+export type RecordingResult = { blob: Blob; mime: string; seconds: number; tracks: SetListEntry[] };
 
 export class DjEngine {
   readonly ctx: AudioContext;
@@ -378,6 +380,7 @@ export class DjEngine {
   private phones: { cue: GainNode; master: GainNode; dest: MediaStreamAudioDestinationNode; el: HTMLAudioElement } | null = null;
   private recorder: { rec: MediaRecorder; chunks: Blob[]; started: number; mime: string } | null = null;
   private recDest: MediaStreamAudioDestinationNode | null = null;
+  private setList: SetListEntry[] = [];
   private mic: { stream: MediaStream; node: MediaStreamAudioSourceNode; gain: GainNode } | null = null;
   private readonly fxOut: GainNode;
   private readonly echoSend: GainNode;
@@ -563,8 +566,46 @@ export class DjEngine {
     this.masterLevel = peak > this.masterLevel ? peak : this.masterLevel * 0.85 + peak * 0.15;
   }
 
+  /** How hard the master limiter is pulling the mix down right now, in dB (0: not at all) — the mix is too loud when this grows. */
+  limiting() {
+    const r = this.limiter.reduction as unknown;
+    // Older Safari exposed it as an AudioParam.
+    const db = typeof r === "number" ? r : ((r as AudioParam | undefined)?.value ?? 0);
+    return Number.isFinite(db) ? Math.max(0, -db) : 0;
+  }
+
+  /** While recording: the song the room hears most, added to the set list when it changes. */
+  private noteSetList() {
+    const r = this.recorder;
+    if (!r) return;
+    const gains = xfadeGains(this.crossfader, this.curve);
+    let best: DeckUnit | null = null;
+    let top = 0.18;
+    for (const id of ["A", "B"] as DeckId[]) {
+      const d = this.decks[id];
+      if (!d.playing || !d.track) continue;
+      const gain = d.volume * gains[id];
+      if (gain > top) {
+        top = gain;
+        best = d;
+      }
+    }
+    const info = best?.track?.info;
+    if (!info) return;
+    const at = Math.max(0, this.ctx.currentTime - r.started);
+    const list = this.setList;
+    if (list[list.length - 1]?.id === info.id) return;
+    // A crossfader wiggled back within seconds isn't a new song.
+    if (list.length >= 2 && list[list.length - 2].id === info.id && at - list[list.length - 1].at < 10) {
+      list.pop();
+      return;
+    }
+    list.push({ id: info.id, at, title: info.title, artist: info.artist, coverStemId: info.coverStemId });
+  }
+
   /** Cheap live meter values for the UI's animation frames. */
   levels() {
+    this.noteSetList();
     this.measureMaster();
     this.checkEnds();
     return { A: this.decks.A.measure(), B: this.decks.B.measure(), master: this.masterLevel };
@@ -1372,6 +1413,8 @@ export class DjEngine {
     };
     rec.start(1000);
     this.recorder = { rec, chunks, started: this.ctx.currentTime, mime: rec.mimeType || mime || "audio/webm" };
+    this.setList = [];
+    this.noteSetList();
     this.emit();
     return true;
   }
@@ -1383,11 +1426,14 @@ export class DjEngine {
   stopRecording(): Promise<RecordingResult | null> {
     const r = this.recorder;
     if (!r) return Promise.resolve(null);
+    this.noteSetList();
+    const tracks = this.setList;
+    this.setList = [];
     this.recorder = null;
     const seconds = this.ctx.currentTime - r.started;
     return new Promise((resolve) => {
       r.rec.onstop = () => {
-        resolve({ blob: new Blob(r.chunks, { type: r.mime }), mime: r.mime, seconds });
+        resolve({ blob: new Blob(r.chunks, { type: r.mime }), mime: r.mime, seconds, tracks });
         this.emit();
       };
       r.rec.stop();

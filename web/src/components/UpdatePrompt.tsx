@@ -4,6 +4,7 @@ import { RefreshCw, X } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { versionWatch } from "@/lib/client/versionCheck";
+import { isBareView } from "@/lib/bareView";
 
 const CHECK_EVERY_MS = 10 * 60_000;
 const LATER = "remixt-update-later";
@@ -36,7 +37,7 @@ export default function UpdatePrompt() {
   const pathname = usePathname() ?? "/";
   const [ready, setReady] = useState<string | null>(null);
   // An embedded player sits on someone else's site: not ours to prompt on.
-  const embed = pathname.startsWith("/embed/");
+  const embed = isBareView(pathname);
 
   useEffect(() => {
     // next.config.ts deploymentId, as this page's build has it; unset in dev.

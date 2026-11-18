@@ -5,7 +5,7 @@ import { Library, Loader2 } from "lucide-react";
 import type { DjEngine } from "@/lib/client/dj/djEngine";
 import { AiDj } from "@/lib/client/dj/aiDj";
 import { QUIZ_PASS, quizFor } from "@/lib/client/dj/curriculum";
-import { loadAnyTrack, retainTracks, type LoadStage } from "@/lib/client/dj/djLibraryTracks";
+import { libraryEntries, loadAnyTrack, retainTracks, type LoadStage } from "@/lib/client/dj/djLibraryTracks";
 import { applyGear, gearById, type GearProfile } from "@/lib/client/dj/gear";
 import { libraryApplies, prepareLibraryMission, type LibraryPrep } from "@/lib/client/dj/missionLibrary";
 import { progressStore, recordResult, type DjProgress } from "@/lib/client/dj/progress";
@@ -123,7 +123,7 @@ export default function MissionSession({
       return;
     }
     runner.current = new ScenarioRunner(mission, seed);
-    ai.current = mission.aiDeck ? new AiDj(engine, mission.aiDeck, (id) => loadAnyTrack(id, engine.ctx)) : null;
+    ai.current = mission.aiDeck ? new AiDj(engine, mission.aiDeck, (id) => loadAnyTrack(id, engine.ctx), () => libraryEntries().then((r) => r.entries)) : null;
     setAiStatus(ai.current?.status ?? null);
     fired.current = new Set();
     last.current = performance.now();

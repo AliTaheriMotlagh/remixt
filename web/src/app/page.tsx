@@ -281,7 +281,7 @@ export default async function Home() {
           <SectionHeading
             eyebrow="Watch & play"
             title="Go live, learn to DJ, see it in action"
-            lead="Perform your remixes for a live room, train in a DJ simulator, or hear exactly what splitting and matching does — no account needed."
+            lead="Perform your remixes for a live room, mix your songs on two DJ decks, or hear exactly what splitting and matching does — no account needed."
           />
           {liveSessions.length > 0 && (
             <div className="mt-8">
@@ -298,7 +298,7 @@ export default async function Home() {
           <div className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
             {[
               { href: "/live", icon: Radio, title: "Live sessions", text: "Hear artists play their stems in real time. Chat, send reactions, or go live yourself.", cta: liveSessions.length ? "See who's live" : "Open Live" },
-              { href: "/dj", icon: Disc3, title: "DJ simulator", text: "Flight-school for DJs: guided missions from beatmatching to a full club night, with a co-pilot and a score.", cta: "Start training" },
+              { href: "/dj", icon: Disc3, title: "DJ decks", text: "Your library on two club-style decks: sync, live stem kills, Auto-mix, an Auto DJ and set recording. Lessons too, if you are new to it.", cta: "Open the decks" },
               { href: "/examples", icon: FlaskConical, title: "Splitting & matching examples", text: "Pick a demo song, split it into vocal and beat, then match a vocal to a different beat — and hear before and after.", cta: "Try the examples" },
             ].map(({ href, icon: Glyph, title, text, cta }) => (
               <Link key={href} href={href} className="group flex flex-col gap-2 rounded-2xl border border-border bg-surface p-5 transition-colors hover:border-brand">

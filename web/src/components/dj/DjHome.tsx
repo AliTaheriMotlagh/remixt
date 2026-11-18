@@ -30,7 +30,7 @@ function ItemButton({ m, progress, next, onOpen, icon }: { m: Mission; progress:
   );
 }
 
-/** The landing section: the gear, the flight school (learn → practice → test), real gigs and free play. */
+/** Learn: the flight school (learn → practice → test), gigs and the gear — the training next to the real decks (the page /dj opens on). */
 export default function DjHome({
   progress,
   gear,
@@ -70,22 +70,22 @@ export default function DjHome({
     <div className="flex min-w-0 flex-col gap-8">
       <section className="rounded-3xl border border-border bg-gradient-to-br from-brand/20 via-surface to-beat/15 p-5 sm:p-8">
         <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-brand-strong">
-          <Disc3 /> DJ simulator
+          <Disc3 /> Learn
         </p>
-        <h1 className="max-w-2xl text-3xl font-bold leading-tight sm:text-4xl">Mix two songs like a DJ, right in your browser</h1>
+        <h1 className="max-w-2xl text-3xl font-bold leading-tight sm:text-4xl">Learn to DJ, step by step</h1>
         <p className="mt-3 max-w-2xl text-muted">
-          Never touched a mixer? Two songs are ready to go: press Auto-mix and watch a DJ transition happen on the controls, step by step, then do it yourself.
-          Producers: blend your own split songs on club-style decks, mute any part live, and record the mix.
+          Short lessons that point at the control to touch, drills, then gigs. This part is a game: the lessons use songs made for practice, and in the gigs a pretend crowd
+          reacts and asks for things. Your real decks, with your library, are one tap away.
         </p>
         <ul className="mt-5 grid gap-3 md:grid-cols-3">
           <li>
             <button type="button" onClick={() => onFree("easy")} className="flex h-full w-full flex-col gap-1.5 rounded-2xl bg-brand p-4 text-left text-white shadow-lg shadow-brand/25 hover:bg-brand-strong">
               <span className="flex items-center gap-2 text-lg font-bold">
-                <Wand2 /> Start mixing now
+                <Wand2 /> Back to the decks
               </span>
-              <span className="text-sm text-white/85">Two songs loaded, big buttons, live visuals, and an Auto-mix that shows you how.</span>
+              <span className="text-sm text-white/85">Two songs from your library, big buttons, Auto-mix and the Auto DJ.</span>
               <span className="mt-auto flex items-center gap-1 pt-1 text-sm font-semibold">
-                No experience needed <ArrowRight />
+                Your songs <ArrowRight />
               </span>
             </button>
           </li>
@@ -201,9 +201,9 @@ export default function DjHome({
 
       <section aria-label="Real gigs">
         <h2 className="mb-1 flex items-center gap-2 text-xl font-bold">
-          <Mic2 /> Real gigs
+          <Mic2 /> Gigs
         </h2>
-        <p className="mb-3 text-sm text-muted">The situations DJs actually play in. Several can use songs from your library.</p>
+        <p className="mb-3 text-sm text-muted">The situations DJs play in, as a game: the crowd and its requests are simulated. Several can use songs from your library.</p>
         <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {GIGS.map((m) => {
             const rec = progress.missions[m.id];

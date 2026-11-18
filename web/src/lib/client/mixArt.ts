@@ -14,7 +14,7 @@ import { getAudibleLaneIds, type StudioLane } from "./studioStore";
 
 export type ArtSong = { stemId: string | null; title: string; artist: string; peaks: number[] };
 
-/** The songs heard in the mix, each once (its vocal's lane first), at most four. Takes recorded here aren't songs. */
+/** The songs heard in the mix, each once (its vocal's lane first) — the vocal and the beat of one song are one picture — at most nine. Takes recorded here aren't songs. */
 export function mixArtSongs(lanes: StudioLane[]): ArtSong[] {
   const audible = getAudibleLaneIds(lanes);
   const seen = new Set<string>();
@@ -27,7 +27,7 @@ export function mixArtSongs(lanes: StudioLane[]): ArtSong[] {
     if (seen.has(key)) continue;
     seen.add(key);
     out.push({ stemId: lane.stemId, title: song || lane.trackTitle, artist, peaks: lane.peaks });
-    if (out.length === 4) break;
+    if (out.length === 9) break;
   }
   return out;
 }
@@ -82,11 +82,24 @@ export function drawCollage(ctx: CanvasRenderingContext2D, pictures: CanvasImage
     cell(a, x, y, half, size);
     cell(b, x + half, y, half, half);
     cell(c, x + half, y + half, half, half);
-  } else {
+  } else if (pictures.length === 4) {
     cell(a, x, y, half, half);
     cell(b, x + half, y, half, half);
     cell(c, x, y + half, half, half);
     cell(d, x + half, y + half, half, half);
+  } else {
+    // Five to nine: a 3×3 grid, filled row by row (the first ones the vocals').
+    const third = size / 3;
+    pictures.slice(0, 9).forEach((img, i) => cell(img, x + (i % 3) * third, y + Math.floor(i / 3) * third, third, third));
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    const line = Math.max(2, size / 200);
+    for (const k of [1, 2]) {
+      ctx.fillRect(x + k * third - line / 2, y, line, size);
+      ctx.fillRect(x, y + k * third - line / 2, size, line);
+    }
+    ctx.restore();
+    return;
   }
   // Thin dark lines between the pictures.
   if (pictures.length > 1) {

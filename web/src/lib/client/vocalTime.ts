@@ -309,3 +309,42 @@ export function slideAlongVocal(lines: LyricLine[], lanes: StudioLane[], at: num
     return placed.time === null ? { ...line, time: round(Math.max(0, line.time + delta)) } : placed;
   });
 }
+
+/** A line's stamp can come this long (stem seconds) before its clip starts and still be that clip's: stamps sit a breath before the singing. */
+const LINE_LEAD = 0.5;
+/** A line stamped this close to its clip's end isn't sung in it: the cut came just as it started. */
+const LINE_TAIL = 0.3;
+
+/**
+ * Lines timed to a recording (`at`: seconds into the stem of each lane),
+ * placed at every play of their moment — one sheet for a song made of
+ * several vocals cut up and re-ordered (a new song from everything), where
+ * a chorus sung twice has its words twice. Lines in no clip are left out:
+ * they aren't sung. The same words from two singers at once are kept once.
+ */
+export function linesInEveryPlay(vocals: { lane: StudioLane; lines: { at: number; text: string }[] }[]): LyricLine[] {
+  const out: { time: number; text: string }[] = [];
+  for (const { lane, lines } of vocals) {
+    if (lane.muted) continue;
+    const clips = clipsOf(lane).filter((c) => !c.muted && !c.reverse);
+    for (const line of lines) {
+      const plays: number[] = [];
+      const sungIn = (c: LaneClip) => line.at >= c.from - LINE_LEAD && line.at < c.to - LINE_TAIL;
+      for (const clip of clips) {
+        if (!sungIn(clip)) continue;
+        const time = timelineOf(lane, clip, line.at);
+        // Stamped just before this clip but sung in the one before it, where that one carries straight on: one play, not two.
+        if (line.at < clip.from && clips.some((c) => c !== clip && within(c, line.at) && sungIn(c) && Math.abs(timelineOf(lane, c, line.at) - time) < SAME_SINGING)) continue;
+        plays.push(time);
+      }
+      for (const time of plays) out.push({ time: Math.max(0, time), text: line.text });
+    }
+  }
+  out.sort((a, b) => a.time - b.time);
+  const kept: LyricLine[] = [];
+  for (const line of out) {
+    if (kept.some((k) => k.text === line.text && Math.abs((k.time ?? 0) - line.time) < SAME_SINGING)) continue;
+    kept.push({ time: round(line.time), text: line.text });
+  }
+  return kept;
+}

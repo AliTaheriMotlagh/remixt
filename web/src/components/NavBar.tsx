@@ -8,11 +8,12 @@ import type { User } from "@/lib/auth";
 import NotificationBell from "./NotificationBell";
 import RemixtMark from "./RemixtMark";
 import { NAV_LINKS, NavIcon, isActive } from "./navLinks";
+import { isBareView } from "@/lib/bareView";
 
 export default function NavBar({ user, isAdmin = false }: { user: User | null; isAdmin?: boolean }) {
   const pathname = usePathname();
   // An embedded player (on someone else's site) is just the player.
-  if (pathname?.startsWith("/embed/")) return null;
+  if (isBareView(pathname)) return null;
 
   return (
     // The blur makes the header a stacking context of its own, so its menus

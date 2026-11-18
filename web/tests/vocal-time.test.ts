@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { clipsOf, deleteClips, fitClips, moveClips, normaliseLane, splitClips, trimClipsAt, WHOLE } from "../src/lib/client/clipEdit.ts";
 import type { LaneClip, StudioLane } from "../src/lib/client/studioStore.ts";
-import { anchorAt, clipKeys, layOut, placeAnchor, placeOnStem, slideAlongVocal, startOnStem, stemOf, sungAt, timelineOf, vocalShape } from "../src/lib/client/vocalTime.ts";
+import { anchorAt, clipKeys, layOut, linesInEveryPlay, placeAnchor, placeOnStem, slideAlongVocal, startOnStem, stemOf, sungAt, timelineOf, vocalShape } from "../src/lib/client/vocalTime.ts";
 
 function lane(id: string, opts: Partial<StudioLane> = {}): StudioLane {
   return normaliseLane({
@@ -249,5 +249,47 @@ describe("everywhere a line is sung", () => {
 
   test("no vocal near: just where it is", () => {
     assert.deepEqual(sungAt([lane("v", { offsetSeconds: 100 })], 5), [{ time: 5, speed: 1 }]);
+  });
+});
+
+describe("linesInEveryPlay: one sheet for a new song cut from several vocals", () => {
+  const clip = (from: number, to: number, at: number, id: string): LaneClip => ({ from, to, at, id }) as LaneClip;
+
+  test("each line goes to every play of its moment, singers interleaved in time", () => {
+    // Singer A: verse (stem 10–20) at 0 s, chorus (stem 30–40) at 20 s and again at 50 s. B: verse (stem 5–15) at 35 s.
+    const a = lane("a", { clips: [clip(10, 20, 0, "a1"), clip(30, 40, 20, "a2"), clip(30, 40, 50, "a3")] });
+    const b = lane("b", { clips: [clip(5, 15, 35, "b1")] });
+    const sheet = linesInEveryPlay([
+      { lane: a, lines: [{ at: 11, text: "verse a" }, { at: 31, text: "chorus" }, { at: 50, text: "never sung" }] },
+      { lane: b, lines: [{ at: 6, text: "verse b" }] },
+    ]);
+    assert.deepEqual(sheet, [
+      { time: 1, text: "verse a" },
+      { time: 21, text: "chorus" },
+      { time: 36, text: "verse b" },
+      { time: 51, text: "chorus" },
+    ]);
+  });
+
+  test("a stamp a breath before its clip counts; one at the very end of a clip doesn't", () => {
+    const a = lane("a", { clips: [clip(10, 20, 0, "a1")] });
+    const sheet = linesInEveryPlay([{ lane: a, lines: [{ at: 9.7, text: "early" }, { at: 19.9, text: "cut off" }] }]);
+    assert.deepEqual(sheet, [{ time: 0, text: "early" }]);
+  });
+
+  test("speed and offset are followed; two clips playing on from each other give one line", () => {
+    const a = lane("a", { tempoRatio: 2, offsetSeconds: 4, clips: [clip(0, 10, 0, "a1"), clip(10, 20, 10, "a2")] });
+    const sheet = linesInEveryPlay([{ lane: a, lines: [{ at: 9.8, text: "across" }] }]);
+    assert.deepEqual(sheet, [{ time: 8.9, text: "across" }]);
+  });
+
+  test("the same words from two singers at once are kept once; muted lanes sing nothing", () => {
+    const a = lane("a", { clips: [clip(0, 10, 0, "a1")] });
+    const b = lane("b", { clips: [clip(0, 10, 0, "b1")] });
+    const m = lane("m", { muted: true, clips: [clip(0, 10, 0, "m1")] });
+    const lines = [{ at: 1, text: "together" }];
+    assert.deepEqual(linesInEveryPlay([{ lane: a, lines }, { lane: b, lines: [{ at: 1.2, text: "together" }] }, { lane: m, lines: [{ at: 2, text: "muted" }] }]), [
+      { time: 1, text: "together" },
+    ]);
   });
 });

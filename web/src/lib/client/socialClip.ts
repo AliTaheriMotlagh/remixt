@@ -402,6 +402,88 @@ function drawVisualizer(f: Frame, el: ClipElement): Box {
     const r = radius + reach;
     return { x: cx - r, y: cy - r, w: r * 2, h: r * 2 };
   }
+  if (el.style === "dots") {
+    // An LED meter: columns of lit dots, the loudest at the top in the accent colour.
+    const cols = 32;
+    const rows = 10;
+    const cell = width / cols;
+    const r = cell * 0.32;
+    for (let i = 0; i < cols; i++) {
+      const v = level(f, frame - Math.abs(i - (cols - 1) / 2) * 1.4);
+      const lit = Math.round(1 + v * (rows - 1));
+      for (let j = 0; j < rows; j++) {
+        ctx.globalAlpha = j < lit ? 1 : 0.12;
+        ctx.fillStyle = j >= rows - 2 && j < lit ? el.accent : el.color;
+        ctx.beginPath();
+        ctx.arc(left + (i + 0.5) * cell, cy + height / 2 - (j + 0.5) * (height / rows), r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+    return { x: left, y: cy - height / 2, w: width, h: height };
+  }
+  if (el.style === "spectrum") {
+    // A filled, glowing landscape of the sound, mirrored below.
+    const points = 48;
+    const step = width / (points - 1);
+    ctx.shadowColor = el.accent;
+    ctx.shadowBlur = 30 * s;
+    for (const side of [1, -1]) {
+      ctx.beginPath();
+      ctx.moveTo(left, cy);
+      for (let i = 0; i < points; i++) {
+        const v = level(f, frame - Math.abs(i - (points - 1) / 2) * 1.2);
+        const envelope = Math.sin((i / (points - 1)) * Math.PI) ** 0.6;
+        ctx.lineTo(left + i * step, cy - side * (4 * s + v * (height / 2) * envelope));
+      }
+      ctx.lineTo(left + width, cy);
+      ctx.closePath();
+      ctx.globalAlpha = side === 1 ? 0.95 : 0.35;
+      ctx.fill();
+    }
+    ctx.restore();
+    return { x: left, y: cy - height / 2, w: width, h: height };
+  }
+  if (el.style === "pulse") {
+    // Rings breathing out from the middle with the music; each ring is a moment a little earlier.
+    const base = 70 * s;
+    for (let k = 5; k >= 0; k--) {
+      const v = level(f, frame - k * 4);
+      const radius = base + k * 34 * s + v * 60 * s;
+      ctx.globalAlpha = 0.2 + (1 - k / 6) * 0.8 * (0.4 + v * 0.6);
+      ctx.lineWidth = (4 + v * 10) * s;
+      ctx.strokeStyle = k % 2 ? el.accent : el.color;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+    const r = base + 5 * 34 * s + 70 * s;
+    return { x: cx - r, y: cy - r, w: r * 2, h: r * 2 };
+  }
+  if (el.style === "rays") {
+    // A sunburst: rays from the centre, longer with the sound, turning slowly.
+    const count = 48;
+    const inner = 40 * s;
+    const reach = 230 * s;
+    const turn = frame * 0.004;
+    ctx.lineCap = "round";
+    for (let i = 0; i < count; i++) {
+      const k = i < count / 2 ? i : count - i;
+      const v = level(f, frame - k * 1.5);
+      const a = (i / count) * Math.PI * 2 + turn;
+      ctx.globalAlpha = 0.35 + v * 0.65;
+      ctx.strokeStyle = i % 2 ? el.accent : el.color;
+      ctx.lineWidth = (6 + v * 6) * s;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(a) * inner, cy + Math.sin(a) * inner);
+      ctx.lineTo(cx + Math.cos(a) * (inner + 20 * s + v * reach), cy + Math.sin(a) * (inner + 20 * s + v * reach));
+      ctx.stroke();
+    }
+    ctx.restore();
+    const r = inner + 20 * s + reach;
+    return { x: cx - r, y: cy - r, w: r * 2, h: r * 2 };
+  }
   if (el.style === "wave") {
     const points = 64;
     const step = width / (points - 1);

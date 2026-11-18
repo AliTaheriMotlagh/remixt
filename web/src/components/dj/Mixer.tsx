@@ -6,6 +6,8 @@ import { DjEngine, type RecordingResult } from "@/lib/client/dj/djEngine";
 import type { Curve, DeckId, DjSnapshot, EqBand, FaderCurve, MonitorMode } from "@/lib/client/dj/djTypes";
 import { EQ_MAX_DB, EQ_MIN_DB, TRIM_DB } from "@/lib/client/dj/djTypes";
 import { downloadBlob } from "@/lib/client/demoSongs";
+import { MP3_SET_LIMIT_SECONDS, setClock, setListText } from "@/lib/client/dj/djSet";
+import { setAsMp3, setTitle } from "@/lib/client/dj/djSetExport";
 import type { GearProfile } from "@/lib/client/dj/gear";
 import { Knob, Toggle, VFader, VuMeter, useRaf } from "./ui";
 
@@ -316,9 +318,10 @@ export function HeadphoneSection({ engine, ui }: { engine: DjEngine; ui: DjSnaps
   );
 }
 
-/** Records the master output (what the crowd hears), then offers it as a file. */
+/** Records the master output (what the room hears), then offers it as a file: as recorded, or as an MP3 tagged with its track list and a cover. */
 export function RecordMix({ engine, recording, big = false }: { engine: DjEngine; recording: boolean; big?: boolean }) {
   const [rec, setRec] = useState<RecordingResult | null>(null);
+  const [mp3, setMp3] = useState<{ state: "idle" | "busy" | "error"; progress: number }>({ state: "idle", progress: 0 });
   const time = useRef<HTMLSpanElement>(null);
   useRaf(() => {
     if (time.current) {
@@ -329,41 +332,88 @@ export function RecordMix({ engine, recording, big = false }: { engine: DjEngine
   const canRec = DjEngine.recordingSupported();
   const ext = rec?.mime.includes("mp4") ? "m4a" : rec?.mime.includes("ogg") ? "ogg" : "webm";
   const size = big ? "min-h-11 px-4 text-sm" : "min-h-10 px-3 text-xs";
+  const name = `Remixt ${setTitle()}`;
+  const tooLong = !!rec && rec.seconds > MP3_SET_LIMIT_SECONDS;
+  const saveMp3 = async () => {
+    if (!rec) return;
+    setMp3({ state: "busy", progress: 0 });
+    try {
+      const blob = await setAsMp3(rec, engine.ctx, (f) => setMp3({ state: "busy", progress: f }));
+      downloadBlob(blob, `${name}.mp3`);
+      setMp3({ state: "idle", progress: 0 });
+    } catch {
+      setMp3({ state: "error", progress: 0 });
+    }
+  };
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {recording ? (
-        <button
-          type="button"
-          onClick={async () => {
-            const r = await engine.stopRecording();
-            if (r) setRec(r);
-          }}
-          className={`flex items-center gap-1.5 rounded-lg bg-danger font-bold text-white ${size}`}
-        >
-          <Square className="fill-white" /> STOP <span ref={time} className="font-mono tabular-nums" />
-        </button>
-      ) : (
-        <button
-          type="button"
-          disabled={!canRec}
-          onClick={() => {
-            setRec(null);
-            engine.startRecording();
-          }}
-          title={canRec ? "Record the master output" : "This browser can't record audio"}
-          className={`flex items-center gap-1.5 rounded-lg bg-surface-raised font-bold hover:bg-surface-hover disabled:opacity-40 ${size}`}
-        >
-          <Circle className="fill-danger text-danger" /> {big ? "Record my mix" : "REC"}
-        </button>
-      )}
-      {rec && (
-        <button
-          type="button"
-          onClick={() => downloadBlob(rec.blob, `Remixt DJ mix ${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.${ext}`)}
-          className={`flex items-center gap-1.5 rounded-lg border border-border font-semibold hover:bg-surface-hover ${size}`}
-        >
-          <Download /> Download ({Math.round(rec.seconds)} s)
-        </button>
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {recording ? (
+          <button
+            type="button"
+            onClick={async () => {
+              const r = await engine.stopRecording();
+              if (r) setRec(r);
+            }}
+            className={`flex items-center gap-1.5 rounded-lg bg-danger font-bold text-white ${size}`}
+          >
+            <Square className="fill-white" /> STOP <span ref={time} className="font-mono tabular-nums" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            disabled={!canRec}
+            onClick={() => {
+              setRec(null);
+              setMp3({ state: "idle", progress: 0 });
+              engine.startRecording();
+            }}
+            title={canRec ? "Record the master output" : "This browser can't record audio"}
+            className={`flex items-center gap-1.5 rounded-lg bg-surface-raised font-bold hover:bg-surface-hover disabled:opacity-40 ${size}`}
+          >
+            <Circle className="fill-danger text-danger" /> {big ? "Record my mix" : "REC"}
+          </button>
+        )}
+        {rec && (
+          <>
+            <button
+              type="button"
+              onClick={() => void saveMp3()}
+              disabled={tooLong || mp3.state === "busy"}
+              title={tooLong ? "Sets longer than 20 minutes download as recorded, with the track list beside them" : "An MP3 tagged with the track list, with a cover made from the songs"}
+              className={`flex items-center gap-1.5 rounded-lg bg-brand font-semibold text-white hover:bg-brand-strong disabled:opacity-50 ${size}`}
+            >
+              <Download /> {mp3.state === "busy" ? `Making the MP3… ${Math.round(mp3.progress * 100)}%` : `Save as MP3 (${Math.round(rec.seconds)} s)`}
+            </button>
+            <button
+              type="button"
+              onClick={() => downloadBlob(rec.blob, `${name}.${ext}`)}
+              className={`flex items-center gap-1.5 rounded-lg border border-border font-semibold hover:bg-surface-hover ${size}`}
+            >
+              <Download /> As recorded (.{ext})
+            </button>
+            {rec.tracks.length > 0 && (
+              <button
+                type="button"
+                onClick={() => downloadBlob(new Blob([`${name}\n\n${setListText(rec.tracks)}\n`], { type: "text/plain" }), `${name} track list.txt`)}
+                className={`flex items-center gap-1.5 rounded-lg border border-border font-semibold hover:bg-surface-hover ${size}`}
+              >
+                <Download /> Track list
+              </button>
+            )}
+          </>
+        )}
+      </div>
+      {mp3.state === "error" && <p className="text-[11px] text-danger">Couldn&apos;t make the MP3 in this browser. The recording itself is fine: download it as recorded.</p>}
+      {rec && rec.tracks.length > 0 && (
+        <ol className="text-[11px] text-muted">
+          {rec.tracks.map((t, i) => (
+            <li key={`${t.id}-${i}`} className="truncate">
+              <span className="font-mono tabular-nums">{setClock(t.at)}</span> {t.title}
+              {t.artist ? ` · ${t.artist}` : ""}
+            </li>
+          ))}
+        </ol>
       )}
     </div>
   );

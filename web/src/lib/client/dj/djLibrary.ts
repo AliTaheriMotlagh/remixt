@@ -107,6 +107,37 @@ export function fitWith(entry: Pick<BrowserEntry, "bpm" | "key">, other: { bpm: 
   };
 }
 
+/**
+ * The song to play next after `now` (what's on air), from `entries`: the
+ * best fit by tempo (half and double time count) and key, never one already
+ * `played` or on air. Songs that don't fit (too far in tempo, keys that
+ * clash) only when nothing else is left. Null when every song has been played.
+ */
+export function pickNext(
+  entries: BrowserEntry[],
+  now: { id?: string; bpm: number | null; key: MusicalKey | null } | null,
+  played: ReadonlySet<string> = new Set()
+): BrowserEntry | null {
+  const left = entries.filter((e) => e.id !== now?.id && !played.has(e.id));
+  if (!left.length) return null;
+  if (!now) return left[0];
+  const scored = left.map((e, i) => ({ e, i, fit: fitWith(e, now)! }));
+  const pool = scored.some((x) => x.fit.possible) ? scored.filter((x) => x.fit.possible) : scored;
+  return pool.sort((a, b) => b.fit.score - a.fit.score || a.i - b.i)[0].e;
+}
+
+/** Shorter than this, a library entry is a clip or a take, not a song to open a set with. */
+const FULL_SONG_SECONDS = 90;
+
+/** Two songs to open the decks with: the newest full song and the one that fits it best. Null with fewer than two. */
+export function openingPair(entries: BrowserEntry[]): [BrowserEntry, BrowserEntry] | null {
+  const full = entries.filter((e) => (e.duration ?? 0) >= FULL_SONG_SECONDS);
+  const pool = full.length >= 2 ? full : entries;
+  const first = pool.find((e) => e.bpm !== null) ?? pool[0];
+  const second = first ? pickNext(pool, first, new Set([first.id])) : null;
+  return first && second ? [first, second] : null;
+}
+
 // ---------------------------------------------------------- search, sort
 
 export type SortKey = "title" | "bpm" | "key" | "artist" | "duration";

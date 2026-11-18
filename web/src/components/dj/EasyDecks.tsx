@@ -2,9 +2,11 @@
 
 import SongArt from "@/components/SongArt";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { CheckCircle2, Circle, Drum, FolderOpen, Guitar, Loader2, Mic, Pause, Piano, Play, RotateCcw, Sparkles, TriangleAlert, Wand2, X, Zap } from "lucide-react";
+import { CheckCircle2, Circle, Disc3, Drum, FolderOpen, Guitar, Loader2, Mic, Pause, Piano, Play, RotateCcw, Sparkles, TriangleAlert, Wand2, X, Zap } from "lucide-react";
 import type { DemoStem } from "@/lib/client/demoSongDefs";
-import { AUTO_MIX_STEPS, AutoMix } from "@/lib/client/dj/autoMix";
+import { AUTO_MIX_STEPS, AutoMix, BLEND_BEATS, PHRASE_BEATS } from "@/lib/client/dj/autoMix";
+import { pickNext, type BrowserEntry } from "@/lib/client/dj/djLibrary";
+import { DEMO_ENTRIES, libraryEntries } from "@/lib/client/dj/djLibraryTracks";
 import { beatIndex } from "@/lib/client/dj/djControls";
 import { derive, type Derived } from "@/lib/client/dj/djDerived";
 import type { DjEngine } from "@/lib/client/dj/djEngine";
@@ -80,6 +82,15 @@ const FIT: Record<string, { text: string; tone: "good" | "warn" | "info" }> = {
   far: { text: "Keys a little apart: keep the overlap short", tone: "warn" },
   clash: { text: "Keys clash: cut the melody or vocals while both play", tone: "warn" },
 };
+
+/** The master as the room hears it: in range, pushed into the limiter, or clipping. */
+function masterOf(level: number, limitingDb: number, playing: boolean): { tone: "good" | "warn" | "info"; text: string } {
+  if (!playing) return { tone: "info", text: "Master: silent." };
+  const peak = level > 0 ? 20 * Math.log10(level) : -Infinity;
+  if (peak >= -0.1) return { tone: "warn", text: "Master clipping: turn the master or the deck faders down." };
+  if (limitingDb >= 3) return { tone: "warn", text: `Too loud: the limiter is pulling the mix down ${limitingDb.toFixed(1)} dB. Lower the faders (or the bass of one deck).` };
+  return { tone: "good", text: `Master level fine: peaks at ${Number.isFinite(peak) ? peak.toFixed(1) : "−∞"} dB${limitingDb >= 0.5 ? `, limiter ${limitingDb.toFixed(1)} dB` : ""}.` };
+}
 
 function Pill({ tone, children }: { tone: "good" | "warn" | "info"; children: ReactNode }) {
   const cls = tone === "good" ? "border-success/50 bg-success/10" : tone === "warn" ? "border-drums/60 bg-drums/10" : "border-border bg-surface-raised";
@@ -269,12 +280,101 @@ function EasyDeck({
 type MixView = { from: DeckId; to: DeckId; phase: AutoMix["phase"]; progress: number; beatsToGo: number };
 const viewOf = (m: AutoMix): MixView => ({ from: m.from, to: m.to, phase: m.phase, progress: m.progress, beatsToGo: m.beatsToGo });
 
-/** Auto-mix: the button, then each step lit as it happens. */
-function AutoMixPanel({ engine, snap }: { engine: DjEngine; snap: DjSnapshot }) {
+/** Beats left in the playing song when the Auto DJ starts the next transition: a phrase to wait for, the blend, and a little room. */
+const AUTO_DJ_LEAD_BEATS = PHRASE_BEATS + BLEND_BEATS + 16;
+
+/** Auto-mix: the button, then each step lit as it happens. With the Auto DJ on, it keeps going: the next song from the library, mixed in before this one ends. */
+function AutoMixPanel({ engine, snap, load }: { engine: DjEngine; snap: DjSnapshot; load: (deck: DeckId, id: string) => Promise<boolean> }) {
   const mix = useRef<AutoMix | null>(null);
   const [m, setM] = useState<MixView | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const running = !!m && m.phase !== "done" && m.phase !== "stopped";
+  const [autoDj, setAutoDj] = useState(false);
+  const [djNote, setDjNote] = useState<string | null>(null);
+  const entries = useRef<BrowserEntry[] | null>(null);
+  const played = useRef(new Set<string>());
+  const loadingNext = useRef(false);
+
+  const { A, B } = snap.decks;
+  // Out of the deck the room hears most; the other comes in.
+  const from: DeckId = A.playing && B.playing ? (onAirGain(A, "A", snap.mix) >= onAirGain(B, "B", snap.mix) ? "A" : "B") : B.playing ? "B" : "A";
+  const blocker = AutoMix.blocker(snap, from);
+  const current = m ? AUTO_MIX_STEPS.findIndex((s) => s.phase === m.phase) : -1;
+
+  const go = (out: DeckId = from) => {
+    setNote(null);
+    const next = new AutoMix(engine, out);
+    mix.current = next;
+    if (!next.start()) setNote(next.reason);
+    setM(viewOf(next));
+  };
+  const cancel = () => {
+    const auto = mix.current;
+    if (!auto) return;
+    auto.cancel();
+    setM(viewOf(auto));
+  };
+
+  const startDj = async () => {
+    setAutoDj(true);
+    setDjNote("Reading your library…");
+    // Your library when it has songs to mix; the demo songs otherwise.
+    const lib = await libraryEntries().then((r) => r.entries).catch(() => [] as BrowserEntry[]);
+    entries.current = lib.length >= 2 ? lib : DEMO_ENTRIES;
+    setDjNote(lib.length >= 2 ? `Picking from your library (${lib.length} songs) by tempo and key.` : "Your library has fewer than two songs: picking from the demo songs.");
+  };
+
+  // The Auto DJ: plays what's loaded, loads the next song on the free deck, and starts the transition before the playing song ends.
+  useInterval(
+    () => {
+      const list = entries.current;
+      if (!list || running || loadingNext.current) return;
+      const s = engine.snapshot();
+      const { A, B } = s.decks;
+      const onAir: DeckId | null = A.playing && B.playing ? (onAirGain(A, "A", s.mix) >= onAirGain(B, "B", s.mix) ? "A" : "B") : A.playing ? "A" : B.playing ? "B" : null;
+      if (!onAir) {
+        const ready: DeckId | null = A.track ? "A" : B.track ? "B" : null;
+        if (ready) {
+          engine.setCrossfader(ready === "A" ? -1 : 1);
+          engine.setVolume(ready, 0.8);
+          engine.play(ready);
+          return;
+        }
+        const first = pickNext(list, null, played.current);
+        if (!first) return;
+        loadingNext.current = true;
+        void load("A", first.id).finally(() => (loadingNext.current = false));
+        return;
+      }
+      const now = s.decks[onAir];
+      if (!now.track) return;
+      played.current.add(now.track.id);
+      const next = onAir === "A" ? "B" : "A";
+      const waiting = s.decks[next];
+      // The free deck holds nothing new: the next song goes on it.
+      if (!waiting.track || played.current.has(waiting.track.id)) {
+        if (waiting.playing) return;
+        const pick = pickNext(list, { id: now.track.id, bpm: now.track.bpm, key: now.track.key }, played.current);
+        if (!pick) {
+          setDjNote("Every song has been played: the Auto DJ stops after this one.");
+          setAutoDj(false);
+          return;
+        }
+        loadingNext.current = true;
+        setDjNote(`Next: ${pick.title}${pick.artist ? ` · ${pick.artist}` : ""}`);
+        void load(next, pick.id).then((ok) => {
+          loadingNext.current = false;
+          if (!ok) played.current.add(pick.id);
+        });
+        return;
+      }
+      // Near the end of the playing song: mix the next one in.
+      const beatSec = 60 / (now.track.bpm * (now.rate || 1));
+      const left = (now.track.duration - now.position) / (now.rate || 1);
+      if (left <= AUTO_DJ_LEAD_BEATS * beatSec && !AutoMix.blocker(s, onAir)) go(onAir);
+    },
+    autoDj ? 250 : null
+  );
 
   useInterval(
     () => {
@@ -288,26 +388,6 @@ function AutoMixPanel({ engine, snap }: { engine: DjEngine; snap: DjSnapshot }) 
   );
   useEffect(() => () => mix.current?.cancel(), []);
 
-  const { A, B } = snap.decks;
-  // Out of the deck the room hears most; the other comes in.
-  const from: DeckId = A.playing && B.playing ? (onAirGain(A, "A", snap.mix) >= onAirGain(B, "B", snap.mix) ? "A" : "B") : B.playing ? "B" : "A";
-  const blocker = AutoMix.blocker(snap, from);
-  const current = m ? AUTO_MIX_STEPS.findIndex((s) => s.phase === m.phase) : -1;
-
-  const go = () => {
-    setNote(null);
-    const next = new AutoMix(engine, from);
-    mix.current = next;
-    if (!next.start()) setNote(next.reason);
-    setM(viewOf(next));
-  };
-  const cancel = () => {
-    const auto = mix.current;
-    if (!auto) return;
-    auto.cancel();
-    setM(viewOf(auto));
-  };
-
   return (
     <section aria-label="Auto-mix" className="flex flex-col gap-2 rounded-2xl border border-brand/40 bg-gradient-to-br from-brand/15 via-surface to-surface p-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -318,7 +398,7 @@ function AutoMixPanel({ engine, snap }: { engine: DjEngine; snap: DjSnapshot }) 
         ) : (
           <button
             type="button"
-            onClick={go}
+            onClick={() => go()}
             disabled={!!blocker}
             className="flex min-h-11 items-center gap-1.5 rounded-xl bg-brand px-4 text-sm font-bold text-white hover:bg-brand-strong disabled:opacity-50"
           >
@@ -331,11 +411,25 @@ function AutoMixPanel({ engine, snap }: { engine: DjEngine; snap: DjSnapshot }) 
               ? `Deck ${m!.to} starts in ${m!.beatsToGo} beat${m!.beatsToGo === 1 ? "" : "s"}, on the next phrase line. Watch the lights.`
               : "Watch the crossfader, the faders and the bass move: that's a DJ transition."
             : m?.phase === "done"
-              ? `Done: deck ${m.to} is on air. Load a new song on deck ${m.from} and go again, or do it by hand this time.`
+              ? autoDj
+                ? `Done: deck ${m.to} is on air. The Auto DJ puts the next song on deck ${m.from} and mixes it in before this one ends.`
+                : `Done: deck ${m.to} is on air. Load a new song on deck ${m.from} and go again, or do it by hand this time.`
               : (blocker ?? "One tap and it blends the songs like a DJ, showing every step. Then try it yourself.")}
         </p>
       </div>
       {note && <p className="text-xs text-drums">{note}</p>}
+      <div className="flex flex-wrap items-center gap-2 border-t border-border/60 pt-2">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={autoDj}
+          onClick={() => (autoDj ? (setAutoDj(false), setDjNote(null)) : void startDj())}
+          className={`flex min-h-10 items-center gap-1.5 rounded-xl border px-3 text-sm font-semibold ${autoDj ? "border-brand bg-brand/20" : "border-border hover:bg-surface-hover"}`}
+        >
+          <Disc3 className={autoDj ? "animate-spin [animation-duration:3s]" : ""} /> Auto DJ {autoDj ? "on" : "off"}
+        </button>
+        <p className="min-w-0 flex-1 basis-48 text-xs text-muted">{djNote ?? "Keeps the music going: picks the next song from your library by tempo and key, and mixes it in before this one ends."}</p>
+      </div>
       {(running || m?.phase === "done") && (
         <>
           <div className="h-1.5 overflow-hidden rounded-full bg-black/40">
@@ -429,13 +523,16 @@ export default function EasyDecks({ engine }: { engine: DjEngine }) {
   // Live readings (positions, sections, the beat status) ten times a second; the controls follow the engine's own updates.
   const [snap, setSnap] = useState<DjSnapshot>(() => engine.snapshot());
   const [derived, setDerived] = useState<Derived | null>(null);
+  const [out, setOut] = useState({ level: 0, limiting: 0 });
   useInterval(() => {
     const s = engine.snapshot();
     setSnap(s);
     setDerived(derive(s));
+    setOut({ level: engine.levels().master, limiting: engine.limiting() });
   }, 100);
   const live: DjSnapshot = { ...snap, decks: { A: { ...ui.decks.A, position: snap.decks.A.position }, B: { ...ui.decks.B, position: snap.decks.B.position } }, mix: { ...ui.mix } };
   const status = statusOf(derived, live);
+  const master = masterOf(out.level, out.limiting, live.decks.A.playing || live.decks.B.playing);
   const fit = derived?.keyFit ? FIT[derived.keyFit] : null;
   const otherOf = (id: DeckId): OtherDeck => {
     const o = ui.decks[id === "A" ? "B" : "A"];
@@ -453,12 +550,13 @@ export default function EasyDecks({ engine }: { engine: DjEngine }) {
         <DeckWave engine={engine} id="B" track={engine.deckTrack("B")} height={60} span={8} mode="stems" accent={ACCENT.B} />
       </section>
 
-      <div className="grid gap-2 md:grid-cols-2">
+      <div className="grid gap-2 md:grid-cols-3">
         <Pill tone={status.tone}>{status.text}</Pill>
         {fit ? <Pill tone={fit.tone}>{fit.text} ({derived?.key?.camelotA} · {derived?.key?.camelotB})</Pill> : <Pill tone="info">Keys show up once both decks hold a song.</Pill>}
+        <Pill tone={master.tone}>{master.text}</Pill>
       </div>
 
-      <AutoMixPanel engine={engine} snap={live} />
+      <AutoMixPanel engine={engine} snap={live} load={pick} />
 
       {/* Phones: deck A, the mixer, deck B, top to bottom. */}
       <div className="grid min-w-0 gap-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,1fr)]">
