@@ -161,6 +161,18 @@ export function resolveKey(key: string): string | null {
   return full;
 }
 
+/**
+ * Puts bytes into R2 under `key`. Signed first, then sent with the bytes
+ * themselves rather than the signed Request: a Request's body is a
+ * stream, which the server's fetch (Next's) sends in chunks with no
+ * length — and R2 refuses a PUT without one (411 Length Required).
+ */
+async function r2Put(key: string, bytes: Uint8Array<ArrayBuffer>, contentType: string): Promise<Response> {
+  const signed = await r2!.client.sign(objectUrl(key), { method: "PUT", body: bytes, headers: { "Content-Type": contentType } });
+  // Bytes in hand: fetch sends their length itself.
+  return fetch(signed.url, { method: "PUT", headers: signed.headers, body: bytes, cache: "no-store" });
+}
+
 function objectUrl(key: string) {
   return `${r2!.endpoint}/${r2!.bucket}/${key.split("/").map(encodeURIComponent).join("/")}`;
 }
@@ -377,11 +389,7 @@ export async function ensureStored(key: string): Promise<boolean> {
       if (!there || there.status !== 404) return true;
       const old = await legacyBlobBytes(key);
       if (!old) return false;
-      const put = await r2.client.fetch(objectUrl(key), {
-        method: "PUT",
-        body: new Uint8Array(old.bytes),
-        headers: { "Content-Type": old.contentType },
-      });
+      const put = await r2Put(key, new Uint8Array(old.bytes), old.contentType);
       return put.ok;
     })()
       .catch(() => false)
@@ -537,11 +545,7 @@ export async function putObject(key: string, body: Buffer): Promise<void> {
     return;
   }
   if (r2) {
-    const res = await r2.client.fetch(objectUrl(key), {
-      method: "PUT",
-      body: new Uint8Array(body),
-      headers: { "Content-Type": contentType },
-    });
+    const res = await r2Put(key, new Uint8Array(body), contentType);
     if (!res.ok) throw new Error(`storage PUT failed (HTTP ${res.status})`);
     return;
   }

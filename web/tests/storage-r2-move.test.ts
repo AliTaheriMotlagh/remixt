@@ -89,6 +89,11 @@ const server = createServer(async (req, res) => {
     const key = url.pathname.slice("/bkt/".length).split("/").map(decodeURIComponent).join("/");
     calls.push(`r2 ${req.method} ${key}`);
     if (req.method === "PUT") {
+      // Like R2: no length, no upload.
+      if (req.headers["content-length"] === undefined) {
+        res.writeHead(411);
+        return res.end();
+      }
       r2Files.set(key, body);
       res.writeHead(200);
       return res.end();
