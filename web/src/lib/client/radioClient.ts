@@ -5,6 +5,7 @@ import { lineAt, type LyricLine } from "@/lib/lyrics";
 import type { RadioFeed } from "@/lib/radio";
 import type { RadioItem, RadioKind } from "@/lib/radioPick";
 import { visitorId } from "./presence";
+import { pollEvery } from "@/lib/radioPace";
 import { mixEnvelope } from "./lyricsSources";
 import { playPayload, RadioDeck } from "./radioDeck";
 import { laneFromApi } from "./remixLanes";
@@ -17,7 +18,8 @@ import { delayed, frequencyBars, loudnessWindow, type Curve } from "@/lib/visual
 
 export type { RadioFeed } from "@/lib/radio";
 
-const POLL_MS = 3000;
+/** "Still listening" goes with a poll at least this often (the server counts a listener for 40 s). */
+const HEARTBEAT_MS = 20_000;
 
 export type TuneState = "off" | "loading" | "on" | "error";
 
@@ -125,7 +127,7 @@ export function useRadio(slug: string, { heartbeat = true, warm = true }: { hear
   /** Recent clock readings: the one with the quickest round trip is the truest (as NTP does). */
   const clockSamples = useRef<{ offset: number; rtt: number }[]>([]);
   const sid = useRef("");
-  const polls = useRef(0);
+  const lastBeat = useRef(0);
   const feedRef = useRef<RadioFeed | null>(null);
   const deck = useRef<RadioDeck | null>(null);
 
@@ -179,7 +181,8 @@ export function useRadio(slug: string, { heartbeat = true, warm = true }: { hear
 
   const poll = useCallback(async () => {
     if (!sid.current) sid.current = visitorId();
-    const hb = heartbeat && polls.current++ % 3 === 0;
+    const hb = heartbeat && Date.now() - lastBeat.current >= HEARTBEAT_MS;
+    if (hb) lastBeat.current = Date.now();
     const sent = Date.now();
     try {
       const data = await fetch(`/api/radio/${encodeURIComponent(slug)}?sid=${encodeURIComponent(sid.current)}${hb ? "&hb=1" : ""}`, { cache: "no-store" }).then((r) => json<RadioFeed>(r));
@@ -198,11 +201,36 @@ export function useRadio(slug: string, { heartbeat = true, warm = true }: { hear
     }
   }, [slug, heartbeat]);
 
-  // Polls, and once more the moment the next song is due (so the decks know of it).
+  // Polls at the pace pollEvery sets — at once when the page comes back on
+  // screen — and once more the moment the next song is due (so the decks know of it).
+  const playing = useRef(false);
   useEffect(() => {
+    playing.current = tune === "on" || tune === "loading";
+  }, [tune]);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+    const next = () => {
+      clearTimeout(timer);
+      if (stopped) return;
+      timer = setTimeout(async () => {
+        await poll();
+        next();
+      }, pollEvery({ hidden: document.hidden, playing: playing.current }));
+    };
+    const onVisible = () => {
+      if (document.hidden) return;
+      void poll();
+      next();
+    };
     void poll();
-    const timer = setInterval(() => void poll(), POLL_MS);
-    return () => clearInterval(timer);
+    next();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [poll]);
   const endsAt = feed?.now?.endsAt ?? null;
   const upcomingAt = feed?.upcoming?.startsAt ?? null;

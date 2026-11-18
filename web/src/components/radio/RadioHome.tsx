@@ -67,10 +67,14 @@ export default function RadioHome({ signedIn }: { signedIn: boolean }) {
         .then((d) => alive && setStations(d.stations ?? []))
         .catch(() => alive && setStations([]));
     void load();
-    const timer = setInterval(load, 15_000);
+    // Fresh while it's looked at; a hidden tab doesn't keep asking (and catches up when shown).
+    const timer = setInterval(() => !document.hidden && load(), 15_000);
+    const onVisible = () => !document.hidden && load();
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       alive = false;
       clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
   const [house, ...rest] = stations ?? [];
