@@ -702,6 +702,26 @@ export async function listStoredFiles(max = 20000): Promise<StoredFile[]> {
   return out;
 }
 
+let keysSeen: { at: number; keys: Promise<Set<string>> } | null = null;
+const KEYS_FRESH_MS = 2 * 60 * 1000;
+
+/**
+ * Every key in an R2 bucket, listed at most every two minutes (per server
+ * instance): what the radio checks a song against before putting it on
+ * air, so it never plays one whose files aren't there (an old song not
+ * moved from Blob yet). Null with any other storage, where every file a
+ * row names is taken to be there.
+ */
+export function storedKeys(): Promise<Set<string>> | null {
+  if (!r2) return null;
+  if (!keysSeen || Date.now() - keysSeen.at > KEYS_FRESH_MS) {
+    const keys = listStoredFiles().then((files) => new Set(files.map((f) => f.key)));
+    keysSeen = { at: Date.now(), keys };
+    keys.catch(() => (keysSeen = null));
+  }
+  return keysSeen.keys;
+}
+
 /** Deletes many stored files by key: a Blob store takes them a batch per call. */
 export async function deleteObjects(keys: string[]): Promise<void> {
   if (blobToken) {

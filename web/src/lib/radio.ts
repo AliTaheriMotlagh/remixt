@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import type { TransactionSql } from "postgres";
 import sql from "./db";
+import { playable } from "./radioPlayable";
 import { ensureSchema } from "./schema";
 import { coverUrl } from "./cover";
 import { isAdmin } from "./admin";
@@ -312,7 +313,7 @@ async function songItems({ ids, search, limit = 200 }: { ids?: string[]; search?
     ORDER BY tracks.created_at DESC
     LIMIT ${limit}
   `;
-  return rows.map((r) => ({ kind: "track", id: r.id, title: r.title, artist: r.artist, duration: Number(r.duration), cover: `/api/stems/${r.stem_id}/cover`, bpm: r.bpm ? Number(r.bpm) : null }));
+  return playable(rows.map((r) => ({ kind: "track", id: r.id, title: r.title, artist: r.artist, duration: Number(r.duration), cover: `/api/stems/${r.stem_id}/cover`, bpm: r.bpm ? Number(r.bpm) : null })));
 }
 
 /** Published remixes, newest first, with their lengths. */
@@ -341,12 +342,14 @@ async function remixItems({ ids, search, limit = 200 }: { ids?: string[]; search
     list.push(l);
     byRemix.set(l.remix_id, list);
   }
-  return rows
-    .map((r) => {
-      const bpm = Number(parse<{ projectBpm?: number }>(r.project_json, {}).projectBpm);
-      return { kind: "remix" as const, id: r.id, title: r.title, artist: r.artist, cover: coverUrl(r.id, r.cover_key), duration: remixLength(byRemix.get(r.id) ?? []), bpm: bpm > 0 ? bpm : null };
-    })
-    .filter((r) => r.duration >= MIN_SECONDS);
+  return playable(
+    rows
+      .map((r) => {
+        const bpm = Number(parse<{ projectBpm?: number }>(r.project_json, {}).projectBpm);
+        return { kind: "remix" as const, id: r.id, title: r.title, artist: r.artist, cover: coverUrl(r.id, r.cover_key), duration: remixLength(byRemix.get(r.id) ?? []), bpm: bpm > 0 ? bpm : null };
+      })
+      .filter((r) => r.duration >= MIN_SECONDS)
+  );
 }
 
 /** Songs and remixes matching `search`, for requests and the console's playlist. */
@@ -555,13 +558,17 @@ async function pickInput(tx: Tx, station: RadioStation, current: string | null, 
   ]);
   const allowed = (i: RadioItem) => (i.kind === "track" ? station.settings.songs : station.settings.remixes);
   const count = new Map(votes.map((v) => [`${v.kind}:${v.item_id}`, v.n]));
+  // Saved before their files went missing: only what can play now.
+  const canPlay = new Set((await playable([...requests.map(itemOf), ...playlist.map(itemOf)], tx)).map(itemKey));
   return {
     djQueue: dj.map(itemOf),
     djRows: dj,
     voting: station.settings.voting,
     votes: station.choices.map((item) => ({ item, votes: count.get(itemKey(item)) ?? 0 })),
-    requests: requests.map((r): RequestedItem => ({ ...itemOf(r), count: r.count, firstAt: r.first_at.getTime() })).filter(allowed),
-    playlist: playlist.map(itemOf).filter(allowed),
+    requests: requests
+      .map((r): RequestedItem => ({ ...itemOf(r), count: r.count, firstAt: r.first_at.getTime() }))
+      .filter((i) => allowed(i) && canPlay.has(itemKey(i))),
+    playlist: playlist.map(itemOf).filter((i) => allowed(i) && canPlay.has(itemKey(i))),
     library: library.filter(allowed),
     recent: recentRows.map((r) => `${r.kind}:${r.item_id}`),
     current,
