@@ -2,7 +2,9 @@
 
 // A song's cover at upload: the picture inside the file (its tags — see
 // lib/audioCover.ts), else the picture of the page a link's song came
-// from, shrunk to a 600 px square JPEG and sent for the new track (or, for
+// from, else the song's cover found online by its artist and name (the
+// file's name, with download sites' names dropped — lib/coverSearch.ts),
+// shrunk to a 600 px square JPEG and sent for the new track (or, for
 // a song queued from a phone, for its split job — the track gets it when a
 // helper has split it). Never in the way: no cover, no fuss.
 
@@ -20,15 +22,30 @@ export async function coverFor(file: File): Promise<Blob | null> {
     const picture = await readCover(file);
     if (picture) return await squareCover(new File([picture.data as Uint8Array<ArrayBuffer>], "cover", { type: picture.mime }), SIZE);
     const fromPage = linkCovers.get(file);
-    if (!fromPage) return null;
-    const res = await fetch(`/api/import/${fromPage}`);
-    if (!res.ok) return null;
-    const blob = await res.blob();
-    void fetch(`/api/import/${fromPage}`, { method: "DELETE" }).catch(() => {});
-    return await squareCover(new File([blob], fromPage, { type: blob.type || "image/jpeg" }), SIZE);
+    if (fromPage) {
+      const res = await fetch(`/api/import/${fromPage}`);
+      if (res.ok) {
+        const blob = await res.blob();
+        void fetch(`/api/import/${fromPage}`, { method: "DELETE" }).catch(() => {});
+        return await squareCover(new File([blob], fromPage, { type: blob.type || "image/jpeg" }), SIZE);
+      }
+    }
+    return await coverOnline(file.name);
   } catch {
     return null;
   }
+}
+
+/** The song's cover found online by its name (see api/covers/search), or null. */
+async function coverOnline(name: string): Promise<Blob | null> {
+  const found = await fetch(`/api/covers/search?${new URLSearchParams({ title: name })}`);
+  if (found.status !== 200) return null;
+  const { url } = (await found.json()) as { url?: string };
+  if (!url) return null;
+  const picture = await fetch(url);
+  if (!picture.ok) return null;
+  const blob = await picture.blob();
+  return await squareCover(new File([blob], "cover.jpg", { type: blob.type || "image/jpeg" }), SIZE);
 }
 
 async function send(url: string, cover: Blob | null) {

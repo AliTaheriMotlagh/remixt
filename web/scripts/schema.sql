@@ -211,6 +211,8 @@ CREATE INDEX IF NOT EXISTS idx_presence_last_seen ON presence(last_seen);
 ALTER TABLE remixes ADD COLUMN IF NOT EXISTS cover_key TEXT;
 -- A song's cover picture: from the file's own tags, or the music site it came from (lib/client/audioCover.ts).
 ALTER TABLE tracks ADD COLUMN IF NOT EXISTS cover_key TEXT;
+-- When a cover was last looked for online and none was found (app/api/stems/[id]/cover): not asked again for a month.
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS cover_searched_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by TEXT REFERENCES users(id) ON DELETE SET NULL;
 
 -- Live sessions: an artist performs a published remix and listeners (guests

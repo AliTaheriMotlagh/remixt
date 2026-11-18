@@ -85,6 +85,19 @@ Today only remixes have covers (`remixes.cover_key`, uploaded by the owner, `lib
 
 ---
 
+## Session 2026-11-18 (2) — owner's list
+
+- [x] Lyrics right to left: `lineDirection` (rtlText.ts, tested) goes by the line's main script, so "Yeah, من…" is still a Persian line. The lyric list's progress bar, the stage wipe (VocalStage), clip karaoke (socialClip) and the line text all follow it; English stays left to right.
+- [x] AI panel kept its state: closing (X / Esc) no longer keeps the idea — it stays on, so reopening shows the same ideas on, the new-song map and its Undo (which used to re-listen from scratch). The panel's choices and what it heard survive leaving the Studio (`remembered` + `heard` in AiProducer). The AI button has a dot while an idea is on with the panel closed. Not yet clicked through in a browser with real lanes.
+- [x] Song artwork online: `coverSearch.ts` (tested) + `coverLookup.ts` + `/api/covers/search` — Apple's catalogue (iTunes Search API, free, no key, pictures CORS-open) by artist and name; Persian names asked in Finglish and matched by sound; karaoke/tribute/live versions and artist-only matches refused. Third fallback at upload (`songCovers.ts`). Library songs with no cover get one the first time they're shown (`/api/stems/[id]/cover`; `tracks.cover_searched_at` so a miss isn't asked again for 30 days; 15 asks a minute). Checked live: Bazam Kalan, Blinding Lights, Amire Bi Gazand (Latin and Persian file names). Not checked: the lazy fill on a real library.
+- [x] Download-site names dropped from titles (`splitSongTitle`, tested): Ganja2Music, RadioJavan, Nex1Music, UpMusic… without their .com, track numbers ("01 "), "Artist-Song-320" joined by dashes, a site's name in front. Helps lyrics and covers.
+- [x] Lyrics follow the vocal: `mixSongsOf` puts songs whose vocal is in the mix first; `sungSongs` (tested) — with a vocal in the mix, only sung songs get lyrics looked up or kept open (no more the beat's song's lyrics).
+- [x] Lyrics on phones: the line editor sits under the whole row (it was squeezed in the words column, nudges overflowed), nudges stretch across, Split/Join/Repeat/Line after in a grid, the line's text box follows its direction; Edit tab section chips in one swipeable row. Screenshots checked at 390 px.
+- [ ] **Genius**: finds nothing without `GENIUS_ACCESS_TOKEN` (not set in `.env.local`). Free token from genius.com/api-clients ("Client Access Token"); then Genius results show in the lyrics picker. Scraping Genius's own search without a token is blocked by Cloudflare and not done.
+- Known: a mixed line in the Edit box (one textarea) can't be laid out per line — "Yeah, من…" shows left to right there; everywhere else it's right.
+
+---
+
 ## Session 2026-11-18 — where it stopped (read first)
 
 Committed on branch `plan-phases-1-5` (not merged to main). Next: phase 5 leftovers below, then phases 6–8. Unit tests: 726 passed before phase 5; new-song tests 12/12 since. tsc + lint clean on touched files at last check.

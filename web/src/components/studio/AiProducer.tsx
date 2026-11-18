@@ -106,7 +106,7 @@ import { useKeepScreenOn } from "@/lib/client/wakeLock";
 import DropMap from "./ai/DropMap";
 import EngineerCard from "./ai/EngineerCard";
 import MashupMap from "./ai/MashupMap";
-import NewSongMap from "./ai/NewSongMap";
+import NewSongMap, { forgetNewSongUndo } from "./ai/NewSongMap";
 import type { NsTweaks } from "@/lib/client/newSong";
 import { mashableSongs } from "@/lib/client/mashup";
 import { Engines, FineTune, MasterIt } from "./ai/extras";
@@ -340,6 +340,21 @@ function keepHeard(session: Session, ideas: Idea[]) {
 type Sheet = "mini" | "half" | "full";
 const SHEETS: Sheet[] = ["mini", "half", "full"];
 
+/**
+ * The panel's own choices, kept outside it: the Studio page is left and
+ * come back to (the Library, a phone's tab switch) and the panel mounts
+ * afresh — what it had heard, the tab it was on and a new song's changes
+ * come back with it, rather than starting over while an idea is still on.
+ */
+const remembered: {
+  vocalId: string;
+  beatId: string;
+  tab: AiTab;
+  sheet: Sheet;
+  keptVibes: Vibe[];
+  newSongTweaks: NsTweaks;
+} = { vocalId: "", beatId: "", tab: "sync", sheet: "half", keptVibes: [], newSongTweaks: {} };
+
 export default function AiProducer() {
   const open = useStudioView((s) => s.aiOpen);
   const setOpen = useStudioView((s) => s.setAiOpen);
@@ -351,10 +366,10 @@ export default function AiProducer() {
   const trial = useAiTrial((s) => s.trial);
   const keptCount = useAiLog((s) => s.kept.length);
   const scope = useAiScope((s) => s.scope);
-  const [vocalId, setVocalId] = useState("");
-  const [beatId, setBeatId] = useState("");
-  const [session, setSession] = useState<Session | null>(null);
-  const [ideas, setIdeas] = useState<Idea[]>([]);
+  const [vocalId, setVocalId] = useState(() => remembered.vocalId);
+  const [beatId, setBeatId] = useState(() => remembered.beatId);
+  const [session, setSession] = useState<Session | null>(() => heard.session);
+  const [ideas, setIdeas] = useState<Idea[]>(() => heard.ideas);
   const [step, setStep] = useState<Step | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** "What happened" is showing in place of the ideas. */
@@ -362,7 +377,7 @@ export default function AiProducer() {
   /** The idea row opened to say why and what it changes. */
   const [expanded, setExpanded] = useState<string | null>(null);
   /** The vibes of what was last kept, for the mastering pick. */
-  const [keptVibes, setKeptVibes] = useState<Vibe[]>([]);
+  const [keptVibes, setKeptVibes] = useState<Vibe[]>(() => remembered.keptVibes);
   /** Keep tracks whole: the AI never cuts them into clips. Read after mount (it's remembered per browser). */
   const [keepWhole, setKeepWhole] = useState(false);
   /** Styles and sounds engineered from measurement (see IdeaOptions.proMix). Read after mount. */
@@ -373,7 +388,7 @@ export default function AiProducer() {
   const [timing, setTiming] = useState<Timing>(DEFAULT_TIMING);
   /** What the ideas are worked out with right now — read by a listen that started before a switch. */
   /** The person's changes to a new song from everything (its map's tools, see newSong.ts). */
-  const [newSongTweaks, setNewSongTweaks] = useState<NsTweaks>({});
+  const [newSongTweaks, setNewSongTweaks] = useState<NsTweaks>(() => remembered.newSongTweaks);
   const options = useRef<Omit<Session["options"], "vibe">>({ keepWhole, proMix, sync: syncId, ...timing, newSong: newSongTweaks });
   useEffect(() => {
     options.current = { keepWhole, proMix, sync: syncId, ...timing, newSong: newSongTweaks };
@@ -423,7 +438,7 @@ export default function AiProducer() {
       localStorage.setItem(PERSONA_KEY, id);
     } catch {}
   }
-  const [tab, setTab] = useState<AiTab>("sync");
+  const [tab, setTab] = useState<AiTab>(() => remembered.tab);
   // Asked for a tab from elsewhere (a lane's "Ask AI", the Easy studio's "Make them fit"): show it.
   const askedTab = useStudioView((s) => s.aiTab);
   useEffect(() => {
@@ -435,7 +450,10 @@ export default function AiProducer() {
   }, [askedTab]);
   const question = useStudioView((s) => s.aiQuestion);
   /** Below desktop width it's a sheet: mini (just the controls), half (the mix stays in view) or full. */
-  const [sheet, setSheet] = useState<Sheet>("half");
+  const [sheet, setSheet] = useState<Sheet>(() => remembered.sheet);
+  useEffect(() => {
+    Object.assign(remembered, { vocalId, beatId, tab, sheet, keptVibes, newSongTweaks });
+  }, [vocalId, beatId, tab, sheet, keptVibes, newSongTweaks]);
   // The Studio's "+ Add stems" button stays above the sheet, except when it's pulled up full.
   useEffect(() => useStudioView.getState().setAiSheet(sheet), [sheet]);
   const sheetRef = useRef<HTMLElement>(null);
@@ -577,6 +595,7 @@ export default function AiProducer() {
     setBeatId("");
     // A new mix: the last new song's changes don't carry over.
     setNewSongTweaks({});
+    forgetNewSongUndo();
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [emptyMix, unrelated]);
 
@@ -991,8 +1010,13 @@ export default function AiProducer() {
   }
 
   function close() {
-    // Like closing a preset browser: what's playing stays.
-    if (useAiTrial.getState().trial) keep();
+    // What's playing stays, and stays an idea being tried: opening the
+    // panel again shows the same ideas switched on (a new song's map and
+    // its Undo too) — keeping it here made the mix "changed", so the panel
+    // listened again from the start and everything looked switched off.
+    // The AI button carries a dot while an idea is on.
+    const trial = useAiTrial.getState().trial;
+    if (trial?.showing === "original") inPlace(() => compare("idea"));
     setOpen(false);
   }
 
@@ -1272,7 +1296,7 @@ export default function AiProducer() {
           >
             {sheet === "mini" ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
           </button>
-          <button onClick={close} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-surface hover:text-foreground" aria-label="Close (keeps what's playing)">
+          <button onClick={close} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-surface hover:text-foreground" aria-label="Close (what's playing stays on)">
             <X className="h-5 w-5" />
           </button>
         </header>

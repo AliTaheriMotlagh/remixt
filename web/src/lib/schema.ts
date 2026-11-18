@@ -17,6 +17,8 @@ export function ensureSchema(): Promise<void> {
     await sql`ALTER TABLE tracks ADD COLUMN IF NOT EXISTS example_credit TEXT`;
     // A song's cover picture (see app/api/tracks/[id]/cover).
     await sql`ALTER TABLE tracks ADD COLUMN IF NOT EXISTS cover_key TEXT`;
+    // When a cover was last looked for online and none was found (app/api/stems/[id]/cover).
+    await sql`ALTER TABLE tracks ADD COLUMN IF NOT EXISTS cover_searched_at TIMESTAMPTZ`;
     // What one browser worked out from a stem, for every other browser (see lib/stemResults.ts).
     await sql`
       CREATE TABLE IF NOT EXISTS stem_results (

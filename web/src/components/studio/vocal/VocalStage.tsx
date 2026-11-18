@@ -1,5 +1,6 @@
 "use client";
 
+import { lineDirection } from "@/lib/rtlText";
 import { useMemo, useState } from "react";
 import { ChevronsLeft, ChevronsRight, Clapperboard, Maximize2, Repeat, Repeat2, ScrollText } from "lucide-react";
 import { audioEngine } from "@/lib/client/audioEngine";
@@ -34,7 +35,6 @@ import { BigPrompter, GetTimes, LineTimingEditor, LoopLineButton, PlayButton, Ri
 // the take drawn in as it's sung; the song's parts to jump to or loop; and
 // the line being fixed, with its timing controls.
 
-const RTL = /[֐-ࣿיִ-﷿ﹰ-﻿]/;
 
 /** Roughly how long a line takes to sing — it fills in over that, not over the pause after it. */
 function sungLength(text: string, style: "rap" | "sing") {
@@ -62,15 +62,17 @@ function WipeLine({ text, start, end, size, onClick }: { text: string; start: nu
   // Rounded, so it re-renders a couple of hundred times a line rather than every frame.
   const fraction = useStudioStore((s) => Math.round(Math.min(1, Math.max(0, (s.playhead - start) / Math.max(0.1, end - start))) * 200) / 200);
   const pct = fraction * 100;
+  // Persian fills from the right, English from the left — by the line's main script, not its first letter.
+  const dir = lineDirection(text);
   return (
     <button onClick={onClick} className="block w-full text-center" title="Fix this line's timing">
       <span
-        dir="auto"
+        dir={dir}
         className="inline font-bold leading-tight [-webkit-background-clip:text] [background-clip:text]"
         style={{
           fontSize: size,
           color: "transparent",
-          backgroundImage: `linear-gradient(${RTL.test(text) ? "270deg" : "90deg"}, var(--vocals) ${pct}%, var(--foreground) ${pct}%)`,
+          backgroundImage: `linear-gradient(${dir === "rtl" ? "270deg" : "90deg"}, var(--vocals) ${pct}%, var(--foreground) ${pct}%)`,
         }}
       >
         {text}
@@ -115,7 +117,7 @@ function Karaoke({ lines }: { lines: LyricLine[] }) {
   return (
     <div className="flex min-h-56 flex-col items-center justify-center gap-2 px-2 py-4 text-center sm:min-h-64" aria-live="polite">
       <p className="h-4 text-[11px] font-bold uppercase tracking-[0.2em] text-vocals/90">{section ?? ""}</p>
-      <p dir="auto" className="min-h-6 max-w-3xl truncate text-base text-muted/50 sm:text-lg">
+      <p dir={lineDirection(before ? lines[before.index].text : "")} className="min-h-6 max-w-3xl truncate text-base text-muted/50 sm:text-lg">
         {before ? lines[before.index].text : ""}
       </p>
       {sung && line?.time != null ? (
@@ -131,7 +133,7 @@ function Karaoke({ lines }: { lines: LyricLine[] }) {
           <button
             key={n.index}
             onClick={() => selectLine(n.index, "stage")}
-            dir="auto"
+            dir={lineDirection(lines[n.index].text)}
             className={`max-w-3xl leading-snug transition-colors hover:text-foreground ${k === 0 ? "font-semibold text-foreground/80" : "text-muted/70"}`}
             style={{ fontSize: k === 0 ? Math.max(18, fontSize * 1.15) : Math.max(15, fontSize * 0.95) }}
           >

@@ -16,6 +16,14 @@ import { clock } from "./ui";
 
 const COLOURS = ["var(--vocals)", "var(--beat)", "var(--brand)", "#f59e0b"];
 
+/** The map's earlier changes, for Undo — outlives the map itself (see AiProducer's `remembered`). */
+const undoSteps: { past: NsTweaks[] } = { past: [] };
+
+/** A different mix: the last new song's Undo steps mean nothing for it. */
+export function forgetNewSongUndo() {
+  undoSteps.past = [];
+}
+
 function Playhead({ seconds }: { seconds: number }) {
   const playhead = useStudioStore((s) => s.playhead);
   return <span className="pointer-events-none absolute inset-y-0 w-0.5 bg-foreground/80" style={{ left: `${(Math.min(playhead, seconds) / seconds) * 100}%` }} aria-hidden />;
@@ -24,7 +32,13 @@ function Playhead({ seconds }: { seconds: number }) {
 export default memo(function NewSongMap({ map, tweaks, onTweak, busy }: { map: Map; tweaks: NsTweaks; onTweak: (next: NsTweaks) => void; busy: boolean }) {
   const { plan, names, lines } = map;
   const [open, setOpen] = useState<number | null>(null);
-  const [past, setPast] = useState<NsTweaks[]>([]);
+  // Kept outside the map: closing the AI panel (or leaving the Studio) and coming back keeps Undo working.
+  const [past, setPastNow] = useState<NsTweaks[]>(() => undoSteps.past);
+  const setPast = (next: (p: NsTweaks[]) => NsTweaks[]) =>
+    setPastNow((p) => {
+      undoSteps.past = next(p);
+      return undoSteps.past;
+    });
   const barSec = 240 / plan.bpm;
   const pct = (bars: number) => `${(bars / plan.bars) * 100}%`;
   const used = plan.parts.filter((p) => p.used);

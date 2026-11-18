@@ -3,6 +3,7 @@
 import { renderMixdown } from "./mixdown";
 import { MARK_BARS, MARK_BAR_WIDTH, MARK_GRADIENT, MARK_TILE_RADIUS } from "@/lib/brand";
 import { clipLineAt, MAX_CLIP_SECONDS, type ClipLine } from "@/lib/clipLyrics";
+import { lineDirection } from "@/lib/rtlText";
 import { CLIP_FONTS, CLIP_FORMATS, CREDIT_LABELS, ELEMENT_ORDER, type ClipDesign, type ClipElement, type ElementId } from "@/lib/clipDesign";
 
 // A video of a stretch of the mix for Reels, TikTok, Shorts, Stories, X and
@@ -19,7 +20,6 @@ import { CLIP_FONTS, CLIP_FORMATS, CREDIT_LABELS, ELEMENT_ORDER, type ClipDesign
 
 const FPS = 30;
 export { MAX_CLIP_SECONDS };
-const RTL = /[֐-ࣿיִ-﷿ﹰ-﻿]/;
 
 /** The best video format this browser can record: MP4 where it can (posts everywhere), else WebM. */
 function pickMimeType() {
@@ -195,7 +195,7 @@ function drawTextBlock(
   if (el.plate) drawPlate(ctx, box, el.color, size * 0.45);
   rows.forEach((row, i) => {
     const y = box.y + step * (i + 0.5);
-    ctx.direction = RTL.test(row) ? "rtl" : "ltr";
+    ctx.direction = lineDirection(row) === "rtl" ? "rtl" : "ltr";
     if (outline && !el.plate) {
       ctx.lineJoin = "round";
       ctx.lineWidth = Math.max(2, size * 0.09);
@@ -506,7 +506,7 @@ function fillSung(ctx: CanvasRenderingContext2D, rows: string[], cx: number, top
     const filled = Math.min(w, left);
     left -= filled;
     if (filled <= 0) return;
-    const rtl = RTL.test(row);
+    const rtl = lineDirection(row) === "rtl";
     const y = top + step * (i + 0.5);
     const x0 = cx - w / 2;
     ctx.save();
@@ -563,7 +563,7 @@ function drawLyrics(f: Frame, el: ClipElement, lyrics: ClipLine[] | undefined): 
       const sungRows = rowsOf(all.slice(0, shown).join(" "));
       sungRows.forEach((row, i) => {
         const y = top + step * (i + 0.5);
-        ctx.direction = RTL.test(row) ? "rtl" : "ltr";
+        ctx.direction = lineDirection(row) === "rtl" ? "rtl" : "ltr";
         const lastRow = i === sungRows.length - 1;
         const pop = lastRow ? Math.min(1, ((fill * all.length) % 1) * 4 + 0.6) : 1;
         ctx.save();
@@ -580,7 +580,7 @@ function drawLyrics(f: Frame, el: ClipElement, lyrics: ClipLine[] | undefined): 
     } else {
       rows.forEach((row, i) => {
         const y = top + step * (i + 0.5);
-        ctx.direction = RTL.test(row) ? "rtl" : "ltr";
+        ctx.direction = lineDirection(row) === "rtl" ? "rtl" : "ltr";
         outline(row, cx, y);
         ctx.fillStyle = style === "lines" ? el.accent : el.color;
         ctx.fillText(row, cx, y);
@@ -595,7 +595,7 @@ function drawLyrics(f: Frame, el: ClipElement, lyrics: ClipLine[] | undefined): 
         ctx.font = font(el, size * 0.62, 600);
         const row = rowsOf(before.text, 1)[0] ?? "";
         const y = top - size * 0.75;
-        ctx.direction = RTL.test(row) ? "rtl" : "ltr";
+        ctx.direction = lineDirection(row) === "rtl" ? "rtl" : "ltr";
         outline(row, cx, y);
         ctx.fillStyle = el.color;
         ctx.fillText(row, cx, y);
@@ -608,7 +608,7 @@ function drawLyrics(f: Frame, el: ClipElement, lyrics: ClipLine[] | undefined): 
       const nextRows = wrapText(ctx, next.text, maxWidth, 2);
       nextRows.forEach((row, i) => {
         const y = top + rows.length * step + size * 0.75 + i * size * 0.75;
-        ctx.direction = RTL.test(row) ? "rtl" : "ltr";
+        ctx.direction = lineDirection(row) === "rtl" ? "rtl" : "ltr";
         outline(row, cx, y);
         ctx.fillStyle = el.color;
         ctx.fillText(row, cx, y);
@@ -629,7 +629,7 @@ function drawLyrics(f: Frame, el: ClipElement, lyrics: ClipLine[] | undefined): 
       ctx.font = font(el, size * 0.7, 600);
       wrapText(ctx, next.text, maxWidth, 2).forEach((row, i) => {
         const y = cy + i * size * 0.85;
-        ctx.direction = RTL.test(row) ? "rtl" : "ltr";
+        ctx.direction = lineDirection(row) === "rtl" ? "rtl" : "ltr";
         outline(row, cx, y);
         ctx.fillStyle = el.color;
         ctx.fillText(row, cx, y);

@@ -87,6 +87,25 @@ export function hasRtl(text: string): boolean {
   return RTL_LETTER.test(text);
 }
 
+/** Hebrew, Arabic and Persian letters (and their presentation forms). */
+const RTL_ANY = /[֐-ࣿיִ-﷿ﹰ-﻿]/u;
+
+/**
+ * Which way a lyric line reads: right to left when most of its letters are
+ * Persian, Arabic or Hebrew — so "Yeah, من اومدم" still starts on the right
+ * (the browser's dir="auto" goes by the first letter and would put it on
+ * the left) — and left to right for English, or a line with no letters.
+ */
+export function lineDirection(text: string): "rtl" | "ltr" {
+  let rtl = 0;
+  let ltr = 0;
+  for (const ch of text) {
+    if (RTL_ANY.test(ch)) rtl++;
+    else if (LTR_LETTER.test(ch)) ltr++;
+  }
+  return rtl > 0 && rtl >= ltr ? "rtl" : "ltr";
+}
+
 const joins = (cp: number | undefined) => cp !== undefined && (cp === TATWEEL || (FORMS.get(cp)?.count ?? 1) > 1);
 const joinsForward = (cp: number | undefined) => cp !== undefined && (cp === TATWEEL || FORMS.get(cp)?.count === 4);
 

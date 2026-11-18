@@ -146,4 +146,20 @@ describe("splitSongTitle", () => {
     assert.deepEqual(splitSongTitle("Blinding Lights"), { song: "Blinding Lights", artist: "" });
     assert.deepEqual(splitSongTitle('Artist "Song Name" Official'), { song: "Song Name", artist: "Artist" });
   });
+
+  test("download sites named without an address, track numbers, names joined by dashes", () => {
+    assert.deepEqual(splitSongTitle("Hichkas - Firooz Ganja2Music"), { song: "Firooz", artist: "Hichkas" });
+    assert.deepEqual(splitSongTitle("Shayea - Deli (RadioJavan)"), { song: "Deli", artist: "Shayea" });
+    assert.deepEqual(splitSongTitle("Ganja2Music - Hichkas - Firooz"), { song: "Firooz", artist: "Hichkas" });
+    assert.deepEqual(splitSongTitle("Mohsen Chavoshi - Amire Bi Gazand 320 (UpMusic)"), { song: "Amire Bi Gazand", artist: "Mohsen Chavoshi" });
+    assert.deepEqual(splitSongTitle("Hichkas-Firooz-320.mp3"), { song: "Firooz", artist: "Hichkas" });
+    assert.deepEqual(splitSongTitle("01 Hichkas - Firooz.mp3"), { song: "Firooz", artist: "Hichkas" });
+    assert.deepEqual(splitSongTitle("02. Blinding Lights"), { song: "Blinding Lights", artist: "" });
+  });
+
+  test("numbers that are the name stay", () => {
+    assert.deepEqual(splitSongTitle("99 Problems"), { song: "99 Problems", artist: "" });
+    assert.deepEqual(splitSongTitle("50 Cent - In Da Club"), { song: "In Da Club", artist: "50 Cent" });
+    assert.deepEqual(splitSongTitle("Dr. Dre - Still D.R.E."), { song: "Still D.R.E.", artist: "Dr. Dre" });
+  });
 });

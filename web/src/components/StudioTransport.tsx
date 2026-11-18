@@ -33,6 +33,7 @@ import MasterPanel, { isMastered } from "./studio/MasterPanel";
 import { redo, startNewStep, undo, useStudioHistory } from "@/lib/client/studioHistory";
 import { markDraftClean } from "@/lib/client/studioDraft";
 import { useStudioView } from "@/lib/client/studioView";
+import { useAiTrial } from "@/lib/client/aiTrial";
 import type { User } from "@/lib/auth";
 import TagInput from "./TagInput";
 import SocialClipButton from "./studio/SocialClipButton";
@@ -384,6 +385,8 @@ export default function StudioTransport({
   const hasXfade = useStudioStore((s) => s.lanes.some((l) => l.xfade));
   const aiOpen = useStudioView((s) => s.aiOpen);
   const setAiOpen = useStudioView((s) => s.setAiOpen);
+  // An AI idea still on with the panel closed: the button says so (opening it again shows it, to keep or undo).
+  const aiTrying = useAiTrial((s) => !!s.trial?.ideas.length);
 
   const canUndo = useStudioHistory((h) => h.past.length > 0);
   const canRedo = useStudioHistory((h) => h.future.length > 0);
@@ -814,13 +817,14 @@ export default function StudioTransport({
               onClick={() => setAiOpen(!aiOpen)}
               disabled={empty}
               aria-pressed={aiOpen}
-              aria-label="AI producer"
-              className={`flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-bold text-white transition-all disabled:opacity-40 tight:px-2.5 ${
+              aria-label={aiTrying && !aiOpen ? "AI producer — an idea is on" : "AI producer"}
+              className={`relative flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-bold text-white transition-all disabled:opacity-40 tight:px-2.5 ${
                 aiOpen ? "bg-brand ring-2 ring-brand-strong" : "bg-gradient-to-r from-brand to-vocals shadow-[0_0_18px_-6px_var(--vocals)] hover:brightness-110"
               }`}
               title="AI producer — make your mix sound good, try styles and drops (I)"
             >
               <Sparkles /> <span className="tight:hidden">AI</span>
+              {aiTrying && !aiOpen && <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-vocals ring-2 ring-background" aria-hidden />}
             </button>
           )}
           <button

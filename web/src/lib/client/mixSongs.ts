@@ -15,15 +15,20 @@ import { useStudioView } from "./studioView";
 // Lyrics the singer wrote (or wrote with the AI) are theirs to keep over
 // any beat, and are never swapped.
 
-/** A song playing in the mix, to look its lyrics up. */
-export type MixSong = { key: string; song: string; artist: string; lane: StudioLane };
+/** A song playing in the mix, to look its lyrics up. `vocal`: its vocal is in the mix (the words heard are its). */
+export type MixSong = { key: string; song: string; artist: string; lane: StudioLane; vocal: boolean };
 
 /** The same song whatever the script's quirks: Arabic letter forms, ZWNJ, case. */
 export function songKey(song: string, artist: string) {
   return normalizePersian(`${artist} ${song}`).toLowerCase();
 }
 
-/** The songs in the mix by their titles — never a recorded take, never who uploaded it. */
+/**
+ * The songs in the mix by their titles — never a recorded take, never who
+ * uploaded it. Songs whose vocal is in the mix come first (the words heard
+ * are theirs: one song's vocal over another's beat sings the vocal's
+ * lyrics), each with its vocal lane; then songs only there as a beat.
+ */
 export function mixSongsOf(lanes: StudioLane[]): MixSong[] {
   const out: MixSong[] = [];
   for (const lane of lanes) {
@@ -31,10 +36,21 @@ export function mixSongsOf(lanes: StudioLane[]): MixSong[] {
     const { song, artist } = splitSongTitle(lane.trackTitle);
     if (!song) continue;
     const key = songKey(song, artist);
-    if (out.some((m) => m.key === key)) continue;
-    out.push({ key, song, artist, lane });
+    const vocal = lane.kind === "vocals";
+    const had = out.find((m) => m.key === key);
+    if (had) {
+      if (vocal && !had.vocal) Object.assign(had, { lane, vocal: true });
+      continue;
+    }
+    out.push({ key, song, artist, lane, vocal });
   }
-  return out.slice(0, 4);
+  return out.sort((a, b) => Number(b.vocal) - Number(a.vocal)).slice(0, 4);
+}
+
+/** The songs whose lyrics are wanted: the ones sung in the mix — or every song, when nothing in it is sung (an instrumental, a full song). */
+export function sungSongs(songs: MixSong[]): MixSong[] {
+  const sung = songs.filter((m) => m.vocal);
+  return sung.length ? sung : songs;
 }
 
 export function useMixSongs(): MixSong[] {
@@ -93,9 +109,11 @@ export function useLyricsFollowMix() {
       if (was && sheet && sheetFitsMix(sheet, mixSongsOfKeys(was)) === true) state.select(null);
       return;
     }
-    if (sheet && sheetFitsMix(sheet, songs) !== false) return;
-    // Sheets are newest first: the last one used for this song.
-    const kept = state.sheets.find((s) => s.source !== "own" && s.source !== "ai" && s.song && songs.some((m) => m.key === s.song));
+    // The open sheet stays if it's the words of a song sung in the mix (or the singer's own) — not a song only there as a beat.
+    if (sheet && sheetFitsMix(sheet, sungSongs(songs)) !== false) return;
+    // Sheets are newest first: the last one used for a song sung in the mix.
+    const wanted = sungSongs(songs);
+    const kept = state.sheets.find((s) => s.source !== "own" && s.source !== "ai" && s.song && wanted.some((m) => m.key === s.song));
     if (kept) {
       state.select(kept.id);
       if (sheet) notify(`Lyrics switched to “${kept.title}” — the song in your mix`);
@@ -103,7 +121,7 @@ export function useLyricsFollowMix() {
     }
     if (sheet) state.select(null);
     // None kept: found on their own — timed, and lined up with the beat or vocal they're the words of.
-    void findForMix(songs, !!sheet);
+    void findForMix(wanted, !!sheet);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `keys` stands for `songs`
   }, [keys]);
 }
@@ -147,5 +165,5 @@ function mixSongsOfKeys(keys: string): MixSong[] {
   return keys
     .split("\n")
     .filter(Boolean)
-    .map((key) => ({ key, song: key, artist: "", lane: null as unknown as StudioLane }));
+    .map((key) => ({ key, song: key, artist: "", lane: null as unknown as StudioLane, vocal: false }));
 }

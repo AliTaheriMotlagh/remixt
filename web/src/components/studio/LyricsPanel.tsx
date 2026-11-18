@@ -48,6 +48,7 @@ import LyricsPicker from "./LyricsPicker";
 import { useMixSongs } from "@/lib/client/mixSongs";
 import LyricsTimeline from "./LyricsTimeline";
 import { rewordSheet, wordsOf } from "@/lib/lyricsEdit";
+import { lineDirection } from "@/lib/rtlText";
 import {
   barAt,
   beatSeconds,
@@ -146,13 +147,13 @@ export function PlayButton({ big = false }: { big?: boolean }) {
   );
 }
 
-/** How far through the line being sung the playhead is, redrawn as it moves. */
-function LineProgress({ start, end }: { start: number; end: number | null }) {
+/** How far through the line being sung the playhead is, redrawn as it moves — from the right for a Persian line. */
+function LineProgress({ start, end, text }: { start: number; end: number | null; text: string }) {
   // In hundredths: a redraw when the bar visibly moves, not on every playhead tick.
   const fraction = useStudioStore((s) => (end === null || end <= start ? 0 : Math.round(Math.min(1, Math.max(0, (s.playhead - start) / (end - start))) * 100) / 100));
   if (end === null || end <= start) return null;
   return (
-    <div className="mt-1 h-1 overflow-hidden rounded-full bg-vocals/15">
+    <div dir={lineDirection(text)} className="mt-1 flex h-1 overflow-hidden rounded-full bg-vocals/15">
       <div className="h-full rounded-full bg-vocals transition-[width] duration-100" style={{ width: `${fraction * 100}%` }} />
     </div>
   );
@@ -255,7 +256,7 @@ function LineWordsEditor({ index }: { index: number }) {
     <div className="flex flex-col gap-1.5 rounded-lg bg-background/60 p-1.5">
       <input
         ref={input}
-        dir="auto"
+        dir={lineDirection(draft)}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={save}
@@ -274,7 +275,7 @@ function LineWordsEditor({ index }: { index: number }) {
         aria-label={`Words of line ${index + 1}`}
         placeholder="The words of this line"
       />
-      <div className="flex flex-wrap items-center gap-0.5" role="group" aria-label="Line">
+      <div className="grid grid-cols-2 gap-1 min-[420px]:grid-cols-3 sm:flex sm:flex-wrap sm:items-center sm:gap-0.5" role="group" aria-label="Line">
         <button
           className={tool}
           onMouseDown={(e) => e.preventDefault()}
@@ -296,7 +297,7 @@ function LineWordsEditor({ index }: { index: number }) {
           <Plus /> Line after
         </button>
         <button
-          className={`${tool} ms-auto hover:!text-danger`}
+          className={`${tool} hover:!text-danger sm:ms-auto`}
           onClick={() => {
             deleteLine(index);
             selectLine(null);
@@ -355,7 +356,7 @@ export function LineTimingEditor({ index, className = "" }: { index: number; cla
   }, [index]);
 
   if (!line || !isSung(line)) return null;
-  const step = "h-8 min-w-9 rounded-md px-1.5 text-[11px] font-semibold tabular-nums text-muted transition-colors hover:bg-surface-raised hover:text-foreground disabled:opacity-40 max-lg:h-10";
+  const step = "h-8 min-w-9 rounded-md px-1.5 text-[11px] font-semibold tabular-nums text-muted transition-colors hover:bg-surface-raised hover:text-foreground disabled:opacity-40 max-lg:h-11 max-sm:min-w-0 max-sm:flex-1";
   const timed = line.time !== null;
   const move = (delta: number) => {
     nudge(index, delta);
@@ -370,11 +371,11 @@ export function LineTimingEditor({ index, className = "" }: { index: number; cla
       role="group"
       aria-label={`Timing of line ${index + 1}`}
     >
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className="rounded-md bg-vocals/10 px-2 py-1 font-mono text-sm font-semibold tabular-nums text-vocals" aria-live="polite">
+      <div className="flex flex-wrap items-center gap-1.5 max-sm:gap-1">
+        <span className="rounded-md bg-vocals/10 px-2 py-1 font-mono text-sm font-semibold tabular-nums text-vocals max-sm:px-1.5 max-sm:text-xs" aria-live="polite">
           {timed ? formatPrecise(line.time!) : "not timed"}
         </span>
-        <div className="flex items-center rounded-lg border border-border" role="group" aria-label="Nudge">
+        <div className="flex items-center rounded-lg border border-border max-sm:order-last max-sm:w-full max-sm:justify-between" role="group" aria-label="Nudge">
           <button disabled={!timed} onClick={() => move(-beat)} className={step} title="A beat earlier (Shift+←)">
             −beat
           </button>
@@ -400,7 +401,7 @@ export function LineTimingEditor({ index, className = "" }: { index: number; cla
             retime(index, useStudioStore.getState().playhead);
             markAligned();
           }}
-          className="flex h-8 items-center gap-1 rounded-lg bg-vocals px-2.5 text-[11px] font-semibold text-white hover:opacity-90 max-lg:h-10"
+          className="flex h-8 items-center gap-1 rounded-lg bg-vocals px-2.5 text-[11px] font-semibold text-white hover:opacity-90 max-lg:h-10 max-sm:px-2"
           title="This line starts at the playhead (S)"
         >
           <Crosshair /> To playhead
@@ -410,8 +411,9 @@ export function LineTimingEditor({ index, className = "" }: { index: number; cla
           onClick={() => playFrom(line.time!)}
           className="flex h-8 items-center gap-1 rounded-lg border border-border px-2.5 text-[11px] font-semibold text-muted hover:border-vocals hover:text-foreground disabled:opacity-40 max-lg:h-10"
           title="Hear it come in, from a second before (P)"
+          aria-label="Hear it"
         >
-          <Play /> Hear it
+          <Play /> <span className="max-[400px]:hidden">Hear it</span>
         </button>
         <button
           disabled={!timed}
@@ -496,7 +498,7 @@ const Prompter = memo(function Prompter({
           <div
             key={i}
             data-line={i}
-            className={`group relative flex items-start gap-2 rounded-lg px-2 py-1.5 transition-colors ${
+            className={`group relative flex flex-wrap items-start gap-2 rounded-lg px-2 py-1.5 transition-colors ${
               tapping || picked ? "bg-vocals/15 ring-1 ring-vocals" : active ? "bg-vocals/10" : "hover:bg-surface-raised"
             }`}
           >
@@ -514,7 +516,7 @@ const Prompter = memo(function Prompter({
             </button>
             <div className="min-w-0 flex-1">
               <p
-                dir="auto"
+                dir={lineDirection(line.text)}
                 onClick={() => {
                   if (tapIndex !== null) onPickTap(i);
                   else if (line.time !== null) audioEngine.seek(line.time);
@@ -524,8 +526,7 @@ const Prompter = memo(function Prompter({
               >
                 {line.text}
               </p>
-              {active && <LineProgress start={line.time ?? 0} end={nextTime(lines, i)} />}
-              {picked && pickedHere && <LineTimingEditor index={i} className="mt-2" />}
+              {active && <LineProgress start={line.time ?? 0} end={nextTime(lines, i)} text={line.text} />}
             </div>
             {showFit && <FitBadge fit={fits[i]} />}
             <button
@@ -539,6 +540,8 @@ const Prompter = memo(function Prompter({
             >
               <Clock />
             </button>
+            {/* Under the whole row, not just the words: on a phone the words' column is too narrow for its buttons. */}
+            {picked && pickedHere && <LineTimingEditor index={i} className="mt-1 basis-full" />}
           </div>
         );
       })}
@@ -1129,14 +1132,14 @@ export function BigPrompter({ lines, onClose }: { lines: LyricLine[]; onClose: (
       >
         {section && <p className="text-xs font-bold uppercase tracking-[0.2em] text-vocals sm:text-sm">{section}</p>}
         {before && (
-          <p dir="auto" className="max-w-4xl text-xl text-muted/60 sm:text-2xl">
+          <p dir={lineDirection(before.text)} className="max-w-4xl text-xl text-muted/60 sm:text-2xl">
             {before.text}
           </p>
         )}
         {ahead.map(({ line, index }, k) => (
           <p
             key={index}
-            dir="auto"
+            dir={lineDirection(line.text)}
             className={`max-w-4xl leading-tight ${k === 0 ? "text-3xl font-bold text-foreground sm:text-5xl" : "text-xl text-muted sm:text-3xl"}`}
           >
             {line.text}
@@ -1235,13 +1238,14 @@ function EditTab({ onDone }: { onDone: () => void }) {
           className="h-10 min-w-0 rounded-lg border border-border bg-background px-3 text-sm"
         />
       </div>
-      <div className="flex flex-wrap items-center gap-1" aria-label="Add a section heading">
+      {/* One row on a phone, swiped sideways: two rows of chips pushed the words off the screen. */}
+      <div className="-mx-1 flex items-center gap-1 overflow-x-auto px-1 pb-0.5 max-sm:flex-nowrap sm:flex-wrap" aria-label="Add a section heading">
         {["Intro", "Verse", "Pre-Chorus", "Chorus", "Hook", "Bridge", "Outro"].map((name) => (
           <button
             key={name}
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => insertSection(name)}
-            className="h-8 rounded-full border border-border px-2.5 text-[11px] font-semibold text-muted transition-colors hover:border-vocals hover:text-foreground max-lg:h-9"
+            className="h-8 shrink-0 rounded-full border border-border px-2.5 text-[11px] font-semibold text-muted transition-colors hover:border-vocals hover:text-foreground max-lg:h-9"
             title={`Start a ${name.toLowerCase()} here`}
           >
             + {name}
@@ -1295,10 +1299,10 @@ function EditTab({ onDone }: { onDone: () => void }) {
           <Eraser /> Clear
         </button>
         <LyricsUndoRedo className="h-10 w-10" />
-        <p className="min-w-0 flex-1 text-[11px] text-muted">
+        <p className="min-w-0 flex-1 text-[11px] text-muted max-sm:order-last max-sm:basis-full">
           {pasteError ? "The browser didn't allow pasting from here — long-press (or Ctrl/⌘+V) in the box instead." : "Saved in this browser as you type."}
         </p>
-        <button onClick={onDone} className="flex h-10 items-center gap-1.5 rounded-lg bg-vocals px-4 text-xs font-semibold text-white hover:opacity-90">
+        <button onClick={onDone} className="flex h-10 items-center gap-1.5 rounded-lg bg-vocals px-4 text-xs font-semibold text-white hover:opacity-90 max-sm:ms-auto">
           <Check /> Done
         </button>
       </div>
@@ -1458,7 +1462,7 @@ function AiTabView({ lines, onDone }: { lines: LyricLine[]; onDone: () => void }
           <div className="max-h-56 overflow-y-auto">
             {draft.lines.map((line, i) =>
               line ? (
-                <p key={i} dir="auto" className="text-sm leading-snug">
+                <p key={i} dir={lineDirection(line)} className="text-sm leading-snug">
                   {line}
                 </p>
               ) : (
@@ -1695,7 +1699,7 @@ export function LyricsCue({ big = false }: { big?: boolean }) {
                 {sectionName(line.text)}
               </p>
             ) : line.text ? (
-              <p key={i} dir="auto" className="leading-snug" style={{ fontSize }}>
+              <p key={i} dir={lineDirection(line.text)} className="leading-snug" style={{ fontSize }}>
                 {line.text}
               </p>
             ) : (
@@ -1719,20 +1723,20 @@ export function LyricsCue({ big = false }: { big?: boolean }) {
       {heading}
       {section && <p className="text-[10px] font-bold uppercase tracking-wider text-vocals/80">{section}</p>}
       {previous && (
-        <p dir="auto" className="truncate text-xs text-muted/50">
+        <p dir={lineDirection(previous.text)} className="truncate text-xs text-muted/50">
           {previous.text}
         </p>
       )}
       {shown.map((i, k) => (
         <div key={i}>
           <p
-            dir="auto"
+            dir={lineDirection(lines[i].text)}
             className={k === 0 && current >= 0 ? "font-semibold leading-snug text-foreground" : "leading-snug text-muted/80"}
             style={{ fontSize: k === 0 && current >= 0 ? fontSize * 1.2 : fontSize * 0.9 }}
           >
             {lines[i].text}
           </p>
-          {k === 0 && current >= 0 && <LineProgress start={lines[i].time ?? 0} end={nextTime(lines, i)} />}
+          {k === 0 && current >= 0 && <LineProgress start={lines[i].time ?? 0} end={nextTime(lines, i)} text={lines[i].text} />}
         </div>
       ))}
       {current < 0 && <p className="text-[11px] text-muted">First line at {formatClock(lines.find((l) => l.time !== null)?.time ?? 0)}</p>}

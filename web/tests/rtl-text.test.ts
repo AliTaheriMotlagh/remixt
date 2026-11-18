@@ -5,7 +5,7 @@
 
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { bidiRuns, hasRtl, visualWord } from "../src/lib/rtlText.ts";
+import { bidiRuns, hasRtl, lineDirection, visualWord } from "../src/lib/rtlText.ts";
 
 const codes = (s: string) => [...s].map((ch) => ch.codePointAt(0)!.toString(16));
 
@@ -68,5 +68,24 @@ describe("bidiRuns", () => {
   test("plain Latin text isn't touched", () => {
     assert.equal(hasRtl("Midnight City — slowed + reverb"), false);
     assert.equal(hasRtl("Remix by علی"), true);
+  });
+});
+
+describe("lineDirection", () => {
+  test("a Persian line reads right to left", () => {
+    assert.equal(lineDirection("من اومدم که بمونم"), "rtl");
+  });
+  test("an English line reads left to right", () => {
+    assert.equal(lineDirection("I came here to stay"), "ltr");
+  });
+  test("a Persian line that opens with an English word still reads right to left", () => {
+    assert.equal(lineDirection("Yeah, من اومدم که بمونم"), "rtl");
+  });
+  test("an English line with one Persian word reads left to right", () => {
+    assert.equal(lineDirection("We said salam, سلام, and left"), "ltr");
+  });
+  test("no letters at all: left to right", () => {
+    assert.equal(lineDirection("♪ 123 ♪"), "ltr");
+    assert.equal(lineDirection(""), "ltr");
   });
 });

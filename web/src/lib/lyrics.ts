@@ -35,6 +35,13 @@ export type LyricLine = {
 };
 
 /**
+ * Music download sites and channels that sign the files they hand out —
+ * by name, without the .com/.ir the address rule below catches.
+ */
+const DOWNLOAD_SITES =
+  /(^|[\s([{])(ganja2music|ganja2|music-?fa|musicfa|nex1music|nex1|upmusics?|radio\s?javan|radiojavan|rj|mybia2music|bia2music|bia2|musicdel|avang\s?music|melovaz|pishvaz|irmusic|ahangify|my-?music|mp3|320kbps|128kbps)(?=$|[\s)\]}])/gi;
+
+/**
  * The song's name — and the artist, when the title names one — from a
  * track title, for looking its lyrics up. Titles come from file names and
  * video titles, so they carry noise the lyrics library doesn't know:
@@ -44,11 +51,19 @@ export type LyricLine = {
  * never from whoever uploaded it.
  */
 export function splitSongTitle(trackTitle: string): { song: string; artist: string } {
-  let title = trackTitle
-    .replace(/\.(mp3|wav|m4a|aac|flac|ogg|opus|webm|mp4)$/i, "")
-    .replace(/_/g, " ")
-    // Bracketed extras: (Official Video), [Lyrics], {HD}, (feat. X), (320).
+  let title = trackTitle.replace(/\.(mp3|wav|m4a|aac|flac|ogg|opus|webm|mp4)$/i, "").replace(/_/g, " ").trim();
+  // Joined with dashes or dots and no spaces at all ("Hichkas-Firooz-320", "Ebi.Khalij"): the joins are the gaps.
+  if (!/\s/.test(title) && /[-.]/.test(title) && !/^[\w-]+\.(com|ir|net|org)$/i.test(title)) {
+    const pieces = title.split(/[-.]+/).filter((p) => p && !/^\d+(kbps|k)?$/i.test(p) && p.replace(DOWNLOAD_SITES, "").trim() !== "");
+    title = pieces.length === 2 ? pieces.join(" - ") : pieces.join(" ");
+  }
+  title = title
+    // A track number in front: "01 Song", "2. Song", "03 - Song" — not "99 Problems" or "7 Rings".
+    .replace(/^(0\d\s*[.)\-–]?|\d{1,2}\s*[.)\-–])\s*(?=\S)/, "")
+    // Bracketed extras: (Official Video), [Lyrics], {HD}, (feat. X), (320), (RadioJavan).
     .replace(/\s*[[({][^\])}]*[\])}]/g, " ")
+    // Download sites named without their address ("Song Ganja2Music").
+    .replace(DOWNLOAD_SITES, " ")
     // Download sites and channels: www.site.com, Site.ir, @channel.
     .replace(/(^|\s)(www\.)?[\w-]+\.(com|ir|net|org|io|co|me)(?=\s|$)/gi, " ")
     .replace(/(^|\s)@[\w.]+/g, " ")
@@ -59,6 +74,8 @@ export function splitSongTitle(trackTitle: string): { song: string; artist: stri
     // Featured artists left outside brackets.
     .replace(/\s+(feat\.?|ft\.?|featuring)\s.*$/i, "")
     .replace(/\s+/g, " ")
+    // A dash left hanging where a site's name was ("Site - Artist - Song").
+    .replace(/^[\s\-–—|]+|[\s\-–—|]+$/g, "")
     .trim();
   // A trailing " - Official Video" / " - Remastered 2011" / " - Live" goes.
   title = title.replace(/\s+[-–—|]\s+(official|lyrics?|audio|video|visuali[sz]er|remaster(ed)?|hd|hq|4k|live|radio edit|explicit|clean)\b.*$/i, "");
