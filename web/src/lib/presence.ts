@@ -186,6 +186,8 @@ export type ActivityType = "remix" | "track" | "like" | "comment" | "follow" | "
 
 export type Activity = {
   type: ActivityType;
+  /** Unique within its type: the remix, song, comment or user, or the pair (a like, a follow). */
+  id: string;
   at: string;
   actor_id: string;
   actor_name: string;
@@ -207,30 +209,30 @@ export async function recentActivity(limit = 14): Promise<Activity[]> {
   // Sign-ups are capped at a few, so a burst of them can't crowd out the music.
   return sql<Activity[]>`
     SELECT * FROM (
-      (SELECT 'remix' AS type, r.created_at AS at, u.id AS actor_id, u.artist_name AS actor_name,
+      (SELECT 'remix' AS type, r.id AS id, r.created_at AS at, u.id AS actor_id, u.artist_name AS actor_name,
               u.avatar_color AS actor_color, r.id AS remix_id, r.title, NULL AS target_id, NULL AS target_name
        FROM remixes r JOIN users u ON u.id = r.owner_id
        WHERE r.published ORDER BY r.created_at DESC LIMIT ${limit})
       UNION ALL
-      (SELECT 'track', t.created_at, u.id, u.artist_name, u.avatar_color, NULL, t.title, NULL, NULL
+      (SELECT 'track', t.id, t.created_at, u.id, u.artist_name, u.avatar_color, NULL, t.title, NULL, NULL
        FROM tracks t JOIN users u ON u.id = t.owner_id
        WHERE t.status = 'ready' AND t.visibility = 'public' ORDER BY t.created_at DESC LIMIT ${limit})
       UNION ALL
-      (SELECT 'like', l.created_at, u.id, u.artist_name, u.avatar_color, r.id, r.title, o.id, o.artist_name
+      (SELECT 'like', l.user_id || ':' || l.remix_id, l.created_at, u.id, u.artist_name, u.avatar_color, r.id, r.title, o.id, o.artist_name
        FROM remix_likes l JOIN users u ON u.id = l.user_id
        JOIN remixes r ON r.id = l.remix_id JOIN users o ON o.id = r.owner_id
        WHERE r.published AND l.user_id <> r.owner_id ORDER BY l.created_at DESC LIMIT ${limit})
       UNION ALL
-      (SELECT 'comment', c.created_at, u.id, u.artist_name, u.avatar_color, r.id, r.title, o.id, o.artist_name
+      (SELECT 'comment', c.id, c.created_at, u.id, u.artist_name, u.avatar_color, r.id, r.title, o.id, o.artist_name
        FROM remix_comments c JOIN users u ON u.id = c.user_id
        JOIN remixes r ON r.id = c.remix_id JOIN users o ON o.id = r.owner_id
        WHERE r.published AND c.user_id <> r.owner_id ORDER BY c.created_at DESC LIMIT ${limit})
       UNION ALL
-      (SELECT 'follow', f.created_at, u.id, u.artist_name, u.avatar_color, NULL, NULL, o.id, o.artist_name
+      (SELECT 'follow', f.follower_id || ':' || f.followee_id, f.created_at, u.id, u.artist_name, u.avatar_color, NULL, NULL, o.id, o.artist_name
        FROM follows f JOIN users u ON u.id = f.follower_id JOIN users o ON o.id = f.followee_id
        ORDER BY f.created_at DESC LIMIT ${limit})
       UNION ALL
-      (SELECT 'join', u.created_at, u.id, u.artist_name, u.avatar_color, NULL, NULL, NULL, NULL
+      (SELECT 'join', u.id, u.created_at, u.id, u.artist_name, u.avatar_color, NULL, NULL, NULL, NULL
        FROM users u ORDER BY u.created_at DESC LIMIT 3)
     ) feed
     ORDER BY at DESC

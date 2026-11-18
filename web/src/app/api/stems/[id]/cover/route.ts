@@ -70,6 +70,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   }
   if (!key) return none();
   const res = await serveObject(key, req.headers.get("range"));
+  // Kept, but its file isn't in storage (not moved from an old store yet): no picture for now,
+  // as for a song without one, rather than a 404 in the console of every page that shows it.
+  if (res.status === 404) return none(300);
   // A replaced cover shows within the hour.
   if (res.ok && !res.headers.has("location")) res.headers.set("Cache-Control", "private, max-age=3600");
   return res;

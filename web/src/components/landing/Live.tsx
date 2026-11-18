@@ -168,8 +168,9 @@ function ActivityGlyph({ type }: { type: Activity["type"] }) {
   return <Glyph />;
 }
 
+/** One row's identity: two songs uploaded by the same artist in the same second are still two rows. */
 function activityKey(a: Activity) {
-  return `${a.type}:${a.actor_id}:${a.remix_id ?? a.target_id ?? ""}:${a.at}`;
+  return `${a.type}:${a.id}`;
 }
 
 function ActivityText({ a }: { a: Activity }) {
