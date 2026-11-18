@@ -122,7 +122,7 @@ function Bars({ data }: { data: RadioReport["perDay"] }) {
 
 export default function RadioConsole({ slug }: { slug: string }) {
   const router = useRouter();
-  const radio = useRadio(slug, { heartbeat: false });
+  const radio = useRadio(slug, { heartbeat: false, warm: false });
   const { feed } = radio;
   const [tab, setTab] = useState<Tab>("air");
   const [data, setData] = useState<ConsoleData | null>(null);

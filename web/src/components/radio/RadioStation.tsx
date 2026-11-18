@@ -100,7 +100,7 @@ export default function RadioStation({ slug, signedIn }: { slug: string; signedI
 
         <div className="grid gap-5 p-4 sm:p-7 md:grid-cols-[minmax(0,320px)_minmax(0,1fr)] md:items-center lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)] lg:gap-10">
           <div className="relative mx-auto w-full max-w-[260px] md:max-w-none">
-            <RadioArt item={now} className={`aspect-square w-full rounded-3xl shadow-2xl shadow-black/60 ring-1 ring-white/15 transition-transform duration-700 ${on ? "scale-100" : "scale-[0.97]"}`} />
+            <RadioArt item={now} spin={on} className={`aspect-square w-full rounded-3xl shadow-2xl shadow-black/60 ring-1 ring-white/15 transition-transform duration-700 ${on ? "scale-100" : "scale-[0.97]"}`} />
             {on && <span className="pointer-events-none absolute -inset-1 -z-10 animate-pulse rounded-[28px] bg-gradient-to-br from-brand via-vocals to-beat opacity-50 blur-xl motion-reduce:animate-none" aria-hidden />}
           </div>
           <div className="flex min-w-0 flex-col gap-4">
@@ -114,7 +114,7 @@ export default function RadioStation({ slug, signedIn }: { slug: string; signedI
                   </p>
                 </div>
                 <Progress row={now} position={radio.position} />
-                <RadioLyrics slug={slug} row={now} position={radio.position} />
+                <RadioLyrics slug={slug} row={now} position={radio.position} onWords={radio.showWords} />
               </>
             ) : (
               <div>
@@ -169,7 +169,7 @@ export default function RadioStation({ slug, signedIn }: { slug: string; signedI
             )}
           </div>
         </div>
-        <Visualizer analyser={radio.getAnalyser} live={on} className="h-16 w-full sm:h-24" bars={72} />
+        <Visualizer analyser={radio.getAnalyser} levels={radio.levels} live={on} className="h-16 w-full sm:h-24" bars={72} />
       </section>
 
       <div className="grid min-w-0 gap-4 sm:gap-6 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">

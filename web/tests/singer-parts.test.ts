@@ -9,11 +9,13 @@ import type { StudioLane } from "../src/lib/client/studioStore.ts";
 import {
   fingerprint,
   groupVoices,
+  likeThese,
   linesOutside,
   lyricSections,
   mergeSpans,
   performers,
   phrasesOf,
+  phrasesIn,
   readHeader,
   rmsCurve,
   toBars,
@@ -186,5 +188,44 @@ describe("the cut", () => {
       { time: null, text: "[Verse]" },
     ];
     assert.deepEqual(linesOutside(lines, [{ start: 10, end: 20 }]).map((l) => l.text), ["keep", "[Verse]"]);
+  });
+});
+
+describe("one example of the singer", () => {
+  // Two voices: A low and dark (phrases 0–5, 12–15), B high and bright (6–11). Small differences within each.
+  const voice = (pitch: number, bright: number, i: number) => [bright + (i % 3) * 0.02, 0.5 + (i % 2) * 0.03, 0.8, pitch + (i % 4) * 0.5];
+  const prints = [
+    ...Array.from({ length: 6 }, (_, i) => voice(120, 0.2, i)),
+    ...Array.from({ length: 6 }, (_, i) => voice(210, 0.6, i)),
+    ...Array.from({ length: 4 }, (_, i) => voice(121, 0.21, i)),
+  ];
+
+  test("marking one of B's phrases finds all of B's, and none of A's", () => {
+    assert.deepEqual(likeThese(prints, [7]), [6, 7, 8, 9, 10, 11]);
+  });
+
+  test("marking A's finds A's in both places", () => {
+    assert.deepEqual(likeThese(prints, [1, 13]), [0, 1, 2, 3, 4, 5, 12, 13, 14, 15]);
+  });
+
+  test("a lone phrase between two of the singer's is theirs too", () => {
+    const odd = prints.map((p) => [...p]);
+    odd[8] = voice(150, 0.4, 0); // half-way: a shout in B's verse
+    assert.ok(likeThese(odd, [7]).includes(8));
+  });
+
+  test("nothing marked: nothing found", () => {
+    assert.deepEqual(likeThese(prints, []), []);
+  });
+
+  test("a held span covers the phrases mostly inside it", () => {
+    const phrases = [
+      { start: 0, end: 2 },
+      { start: 2.5, end: 4 },
+      { start: 4.2, end: 7 },
+    ];
+    // Held from 1.8 to 4.5: phrase 0 barely (0.2 of 2 s), phrase 1 fully, phrase 2 barely.
+    assert.deepEqual(phrasesIn(phrases, { start: 1.8, end: 4.5 }), [1]);
+    assert.deepEqual(phrasesIn(phrases, { start: 0, end: 7 }), [0, 1, 2]);
   });
 });

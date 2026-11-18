@@ -109,3 +109,25 @@ export function rankByVoice<T extends Pick<LyricsResult, "duration" | "plain" | 
   });
   return scored.sort((a, b) => b.rank - a.rank).map(({ result, fit }) => ({ result, fit }));
 }
+
+/**
+ * The timed sheet to show for a vocal without asking anyone (the radio):
+ * the timed results ranked by how they fit the singing, the first that's
+ * surely of this recording — its length within 4 s, or (a copy whose length
+ * is off: a radio edit, a different upload of it) its first and last lines
+ * landing on where the singing starts and stops. Null when none is sure:
+ * better no words than the wrong ones.
+ */
+export function bestTimed<T extends Pick<LyricsResult, "duration" | "plain" | "synced" | "instrumental">>(
+  results: T[],
+  voice: VoiceProfile | null,
+  recordingSeconds: number
+): { result: T; fit: VoiceFit | null } | null {
+  const timed = results.filter((r) => r.synced && !r.instrumental);
+  for (const { result, fit } of rankByVoice(timed, voice)) {
+    const sameLength = !!result.duration && !!recordingSeconds && Math.abs(result.duration - recordingSeconds) <= 4;
+    if (fit && fit.score < 0.45) continue;
+    if (sameLength || (fit && fit.score >= 0.75)) return { result, fit };
+  }
+  return null;
+}

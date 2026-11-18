@@ -6,16 +6,46 @@ import { audioEngine } from "@/lib/client/audioEngine";
 import { clock, searchStation, type RadioFeed } from "@/lib/client/radioClient";
 import type { QueueRow } from "@/lib/radio";
 import type { RadioItem } from "@/lib/radioPick";
-import { songArtUrl } from "@/lib/songArt";
+import { songArtUrl, songBackdrop, songDiscUrl } from "@/lib/songArt";
 
 // The radio's pieces, shared by the station page, its console, the embed
 // and the broadcast view.
 
-/** A song's picture: its cover, else one drawn from its title (never a broken image). */
-export const RadioArt = memo(function RadioArt({ item, className = "size-12 rounded-lg" }: { item: Pick<RadioItem, "title" | "artist" | "cover"> | null; className?: string }) {
-  const drawn = useMemo(() => songArtUrl({ title: item?.title ?? "Remixt Radio", artist: item?.artist ?? "" }), [item?.title, item?.artist]);
+/**
+ * A song's picture: its cover, else one drawn from its title (never a
+ * broken image) — a record in the song's colours with its first letter.
+ * `spin` (the big one on air): the record turns while the radio plays,
+ * over a still background.
+ */
+export const RadioArt = memo(function RadioArt({
+  item,
+  className = "size-12 rounded-lg",
+  spin,
+}: {
+  item: Pick<RadioItem, "title" | "artist" | "cover"> | null;
+  className?: string;
+  spin?: boolean;
+}) {
+  const title = item?.title ?? "Remixt Radio";
+  const artist = item?.artist ?? "";
+  const drawn = useMemo(() => songArtUrl({ title, artist }), [title, artist]);
   const [failed, setFailed] = useState<string | null>(null);
-  const src = item?.cover && failed !== item.cover ? item.cover : drawn;
+  const hasCover = !!item?.cover && failed !== item.cover;
+  if (!hasCover && spin !== undefined) {
+    return (
+      <div className={`${className} relative shrink-0 overflow-hidden`} style={{ background: songBackdrop(title, artist) }} aria-hidden>
+        {/* eslint-disable-next-line @next/next/no-img-element -- a data URL */}
+        <img
+          src={songDiscUrl({ title, artist })}
+          alt=""
+          className={`absolute inset-[7%] size-[86%] drop-shadow-2xl ${spin ? "animate-[spin_7s_linear_infinite] motion-reduce:animate-none" : ""}`}
+        />
+        {/* The light on the record stays still while it turns. */}
+        <div className="pointer-events-none absolute inset-[7%] rounded-full bg-[conic-gradient(from_200deg,transparent_0deg,rgba(255,255,255,0.14)_40deg,transparent_90deg,transparent_200deg,rgba(255,255,255,0.08)_240deg,transparent_290deg)]" />
+      </div>
+    );
+  }
+  const src = hasCover ? item!.cover! : drawn;
   return (
     // eslint-disable-next-line @next/next/no-img-element -- our own small cover routes, or a data URL
     <img
@@ -105,12 +135,15 @@ export function Visualizer({
   className = "h-24 w-full",
   bars = 64,
   analyser: source = () => audioEngine.getAnalyser(),
+  levels,
 }: {
   live: boolean;
   className?: string;
   bars?: number;
   /** Where the sound is read from (the radio's decks; the Studio's engine by default). */
   analyser?: () => AnalyserNode | null;
+  /** The bars themselves (0–1), worked out by the caller in time with what's heard (the radio): before `analyser`. */
+  levels?: (bars: number) => ArrayLike<number> | null;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
@@ -120,12 +153,23 @@ export function Visualizer({
     const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     let raf = 0;
     let data: Uint8Array<ArrayBuffer> | null = null;
-    const levels = new Float32Array(bars);
+    const shown = new Float32Array(bars);
+    let drawnAt = 0;
     const draw = (t: number) => {
-      const w = (el.width = el.clientWidth * devicePixelRatio);
-      const h = (el.height = el.clientHeight * devicePixelRatio);
+      // 30 frames a second is plenty for bars: half the work (and battery) of the screen's rate.
+      if (t - drawnAt < 30) {
+        raf = requestAnimationFrame(draw);
+        return;
+      }
+      drawnAt = t;
+      // Sized only when the box changes: setting a canvas's size every frame reallocates it (and measures the page).
+      const w = Math.round(el.clientWidth * devicePixelRatio);
+      const h = Math.round(el.clientHeight * devicePixelRatio);
+      if (el.width !== w) el.width = w;
+      if (el.height !== h) el.height = h;
       ctx.clearRect(0, 0, w, h);
-      const analyser = live ? source() : null;
+      const given = live && levels ? levels(bars) : null;
+      const analyser = live && !given ? source() : null;
       if (analyser) {
         if (!data || data.length !== analyser.frequencyBinCount) data = new Uint8Array(analyser.frequencyBinCount);
         analyser.getByteFrequencyData(data);
@@ -139,7 +183,8 @@ export function Visualizer({
       const bw = w / bars - gap;
       for (let i = 0; i < bars; i++) {
         let target: number;
-        if (data) {
+        if (given) target = given[i] ?? 0;
+        else if (data) {
           // Log-spaced bins: the bass gets as much room as the treble.
           const lo = Math.floor(Math.pow(data.length * 0.7, i / bars));
           const hi = Math.max(lo + 1, Math.floor(Math.pow(data.length * 0.7, (i + 1) / bars)));
@@ -147,19 +192,20 @@ export function Visualizer({
           for (let b = lo; b < hi && b < data.length; b++) peak = Math.max(peak, data[b]);
           target = peak / 255;
         } else target = still ? 0.12 : 0.1 + 0.08 * (1 + Math.sin(t / 900 + i * 0.35)) * (1 + Math.sin(t / 1700 + i * 0.11));
-        levels[i] += (target - levels[i]) * (target > levels[i] ? 0.5 : 0.12);
-        const bh = Math.max(2 * devicePixelRatio, levels[i] * h * 0.95);
+        // Up at once, down a little slower (a beat's bar falls rather than blinks).
+        shown[i] += (target - shown[i]) * (target > shown[i] ? 0.7 : given ? 0.3 : 0.2);
+        const bh = Math.max(2 * devicePixelRatio, shown[i] * h * 0.95);
         const x = i * (bw + gap) + gap / 2;
-        ctx.globalAlpha = 0.35 + levels[i] * 0.65;
+        ctx.globalAlpha = 0.35 + shown[i] * 0.65;
         ctx.beginPath();
         ctx.roundRect(x, (h - bh) / 2, bw, bh, bw / 2);
         ctx.fill();
       }
-      if (!still || data) raf = requestAnimationFrame(draw);
+      if (!still || data || given) raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [live, bars, source]);
+  }, [live, bars, source, levels]);
   return <canvas ref={canvas} className={className} aria-hidden />;
 }
 

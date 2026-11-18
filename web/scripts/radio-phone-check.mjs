@@ -5,9 +5,10 @@
 // players crossfading by volume) — must go from one song to the next with
 // no silence, driven by the elements' own events, while the page's timers
 // fire at most once every SLEEP_MS.
-//   cd web && OWNER_ID=<user id> PHONE=ios|android node scripts/radio-phone-check.mjs
+//   cd web && OWNER_ID=<user id> PHONE=ios|android [ENGINE=webkit] node scripts/radio-phone-check.mjs
+// ENGINE=webkit: the listener in Safari's engine (Playwright's WebKit) rather than Chrome.
 // Needs the app running (BASE_URL) and the test database in Docker (remixt-test-pg).
-import { chromium, devices } from "playwright-core";
+import { chromium, devices, webkit } from "playwright-core";
 import { SignJWT } from "jose";
 import { execSync } from "node:child_process";
 import fs from "node:fs";
@@ -23,6 +24,7 @@ const token = await new SignJWT({ userId: process.env.OWNER_ID }).setProtectedHe
 const log = (x) => console.log(JSON.stringify(x));
 
 const browser = await chromium.launch({ channel: "chrome", args: ["--autoplay-policy=no-user-gesture-required"] });
+const listener = process.env.ENGINE === "webkit" ? await webkit.launch() : browser;
 const owner = await browser.newContext();
 await owner.addCookies([{ name: "remix_session", value: token, url: base }]);
 const call = async (method, path, data) => {
@@ -39,7 +41,8 @@ await call("POST", `/api/radio/${slug}/console`, { action: "settings", settings:
 log({ step: "station", slug, phone, sleepMs });
 
 const device = phone === "ios" ? devices["iPhone 13"] : devices["Pixel 7"];
-const ctx = await browser.newContext({ ...device, defaultBrowserType: undefined });
+const { defaultBrowserType: _, ...dressed } = device;
+const ctx = await listener.newContext(dressed);
 await ctx.addInitScript(
   ({ ios, sleepMs }) => {
     if (ios) {
@@ -105,4 +108,5 @@ log({ step: "pauses", pauses: await page.evaluate(() => window.__pauses.slice(-8
 log({ step: "result", songsHeard: [...rows], silentSamples: silent, ok: rows.size >= 2 && silent <= 2 });
 
 await call("DELETE", `/api/radio/${slug}`);
+if (listener !== browser) await listener.close();
 await browser.close();

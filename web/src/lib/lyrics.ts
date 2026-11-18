@@ -26,6 +26,8 @@ export type LyricsPage = {
   source: "genius";
   /** Genius's id for the song: its embed can be read when the page can't (see lyricsImport.geniusEmbedHtml). */
   id?: number;
+  /** The featured singers in Genius's credits ("2 Chainz"). */
+  featured?: string[];
 };
 
 export type LyricLine = {

@@ -87,16 +87,24 @@ if (process.env.LYRICS) {
 const page = await open({ viewport: { width: 1440, height: 900 } });
 const before = await snapshot(page);
 log({ step: "before", ...before });
+// It listens by itself as it opens.
+await page.getByText(/voices heard|hears one voice|couldn't be heard/).first().waitFor({ timeout: 180_000 });
 await page.getByRole("tab", { name: /By voice/ }).click();
-await page.getByRole("button", { name: "Listen for the voices" }).click();
-await page.getByText(/voices? heard|hears one voice/).first().waitFor({ timeout: 180_000 });
 const takeOut = page.getByRole("button", { name: "Take out", exact: true });
 const voices = await takeOut.count();
 log({ step: "voices", count: voices });
-if (voices < 2) {
-  log({ result: "one voice heard: picking the first part on the strip by hand instead" });
-  await page.getByRole("tab", { name: /By hand/ }).click();
-  await page.locator('[aria-label="Where each part is sung"] button').first().click();
+if (voices < 2 || process.env.POINT) {
+  // Pointing out: play from a third in, hold the button for 3 s, then find the rest that sound like it.
+  await page.getByRole("tab", { name: /Point out/ }).click();
+  await page.evaluate(() => window.__remixt.engine.seek(window.__remixt.studio.getState().duration / 3));
+  const hold = page.getByRole("button", { name: /Hold while they sing/ });
+  await hold.hover();
+  await page.mouse.down();
+  await page.waitForTimeout(3000);
+  await page.mouse.up();
+  await page.getByRole("button", { name: /Find all their parts/ }).click();
+  log({ step: "pointed out", note: await page.getByText(/Found \d+ phrase|No singing where you held/).first().innerText() });
+  await page.evaluate(() => window.__remixt.engine.pause());
 } else await takeOut.last().click();
 await page.getByRole("radio", { name: /Cut that time out/ }).click();
 const apply = page.getByRole("button", { name: /^Take out \d+ part/ });

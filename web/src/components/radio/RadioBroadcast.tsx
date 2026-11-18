@@ -49,13 +49,13 @@ export default function RadioBroadcast({ slug }: { slug: string }) {
           </span>
         </header>
         <main className="flex min-h-0 flex-1 items-center gap-[3em]">
-          <RadioArt item={now} className="aspect-square h-[62%] max-h-[28em] rounded-[1.6em] shadow-2xl shadow-black/70 ring-1 ring-white/15" />
+          <RadioArt item={now} spin={tune === "on"} className="aspect-square h-[62%] max-h-[28em] rounded-[1.6em] shadow-2xl shadow-black/70 ring-1 ring-white/15" />
           <div className="flex min-w-0 flex-1 flex-col gap-[1.2em]">
             {now && <SourceChip row={now} className="self-start text-[0.9em]" />}
             <h1 className="line-clamp-2 text-[4.2em] font-black leading-[1.02] tracking-tight">{now?.title ?? "Nothing on air"}</h1>
             <p className="truncate text-[1.8em] text-white/75">{now?.artist}</p>
             <Progress row={now} position={radio.position} big />
-            <RadioLyrics slug={slug} row={now} position={radio.position} big />
+            <RadioLyrics slug={slug} row={now} position={radio.position} big onWords={radio.showWords} />
           </div>
           {feed && feed.station.settings.voting && feed.vote.choices.length > 0 && (
             <aside className="w-[30%] shrink-0 rounded-[1.4em] bg-black/40 p-[1.4em] ring-1 ring-white/10 backdrop-blur">
@@ -66,7 +66,7 @@ export default function RadioBroadcast({ slug }: { slug: string }) {
             </aside>
           )}
         </main>
-        <Visualizer analyser={radio.getAnalyser} live={tune === "on"} className="h-[7em] w-full" bars={96} />
+        <Visualizer analyser={radio.getAnalyser} levels={radio.levels} live={tune === "on"} className="h-[7em] w-full" bars={96} />
         <footer className="mt-[1em] flex items-center gap-[0.6em] text-[1.3em] text-white/85">
           <Hand className="size-[1.2em]" /> Vote and request at <strong>{origin}/radio/{slug}</strong>
         </footer>

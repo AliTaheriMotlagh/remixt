@@ -374,6 +374,43 @@ export function groupVoices(prints: number[][], durations: number[], maxVoices =
   return { ...best, labels: best.labels.map((l) => rank.get(l)!) };
 }
 
+/**
+ * The phrases that sound like the ones the listener marked (held a button
+ * while that singer sang): two groups, the marked phrases fixed in the
+ * first, everything else going to whichever group's average it's nearer,
+ * a few rounds over. Works where groupVoices hears only one voice: one
+ * example of who to listen for is what it was missing. A lone phrase
+ * between two of the singer's is theirs too (a breath, an ad-lib). Indices,
+ * in order; the marked ones always among them.
+ */
+export function likeThese(prints: number[][], marked: number[]): number[] {
+  const mine = new Set(marked.filter((i) => i >= 0 && i < prints.length));
+  if (mine.size === 0) return [];
+  if (mine.size === prints.length) return [...mine].sort((a, b) => a - b);
+  const rows = standardise(prints);
+  const mean = (idx: number[]) => rows[0].map((_, d) => idx.reduce((sum, i) => sum + rows[i][d], 0) / idx.length);
+  let theirs = rows.map((_, i) => mine.has(i));
+  for (let round = 0; round < 12; round++) {
+    const a = mean(rows.map((_, i) => i).filter((i) => theirs[i]));
+    const restIdx = rows.map((_, i) => i).filter((i) => !theirs[i]);
+    if (!restIdx.length) break;
+    const b = mean(restIdx);
+    const next = rows.map((r, i) => mine.has(i) || dist(r, a) < dist(r, b));
+    if (next.every((v, i) => v === theirs[i])) break;
+    theirs = next;
+  }
+  for (let i = 1; i < theirs.length - 1; i++) if (!theirs[i] && theirs[i - 1] && theirs[i + 1]) theirs[i] = true;
+  return theirs.flatMap((v, i) => (v ? [i] : []));
+}
+
+/** The phrases a held span covers (more than a third of the phrase inside it). */
+export function phrasesIn(phrases: Span[], held: Span): number[] {
+  return phrases.flatMap((p, i) => {
+    const overlap = Math.min(p.end, held.end) - Math.max(p.start, held.start);
+    return overlap > (p.end - p.start) / 3 ? [i] : [];
+  });
+}
+
 // ----------------------------------------------------------------- the cut
 
 /** Spans sorted, overlapping or touching ones joined. */

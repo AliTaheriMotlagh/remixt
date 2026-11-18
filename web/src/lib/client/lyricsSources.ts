@@ -416,3 +416,38 @@ export async function autoFindLyrics(song: { song: string; artist: string; lane:
   const timed = await autoTimeSheet(pick.plain!, named, onStep);
   return { ...named, ...timed, note: timed.note || "Lyrics found — not timed yet: tap Get times, or sing along and tap each line" };
 }
+
+/** Translations and covers on Genius are other pages of the same song: not the one wanted. */
+const NOT_THE_SONG = /traducci|translation|übersetzung|traduç|tradu[cç]|перевод|romani[sz]ed|cover/i;
+
+/**
+ * Lyrics that say who sings each part — Genius writes "[Verse 2: 2 Chainz]"
+ * over each section — timed to the vocal's recording by the lyrics
+ * library's timed copy of the same recording (its length within 4 s). For
+ * "Remove a singer" when the open lyrics name no one. Times are seconds into
+ * the recording (see singerParts.onTimeline). With the song's credits
+ * (its artist and featured singers) even when the words can't be read —
+ * `lines` null then. Null when Genius doesn't have the song.
+ */
+export async function namedLyricsFor(
+  lane: StudioLane,
+  onStep?: (step: string) => void
+): Promise<{ lines: LyricLine[] | null; source: string; primary: string; featured: string[] } | null> {
+  const { song, artist } = splitSongTitle(lane.trackTitle);
+  if (!song.trim()) return null;
+  const params = new URLSearchParams({ track: song.trim().slice(0, 200) });
+  if (artist.trim()) params.set("artist", artist.trim().slice(0, 200));
+  if (lane.originalDuration) params.set("duration", String(Math.round(lane.originalDuration)));
+  onStep?.("Looking for lyrics that name the singers…");
+  const { results, web } = await searchLyrics(params).catch(() => ({ results: [] as LyricsResult[], web: [] as LyricsPage[] }));
+  const page = web.find((p) => !NOT_THE_SONG.test(`${p.title} ${p.artist}`) && lineSimilarity(p.title, song) >= 0.5);
+  if (!page) return null;
+  // The credits alone name the voices, when the words can't be read.
+  const credits = { source: "genius.com", primary: page.artist, featured: page.featured ?? [] };
+  const sameRecording = results.find((r) => r.synced && (!r.duration || !lane.originalDuration || Math.abs(r.duration - lane.originalDuration) <= 4));
+  if (!sameRecording?.synced) return { ...credits, lines: null };
+  onStep?.("Reading the lyrics on Genius…");
+  const words = await importLyrics(page.url, { title: song, artist, geniusId: page.id }).catch(() => null);
+  const timed = words ? borrowTimes(parseLyrics(words.text), parseLyrics(sameRecording.synced)) : null;
+  return { ...credits, lines: timed?.lines ?? null, source: words?.source || "genius.com" };
+}

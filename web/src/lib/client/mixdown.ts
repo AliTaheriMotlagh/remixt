@@ -216,6 +216,30 @@ export async function renderInPieces(bounce: Bounce, sink: PcmSink, onProgress?:
   }
 }
 
+/** Lets the page draw and answer before going on (a message, not a timer: a hidden page's timers are slowed down). */
+export function yieldToPage(): Promise<void> {
+  const scheduler = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+  if (scheduler?.yield) return scheduler.yield();
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => resolve();
+    channel.port2.postMessage(null);
+  });
+}
+
+/** encodeWav ten seconds at a time, the page getting a turn between: no freeze for a whole song (the radio's songs). */
+export async function encodeWavGently(buffer: AudioBuffer): Promise<Blob> {
+  const sink = wavSink(buffer.sampleRate);
+  const left = buffer.getChannelData(0);
+  const right = buffer.getChannelData(buffer.numberOfChannels > 1 ? 1 : 0);
+  const step = buffer.sampleRate * 10;
+  for (let i = 0; i < buffer.length; i += step) {
+    await sink.write(left.subarray(i, i + step), right.subarray(i, i + step));
+    await yieldToPage();
+  }
+  return sink.finish();
+}
+
 /** A WAV file written a piece at a time; each piece goes into a Blob as it comes, rather than all into one big buffer. */
 export function wavSink(sampleRate: number, tags?: AudioTags): PcmSink {
   const parts: Blob[] = [];
@@ -370,10 +394,29 @@ export async function renderMixWav(options: Pick<ExportOptions, "signal" | "onPr
   }
 }
 
-/** Interleaves channels as 16-bit PCM. */
+/** This machine stores numbers little end first (as WAV does): every browser in use; checked anyway. */
+const LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
+
+/**
+ * The samples as 16-bit PCM, interleaved. A tight loop over typed arrays
+ * (a four-minute song is 21 million samples): ~10× quicker than writing
+ * each through a DataView, which froze the page for half a second on
+ * every radio song. Same bytes either way: both truncate toward zero.
+ */
 function pcm16(channelData: Float32Array[], frames: number): ArrayBuffer {
   const channels = channelData.length;
   const pcm = new ArrayBuffer(frames * channels * 2);
+  if (LITTLE_ENDIAN) {
+    const out = new Int16Array(pcm);
+    for (let c = 0; c < channels; c++) {
+      const data = channelData[c];
+      for (let i = 0, j = c; i < frames; i++, j += channels) {
+        const s = data[i];
+        out[j] = s < 0 ? (s < -1 ? -0x8000 : s * 0x8000) : s > 1 ? 0x7fff : s * 0x7fff;
+      }
+    }
+    return pcm;
+  }
   const view = new DataView(pcm);
   let offset = 0;
   for (let i = 0; i < frames; i++) {

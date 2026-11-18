@@ -126,6 +126,8 @@ async function geniusPages(query: string): Promise<LyricsPage[]> {
         image: result!.song_art_image_thumbnail_url ?? null,
         source: "genius" as const,
         ...(typeof result!.id === "number" ? { id: result!.id } : {}),
+        // Who else sings on it (Genius's credits): names the voices "Remove a singer" hears, even when the words can't be read.
+        featured: (result!.featured_artists ?? []).map((a) => a.name ?? "").filter(Boolean).slice(0, 6),
       }));
     if (webCache.size >= MAX_CACHED) webCache.delete(webCache.keys().next().value!);
     webCache.set(key, { at: Date.now(), found });
@@ -135,7 +137,7 @@ async function geniusPages(query: string): Promise<LyricsPage[]> {
   }
 }
 
-type GeniusSong = { id?: number; title?: string; url?: string; song_art_image_thumbnail_url?: string; primary_artist?: { name?: string } };
+type GeniusSong = { id?: number; title?: string; url?: string; song_art_image_thumbnail_url?: string; primary_artist?: { name?: string }; featured_artists?: { name?: string }[] };
 const webCache = new Map<string, { at: number; found: LyricsPage[] }>();
 
 function toResult(r: LrclibResult): LyricsResult {

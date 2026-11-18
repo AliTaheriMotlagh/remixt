@@ -103,7 +103,7 @@ export default function RadioEmbed({ slug, autoplay = false }: { slug: string; a
           <Progress row={now} position={radio.position} />
         </div>
         <div className="flex items-center gap-2">
-          <Visualizer analyser={radio.getAnalyser} live={on} className="h-6 min-w-0 flex-1" bars={40} />
+          <Visualizer analyser={radio.getAnalyser} levels={radio.levels} live={on} className="h-6 min-w-0 flex-1" bars={40} />
           <a href={`/radio/${slug}`} target="_blank" rel="noopener" className="flex shrink-0 items-center gap-1 text-[11px] font-bold text-white/85 hover:underline">
             <RemixtMark className="size-4" /> Vote on Remixt <ArrowUpRight className="size-3" />
           </a>

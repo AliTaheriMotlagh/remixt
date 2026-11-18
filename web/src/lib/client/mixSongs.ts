@@ -53,6 +53,29 @@ export function sungSongs(songs: MixSong[]): MixSong[] {
   return sung.length ? sung : songs;
 }
 
+/**
+ * Whose words to show for a mix — one rule for the Studio, the radio and
+ * clips: the songs whose vocal is in it. With none: in the Studio, the
+ * beat's song, to sing along to (recording over a beat in the booth);
+ * `vocalOnly` (the radio) — none, only ever the vocal's words. With
+ * `takesHaveOwnWords`, a take as the only voice means words of its
+ * singer's own (`ownWords`). `singAlong`: the words are the beat's song's.
+ */
+export function wordsOf(
+  lanes: StudioLane[],
+  { takesHaveOwnWords = false, vocalOnly = false } = {}
+): { songs: MixSong[]; singAlong: boolean; ownWords: boolean } {
+  const live = lanes.filter((l) => !l.muted);
+  const songs = mixSongsOf(live);
+  const sung = songs.filter((m) => m.vocal);
+  if (sung.length) return { songs: sung, singAlong: false, ownWords: false };
+  // Listening (the radio): only what's sung — an instrumental shows no words.
+  if (vocalOnly) return { songs: [], singAlong: false, ownWords: takesHaveOwnWords && live.some((l) => l.kind === "vocals") };
+  const takes = live.some((l) => l.kind === "vocals" && (l.artistName === "You" || /^studio vocal|— take \d+/i.test(l.trackTitle)));
+  if (takes && takesHaveOwnWords) return { songs: [], singAlong: false, ownWords: true };
+  return { songs: songs.slice(0, 1), singAlong: songs.length > 0, ownWords: false };
+}
+
 export function useMixSongs(): MixSong[] {
   const lanes = useStudioStore((s) => s.lanes);
   return useMemo(() => mixSongsOf(lanes), [lanes]);
