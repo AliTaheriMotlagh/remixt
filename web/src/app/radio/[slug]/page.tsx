@@ -20,7 +20,7 @@ export default async function StationPage({ params }: { params: Promise<{ slug: 
   if (!station) notFound();
   return (
     <div className="mx-auto w-full max-w-7xl px-3 py-3 sm:px-5 sm:py-6">
-      <RadioStation slug={station.slug} signedIn={!!user} />
+      <RadioStation slug={station.slug} name={station.name} signedIn={!!user} />
     </div>
   );
 }

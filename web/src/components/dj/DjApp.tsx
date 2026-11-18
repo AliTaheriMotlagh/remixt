@@ -225,7 +225,11 @@ export default function DjApp() {
         {error}
       </p>
     ) : (
-      <p className="text-sm text-muted">Setting up the decks…</p>
+      // Server-drawn too: the page's heading is there before the decks are.
+      <div className="flex flex-col gap-1">
+        <h1 className="text-lg font-bold">DJ decks</h1>
+        <p className="text-sm text-muted">Setting up the decks…</p>
+      </div>
     );
   }
 

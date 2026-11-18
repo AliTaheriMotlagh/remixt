@@ -558,13 +558,16 @@ async function pickInput(tx: Tx, station: RadioStation, current: string | null, 
   ]);
   const allowed = (i: RadioItem) => (i.kind === "track" ? station.settings.songs : station.settings.remixes);
   const count = new Map(votes.map((v) => [`${v.kind}:${v.item_id}`, v.n]));
-  // Saved before their files went missing: only what can play now.
-  const canPlay = new Set((await playable([...requests.map(itemOf), ...playlist.map(itemOf)], tx)).map(itemKey));
+  // Saved before their files went missing — queued by the DJ, put to the
+  // vote, asked for, on the playlist: only what can play now goes on air.
+  const saved = [...dj.map(itemOf), ...station.choices, ...requests.map(itemOf), ...playlist.map(itemOf)];
+  const canPlay = new Set((await playable(saved, tx)).map(itemKey));
+  const djPlayable = dj.filter((r) => canPlay.has(itemKey(itemOf(r))));
   return {
-    djQueue: dj.map(itemOf),
-    djRows: dj,
+    djQueue: djPlayable.map(itemOf),
+    djRows: djPlayable,
     voting: station.settings.voting,
-    votes: station.choices.map((item) => ({ item, votes: count.get(itemKey(item)) ?? 0 })),
+    votes: station.choices.filter((item) => canPlay.has(itemKey(item))).map((item) => ({ item, votes: count.get(itemKey(item)) ?? 0 })),
     requests: requests
       .map((r): RequestedItem => ({ ...itemOf(r), count: r.count, firstAt: r.first_at.getTime() }))
       .filter((i) => allowed(i) && canPlay.has(itemKey(i))),

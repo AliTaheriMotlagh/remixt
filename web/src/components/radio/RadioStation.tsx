@@ -55,7 +55,7 @@ export function ShareStation({ slug }: { slug: string }) {
   );
 }
 
-export default function RadioStation({ slug, signedIn }: { slug: string; signedIn: boolean }) {
+export default function RadioStation({ slug, name, signedIn }: { slug: string; name?: string; signedIn: boolean }) {
   const radio = useRadio(slug);
   const { feed, tune, error } = radio;
   const now = feed?.now ?? null;
@@ -63,8 +63,10 @@ export default function RadioStation({ slug, signedIn }: { slug: string; signedI
   const VolumeIcon = radio.volume === 0 ? VolumeX : radio.volume < 0.5 ? Volume1 : Volume2;
 
   if (!feed) {
+    // Server-drawn too: the station's name is the page's heading until what's on air arrives.
     return (
-      <div className="flex min-h-[60vh] items-center justify-center text-muted">
+      <div className="flex min-h-[60vh] flex-col items-center justify-center gap-3 text-muted">
+        {name && <h1 className="text-2xl font-black text-foreground">{name}</h1>}
         {error ? <p className="text-danger">{error}</p> : <Loader2 className="size-6 animate-spin" />}
       </div>
     );
@@ -119,7 +121,16 @@ export default function RadioStation({ slug, signedIn }: { slug: string; signedI
             ) : (
               <div>
                 <h1 className="text-3xl font-black sm:text-4xl">Nothing on air</h1>
-                <p className="mt-1 text-white/70">{feed.canManage ? "Add songs to the playlist in the console, or switch on “play anything from the library”." : "This station's playlist is empty for now."}</p>
+                <p className="mt-1 text-white/70">
+                  {feed.canManage
+                    ? "Nothing it could play: add songs to the playlist in the console, or switch on “play anything from the library”. Songs whose audio isn't in storage are left out."
+                    : "No song can play here right now. "}
+                  {!feed.canManage && (
+                    <Link href="/upload" className="font-semibold text-white underline underline-offset-2">
+                      Upload a song and it goes on air in a couple of minutes.
+                    </Link>
+                  )}
+                </p>
               </div>
             )}
             <div className="flex flex-wrap items-center gap-3">

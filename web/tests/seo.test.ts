@@ -102,3 +102,24 @@ describe("site footer", () => {
     }
   });
 });
+
+describe("a remix page's description", async () => {
+  const { remixDescription, DESCRIPTION_MAX } = await import("../src/lib/site.ts");
+  test("says what it's built from and invites, when there's room", () => {
+    const text = remixDescription("Night Drive", "Sara", ["Rain", "Moon"]);
+    assert.equal(text, "Listen to “Night Drive”, a remix by Sara on Remixt. Built from Rain + Moon. Open it in the studio and make your own.");
+  });
+  test("drops source songs, then the invitation, then shortens the title — never past 160", () => {
+    const long = ["A very long source song title here", "Another quite long source title", "Third long source song title"];
+    for (const [title, artist, sources] of [
+      ["Night Drive", "Sara", long],
+      ["A remix title that goes on and on and on for a very long while indeed, far too long", "An artist with a long name", long],
+      ["x".repeat(400), "y".repeat(200), []],
+    ] as const) {
+      const text = remixDescription(title, artist, [...sources]);
+      assert.ok(text.length <= DESCRIPTION_MAX, `${text.length}: ${text}`);
+      assert.ok(text.startsWith("Listen to “"));
+    }
+    assert.ok(!remixDescription("Night Drive", "Sara", long).includes("Third"), "fewer sources first");
+  });
+});

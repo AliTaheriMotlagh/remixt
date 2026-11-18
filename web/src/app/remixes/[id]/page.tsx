@@ -14,7 +14,7 @@ import { getArtistProgress, getComments } from "@/lib/social";
 import { coverUrl, ensureRemixStats, getRemixCard, getRemixStats, shareImageUrl } from "@/lib/models";
 import type { Metadata } from "next";
 import { JsonLd, breadcrumbJsonLd, pageMetadata } from "@/lib/seo";
-import { SITE_NAME, absoluteUrl } from "@/lib/site";
+import { SITE_NAME, absoluteUrl, remixDescription } from "@/lib/site";
 
 type RemixRow = {
   id: string;
@@ -36,8 +36,7 @@ export async function generateMetadata({
   const remix = await getRemixCard(id);
   // Private (or missing): nothing to show a search engine.
   if (!remix?.published) return { title: "Remix", robots: { index: false } };
-  const from = remix.source_titles.length ? ` Built from ${remix.source_titles.slice(0, 3).join(" + ")}.` : "";
-  const description = `Listen to “${remix.title}”, a remix by ${remix.artist_name} on Remixt.${from} Open it in the studio and make your own version.`;
+  const description = remixDescription(remix.title, remix.artist_name, remix.source_titles);
   return pageMetadata({
     title: `${remix.title} — remix by ${remix.artist_name}`,
     description,
