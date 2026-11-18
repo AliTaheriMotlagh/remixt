@@ -20,6 +20,10 @@ const KIND_TEXT: Record<CacheKind, { title: string; body: string }> = {
     title: "Tempo and key changes",
     body: "Stems already stretched to a new speed or key, so a draft or an idea plays at once instead of being worked out again. Kept up to 30 days.",
   },
+  radio: {
+    title: "Radio remixes",
+    body: "Remixes the radio has played, already mixed, so tuning in again plays them at once instead of mixing them again. Kept up to 30 days.",
+  },
   analysis: {
     title: "Analysis",
     body: "The key, rhythm and melody worked out from each stem, so the Studio and AI Match don't listen again.",

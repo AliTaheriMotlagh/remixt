@@ -9,7 +9,7 @@ export default function RemixOfTheDay({ remix }: { remix: FeaturedRemix }) {
   return (
     <section className="relative mt-6 overflow-hidden rounded-2xl border border-brand/40 bg-gradient-to-br from-brand/20 via-surface to-vocals/15">
       <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:p-5">
-        <Link href={`/remixes/${remix.id}`} className="shrink-0">
+        <Link href={`/remixes/${remix.id}`} className="shrink-0" aria-label={`Open ${remix.title}`}>
           {cover ? (
             // eslint-disable-next-line @next/next/no-img-element -- our own storage route, already square and small
             <img src={cover} alt="" className="aspect-square w-full rounded-xl object-cover shadow-lg sm:w-32" />

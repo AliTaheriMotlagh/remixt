@@ -28,6 +28,7 @@ import {
   startSharedSession,
 } from "@/lib/client/collab";
 import { audioEngine } from "@/lib/client/audioEngine";
+import { renderMixWav } from "@/lib/client/mixdown";
 import { detectMissingKeys, listenForBeats } from "@/lib/client/autoMatch";
 import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/remixLanes";
 import { useStudioStore } from "@/lib/client/studioStore";
@@ -63,7 +64,7 @@ function formatAgo(timestamp: number) {
 // so a check can read the mix or set one up without clicking through the
 // page — `__remixt.studio.getState().lanes`. Development only.
 if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
-  (window as unknown as { __remixt?: unknown }).__remixt = { studio: useStudioStore, view: useStudioView, lyrics: useLyrics, engine: audioEngine, aiTrial: useAiTrial };
+  (window as unknown as { __remixt?: unknown }).__remixt = { studio: useStudioStore, view: useStudioView, lyrics: useLyrics, engine: audioEngine, aiTrial: useAiTrial, renderMixWav };
 }
 
 export default function Studio({ user }: { user: User | null }) {

@@ -1,7 +1,8 @@
 // What this browser keeps on disk between visits, in IndexedDB: stems as
 // downloaded (so opening a song again doesn't download it again), stems
 // with their pitch and tempo changed (see pitchTempo.ts), the Studio's
-// analysis of each stem, the beat model's beats, and the library's list
+// analysis of each stem, the beat model's beats, the radio's rendered
+// remixes (radioDeck.ts), and the library's list
 // (shown at once next visit, while a fresh one loads). Everything
 // in it can be made again, so it's only ever a cache: when IndexedDB isn't
 // there (private windows, some in-app browsers) or the disk is full, it
@@ -13,8 +14,8 @@
 
 import { isConstrainedDevice } from "./device";
 
-export type CacheKind = "stem" | "render" | "analysis" | "beats" | "list";
-export const CACHE_KINDS: CacheKind[] = ["stem", "render", "analysis", "beats", "list"];
+export type CacheKind = "stem" | "render" | "radio" | "analysis" | "beats" | "list";
+export const CACHE_KINDS: CacheKind[] = ["stem", "render", "radio", "analysis", "beats", "list"];
 
 const DB_NAME = "remixt-cache";
 const DB_VERSION = 1;
@@ -27,6 +28,8 @@ const MB = 1024 * 1024;
 const BUDGETS: Record<CacheKind, { phone: number; computer: number; share: number }> = {
   stem: { phone: 250 * MB, computer: 1500 * MB, share: 0.25 },
   render: { phone: 400 * MB, computer: 3000 * MB, share: 0.35 },
+  // A four-minute remix is ~42 MB as WAV: about 7 on a phone, 35 on a computer.
+  radio: { phone: 300 * MB, computer: 1500 * MB, share: 0.2 },
   analysis: { phone: 40 * MB, computer: 120 * MB, share: 0.05 },
   beats: { phone: 8 * MB, computer: 8 * MB, share: 0.05 },
   list: { phone: 20 * MB, computer: 20 * MB, share: 0.05 },
@@ -39,7 +42,7 @@ function budget(kind: CacheKind, quota: number | null): number {
 }
 
 /** Audio is dropped after a while even with room to spare, so a stem taken down doesn't live on here. */
-const MAX_AGE: Partial<Record<CacheKind, number>> = { stem: 30 * 24 * 3600 * 1000, render: 30 * 24 * 3600 * 1000 };
+const MAX_AGE: Partial<Record<CacheKind, number>> = { stem: 30 * 24 * 3600 * 1000, render: 30 * 24 * 3600 * 1000, radio: 30 * 24 * 3600 * 1000 };
 /** A read only moves an entry to the front of the queue this often, not on every read. */
 const TOUCH_MS = 60_000;
 

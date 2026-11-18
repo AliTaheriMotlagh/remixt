@@ -10,6 +10,18 @@ Written 2026-11-17. Last commit at that time: `0fee2ca` (all earlier work commit
 
 ---
 
+## What's left (2026-11-18 (3)) — all of it needs you, a device or hardware
+
+Everything that could be done and checked from this computer is done. Open:
+1. **Real phones** (Phase 2, 3, 9): iPhone (installed PWA + Safari tab) and Android Chrome — lock, switch app, home, a call; AI features' timings; a remix tune-in with nothing kept.
+2. **A signed-in account** (Phase 4, 7): a tagged MP3 upload shows its cover after splitting; the lazy cover fill on a real library; every page signed in with data and as a new empty account.
+3. **Genius**: set `GENIUS_ACCESS_TOKEN` in `.env.local` (free, genius.com/api-clients).
+4. **DJ** (Phase 6): listen for clicks at loop points; a MIDI controller.
+5. **Look and listen**: the AI panel clicked through with real lanes; the four new clip visualizers in an exported video.
+6. Decisions below: 1 (native wrapper) is still open; 2 and 3 were taken as recommended.
+
+---
+
 ## Decisions for the owner (answer when you can; work starts with the recommended option)
 
 1. **"Kill the app and it keeps playing."** If the app is *swiped away* (force-closed), no web app or PWA can keep playing on iPhone or Android. The phone ends the page, and the sound with it. What a web app *can* do is keep playing when the screen locks, when you switch to another app, or when you go to the home screen. Only a native wrapper (for example Capacitor, with a background audio service) survives a swipe-away.
@@ -144,7 +156,9 @@ How it works (like the live rooms, `lib/live.ts`): no media server. The server k
 - [x] Player (`radioDeck.ts`): every song is rendered to a WAV in the tab and played by `<audio>` (keeps going with the screen locked); two decks crossfade through Web Audio gains + analyser (visualizer); iPhone (element volume is fixed there) switches at the crossfade start. Songs: their stems summed directly (≈4 s, 2 s cached). Remixes: the Studio mixdown (`renderMixWav` with a span) — tune-in shows "Getting the remix ready… n%". Clock: NTP-style, the quickest of the last 12 round trips. Lock screen: Media Session metadata + play/pause.
 - [x] Checked (`OWNER_ID=<id> SHORTEN=1 node scripts/radio-check.mjs`): two tabs −26/−88 ms from the station clock; at the change the voted song came in over a 6 s equal-power blend (0.9/0.08 → 0.03/0.9) in both tabs; after it, both within 23 ms of the station (2 ms apart).
 - [x] Always on, anywhere: `/radio/[slug]/embed?autoplay=1` starts by itself where sound is allowed (OBS, game web views, kiosks) and retunes after a drop; `postMessage` API — `{type:"remixt-radio", action:"play"|"pause"|"volume", value}` in, `{type:"remixt-radio:state", playing, now, next, listeners}` out (checked: `node scripts/radio-embed-check.mjs`). The broadcast view retunes itself too. Share card lists all of it.
-- [ ] **Remix mixdown is slow**: a 3:53 song through `renderMixWav` took 26 s (45 s with stems cached!) in one tab; 100 s with two tabs. No worklets in the chain — profile `mixBounce`/`renderInPieces` (pieces of 40 s + 12 s lead-ins; master chain per piece). Until then a remix tune-in waits for its render, and a phone may not have the next remix ready in 90 s (it then joins it late).
+- [x] **Remix mixdown speed — profiled (2026-11-18 (3))**: nothing wasteful in it. The 4:00 remix "avalin" renders in ~6 s (40× real time) on an idle Mac; the same render swings 3× with machine load (a blank page's synthetic render went 0.55 → 1.8 s within minutes, load average 10–30 with iCloud's `bird` at 100%), which explains the 26/45/100 s seen before. Ruled out: the progress pauses (no progress at all: same time), the live AudioContext (suspended: same), the main thread (no long tasks). The costly stages (drive, compressor, reverb) are already out of the path when off; what's left per lane is 7 biquads + the echo loop. Not changed — it would touch every export. Instead the radio now **keeps what it mixed** (next item), so a remix is mixed once per device.
+- [x] **Radio keeps every song it mixed** (`radioCache.ts`, kind `radio` in `localCache.ts`: phone 300 MB / computer 1.5 GB, 30 days, least-recently-used first; on the Storage page as "Radio remixes"). Kept whole from 0:00, keyed by a SHA-256 of the play payload + length (an edited remix gets a new key; `RADIO_MIX_VERSION` to remix everything). Kept → played at once and sought to the station's spot (waits for the element's metadata first, Safari drops an earlier seek). Not kept → exactly the old path; mixed from 0 → kept as is; tuned in part way → the whole song is mixed for keeping later, only while the mixer is idle, and that job is aborted the moment the station needs a song (it's retried later). `tests/radio-cache.test.ts` 2/2. Checked: `node scripts/radio-cache-check.mjs` on the house station — first visit 2.4 s to sound (2 mixes, 42 MB kept), second visit **0.39 s, 0 mixes, −4 ms off the station** at 0:11.
+- [ ] Remix tune-in time on a real phone with nothing kept (needs a phone).
 - Later: a plain audio stream URL (Icecast-style) needs remixes rendered on the server — not possible while remixes exist only as lanes.
 
 ## Phase 10 — Remove one singer from a song (done 2026-11-18)
@@ -155,24 +169,26 @@ In the Studio: vocal lane menu → "Remove a singer…" (`RemoveSingerDialog.tsx
 - [x] By hand: tap parts on the strip, or tick lyric sections.
 - [x] Remove: keep the music (vocal clips cut, 30 ms fades on new edges; a lane with nothing left is muted) or cut the time out of the whole song (widened to whole bars, markers shifted). Lyric lines inside go. One undo step (`startNewStep` before and after).
 - [x] Checked on "Kid Cudi – Can't Believe It (Ft 2 Chainz)": no names in its lyrics; by voice → 2 voices (silhouette 0.44), Voice 2 = mostly 1:41–2:13 (the featured verse) plus two short intro bits; taking it out left 9 clips, all faded. The first version heard one voice (an odd phrase became its own group) — fixed by the several starts and the minimum group size.
-- [ ] Not checked in the browser: undo after the cut, the "cut the time out" path, a sheet with Genius headers, phones/iPad screenshots of the dialog (it's a bottom sheet under 640 px).
+- [x] Checked in Chrome (`node scripts/singer-check.mjs <remix id>`, on "avalin"): by voice → 2 voices, Voice 2 taken out with "Cut that time out" → 4:00 became 2:04, exactly 44 whole bars, both lanes cut to matching clips; ⌘Z brought every lane, clip and the length back (identical). `LYRICS=1`: a timed sheet with `[Verse 1: Hichkas]`, `[Chorus: Hichkas & Dorcci]`, `[Verse 2: Dorcci]` → both offered by name, the shared-chorus warning shows, "keep the music" kept 4:00, cut the vocal into clips and took out the 6 lines sung there. Phone (390 px) bottom sheet: fits, nothing cut off.
+- Note: the Studio's Undo button isn't visible at 1440 px in the transport (⌘Z works). Not looked into.
 
 ## Phase 7 — every page works and makes sense
 
 Pages: `/` `studio` `library` `upload` `remixes` `remixes/[id]` `r` `embed` `artist` `dj` `live` `live/new` `live/[id]` `challenges` `leaderboard` `notifications` `invite` `examples` `login` `signup` `storage` `takedown` `admin`.
 
-For each page, on phone and computer:
-- [ ] Screenshot it (`npm run shot -- /path /tmp/x.png phone` and `desktop`) with real data and with an empty account.
-- [ ] Every number is real (counts, plays, scores, live viewers) — no made-up or random values. Known random: floating reactions in `live/Reactions.tsx` (fine, it's decoration).
-- [ ] Every button does what it says. Empty states say what to do next.
-- [ ] `/examples` uses synthesised demo songs (`demoSongs.ts`) next to real library songs; it should say clearly which is which.
-- [ ] Write a line per page here: OK, or what's wrong.
+Done 2026-11-18 (3) as a guest, with `node scripts/page-audit.mjs` (every page on phone 390 px and desktop 1440 px: status, page/console errors, sideways scroll, broken images, "NaN/undefined/Infinity" on screen, buttons/links with no name; screenshots in `OUT_DIR`). Set `REMIX_ID`, `ARTIST_ID`, `LIVE_ID` for the pages with ids; `COOKIE=` to run it signed in.
+- [x] OK on phone and desktop: `/` `/studio` `/library` `/upload` `/remixes/[id]` `/embed/[id]` `/artist/[id]` `/dj` `/radio` `/radio/remixt-radio` (+ `/embed`, `/broadcast`) `/live` `/live/new` `/live/[id]` `/challenges` `/leaderboard` `/notifications` `/examples` `/login` `/signup` `/storage` `/takedown`.
+- [x] `/remixes`: the "Remix of the day" cover link had no name for screen readers — fixed (`aria-label`).
+- [x] `/admin`: 404 for anyone not an admin — on purpose (`notFound()`, no hint it exists).
+- [x] `/examples` says clearly which is which: "From the library" (real uploads, split by the AI splitter) and "Demo songs" (synthesised in the browser) are separate tabs, each explained.
+- Screens looked at: radio (phone), DJ decks (phone), examples (desktop) — fine.
+- [ ] Signed in as a real account with data, and as a new empty account (needs a login; the test login isn't stored here).
 
 ---
 
 ## Phase 8 — checks before every commit
 
-Last run (2026-11-18, end of session): tsc clean; lint = the 3 old vendored errors; unit tests 803 passed, 1 failed — `demo-songs` "is quick enough" (3.06 s against its limit) under the full parallel run; it passes alone. Full `npm test` (with the server) not run this session.
+Last run (2026-11-18 (3)): tsc clean; lint = the 3 old vendored errors (`public/stretch/…`), the changed files clean; unit tests 805 passed, 1 failed — `demo-songs` "is quick enough" (2.67 s against 2.5 s). It fails the same with this session's changes stashed: the machine was loaded (iCloud `bird` at 100%). Full `npm test` (with the server) not run: it needs the `next dev` on port 3000 stopped.
 
 
 - [ ] `cd web && npx tsc --noEmit && npm run lint && npm test -- --brief` (stop any `next dev` in `web/` first; they share `.next`).
@@ -182,6 +198,8 @@ Last run (2026-11-18, end of session): tsc clean; lint = the 3 old vendored erro
 ---
 
 ## Notes and tools (from earlier sessions)
+
+- New rigs (2026-11-18 (3)): `scripts/page-audit.mjs` (every page, both sizes), `scripts/singer-check.mjs` (remove a singer + undo; `LYRICS=1` for the headers sheet), `scripts/radio-cache-check.mjs` (kept radio mixes). `window.__remixt.renderMixWav` (development only) times the listening-mode render from a console or rig.
 
 - Cheap tests: `cd web && npm test -- --unit --brief` (no server); `npm test -- --brief tests/<file>.test.ts`.
 - New network problems: add a case to `tests/upload-sim.test.ts` with `tests/support/line.ts`; don't test by hand.

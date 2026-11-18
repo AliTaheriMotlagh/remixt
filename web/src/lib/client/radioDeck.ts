@@ -5,6 +5,7 @@ import { crossfadeGains } from "@/lib/radioPick";
 import { audioEngine } from "./audioEngine";
 import { encodeWav, renderMixWav } from "./mixdown";
 import { fetchStem } from "./stemFetch";
+import { keepMix, keptMix, radioMixKey } from "./radioCache";
 import { laneFromApi, projectFromApi, type RemixApi, type RemixLaneApi } from "./remixLanes";
 import { useStudioStore } from "./studioStore";
 
@@ -20,6 +21,13 @@ import { useStudioStore } from "./studioStore";
 // through Web Audio (gain + an analyser for the visualizer); iPhones don't
 // allow that, so there they play as they are and change at the crossfade's
 // start.
+//
+// Every song is kept on the device once mixed (radioCache.ts), whole from
+// its start: the next time it's on — this visit or another — it plays from
+// the kept file at once. A song tuned into part way is mixed from where
+// the station is (quickest to sound); the whole of it is mixed for keeping
+// later, only while nothing else is being mixed, and that gives way at once
+// to a song the station needs.
 
 /** Off the station by more than this (seconds): jump back on. */
 const DRIFT = 0.4;
@@ -44,6 +52,18 @@ async function json<T>(res: Response): Promise<T> {
   return data as T;
 }
 
+type PlayPayload = { remix: RemixApi; lanes: RemixLaneApi[] };
+
+/** Resolves once `el` knows its length (or after a few seconds, whatever happens). */
+function metadataOf(el: HTMLAudioElement) {
+  return new Promise<void>((resolve) => {
+    if (el.readyState >= 1) return resolve();
+    el.addEventListener("loadedmetadata", () => resolve(), { once: true });
+    el.addEventListener("error", () => resolve(), { once: true });
+    setTimeout(resolve, 5000);
+  });
+}
+
 /** Can this browser set an <audio> element's volume? (iOS keeps it at 1.) */
 function volumeWorks() {
   try {
@@ -60,6 +80,12 @@ export class RadioDeck {
   private rendering = new Map<number, Promise<void>>();
   /** Renders share the Studio's state: one at a time. */
   private queue: Promise<unknown> = Promise.resolve();
+  /** Renders the station needs, waiting or running. */
+  private busy = 0;
+  /** Whole mixes still to keep (songs tuned into part way), by cache key. */
+  private toKeep = new Map<string, (signal: AbortSignal) => Promise<void>>();
+  /** The keeping mix running now: stopped when the station needs the mixer. */
+  private keeping: AbortController | null = null;
   private ctx: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
   private routed = false;
@@ -91,6 +117,8 @@ export class RadioDeck {
 
   stop() {
     this.stopped = true;
+    this.keeping?.abort();
+    this.toKeep.clear();
     for (const d of this.decks) this.drop(d);
     this.decks = [];
   }
@@ -172,33 +200,85 @@ export class RadioDeck {
   }
 
   /** Renders `row` from `from` seconds to its end, as a playable file. */
+  /** A remix mixed by the Studio's mixdown, from `from` to the song's end. */
+  private async mixRemix(row: QueueRow, payload: PlayPayload, from: number, onProgress?: (fraction: number) => void, signal?: AbortSignal) {
+    const store = useStudioStore.getState();
+    store.loadRemix(payload.lanes.map(laneFromApi), projectFromApi(payload.remix), { id: payload.remix.id, title: row.title });
+    return renderMixWav({
+      span: { start: from, end: Math.max(from + 1, row.duration) },
+      tailSeconds: 0,
+      signal,
+      onProgress: onProgress && ((_stage, f) => f !== undefined && onProgress(f)),
+    });
+  }
+
+  /** Renders `row` from `from` seconds to its end, as a playable file — or the kept whole mix, from its start. */
   private render(row: QueueRow, from: number): Promise<{ url: string; offset: number }> {
+    // The station needs the mixer: a keeping mix running now stops (and is tried again later).
+    this.keeping?.abort();
+    this.busy++;
     const job = this.queue.then(async () => {
       const payload = await fetch(`/api/radio/${encodeURIComponent(this.slug)}/play?kind=${row.kind}&id=${encodeURIComponent(row.id)}`).then((r) =>
-        json<{ remix: RemixApi; lanes: RemixLaneApi[] }>(r)
+        json<PlayPayload>(r)
       );
-      if (row.kind === "track") return { url: URL.createObjectURL(await this.mixSong(payload.lanes, from, row.duration)), offset: from };
-      const store = useStudioStore.getState();
-      store.loadRemix(payload.lanes.map(laneFromApi), projectFromApi(payload.remix), { id: payload.remix.id, title: row.title });
-      const end = Math.max(from + 1, row.duration);
-      const blob = await renderMixWav({
-        span: { start: from, end },
-        tailSeconds: 0,
-        onProgress: (_stage, f) => {
-          if (f !== undefined && !this.decks.some((d) => !d.el.paused)) this.onState("loading", `Getting the remix ready… ${Math.round(f * 100)}%`);
-        },
-      });
+      const key = await radioMixKey(row.kind, payload, row.duration).catch(() => null);
+      const kept = key ? await keptMix(key) : null;
+      if (kept) return { url: URL.createObjectURL(kept), offset: 0 };
+      const whole = from < 0.01;
+      const blob =
+        row.kind === "track"
+          ? await this.mixSong(payload.lanes, from, row.duration)
+          : await this.mixRemix(row, payload, from, (f) => {
+              if (!this.decks.some((d) => !d.el.paused)) this.onState("loading", `Getting the remix ready… ${Math.round(f * 100)}%`);
+            });
+      if (key && whole) void keepMix(key, blob);
+      else if (key) this.keepLater(key, row, payload);
       return { url: URL.createObjectURL(blob), offset: from };
     });
-    this.queue = job.catch(() => {});
+    this.queue = job.catch(() => {}).finally(() => {
+      this.busy--;
+      this.keepNext();
+    });
     return job;
+  }
+
+  /** Remembers to mix the whole of `row` for keeping, once the mixer is free. */
+  private keepLater(key: string, row: QueueRow, payload: PlayPayload) {
+    if (this.toKeep.has(key)) return;
+    this.toKeep.set(key, async (signal) => {
+      if (await keptMix(key)) return;
+      // A remix's mix stops when the station needs the mixer; a song's takes a second or two and is kept even then.
+      const blob = row.kind === "track" ? await this.mixSong(payload.lanes, 0, row.duration) : await this.mixRemix(row, payload, 0, undefined, signal);
+      await keepMix(key, blob);
+    });
+  }
+
+  /** Runs one keeping mix if nothing the station needs is waiting. */
+  private keepNext() {
+    if (this.busy > 0 || this.keeping || this.stopped) return;
+    const next = this.toKeep.entries().next();
+    if (next.done) return;
+    const [key, task] = next.value;
+    this.toKeep.delete(key);
+    const control = new AbortController();
+    this.keeping = control;
+    this.queue = this.queue
+      .then(() => (control.signal.aborted ? Promise.reject(control.signal.reason) : task(control.signal)))
+      .catch(() => {
+        // Stopped for the station (or failed): tried again when the mixer is free, unless the radio was turned off.
+        if (control.signal.aborted && !this.stopped && !this.toKeep.has(key)) this.toKeep.set(key, task);
+      })
+      .finally(() => {
+        if (this.keeping === control) this.keeping = null;
+        this.keepNext();
+      });
   }
 
   /** Makes sure `row` is (being) prepared; `from`: the song's second to render from. */
   prepare(row: QueueRow, from: number) {
     if (this.has(row.rowId) || this.rendering.has(row.rowId) || this.stopped) return;
     const job = this.render(row, from)
-      .then(({ url, offset }) => {
+      .then(async ({ url, offset }) => {
         if (this.stopped) return URL.revokeObjectURL(url);
         const el = new Audio();
         el.preload = "auto";
@@ -212,7 +292,10 @@ export class RadioDeck {
           gain.gain.value = 0;
           source.connect(gain).connect(this.analyser);
         }
-        this.decks.push({ row, el, url, offset, gain, joinedAt: 0, fadeFromStart: offset > 0.5 });
+        // A kept whole mix joined part way: let it learn its length first, so the jump to the station's spot holds (Safari drops one made earlier).
+        if (from - offset > 1) await metadataOf(el);
+        if (this.stopped) return URL.revokeObjectURL(url);
+        this.decks.push({ row, el, url, offset, gain, joinedAt: 0, fadeFromStart: from > 0.5 });
         this.decks.sort((a, b) => (a.row.startsAt ?? 0) - (b.row.startsAt ?? 0));
       })
       .catch((e) => this.onState("error", e instanceof Error ? e.message : "Couldn't get the song ready"))
