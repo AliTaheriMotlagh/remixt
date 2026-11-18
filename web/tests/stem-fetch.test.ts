@@ -151,3 +151,25 @@ describe("fetchInSlices", () => {
     assert.equal(requests, 1);
   });
 });
+
+describe("a store's CDN that can't be reached", () => {
+  test("is given up on within seconds, and the file comes through the app — from then on straight away", async () => {
+    const asked: string[] = [];
+    handler = (req, res) => {
+      asked.push(req.url ?? "");
+      // The CDN (the redirect target) never answers: a connection that hangs, as where it's blocked.
+      if (!req.url?.includes("via=app")) return;
+      ranged()(req, res);
+    };
+    const started = Date.now();
+    const { bytes } = await download("/api/audio/stem/hangs");
+    assert.ok(Buffer.from(bytes).equals(FILE));
+    assert.ok(Date.now() - started < 8000 + 5000, "waited on the CDN only a few seconds");
+    assert.equal(asked.filter((u) => !u.includes("via=app")).length, 1, "the hanging CDN wasn't asked again and again");
+
+    asked.length = 0;
+    const again = await download("/api/audio/stem/hangs");
+    assert.ok(Buffer.from(again.bytes).equals(FILE));
+    assert.ok(asked.every((u) => u.includes("via=app")), "the next file goes straight through the app");
+  });
+});

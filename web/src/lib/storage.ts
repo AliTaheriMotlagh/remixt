@@ -32,6 +32,12 @@ function findBlobToken(): string | undefined {
 }
 
 const blobToken = process.env.R2_BUCKET ? undefined : findBlobToken();
+/**
+ * With R2 in use, a Blob store still connected is the old home of files
+ * not moved yet: read from (and copied into R2) when R2 lacks a file,
+ * never written to. See ensureStored.
+ */
+const legacyBlobToken = process.env.R2_BUCKET ? findBlobToken() : undefined;
 
 /**
  * Why uploads can't work in this environment, if they can't. Serverless
@@ -112,7 +118,8 @@ export const MAX_STEM_BYTES = 40 * 1024 * 1024;
 const r2 = process.env.R2_BUCKET
   ? {
       bucket: process.env.R2_BUCKET,
-      endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      // R2_ENDPOINT: any other S3-compatible store (path-style URLs).
+      endpoint: (process.env.R2_ENDPOINT || `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`).replace(/\/$/, ""),
       publicUrl: (process.env.R2_PUBLIC_URL ?? "").replace(/\/$/, ""),
       client: new AwsClient({
         accessKeyId: process.env.R2_ACCESS_KEY_ID ?? "",
@@ -318,6 +325,7 @@ export async function serveThroughApp(fileUrl: string, rangeHeader: string | nul
     const start = match?.[1] ? parseInt(match[1], 10) : 0;
     const wanted = match?.[2] ? parseInt(match[2], 10) : Number.MAX_SAFE_INTEGER;
     const end = Math.min(wanted, start + MAX_SLICE - 1);
+    if (!(await ensureStored(key))) return new Response("Not found", { status: 404 });
     const upstream = await r2.client.fetch(objectUrl(key), { headers: { Range: `bytes=${start}-${end}` } });
     if (!upstream.ok || !upstream.body) return new Response("Not found", { status: upstream.status === 416 ? 416 : 404 });
     const headers = new Headers({
@@ -334,9 +342,85 @@ export async function serveThroughApp(fileUrl: string, rangeHeader: string | nul
   return serveStorageFile(fileUrl, rangeHeader);
 }
 
+/** Keys known to be in R2 already (this server instance): no need to look again. */
+const inR2 = new Set<string>();
+const copying = new Map<string, Promise<boolean>>();
+
+/** A file's bytes from the old Blob store (private or public), or null when it isn't there or the store refuses. */
+async function legacyBlobBytes(key: string): Promise<{ bytes: ArrayBuffer; contentType: string } | null> {
+  const found = await head(key, { token: legacyBlobToken }).catch(() => null);
+  if (!found) return null;
+  for (const auth of [true, false]) {
+    const res = await fetch(found.url, {
+      headers: auth ? { Authorization: `Bearer ${legacyBlobToken}` } : {},
+      cache: "no-store",
+    }).catch(() => null);
+    if (res?.ok) return { bytes: await res.arrayBuffer(), contentType: found.contentType || contentTypeFor(key) };
+  }
+  return null;
+}
+
+/**
+ * Moving from Blob to R2 without losing a song: with R2 in use and the old
+ * Blob store still connected, a file R2 doesn't have yet is copied over
+ * the first time it's asked for (scripts/blob-to-r2.mjs moves the rest in
+ * one go). True when R2 has the file — or can't say, and the normal path
+ * should answer. Free without a Blob store, or once a file is seen in R2.
+ */
+export async function ensureStored(key: string): Promise<boolean> {
+  if (!r2 || !legacyBlobToken || /^https?:\/\//.test(key) || inR2.has(key)) return true;
+  let pending = copying.get(key);
+  if (!pending) {
+    pending = (async () => {
+      const there = await r2.client.fetch(objectUrl(key), { method: "HEAD" }).catch(() => null);
+      if (there?.ok) return true;
+      if (!there || there.status !== 404) return true;
+      const old = await legacyBlobBytes(key);
+      if (!old) return false;
+      const put = await r2.client.fetch(objectUrl(key), {
+        method: "PUT",
+        body: new Uint8Array(old.bytes),
+        headers: { "Content-Type": old.contentType },
+      });
+      return put.ok;
+    })()
+      .catch(() => false)
+      .then((ok) => {
+        if (ok) inR2.add(key);
+        return ok;
+      })
+      .finally(() => copying.delete(key));
+    copying.set(key, pending);
+  }
+  return pending;
+}
+
+/** How long a signed link to a file in a private R2 bucket works. */
+export const SIGNED_URL_SECONDS = 12 * 60 * 60;
+
+/**
+ * Where a browser can fetch a stored file straight from the store, at the
+ * store's speed and without passing through this app: the bucket's public
+ * URL (R2_PUBLIC_URL), or else — the bucket kept private — a link signed
+ * for SIGNED_URL_SECONDS, given only to someone the app has let hear it.
+ * Signed as of the start of the hour, so the same file has the same link
+ * for an hour and the browser's cache can keep it. Null when files come
+ * through this app instead (Blob, disk).
+ */
+export async function directUrl(key: string): Promise<string | null> {
+  if (!r2) return null;
+  if (r2.publicUrl) return publicUrl(key);
+  const url = new URL(objectUrl(key));
+  url.searchParams.set("X-Amz-Expires", String(SIGNED_URL_SECONDS));
+  const hour = new Date(Math.floor(Date.now() / 3_600_000) * 3_600_000);
+  const datetime = hour.toISOString().replace(/[:-]|\.\d{3}/g, "");
+  const signed = await r2.client.sign(new Request(url, { method: "GET" }), { aws: { signQuery: true, datetime } });
+  return signed.url;
+}
+
 /** Public URL for a stored object when the backend has one (R2). */
 export function publicUrl(key: string): string | null {
-  if (!r2) return null;
+  if (!r2?.publicUrl) return null;
   return `${r2.publicUrl}/${key.split("/").map(encodeURIComponent).join("/")}`;
 }
 
@@ -485,6 +569,7 @@ export async function readObject(key: string): Promise<Buffer | null> {
     return Buffer.from(await res.arrayBuffer());
   }
   if (r2) {
+    if (!(await ensureStored(key))) return null;
     const res = await r2.client.fetch(objectUrl(key));
     if (res.status === 404) return null;
     if (!res.ok) throw new Error(`storage GET failed (HTTP ${res.status})`);
@@ -524,8 +609,11 @@ export async function serveObject(
     }
     return serveBlobRange(key, rangeHeader);
   }
-  const remote = publicUrl(key);
-  if (remote) return Response.redirect(remote, 302);
+  if (r2) {
+    if (!(await ensureStored(key))) return new Response("Not found", { status: 404 });
+    const direct = await directUrl(key);
+    return direct ? Response.redirect(direct, 302) : serveThroughApp(key, rangeHeader);
+  }
   return serveStorageFile(key, rangeHeader);
 }
 
@@ -547,7 +635,8 @@ export function keyOfFileUrl(fileUrl: string): string {
 export function storageLimitBytes(): number | null {
   const set = Number(process.env.STORAGE_LIMIT_GB);
   if (set > 0) return set * 1e9;
-  return blobToken ? 1e9 : null;
+  // Vercel Blob Hobby's 1 GB; R2's free tier is 10 GB.
+  return blobToken ? 1e9 : r2 ? 10e9 : null;
 }
 
 export function storageBackend(): "blob" | "r2" | "local" {

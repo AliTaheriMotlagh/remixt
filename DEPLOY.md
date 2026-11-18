@@ -199,21 +199,47 @@ From now on, every `git push` to `main` redeploys the site by itself.
 - **Serve ONNX Runtime from a CDN**: set `NEXT_PUBLIC_ORT_BASE_URL` to
   `https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/`. That moves the
   28 MB runtime off Vercel's bandwidth.
-- **Cloudflare R2 instead of Blob** (10 GB free, but Cloudflare needs a
-  payment card on file): create a bucket with public access and this CORS
-  policy, and an API token with Object Read & Write:
+- **Cloudflare R2 instead of Blob** (10 GB free, downloads always free;
+  Cloudflare may ask for a payment method on file): create a **private**
+  bucket (no public access), this CORS policy (bucket → Settings → CORS
+  Policy; your site's address as the origin), and an Account API token
+  with Object Read & Write on that bucket:
 
   ```json
   [{ "AllowedOrigins": ["https://<project>.vercel.app"],
      "AllowedMethods": ["GET", "HEAD", "PUT"],
      "AllowedHeaders": ["Content-Type", "Range"],
-     "ExposeHeaders": ["Content-Length", "Content-Range", "Accept-Ranges", "ETag"],
+     "ExposeHeaders": ["Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Content-Type"],
      "MaxAgeSeconds": 3600 }]
   ```
 
-  Then set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
-  `R2_BUCKET` and `R2_PUBLIC_URL`. When `R2_BUCKET` is set, it takes
-  priority over Blob.
+  Then set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and
+  `R2_BUCKET`, and redeploy. When `R2_BUCKET` is set, it takes priority
+  over Blob. Add lifecycle rules that delete `imports/` and `relay/` after
+  a day.
+
+  The bucket stays private: once the app has checked someone may hear a
+  stem, it sends their browser a link to it signed for 12 hours, so the
+  audio comes straight from Cloudflare, at its speed and at no cost,
+  while a private take's address is useless to anyone else a day later.
+  (`R2_PUBLIC_URL` instead makes stems plain public URLs on a custom
+  domain; Cloudflare says the `r2.dev` address isn't for production.)
+
+  Where Cloudflare can't be reached (Iran filters its addresses from time
+  to time), the browser gives up on it within 8 seconds and gets files
+  through the app instead, and remembers that for a day. Those downloads
+  then count against Vercel's bandwidth (100 GB a month on Hobby).
+  Uploads fall back the same way.
+
+  **Moving from Blob to R2 without losing songs:** keep the Blob store
+  connected and add the `R2_*` variables. New files go to R2 only; a file
+  R2 doesn't have yet is copied over from Blob the first time it's
+  played. To move everything at once, put `BLOB_READ_WRITE_TOKEN` and the
+  `R2_*` values in `web/.env.migrate` and run
+  `node --env-file=.env.migrate scripts/blob-to-r2.mjs` (add `--dry-run`
+  first to see what it would copy; it's safe to run again). Once it
+  reports every file in R2, disconnect the Blob store. A suspended Blob
+  store can't be read: wait for it to come back first.
 - `NEXT_PUBLIC_…` variables are baked in when the site is built, so
   redeploy after changing them.
 

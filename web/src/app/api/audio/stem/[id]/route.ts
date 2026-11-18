@@ -2,10 +2,11 @@ import { NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { getStemById } from "@/lib/models";
 import { canHearStem } from "@/lib/trackAccess";
-import { publicUrl, serveBlobRange, servesThroughApp, serveStorageFile, serveThroughApp } from "@/lib/storage";
+import { directUrl, ensureStored, publicUrl, servesThroughApp, serveStorageFile, serveThroughApp } from "@/lib/storage";
 
 // Plays a stem. Stems with a public URL (a public Blob store, R2, rows from
-// older builds) redirect there, so the audio streams from the CDN rather
+// older builds), or a signed link to a private R2 bucket, redirect there,
+// so the audio streams from the store rather
 // than through this server. A private Blob store's stems are proxied here
 // in slices; local-disk stems are streamed with Range support.
 //
@@ -16,8 +17,11 @@ const KEEP_FILE = "private, max-age=2592000, immutable";
 /** Where a stem lives could move (another storage backend): its redirect is kept a day. */
 const KEEP_REDIRECT = "private, max-age=86400";
 
-function redirect(url: string) {
-  return new Response(null, { status: 302, headers: { Location: url, "Cache-Control": KEEP_REDIRECT } });
+/** A signed link to a private R2 bucket works for 12 hours (SIGNED_URL_SECONDS); its redirect is kept one. */
+const KEEP_SIGNED_REDIRECT = "private, max-age=3600";
+
+function redirect(url: string, keep = KEEP_REDIRECT) {
+  return new Response(null, { status: 302, headers: { Location: url, "Cache-Control": keep } });
 }
 
 function kept(res: Response) {
@@ -44,10 +48,15 @@ export async function GET(
     return kept(await serveThroughApp(stem.file_url, req.headers.get("range")));
   }
   if (/^https?:\/\//.test(stem.file_url)) return redirect(stem.file_url);
-  const remote = publicUrl(stem.file_url);
-  if (remote) return redirect(remote);
+  const direct = await directUrl(stem.file_url);
+  if (direct) {
+    // Moving from Blob: a stem not in R2 yet is copied there first (see ensureStored).
+    if (!(await ensureStored(stem.file_url))) return Response.json({ error: "Not found" }, { status: 404 });
+    // A signed link expires: the redirect to it is kept well short of that.
+    return redirect(direct, publicUrl(stem.file_url) ? KEEP_REDIRECT : KEEP_SIGNED_REDIRECT);
+  }
   if (servesThroughApp(stem.file_url)) {
-    return kept(await serveBlobRange(stem.file_url, req.headers.get("range")));
+    return kept(await serveThroughApp(stem.file_url, req.headers.get("range")));
   }
   return kept(await serveStorageFile(stem.file_url, req.headers.get("range")));
 }

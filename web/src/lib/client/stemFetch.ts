@@ -26,10 +26,28 @@ export type Pace = {
   before?: () => Promise<void>;
 };
 
-async function fetchRange(url: string, start: number, end: number) {
+/**
+ * How long the store's CDN gets to start answering before it's taken to be
+ * unreachable from here — blocked in some countries, where a connection
+ * can hang rather than fail — and the file comes through this app instead.
+ */
+export const CDN_ANSWER_MS = 8000;
+
+class Unreachable extends Error {
+  final = true;
+}
+
+async function fetchRange(url: string, start: number, end: number, answerWithin?: number) {
   for (let attempt = 1; ; attempt++) {
     try {
-      const res = await fetch(url, { headers: { Range: `bytes=${start}-${end}` } });
+      // Only the answer's start is timed: a slow line may take long over the body.
+      const controller = answerWithin ? new AbortController() : null;
+      const timer = controller && setTimeout(() => controller.abort(), answerWithin);
+      const res = await fetch(url, { headers: { Range: `bytes=${start}-${end}` }, signal: controller?.signal })
+        .catch((err) => {
+          throw controller?.signal.aborted ? new Unreachable("no answer") : err;
+        })
+        .finally(() => timer && clearTimeout(timer));
       // A 4xx won't get better by asking again.
       if (res.status >= 400 && res.status < 500) throw Object.assign(new Error(`HTTP ${res.status}`), { final: true });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -87,12 +105,35 @@ export async function fetchStem(
   return bytes;
 }
 
-/** Set once the store's CDN has proved unreachable from this page: files come through this app from then on. */
-let viaApp = false;
+/**
+ * Set once the store's CDN has proved unreachable from here: files come
+ * through this app from then on — remembered for a day, so the next visit
+ * doesn't wait on the CDN again first.
+ */
+const VIA_APP_KEY = "remixt:via-app";
+const VIA_APP_MS = 24 * 60 * 60 * 1000;
+let viaApp = (() => {
+  try {
+    return Date.now() - Number(globalThis.localStorage?.getItem(VIA_APP_KEY) ?? 0) < VIA_APP_MS;
+  } catch {
+    return false;
+  }
+})();
+
+function rememberViaApp() {
+  viaApp = true;
+  try {
+    globalThis.localStorage?.setItem(VIA_APP_KEY, String(Date.now()));
+  } catch {
+    // Private mode: this page remembers it, the next doesn't.
+  }
+}
 
 /** The same file, served through this app rather than by a redirect to the store's CDN. */
 function throughApp(url: string): string | null {
-  if (!url.startsWith("/api/") || /[?&]via=app/.test(url)) return null;
+  // This app's own routes (as a path, or a full URL to one), not some other site.
+  const pathname = /^https?:\/\//.test(url) ? new URL(url).pathname : url;
+  if (!pathname.startsWith("/api/") || /[?&]via=app/.test(url)) return null;
   return `${url}${url.includes("?") ? "&" : "?"}via=app`;
 }
 
@@ -111,13 +152,13 @@ export async function fetchInSlices(
   const fallback = throughApp(url);
   if (fallback && viaApp) return fetchSlices(fallback, onProgress, pace);
   try {
-    return await fetchSlices(url, onProgress, pace);
+    return await fetchSlices(url, onProgress, pace, fallback ? CDN_ANSWER_MS : undefined);
   } catch (err) {
     if (!fallback) throw err;
     const bytes = await fetchSlices(fallback, onProgress, pace).catch(() => {
       throw err;
     });
-    viaApp = true;
+    rememberViaApp();
     return bytes;
   }
 }
@@ -125,10 +166,11 @@ export async function fetchInSlices(
 async function fetchSlices(
   url: string,
   onProgress: ((loaded: number, total: number) => void) | undefined,
-  { parallel = PARALLEL, slice = SLICE, before }: Pace
+  { parallel = PARALLEL, slice = SLICE, before }: Pace,
+  answerWithin?: number
 ): Promise<ArrayBuffer> {
   await before?.();
-  const first = await fetchRange(url, 0, slice - 1);
+  const first = await fetchRange(url, 0, slice - 1, answerWithin);
   const head = new Uint8Array(await first.arrayBuffer());
   // Redirected to a CDN (R2, a public Blob store): ask it directly for the
   // rest, rather than going through the redirect again for every slice.
