@@ -175,7 +175,7 @@ describe("moving from Blob to R2", () => {
     assert.equal((await storage.readObject("results/e/beats.bin"))?.toString(), "beats");
   });
 
-  test("a suspended Blob store means 'not there', not a crash", async () => {
+  test("a suspended Blob store means 'not there', not a crash — and isn't asked again per file", async () => {
     blobSuspended = true;
     try {
       assert.equal(await storage.ensureStored("stems/gone/vocals.mp3"), false);
@@ -183,9 +183,26 @@ describe("moving from Blob to R2", () => {
       assert.equal((await storage.serveThroughApp("stems/gone/vocals.mp3", "bytes=0-9")).status, 404);
       // Files already moved still play.
       assert.equal(await storage.ensureStored("stems/a/vocals.mp3"), true);
+      // Refused once: the store is left alone a while — a page of 40 old songs doesn't make 40 calls to it.
+      assert.match(storage.legacyResting() ?? "", /suspended/);
+      calls.length = 0;
+      for (let i = 0; i < 40; i++) assert.equal(await storage.ensureStored(`stems/old${i}/vocals.mp3`), false);
+      assert.equal(calls.filter((c) => c.startsWith("blob")).length, 0, calls.join(", "));
+      await assert.rejects(storage.listLegacyBlobFiles(), /suspended.*again in a few minutes/);
     } finally {
       blobSuspended = false;
+      storage.forgetLegacyRefusal();
     }
+  });
+
+  test("a file in neither store isn't looked for again on every view", async () => {
+    calls.length = 0;
+    assert.equal(await storage.ensureStored("stems/never/vocals.mp3"), false);
+    const first = calls.length;
+    assert.ok(first > 0);
+    assert.equal(await storage.ensureStored("stems/never/vocals.mp3"), false);
+    assert.equal(calls.length, first, "remembered");
+    assert.equal(storage.legacyResting(), null, "a missing file isn't a refusal");
   });
 
   test("with a public URL, stems redirect to it", () => {
@@ -215,12 +232,16 @@ describe("moving from Blob to R2", () => {
     assert.equal(blobFiles.size, 0);
   });
 
-  test("a suspended old store: listing it says why", async () => {
+  test("a suspended old store: listing it says why, then it's left alone", async () => {
     blobSuspended = true;
     try {
       await assert.rejects(storage.listLegacyBlobFiles(), /suspended/);
+      calls.length = 0;
+      await assert.rejects(storage.listLegacyBlobFiles(), /again in a few minutes/);
+      assert.equal(calls.length, 0);
     } finally {
       blobSuspended = false;
+      storage.forgetLegacyRefusal();
     }
   });
 });

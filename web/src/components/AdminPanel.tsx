@@ -1011,7 +1011,11 @@ function StorageTab({ onChange }: { onChange: () => void }) {
           </>
         )}
         {report.brokenSongs > 0 && (
-          <p className="mt-2 text-sm text-danger">{report.brokenSongs} ready song(s) have stems missing from storage and can&apos;t play.</p>
+          <p className="mt-2 text-sm text-danger">
+            {report.legacy && !report.legacy.ok
+              ? `${report.brokenSongs} ready song(s) can't play until the old Blob store answers again — their audio is still in it, and is copied to R2 then (see below).`
+              : `${report.brokenSongs} ready song(s) have stems missing from storage and can't play.`}
+          </p>
         )}
         <div className="mt-4 flex flex-col divide-y divide-border text-sm">
           {report.groups.map((g) => (

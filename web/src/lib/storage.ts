@@ -3,7 +3,7 @@ import { mkdir, readFile, readdir, rm, stat, writeFile } from "fs/promises";
 import path from "path";
 import { Readable } from "stream";
 import { AwsClient } from "aws4fetch";
-import { del, head, list, put } from "@vercel/blob";
+import { BlobNotFoundError, del, head, list, put } from "@vercel/blob";
 import { generateClientTokenFromReadWriteToken } from "@vercel/blob/client";
 
 // Where stems live. Three backends, picked by environment:
@@ -359,8 +359,36 @@ const inR2 = new Set<string>();
 const copying = new Map<string, Promise<boolean>>();
 
 /** A file's bytes from the old Blob store (private or public), or null when it isn't there or the store refuses. */
+/** How long the old store is left alone once it refuses (suspended, rate-limited), and a file found nowhere is taken as gone. */
+export const LEGACY_REST_MS = 5 * 60 * 1000;
+let legacyRestingUntil = 0;
+let legacyRefusal = "";
+/** Files in neither store, until when (so a page showing them doesn't look again on every view). */
+const nowhere = new Map<string, number>();
+
+/** Why the old store isn't being asked right now, or null when it may be. */
+export function legacyResting(): string | null {
+  return Date.now() < legacyRestingUntil ? legacyRefusal : null;
+}
+
+/** Forgets a refusal and the files found nowhere (tests; a store known to be back). */
+export function forgetLegacyRefusal() {
+  legacyRestingUntil = 0;
+  nowhere.clear();
+}
+
+/** The old store refused (anything but "no such file"): leave it alone a while, not ask again per file. */
+function legacyRefused(error: unknown) {
+  legacyRestingUntil = Date.now() + LEGACY_REST_MS;
+  legacyRefusal = error instanceof Error ? error.message.replace(/^Vercel Blob:\s*/, "") : "It didn't answer";
+}
+
 async function legacyBlobBytes(key: string): Promise<{ bytes: ArrayBuffer; contentType: string } | null> {
-  const found = await head(key, { token: legacyBlobToken }).catch(() => null);
+  if (legacyResting()) return null;
+  const found = await head(key, { token: legacyBlobToken }).catch((error: unknown) => {
+    if (!(error instanceof BlobNotFoundError)) legacyRefused(error);
+    return null;
+  });
   if (!found) return null;
   for (const auth of [true, false]) {
     const res = await fetch(found.url, {
@@ -381,6 +409,7 @@ async function legacyBlobBytes(key: string): Promise<{ bytes: ArrayBuffer; conte
  */
 export async function ensureStored(key: string): Promise<boolean> {
   if (!r2 || !legacyBlobToken || /^https?:\/\//.test(key) || inR2.has(key)) return true;
+  if ((nowhere.get(key) ?? 0) > Date.now()) return false;
   let pending = copying.get(key);
   if (!pending) {
     pending = (async () => {
@@ -395,6 +424,11 @@ export async function ensureStored(key: string): Promise<boolean> {
       .catch(() => false)
       .then((ok) => {
         if (ok) inR2.add(key);
+        else {
+          // Remembered a while, the oldest forgotten first if many.
+          if (nowhere.size > 5000) nowhere.delete(nowhere.keys().next().value!);
+          nowhere.set(key, Date.now() + LEGACY_REST_MS);
+        }
         return ok;
       })
       .finally(() => copying.delete(key));
@@ -716,10 +750,15 @@ export function hasLegacyBlob(): boolean {
 /** Every file in the old Blob store. Throws what the store says when it refuses (e.g. suspended). */
 export async function listLegacyBlobFiles(max = 20000): Promise<StoredFile[]> {
   if (!legacyBlobToken) return [];
+  const resting = legacyResting();
+  if (resting) throw new Error(`${resting} (asked again in a few minutes)`);
   const out: StoredFile[] = [];
   let cursor: string | undefined;
   do {
-    const page = await list({ token: legacyBlobToken, cursor, limit: 1000 });
+    const page = await list({ token: legacyBlobToken, cursor, limit: 1000 }).catch((error: unknown) => {
+      legacyRefused(error);
+      throw error;
+    });
     for (const b of page.blobs) out.push({ key: b.pathname, size: b.size, uploadedAt: new Date(b.uploadedAt) });
     cursor = page.hasMore ? page.cursor : undefined;
   } while (cursor && out.length < max);
@@ -734,6 +773,8 @@ export async function listLegacyBlobFiles(max = 20000): Promise<StoredFile[]> {
  */
 export async function copyFromLegacyBlob(keys: string[], budgetMs: number): Promise<{ copied: number; failed: string[]; done: number }> {
   const until = Date.now() + budgetMs;
+  // Listed in the old store just now: worth asking for, whatever was remembered.
+  for (const key of keys) nowhere.delete(key);
   const queue = [...keys];
   let copied = 0;
   let done = 0;
