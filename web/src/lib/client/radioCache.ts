@@ -8,7 +8,7 @@
 // A remix edited after it was kept gets a new key, so an old mix is never
 // played for it; the old one just ages out of the cache.
 
-import { cacheGet, cachePut } from "./localCache";
+import { cacheDelete, cacheGet, cachePut } from "./localCache";
 
 /** Raise when the radio's mixing changes how a song sounds: everything kept before is mixed again. */
 export const RADIO_MIX_VERSION = 1;
@@ -23,10 +23,28 @@ export async function radioMixKey(kind: string, payload: unknown, duration: numb
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** The kept whole mix, or null. */
+/**
+ * The kept whole mix, or null. Checked before it's handed to a player:
+ * Safari can lose the file behind a kept Blob (reading it then fails), and
+ * may give it back with no type — an <audio> element there won't play a
+ * typeless file, so it's typed again here (a slice: no copy).
+ */
 export async function keptMix(key: string): Promise<Blob | null> {
-  const blob = await cacheGet<Blob>("radio", key);
-  return blob instanceof Blob && blob.size > WAV_HEADER ? blob : null;
+  const blob = await cacheGet<Blob>("radio", key).catch(() => null);
+  if (!(blob instanceof Blob) || blob.size <= WAV_HEADER) return null;
+  try {
+    const head = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
+    if (String.fromCharCode(...head) !== "RIFF") throw new Error("not a WAV");
+  } catch {
+    void forgetMix(key);
+    return null;
+  }
+  return blob.type === "audio/wav" ? blob : blob.slice(0, blob.size, "audio/wav");
+}
+
+/** Drops a kept mix that turned out broken (the player couldn't play it): it's mixed again. */
+export function forgetMix(key: string): Promise<void> {
+  return cacheDelete("radio", key);
 }
 
 /** Keeps a whole mix (from the song's start). Never throws: at worst it's mixed again next time. */

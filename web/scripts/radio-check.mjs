@@ -78,7 +78,7 @@ if (process.env.SHORTEN) {
   const samples = [];
   const until = Date.now() + 120_000;
   while (Date.now() < until) {
-    samples.push(await a.evaluate(() => { const h = window.__remixtRadio?.heard(Date.now() + window.__remixtRadio.serverClock); const r = window.__remixtRadio; return h ? `${h.rowId}[${h.levels.join("/")}]${h.offMs}` : `silent(rendering ${[...(r?.rendering?.keys() ?? [])]}; decks ${(r?.decks ?? []).map((d) => `${d.row.rowId}:${d.el.paused ? "paused" : "on"}:${Math.round(d.el.currentTime)}:${d.el.error?.code ?? ""}:${d.row.startsAt}`).join(",")}; ${document.querySelector('[role=alert], .text-danger')?.textContent ?? ""})`; }));
+    samples.push(await a.evaluate(() => { const h = window.__remixtRadio?.heard(Date.now() + window.__remixtRadio.serverClock); const r = window.__remixtRadio; return h ? `${h.rowId}[${h.levels.join("/")}]${h.offMs}` : `silent(rendering ${[...(r?.rendering?.keys() ?? [])]}; players ${(r?.players ?? []).map((p) => `${p.deck?.row.rowId ?? (p.silent ? "silence" : "-")}:${p.el.paused ? "paused" : "on"}:${Math.round(p.el.currentTime)}:${p.el.error?.code ?? ""}`).join(",")}; ${document.querySelector('[role=alert], .text-danger')?.textContent ?? ""})`; }));
     await a.waitForTimeout(500);
   }
   log({ step: "through the change (tab A every 0.5 s: newest row [gain of each sounding deck])", samples: samples.join(" ") });

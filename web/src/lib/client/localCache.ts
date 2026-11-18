@@ -204,6 +204,15 @@ async function remove(keys: string[]) {
   await done(tx);
 }
 
+/** Forgets one entry (one found broken). Never throws. */
+export async function cacheDelete(kind: CacheKind, key: string): Promise<void> {
+  try {
+    await remove([id(kind, key)]);
+  } catch {
+    // It ages out anyway.
+  }
+}
+
 export type CacheUsage = Record<CacheKind, { count: number; bytes: number }>;
 
 /** How many entries of each kind are kept, and about how much room they take. */

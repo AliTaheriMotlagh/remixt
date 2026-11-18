@@ -1,50 +1,88 @@
 "use client";
 
 import type { QueueRow } from "@/lib/radio";
-import { crossfadeGains } from "@/lib/radioPick";
+import { planDecks } from "@/lib/radioPlan";
 import { audioEngine } from "./audioEngine";
+import { deviceClass } from "./device";
 import { encodeWav, renderMixWav } from "./mixdown";
 import { fetchStem } from "./stemFetch";
-import { keepMix, keptMix, radioMixKey } from "./radioCache";
+import { forgetMix, keepMix, keptMix, radioMixKey } from "./radioCache";
 import { laneFromApi, projectFromApi, type RemixApi, type RemixLaneApi } from "./remixLanes";
 import { useStudioStore } from "./studioStore";
 
-// The radio's two decks. Every song on air is rendered to a WAV in this tab
-// (the Studio's own mixdown, so a remix sounds exactly as made) and played
-// through an <audio> element — which keeps playing with the screen locked,
-// in another app, or on the home screen. The next song is rendered while
-// this one plays, so when the station's schedule says it starts (a
-// crossfade before this one ends, on its bar lines — see crossfadeFor),
-// the two blend with equal-power gains, in every tab at the same moment.
+// The radio's player. Every song on air is mixed to a WAV in this tab (the
+// Studio's own mixdown, so a remix sounds exactly as made) and played by an
+// <audio> element, which keeps going with the screen locked, in another
+// app, or on the home screen. The next song is mixed while this one plays;
+// radioPlan.ts says which songs sound at each moment and how loud, so every
+// tab blends them on the station's clock.
 //
-// Where the browser lets a page set an element's volume, the decks run
-// through Web Audio (gain + an analyser for the visualizer); iPhones don't
-// allow that, so there they play as they are and change at the crossfade's
-// start.
+// The elements ("players") are made once, in the Tune in tap, and used for
+// every song after it: a phone only lets a page start an element it has
+// started from a tap, and a new element made later (the next song, with
+// the screen locked) is refused. Between songs, or while one is being
+// mixed, a player plays silence, so the phone doesn't take the page's sound
+// session (and its lock-screen controls) away.
+//
+// - Computers: two players through Web Audio (gains + an analyser for the
+//   visualizer), crossfading.
+// - Android: two players crossfading by their own volume — no Web Audio, so
+//   nothing between the element and the speaker for the phone to suspend.
+// - iPhone/iPad (a page can't set an element's volume): one player that
+//   never stops; it changes song halfway through the crossfade.
+//
+// The player is driven by tick() from a timer and also by its elements'
+// own events (timeupdate, ended, loadedmetadata): a phone may slow a hidden
+// page's timers down to once a minute, but an element that's playing keeps
+// reporting.
 //
 // Every song is kept on the device once mixed (radioCache.ts), whole from
-// its start: the next time it's on — this visit or another — it plays from
-// the kept file at once. A song tuned into part way is mixed from where
-// the station is (quickest to sound); the whole of it is mixed for keeping
-// later, only while nothing else is being mixed, and that gives way at once
-// to a song the station needs.
+// its start: the next time it's on, this visit or another, it plays at once.
+// A song tuned into part way is mixed from where the station is (quickest
+// to sound); the whole of it is mixed for keeping later, only while nothing
+// else is being mixed, and that gives way at once to a song the station
+// needs. A song that can't be readied (the connection dropped) is tried
+// again after 2, 5, then 15 s; the listener only hears about it when
+// nothing is playing.
 
 /** Off the station by more than this (seconds): jump back on. */
 const DRIFT = 0.4;
 /** Tuning in mid-song: the sound comes up over this long instead of with a click. */
 const FADE_IN = 0.35;
+/** Waits before readying a song again after it failed. */
+const RETRY_MS = [2000, 5000, 15_000];
+/** A pause this soon after the player itself changed an element is its own, not the phone's. */
+const OWN_CHANGE_MS = 800;
 
 type Deck = {
   row: QueueRow;
-  el: HTMLAudioElement;
   url: string;
-  /** The song's second at the file's start (a tune-in renders from where the station is). */
+  /** The song's second at the file's start (a tune-in mixes from where the station is). */
   offset: number;
-  gain: GainNode | null;
   /** When this tab started it (for the short fade-in of a mid-song tune-in). */
   joinedAt: number;
   fadeFromStart: boolean;
+  /** The kept mix it plays, if it came from the cache (forgotten if it won't play). */
+  keptKey: string | null;
 };
+
+type Player = {
+  el: HTMLAudioElement;
+  gain: GainNode | null;
+  deck: Deck | null;
+  /** Playing silence (holding the sound session between songs). */
+  silent: boolean;
+  /** The element knows its deck's length: it can be sought and started. */
+  loaded: boolean;
+  /** Started once from the tap: this browser lets the page start it again. */
+  unlocked: boolean;
+  /** When the player last changed it itself (performance.now()). */
+  touchedAt: number;
+};
+
+type Mode = "fade" | "volume" | "switch";
+
+export type PlayPayload = { remix: RemixApi; lanes: RemixLaneApi[] };
 
 async function json<T>(res: Response): Promise<T> {
   const data = await res.json().catch(() => ({}));
@@ -52,16 +90,19 @@ async function json<T>(res: Response): Promise<T> {
   return data as T;
 }
 
-type PlayPayload = { remix: RemixApi; lanes: RemixLaneApi[] };
+const payloads = new Map<string, { at: number; job: Promise<PlayPayload> }>();
+const PAYLOAD_MS = 5 * 60_000;
 
-/** Resolves once `el` knows its length (or after a few seconds, whatever happens). */
-function metadataOf(el: HTMLAudioElement) {
-  return new Promise<void>((resolve) => {
-    if (el.readyState >= 1) return resolve();
-    el.addEventListener("loadedmetadata", () => resolve(), { once: true });
-    el.addEventListener("error", () => resolve(), { once: true });
-    setTimeout(resolve, 5000);
-  });
+/** What a song or remix is made of (its lanes), asked once for the player and the lyrics. */
+export function playPayload(slug: string, kind: string, id: string): Promise<PlayPayload> {
+  const key = `${slug}|${kind}|${id}`;
+  const kept = payloads.get(key);
+  if (kept && Date.now() - kept.at < PAYLOAD_MS) return kept.job;
+  const job = fetch(`/api/radio/${encodeURIComponent(slug)}/play?kind=${kind}&id=${encodeURIComponent(id)}`).then((r) => json<PlayPayload>(r));
+  payloads.set(key, { at: Date.now(), job });
+  job.catch(() => payloads.delete(key));
+  if (payloads.size > 20) payloads.delete(payloads.keys().next().value!);
+  return job;
 }
 
 /** Can this browser set an <audio> element's volume? (iOS keeps it at 1.) */
@@ -75,9 +116,37 @@ function volumeWorks() {
   }
 }
 
+let silence: string | null = null;
+/** Half a second of silence as a WAV (8 kHz, 8-bit mono: 4 KB), looped between songs. */
+function silenceUrl(): string {
+  if (silence) return silence;
+  const samples = 4000;
+  const bytes = new Uint8Array(44 + samples);
+  const view = new DataView(bytes.buffer);
+  const text = (at: number, s: string) => [...s].forEach((ch, i) => (bytes[at + i] = ch.charCodeAt(0)));
+  text(0, "RIFF");
+  view.setUint32(4, 36 + samples, true);
+  text(8, "WAVEfmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, 8000, true);
+  view.setUint32(28, 8000, true);
+  view.setUint16(32, 1, true);
+  view.setUint16(34, 8, true);
+  text(36, "data");
+  view.setUint32(40, samples, true);
+  bytes.fill(128, 44);
+  silence = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+  return silence;
+}
+
 export class RadioDeck {
   private decks: Deck[] = [];
+  private players: Player[] = [];
+  private mode: Mode = "fade";
   private rendering = new Map<number, Promise<void>>();
+  private failures = new Map<number, { count: number; retryAt: number }>();
   /** Renders share the Studio's state: one at a time. */
   private queue: Promise<unknown> = Promise.resolve();
   /** Renders the station needs, waiting or running. */
@@ -88,66 +157,178 @@ export class RadioDeck {
   private keeping: AbortController | null = null;
   private ctx: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
-  private routed = false;
   private volume = 0.9;
   private stopped = true;
+  /** The browser refused to start sound: don't ask again before this (performance.now()). */
+  private blockedUntil = 0;
+  private wokeAt = 0;
+  /** When an element paused by something else was last played again. */
+  private resumedAt = -Infinity;
+  /** The newest song heard, told once to onPlaying. */
+  private announced: QueueRow | null = null;
+
   onState: (state: "loading" | "on" | "error", message?: string) => void = () => {};
+  /** A new song is heard (for the lock screen). */
+  onPlaying: (row: QueueRow) => void = () => {};
+  /** The phone paused the sound (a call, headphones out, another app's sound): the radio goes quiet until asked again. */
+  onExternalPause: () => void = () => {};
+  /** Time to look again (an element's event or the page coming back): the owner calls tick() with the station's state. */
+  onWake: () => void = () => {};
 
   constructor(private readonly slug: string) {}
 
-  /** Starts from a tap (so the browser allows sound). */
+  /** The newest song heard (for the lock screen). */
+  get nowPlaying(): QueueRow | null {
+    return this.announced;
+  }
+
+  /** How this device plays (for the rigs). */
+  get playMode(): Mode {
+    return this.mode;
+  }
+
+  /** Starts from a tap (so the browser allows sound). Everything sound-related here must happen before any await. */
   start() {
     this.stopped = false;
-    if (!this.ctx && volumeWorks()) {
+    if (this.players.length === 0) this.makePlayers();
+    void this.ctx?.resume();
+    // The Studio's live engine stays quiet: the radio plays its renders.
+    audioEngine.stop();
+    // Every player is started inside the tap (silence), so this page may start each of them later, screen locked or not.
+    for (const p of this.players) if (!p.deck) this.playSilence(p);
+    document.addEventListener("visibilitychange", this.onVisible);
+  }
+
+  private makePlayers() {
+    const phone = deviceClass().kind !== "computer";
+    this.mode = !volumeWorks() ? "switch" : phone ? "volume" : "fade";
+    if (this.mode === "fade") {
       try {
         const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
         this.ctx = new Ctor({ latencyHint: "playback" });
         this.analyser = this.ctx.createAnalyser();
         this.analyser.fftSize = 2048;
         this.analyser.connect(this.ctx.destination);
-        this.routed = true;
+        this.ctx.addEventListener("statechange", () => {
+          if (this.ctx && this.ctx.state !== "running" && !this.stopped && !document.hidden) void this.ctx.resume();
+        });
       } catch {
-        this.routed = false;
+        this.ctx = null;
+        this.mode = "volume";
       }
     }
+    const count = this.mode === "switch" ? 1 : 2;
+    for (let i = 0; i < count; i++) {
+      const el = new Audio();
+      el.preload = "auto";
+      // Plays in the page, not full screen, and marks it as music.
+      el.setAttribute("playsinline", "");
+      let gain: GainNode | null = null;
+      if (this.ctx && this.analyser) {
+        gain = this.ctx.createGain();
+        gain.gain.value = 0;
+        this.ctx.createMediaElementSource(el).connect(gain).connect(this.analyser);
+      }
+      const player: Player = { el, gain, deck: null, silent: false, loaded: false, unlocked: false, touchedAt: 0 };
+      el.addEventListener("loadedmetadata", () => {
+        if (player.deck && el.src === player.deck.url) {
+          player.loaded = true;
+          // Straight on, not at the next timer: a hidden page's timers may be slow.
+          this.onWake();
+        }
+      });
+      el.addEventListener("timeupdate", () => this.wake());
+      el.addEventListener("ended", () => this.onWake());
+      el.addEventListener("pause", () => this.pausedBy(player));
+      el.addEventListener("error", () => this.failed(player));
+      this.players.push(player);
+    }
+  }
+
+  private onVisible = () => {
+    if (document.hidden || this.stopped) return;
     void this.ctx?.resume();
-    // The Studio's live engine stays quiet: the radio plays its renders.
-    audioEngine.stop();
+    this.onWake();
+  };
+
+  private wake() {
+    const t = performance.now();
+    if (t - this.wokeAt < 200) return;
+    this.wokeAt = t;
+    this.onWake();
+  }
+
+  /**
+   * The element paused: by the player (ignored), at its end (ignored), or by
+   * something else. That's tried once more: a glitch plays on; the phone
+   * taking the sound (a call, another app) refuses, or pauses it again at
+   * once — then the radio goes quiet until asked, as any music app does.
+   */
+  private pausedBy(p: Player) {
+    if (this.stopped || p.el.ended || performance.now() - p.touchedAt < OWN_CHANGE_MS) return;
+    if (!p.deck && !p.silent) return;
+    const t = performance.now();
+    if (t - this.resumedAt < 5000) return this.onExternalPause();
+    this.resumedAt = t;
+    p.touchedAt = t;
+    p.el.play().then(
+      () => this.onWake(),
+      () => this.onExternalPause()
+    );
+  }
+
+  /** The element couldn't play its file: a kept mix is forgotten, and the song is readied again. */
+  private failed(p: Player) {
+    const d = p.deck;
+    if (!d || p.el.src !== d.url) return;
+    if (d.keptKey) void forgetMix(d.keptKey);
+    this.release(d);
+    this.fail(d.row.rowId, "This song couldn't be played");
   }
 
   stop() {
     this.stopped = true;
     this.keeping?.abort();
     this.toKeep.clear();
-    for (const d of this.decks) this.drop(d);
+    for (const p of this.players) this.free(p);
+    for (const d of this.decks) URL.revokeObjectURL(d.url);
     this.decks = [];
+    this.failures.clear();
+    this.announced = null;
+    document.removeEventListener("visibilitychange", this.onVisible);
   }
 
   dispose() {
     this.stop();
     void this.ctx?.close();
     this.ctx = null;
+    this.players = [];
   }
 
   getAnalyser() {
-    return this.routed && !this.stopped ? this.analyser : null;
+    return this.mode === "fade" && !this.stopped ? this.analyser : null;
   }
 
   setVolume(v: number) {
     this.volume = v;
   }
 
-  /** The deck playing `row`, if any. */
+  /** A deck is ready for `row`. */
   has(rowId: number) {
     return this.decks.some((d) => d.row.rowId === rowId);
   }
 
-  /** For the rigs: the newest deck that's playing, and the song second it's at. */
+  private sounding() {
+    return this.players.filter((p) => p.deck && !p.el.paused);
+  }
+
+  /** For the rigs: the newest song playing, and the song second it's at. */
   heard(serverNow?: number): { rowId: number; at: number; offMs: number | null; playing: number; levels: number[] } | null {
-    const d = [...this.decks].reverse().find((x) => !x.el.paused);
-    const playing = this.decks.filter((x) => !x.el.paused);
-    if (!d) return null;
-    const at = d.el.currentTime + d.offset;
+    const playing = this.sounding();
+    const p = [...playing].sort((a, b) => (b.deck!.row.startsAt ?? 0) - (a.deck!.row.startsAt ?? 0))[0];
+    if (!p?.deck) return null;
+    const d = p.deck;
+    const at = p.el.currentTime + d.offset;
     const expected = serverNow && d.row.startsAt ? (serverNow - d.row.startsAt) / 1000 : null;
     return {
       rowId: d.row.rowId,
@@ -160,22 +341,67 @@ export class RadioDeck {
   /** This tab's guess of the server's clock (for the rigs). */
   serverClock = 0;
 
-  /** The element sounding loudest now (for the lock screen's play/pause). */
-  current(): HTMLAudioElement | null {
-    return this.decks[this.decks.length - 1]?.el ?? null;
+  // ——— players ———
+
+  private play(p: Player) {
+    p.touchedAt = performance.now();
+    p.el.play().then(
+      () => {
+        p.unlocked = true;
+      },
+      (e: unknown) => {
+        // AbortError: a newer change took its place. NotAllowedError: the browser wants a tap.
+        if ((e as { name?: string })?.name !== "NotAllowedError") return;
+        this.blockedUntil = performance.now() + 2000;
+        if (this.sounding().length === 0 && !this.stopped) this.onState("error", "Tap Tune in again to start the sound");
+      }
+    );
   }
 
-  private drop(d: Deck) {
-    d.el.pause();
-    d.el.removeAttribute("src");
-    d.el.load();
-    try {
-      d.gain?.disconnect();
-    } catch {
-      // already gone
-    }
-    URL.revokeObjectURL(d.url);
+  private playSilence(p: Player) {
+    p.touchedAt = performance.now();
+    p.deck = null;
+    p.loaded = false;
+    p.silent = true;
+    p.el.loop = true;
+    if (p.gain) p.gain.gain.value = 0;
+    p.el.src = silenceUrl();
+    this.play(p);
   }
+
+  /** Lets go of whatever `p` plays. */
+  private free(p: Player) {
+    p.touchedAt = performance.now();
+    p.deck = null;
+    p.loaded = false;
+    p.silent = false;
+    p.el.loop = false;
+    p.el.pause();
+    p.el.removeAttribute("src");
+    p.el.load();
+  }
+
+  /** Puts `d` on `p` (it starts once loaded). On one player the song before is cut here, with no pause in between. */
+  private load(p: Player, d: Deck) {
+    p.touchedAt = performance.now();
+    p.deck = d;
+    p.loaded = false;
+    p.silent = false;
+    p.el.loop = false;
+    if (p.gain) p.gain.gain.value = 0;
+    else if (this.mode === "volume") p.el.volume = 0;
+    p.el.src = d.url;
+  }
+
+  /** A deck is done with: off its player, its file let go. */
+  private release(d: Deck) {
+    const p = this.players.find((x) => x.deck === d);
+    if (p) this.free(p);
+    URL.revokeObjectURL(d.url);
+    this.decks = this.decks.filter((x) => x !== d);
+  }
+
+  // ——— mixing ———
 
   /**
    * A library song as one file: its vocal and beat (or parts) as uploaded,
@@ -199,7 +425,6 @@ export class RadioDeck {
     return encodeWav(await mix.startRendering());
   }
 
-  /** Renders `row` from `from` seconds to its end, as a playable file. */
   /** A remix mixed by the Studio's mixdown, from `from` to the song's end. */
   private async mixRemix(row: QueueRow, payload: PlayPayload, from: number, onProgress?: (fraction: number) => void, signal?: AbortSignal) {
     const store = useStudioStore.getState();
@@ -212,28 +437,26 @@ export class RadioDeck {
     });
   }
 
-  /** Renders `row` from `from` seconds to its end, as a playable file — or the kept whole mix, from its start. */
-  private render(row: QueueRow, from: number): Promise<{ url: string; offset: number }> {
+  /** `row` from `from` seconds to its end as a playable file — or the kept whole mix, from its start. */
+  private render(row: QueueRow, from: number): Promise<{ url: string; offset: number; keptKey: string | null }> {
     // The station needs the mixer: a keeping mix running now stops (and is tried again later).
     this.keeping?.abort();
     this.busy++;
     const job = this.queue.then(async () => {
-      const payload = await fetch(`/api/radio/${encodeURIComponent(this.slug)}/play?kind=${row.kind}&id=${encodeURIComponent(row.id)}`).then((r) =>
-        json<PlayPayload>(r)
-      );
+      const payload = await playPayload(this.slug, row.kind, row.id);
       const key = await radioMixKey(row.kind, payload, row.duration).catch(() => null);
       const kept = key ? await keptMix(key) : null;
-      if (kept) return { url: URL.createObjectURL(kept), offset: 0 };
+      if (kept) return { url: URL.createObjectURL(kept), offset: 0, keptKey: key };
       const whole = from < 0.01;
       const blob =
         row.kind === "track"
           ? await this.mixSong(payload.lanes, from, row.duration)
           : await this.mixRemix(row, payload, from, (f) => {
-              if (!this.decks.some((d) => !d.el.paused)) this.onState("loading", `Getting the remix ready… ${Math.round(f * 100)}%`);
+              if (this.sounding().length === 0) this.onState("loading", `Getting the remix ready… ${Math.round(f * 100)}%`);
             });
       if (key && whole) void keepMix(key, blob);
       else if (key) this.keepLater(key, row, payload);
-      return { url: URL.createObjectURL(blob), offset: from };
+      return { url: URL.createObjectURL(blob), offset: from, keptKey: null };
     });
     this.queue = job.catch(() => {}).finally(() => {
       this.busy--;
@@ -274,39 +497,39 @@ export class RadioDeck {
       });
   }
 
-  /** Makes sure `row` is (being) prepared; `from`: the song's second to render from. */
+  /** Notes a failure to ready `rowId`, to try again later; says so only when nothing is playing. */
+  private fail(rowId: number, message: string) {
+    const count = (this.failures.get(rowId)?.count ?? 0) + 1;
+    this.failures.set(rowId, { count, retryAt: Date.now() + RETRY_MS[Math.min(count, RETRY_MS.length) - 1] });
+    if (this.stopped || this.sounding().length > 0) return;
+    if (count >= RETRY_MS.length) this.onState("error", message);
+    else this.onState("loading", "The connection dropped — trying again…");
+  }
+
+  /** Makes sure `row` is (being) prepared; `from`: the song's second to mix from. */
   prepare(row: QueueRow, from: number) {
     if (this.has(row.rowId) || this.rendering.has(row.rowId) || this.stopped) return;
+    const failed = this.failures.get(row.rowId);
+    if (failed && Date.now() < failed.retryAt) return;
     const job = this.render(row, from)
-      .then(async ({ url, offset }) => {
+      .then(({ url, offset, keptKey }) => {
         if (this.stopped) return URL.revokeObjectURL(url);
-        const el = new Audio();
-        el.preload = "auto";
-        el.src = url;
-        // Keeps playing in the background on phones; marks it as music.
-        el.setAttribute("playsinline", "");
-        let gain: GainNode | null = null;
-        if (this.routed && this.ctx && this.analyser) {
-          const source = this.ctx.createMediaElementSource(el);
-          gain = this.ctx.createGain();
-          gain.gain.value = 0;
-          source.connect(gain).connect(this.analyser);
-        }
-        // A kept whole mix joined part way: let it learn its length first, so the jump to the station's spot holds (Safari drops one made earlier).
-        if (from - offset > 1) await metadataOf(el);
-        if (this.stopped) return URL.revokeObjectURL(url);
-        this.decks.push({ row, el, url, offset, gain, joinedAt: 0, fadeFromStart: from > 0.5 });
-        this.decks.sort((a, b) => (a.row.startsAt ?? 0) - (b.row.startsAt ?? 0));
+        this.failures.delete(row.rowId);
+        this.decks.push({ row, url, offset, joinedAt: 0, fadeFromStart: from > 0.5, keptKey });
+        this.onWake();
       })
-      .catch((e) => this.onState("error", e instanceof Error ? e.message : "Couldn't get the song ready"))
+      .catch((e) => this.fail(row.rowId, e instanceof Error ? e.message : "Couldn't get the song ready"))
       .finally(() => this.rendering.delete(row.rowId));
     this.rendering.set(row.rowId, job);
   }
 
+  // ——— following the station ———
+
   /**
-   * Called a few times a second with the station's state: starts each deck
-   * at its moment, keeps it on the station's clock, sets the crossfade gains,
-   * lets go of songs that have ended.
+   * Called a few times a second (and on the elements' events) with the
+   * station's state: readies what's on and what's next, puts each song on a
+   * player at its moment, keeps it on the station's clock, sets the
+   * crossfade, and lets go of songs that have ended.
    */
   tick(now: QueueRow | null, upcoming: QueueRow | null, serverNow: number, fading: QueueRow | null = null) {
     this.serverClock = serverNow - Date.now();
@@ -315,63 +538,96 @@ export class RadioDeck {
     const live = new Map([fading, now, upcoming].filter((r): r is QueueRow => !!r).map((r) => [r.rowId, r]));
     for (const d of [...this.decks]) {
       const row = live.get(d.row.rowId);
-      if (row) d.row = row;
-      else {
-        this.drop(d);
-        this.decks.splice(this.decks.indexOf(d), 1);
-      }
+      if (row && serverNow < (row.endsAt ?? 0)) d.row = row;
+      else this.release(d);
     }
-    // What's on air: ready it from where the station is (plus a little, for the render's own time).
-    if (now?.startsAt && now.endsAt && !this.has(now.rowId) && !this.rendering.has(now.rowId)) {
-      const left = (now.endsAt - serverNow) / 1000;
-      // Seconds before the end: not worth it, the next one is about to take over.
-      if (left > 4) {
-        this.onState("loading");
-        this.prepare(now, Math.max(0, (serverNow - now.startsAt) / 1000));
-      }
+    // What's on air: readied from where the station is. Seconds before its end: not worth it, the next one is about to take over.
+    if (now?.startsAt && now.endsAt && !this.has(now.rowId) && !this.rendering.has(now.rowId) && (now.endsAt - serverNow) / 1000 > 4) {
+      if (this.sounding().length === 0 && !this.failures.has(now.rowId)) this.onState("loading");
+      this.prepare(now, Math.max(0, (serverNow - now.startsAt) / 1000));
     }
     if (upcoming) this.prepare(upcoming, 0);
 
-    let sounding = false;
-    for (const d of [...this.decks]) {
-      const start = d.row.startsAt ?? 0;
-      const end = d.row.endsAt ?? 0;
-      if (serverNow >= end) {
-        this.drop(d);
-        this.decks.splice(this.decks.indexOf(d), 1);
+    const plan = planDecks(
+      this.decks.map((d) => ({ rowId: d.row.rowId, startsAt: d.row.startsAt ?? 0, endsAt: d.row.endsAt ?? 0, offset: d.offset })),
+      serverNow,
+      this.players.length === 1 ? 1 : 2
+    );
+    const deckOf = (rowId: number) => this.decks.find((d) => d.row.rowId === rowId)!;
+    const wanted = new Map(plan.sound.map((v) => [v.rowId, v]));
+
+    // Players whose song isn't wanted now (and isn't the next one, loading early) let it go.
+    for (const p of this.players) {
+      if (p.deck && !wanted.has(p.deck.row.rowId) && p.deck.row.rowId !== plan.preload) {
+        // One player: the next song goes straight on (load cuts this one), or silence does — never a pause, which could lose the sound session.
+        if (this.players.length === 1) {
+          if (!plan.sound.length) this.playSilence(p);
+          continue;
+        }
+        this.free(p);
+      }
+    }
+    const freePlayer = () => this.players.find((p) => !p.deck) ?? (this.players.length === 1 ? this.players[0] : null);
+    for (const v of plan.sound) {
+      const d = deckOf(v.rowId);
+      if (this.players.some((p) => p.deck === d)) continue;
+      const p = freePlayer();
+      if (p) this.load(p, d);
+    }
+    if (plan.preload !== null) {
+      const d = deckOf(plan.preload);
+      const p = this.players.find((x) => !x.deck);
+      if (p && !this.players.some((x) => x.deck === d)) this.load(p, d);
+    }
+
+    let newest: Deck | null = null;
+    for (const p of this.players) {
+      const d = p.deck;
+      const v = d && wanted.get(d.row.rowId);
+      if (!d || !v) {
+        if (d && !p.el.paused) {
+          p.touchedAt = performance.now();
+          p.el.pause();
+        }
         continue;
       }
-      const into = (serverNow - start) / 1000 - d.offset;
-      if (into < 0) continue;
-      if (d.el.paused) {
-        d.el.currentTime = into;
-        d.joinedAt = performance.now();
-        void d.el.play().catch(() => this.onState("error", "Tap Tune in again to start the sound"));
-      } else if (Math.abs(d.el.currentTime - into) > DRIFT) d.el.currentTime = into;
-
-      // The gains: in over the overlap with the song before, out over the overlap with the next.
-      const before = this.decks.find((o) => o !== d && (o.row.endsAt ?? 0) > start && (o.row.startsAt ?? 0) < start);
-      const after = this.decks.find((o) => o !== d && (o.row.startsAt ?? 0) > start && (o.row.startsAt ?? 0) < end) ?? (upcoming && upcoming.rowId !== d.row.rowId ? { row: upcoming } : undefined);
-      let g = 1;
-      if (before) {
-        const overlap = ((before.row.endsAt ?? 0) - start) / 1000;
-        if (overlap > 0) g *= crossfadeGains((serverNow - start) / 1000 / overlap).in;
+      if (!p.loaded) continue;
+      if (p.el.paused) {
+        if (performance.now() < this.blockedUntil) continue;
+        p.el.currentTime = v.into;
+        d.joinedAt ||= performance.now();
+        this.play(p);
+      } else if (Math.abs(p.el.currentTime - v.into) > DRIFT) {
+        p.touchedAt = performance.now();
+        p.el.currentTime = v.into;
       }
-      if (after?.row.startsAt && after.row.startsAt < end) {
-        const overlap = (end - after.row.startsAt) / 1000;
-        if (serverNow > after.row.startsAt && overlap > 0) g *= crossfadeGains((serverNow - after.row.startsAt) / 1000 / overlap).out;
-      }
-      if (d.fadeFromStart && d.joinedAt) g *= Math.min(1, (performance.now() - d.joinedAt) / 1000 / FADE_IN);
-      const level = g * this.volume;
-      if (d.gain) d.gain.gain.setTargetAtTime(level, d.gain.context.currentTime, 0.03);
-      else if (this.routed) d.el.volume = Math.min(1, level);
-      else {
-        // No volume control here (iPhone): the outgoing song stops where the next one starts.
-        const next = after?.row.startsAt;
-        if (next && serverNow >= next && !d.el.paused) d.el.pause();
-      }
-      sounding ||= !d.el.paused;
+      let level = v.gain * this.volume;
+      if (d.fadeFromStart && d.joinedAt) level *= Math.min(1, (performance.now() - d.joinedAt) / 1000 / FADE_IN);
+      if (p.gain) p.gain.gain.setTargetAtTime(level, p.gain.context.currentTime, 0.03);
+      else if (this.mode === "volume") p.el.volume = Math.min(1, Math.max(0, level));
+      if (!p.el.paused && (!newest || (d.row.startsAt ?? 0) > (newest.row.startsAt ?? 0))) newest = d;
     }
-    if (sounding) this.onState("on");
+
+    // Nothing to hear yet (a song being mixed, a gap): a free player plays silence, keeping the page's sound session.
+    if (!this.players.some((p) => p.deck && wanted.has(p.deck.row.rowId))) {
+      const p = this.players.find((x) => !x.deck);
+      if (p && !p.silent) this.playSilence(p);
+    }
+    // Spare silence (the tap's unlocking) stops once a song plays.
+    for (const p of this.players) {
+      if (p.silent && p.unlocked && newest) {
+        p.touchedAt = performance.now();
+        p.silent = false;
+        p.el.pause();
+      }
+    }
+
+    if (newest) {
+      this.onState("on");
+      if (this.announced?.rowId !== newest.row.rowId) {
+        this.announced = newest.row;
+        this.onPlaying(newest.row);
+      }
+    }
   }
 }

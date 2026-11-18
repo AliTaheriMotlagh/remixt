@@ -5,6 +5,7 @@ import { Hand, Users } from "lucide-react";
 import { useRadio } from "@/lib/client/radioClient";
 import RemixtMark from "../RemixtMark";
 import { Countdown, LiveDot, Progress, RadioArt, SourceChip, Visualizer, VoteBoard } from "./RadioBits";
+import RadioLyrics from "./RadioLyrics";
 
 // The station as a 16:9 picture with its sound, for OBS (Browser Source,
 // 1920×1080) → YouTube Live, Twitch, a screen at a party. It tunes itself
@@ -54,6 +55,7 @@ export default function RadioBroadcast({ slug }: { slug: string }) {
             <h1 className="line-clamp-2 text-[4.2em] font-black leading-[1.02] tracking-tight">{now?.title ?? "Nothing on air"}</h1>
             <p className="truncate text-[1.8em] text-white/75">{now?.artist}</p>
             <Progress row={now} position={radio.position} big />
+            <RadioLyrics slug={slug} row={now} position={radio.position} big />
           </div>
           {feed && feed.station.settings.voting && feed.vote.choices.length > 0 && (
             <aside className="w-[30%] shrink-0 rounded-[1.4em] bg-black/40 p-[1.4em] ring-1 ring-white/10 backdrop-blur">

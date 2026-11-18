@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowLeft, Check, Code2, Copy, Gamepad2, Radio, Headphones, History as HistoryIcon, Link2, Loader2, MonitorPlay, Pause, Play, Settings2, Share2, Users, Volume1, Volume2, VolumeX } from "lucide-react";
 import { clock, useRadio } from "@/lib/client/radioClient";
 import { Countdown, History, ItemRow, LiveDot, Progress, RadioArt, RequestPanel, SourceChip, Visualizer, VoteBoard } from "./RadioBits";
+import RadioLyrics from "./RadioLyrics";
 
 // A station's page: what's on (big, with its cover glowing behind it), the
 // vote on what's next, requests, what played, and how to share or embed
@@ -107,12 +108,13 @@ export default function RadioStation({ slug, signedIn }: { slug: string; signedI
               <>
                 <div className="min-w-0">
                   <SourceChip row={now} className="mb-3" />
-                  <h1 className="line-clamp-2 text-3xl font-black leading-[1.05] tracking-tight sm:text-4xl lg:text-5xl">{now.title}</h1>
+                  <h1 className="line-clamp-2 text-3xl font-black leading-[1.05] tracking-tight [overflow-wrap:anywhere] sm:text-4xl lg:text-5xl">{now.title}</h1>
                   <p className="mt-1.5 truncate text-lg text-white/75 sm:text-xl">
                     {now.artist} <span className="text-white/40">· {now.kind === "remix" ? "Remix" : "Song"}</span>
                   </p>
                 </div>
                 <Progress row={now} position={radio.position} />
+                <RadioLyrics slug={slug} row={now} position={radio.position} />
               </>
             ) : (
               <div>

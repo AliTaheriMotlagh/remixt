@@ -29,12 +29,14 @@ function lockScreen(row: RadioFeed["now"], station: string, on: { play: () => vo
   if (!ms) return;
   if (!row || !on) {
     ms.metadata = null;
+    ms.playbackState = "none";
     return;
   }
   const art = row.cover ? [{ src: new URL(row.cover, location.origin).href, sizes: "600x600" }] : [];
   ms.metadata = new MediaMetadata({ title: row.title, artist: row.artist, album: station, artwork: art });
   ms.setActionHandler("play", on.play);
   ms.setActionHandler("pause", on.pause);
+  ms.setActionHandler("stop", on.pause);
   // A radio can't skip or go back: what plays is the station's.
   for (const action of ["previoustrack", "nexttrack", "seekbackward", "seekforward", "seekto"] as MediaSessionAction[]) {
     try {
@@ -43,6 +45,19 @@ function lockScreen(row: RadioFeed["now"], station: string, on: { play: () => vo
       // not supported here
     }
   }
+}
+
+/** Playing or paused, on the lock screen (the metadata stays, so play there tunes back in). */
+function lockScreenState(state: MediaSessionPlaybackState) {
+  if (typeof navigator !== "undefined" && navigator.mediaSession) navigator.mediaSession.playbackState = state;
+}
+
+/** Asks once for the device to keep what the radio stored (kept mixes, stems) when space runs low. */
+let askedToPersist = false;
+function askToPersist() {
+  if (askedToPersist) return;
+  askedToPersist = true;
+  void navigator.storage?.persist?.().catch(() => false);
 }
 
 /** Everything a station page, its embed and its broadcast view need. */
@@ -84,6 +99,8 @@ export function useRadio(slug: string, { heartbeat = true }: { heartbeat?: boole
       offset.current = clockSamples.current.reduce((best, x) => (x.rtt < best.rtt ? x : best)).offset;
       feedRef.current = data;
       setFeed(data);
+      // Every answer moves the decks on too (a hidden page's other timers may be asleep).
+      deck.current?.tick(data.now, data.upcoming, Date.now() + offset.current, data.fading);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "The station can't be reached");
@@ -129,40 +146,49 @@ export function useRadio(slug: string, { heartbeat = true }: { heartbeat?: boole
   const tuneOut = useCallback(() => {
     deck.current?.stop();
     setTune("off");
+    lockScreenState("paused");
   }, []);
 
-  /** Tune in (call it from a tap, so the browser lets the sound start). */
+  /** Tune in (call it from a tap, so the browser lets the sound start: everything sound-related runs before any await). */
   const tuneIn = useCallback(async () => {
     if (!deck.current) {
-      deck.current = new RadioDeck(slug);
-      deck.current.onState = (state, message) => {
+      const d = new RadioDeck(slug);
+      deck.current = d;
+      d.onState = (state, message) => {
         setTune(state);
         setStatus(state === "loading" ? (message ?? null) : null);
         if (state === "error" && message) setError(message);
+      };
+      // An element's own event (or the page coming back): look again now, not at the next timer.
+      d.onWake = () => {
+        const f = feedRef.current;
+        if (f && deck.current === d) d.tick(f.now, f.upcoming, Date.now() + offset.current, f.fading);
       };
     }
     deck.current.setVolume(volume);
     // For the rigs under scripts/ (radio-check.mjs). Development only.
     if (process.env.NODE_ENV !== "production") (window as unknown as { __remixtRadio?: RadioDeck }).__remixtRadio = deck.current;
     setTune("loading");
+    setError(null);
     deck.current.start();
-    // A silent element played inside the tap: the browser then lets this page play sound later too.
-    try {
-      const unlock = new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=");
-      await unlock.play().catch(() => {});
-    } catch {
-      // nothing to unlock
-    }
+    askToPersist();
     const f = feedRef.current;
     if (f) deck.current.tick(f.now, f.upcoming, serverNow(), f.fading);
   }, [slug, volume, serverNow]);
-
-  // The lock screen follows the song on air while tuned in.
-  const nowId = feed?.now?.rowId;
+  // The lock screen follows the song heard: set when one starts (and again now if one already has).
   useEffect(() => {
-    if (tune !== "on" || !feedRef.current) return;
-    lockScreen(feedRef.current.now, feedRef.current.station.name, { play: () => void tuneIn(), pause: tuneOut });
-  }, [tune, nowId, tuneIn, tuneOut]);
+    const d = deck.current;
+    if (!d || tune === "off") return;
+    const handlers = { play: () => void tuneIn(), pause: tuneOut };
+    const show = (row: RadioFeed["now"]) => {
+      lockScreen(row, feedRef.current?.station.name ?? "Remixt Radio", handlers);
+      lockScreenState("playing");
+    };
+    d.onPlaying = show;
+    // The phone paused it (a call, headphones out): stay quiet until asked, as any music app does.
+    d.onExternalPause = tuneOut;
+    if (tune === "on" && d.nowPlaying) show(d.nowPlaying);
+  }, [tune, tuneIn, tuneOut]);
 
   const setVolume = useCallback((v: number) => {
     setVolumeState(v);
