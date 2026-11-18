@@ -1,6 +1,14 @@
 import sql from "./db";
 import { ensureSchema } from "./schema";
-import { keyOfFileUrl, listStoredFiles, storageBackend, storageLimitBytes, type StoredFile } from "./storage";
+import {
+  hasLegacyBlob,
+  keyOfFileUrl,
+  listLegacyBlobFiles,
+  listStoredFiles,
+  storageBackend,
+  storageLimitBytes,
+  type StoredFile,
+} from "./storage";
 
 // What's in storage and what it's for, for the admin's Storage tab: each
 // file is either pointed at by a row (a song's stem, a cover, a shared
@@ -61,12 +69,57 @@ export async function findLeftovers(): Promise<StoredFile[]> {
   return files.filter((f) => isLeftover(f, used, now));
 }
 
+/**
+ * Moving from Blob to R2: the old store's files, and which aren't in R2
+ * yet (at the same size). Null without an old store; `error` when it
+ * refuses — Vercel suspends a Hobby store that goes over its limits.
+ */
+export type LegacyStore =
+  | { ok: true; files: number; bytes: number; moved: number; movedBytes: number; left: StoredFile[]; leftBytes: number }
+  | { ok: false; error: string };
+
+async function legacyStore(inR2: Map<string, number>): Promise<LegacyStore | null> {
+  if (!hasLegacyBlob()) return null;
+  let files: StoredFile[];
+  try {
+    files = await listLegacyBlobFiles();
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message.replace(/^Vercel Blob:\s*/, "") : "It didn't answer" };
+  }
+  const left = files.filter((f) => !f.key.startsWith(".remixt/") && inR2.get(f.key) !== f.size);
+  const sum = (list: StoredFile[]) => list.reduce((n, f) => n + f.size, 0);
+  return {
+    ok: true,
+    files: files.length,
+    bytes: sum(files),
+    moved: files.length - left.length,
+    movedBytes: sum(files) - sum(left),
+    left,
+    leftBytes: sum(left),
+  };
+}
+
+/** Files in the old Blob store that R2 holds at the same size: safe to delete from Blob. */
+export async function legacyMovedKeys(): Promise<string[]> {
+  const [inBlob, inR2] = await Promise.all([listLegacyBlobFiles(), listStoredFiles()]);
+  const r2Size = new Map(inR2.map((f) => [f.key, f.size]));
+  return inBlob.filter((f) => r2Size.get(f.key) === f.size).map((f) => f.key);
+}
+
+/** What's still only in the old Blob store (checked afresh). */
+export async function legacyLeft(): Promise<LegacyStore | null> {
+  const files = await listStoredFiles();
+  return legacyStore(new Map(files.map((f) => [f.key, f.size])));
+}
+
 export type StorageReport = Awaited<ReturnType<typeof storageReport>>;
 
 export async function storageReport() {
   const [files, used] = await Promise.all([listStoredFiles(), referencedKeys()]);
   const now = Date.now();
   const size = new Map(files.map((f) => [f.key, f.size]));
+  const legacy = await legacyStore(size);
+  const onlyInBlob = new Map(legacy?.ok ? legacy.left.map((f) => [f.key, f.size]) : []);
 
   const groups = new Map<StorageGroup, { files: number; bytes: number; leftoverFiles: number; leftoverBytes: number }>();
   const leftovers: { key: string; size: number; uploadedAt: string; group: StorageGroup }[] = [];
@@ -107,7 +160,8 @@ export async function storageReport() {
       files: 0,
       missing: 0,
     };
-    const bytes = size.get(keyOfFileUrl(s.file_url));
+    const key = keyOfFileUrl(s.file_url);
+    const bytes = size.get(key) ?? onlyInBlob.get(key);
     if (bytes === undefined) song.missing++;
     else {
       song.bytes += bytes;
@@ -131,5 +185,7 @@ export async function storageReport() {
     songs: bySize.filter((s) => s.bytes > 0).slice(0, 100),
     /** Songs whose stems aren't in storage at all: they can't play. */
     brokenSongs: bySize.filter((s) => s.missing > 0 && s.status === "ready").length,
+    /** The old Blob store while moving to R2 (its `left` trimmed to a count for the page). */
+    legacy: legacy?.ok ? { ...legacy, left: undefined, leftCount: legacy.left.length } : legacy,
   };
 }

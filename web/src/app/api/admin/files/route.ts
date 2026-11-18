@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { currentAdmin, deleteStemResults } from "@/lib/admin";
 import { ensureSchema } from "@/lib/schema";
-import { deleteObjects } from "@/lib/storage";
-import { findLeftovers, storageReport } from "@/lib/storageReport";
+import { copyFromLegacyBlob, deleteFromLegacyBlob, deleteObjects, hasLegacyBlob } from "@/lib/storage";
+import { findLeftovers, legacyLeft, legacyMovedKeys, storageReport } from "@/lib/storageReport";
 
 export const maxDuration = 120;
 
@@ -31,6 +31,8 @@ const deleteSchema = z.union([
   z.object({ keys: z.array(z.string().min(1)).min(1).max(1000) }),
   // Shared beats and analysis: browsers work them out again when a stem is next opened.
   z.object({ results: z.literal(true) }),
+  // Moving to R2: the old Blob store's files R2 already holds (deleting from Blob is free).
+  z.object({ legacyMoved: z.literal(true) }),
 ]);
 
 export async function DELETE(req: NextRequest) {
@@ -38,6 +40,12 @@ export async function DELETE(req: NextRequest) {
   const parsed = deleteSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Say what to delete" }, { status: 400 });
   try {
+    if ("legacyMoved" in parsed.data) {
+      if (!hasLegacyBlob()) return NextResponse.json({ error: "No old Blob store is connected" }, { status: 400 });
+      const keys = await legacyMovedKeys();
+      await deleteFromLegacyBlob(keys);
+      return NextResponse.json({ deleted: keys.length });
+    }
     if ("results" in parsed.data) {
       await ensureSchema();
       return NextResponse.json({ deleted: await deleteStemResults({ all: true }) });
@@ -47,6 +55,28 @@ export async function DELETE(req: NextRequest) {
     const doomed = leftovers.filter((f) => !wanted || wanted.has(f.key));
     await deleteObjects(doomed.map((f) => f.key));
     return NextResponse.json({ deleted: doomed.length, bytes: doomed.reduce((n, f) => n + f.size, 0) });
+  } catch (error) {
+    return storageError(error);
+  }
+}
+
+/** How long one copy request may run: the browser asks again for the rest, so none hits the time limit. */
+const COPY_BUDGET_MS = 45_000;
+
+/**
+ * Moving to R2: copies the next batch of files from the old Blob store.
+ * The Storage tab calls it again until nothing is left.
+ */
+export async function POST() {
+  if (!(await currentAdmin())) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!hasLegacyBlob()) return NextResponse.json({ error: "No old Blob store is connected" }, { status: 400 });
+  try {
+    const legacy = await legacyLeft();
+    if (!legacy?.ok) return NextResponse.json({ error: `The old store refused: ${legacy?.error ?? "not connected"}` }, { status: 503 });
+    // Songs' stems first: they're what people play.
+    const keys = legacy.left.map((f) => f.key).sort((a, b) => Number(b.startsWith("stems/")) - Number(a.startsWith("stems/")));
+    const { copied, failed, done } = await copyFromLegacyBlob(keys, COPY_BUDGET_MS);
+    return NextResponse.json({ copied, failed: failed.slice(0, 20), failedCount: failed.length, left: keys.length - done });
   } catch (error) {
     return storageError(error);
   }

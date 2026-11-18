@@ -805,6 +805,100 @@ function formatSize(bytes: number) {
 }
 
 /**
+ * Moving from Vercel Blob to R2: how much of the old store is in R2 yet,
+ * a button that copies the rest (a batch per request, asked again until
+ * done, so none hits the time limit), and once it's all there, emptying
+ * the old store. A suspended store says so, and why it'll come back.
+ */
+function MoveFromBlob({ legacy, onDone }: { legacy: NonNullable<StorageReport["legacy"]>; onDone: () => void }) {
+  const [copying, setCopying] = useState<{ copied: number; left: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [emptying, setEmptying] = useState(false);
+
+  async function copyRest() {
+    setError(null);
+    let copied = 0;
+    setCopying({ copied, left: legacy.ok ? legacy.leftCount : 0 });
+    for (;;) {
+      const res = await fetch("/api/admin/files", { method: "POST" }).catch(() => null);
+      const data = await res?.json().catch(() => null);
+      if (!res?.ok) {
+        setError(data?.error ?? "Copying stopped: no answer. Press again to carry on.");
+        break;
+      }
+      copied += data.copied;
+      setCopying({ copied, left: data.left });
+      if (data.failedCount) setError(`${data.failedCount} file(s) couldn't be copied, e.g. ${data.failed[0]}. Press again to retry them.`);
+      // Done, or nothing went over this round (only files that keep failing are left).
+      if (data.left === 0 || data.copied === 0) break;
+    }
+    setCopying(null);
+    onDone();
+  }
+
+  async function emptyOld() {
+    if (!confirm("Delete from the old Blob store every file R2 already holds (same size)? Files not copied yet stay. Deleting is free on Vercel.")) return;
+    setEmptying(true);
+    setError(await send("/api/admin/files", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ legacyMoved: true }) }));
+    setEmptying(false);
+    onDone();
+  }
+
+  if (!legacy.ok) {
+    return (
+      <div className="rounded-xl border border-border bg-surface p-5">
+        <p className="font-medium">Moving from Vercel Blob</p>
+        <p className="mt-1 text-sm text-danger">The old store refused: {legacy.error}</p>
+        <p className="mt-2 text-sm text-muted">
+          New songs are stored in R2 and play normally. Old songs come back once the old store can be read again
+          (on the Hobby plan, 30 days after it went over a limit) — then copy them here. Until then the radio
+          leaves them out.
+        </p>
+      </div>
+    );
+  }
+  const total = legacy.moved + legacy.leftCount;
+  const done = total ? legacy.moved / total : 1;
+  const left = copying ? copying.left : legacy.leftCount;
+  return (
+    <div className="rounded-xl border border-border bg-surface p-5">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="font-medium">Moving from Vercel Blob</p>
+        <p className="text-sm tabular-nums text-muted">
+          {legacy.moved} of {total} files in R2 · {formatSize(legacy.leftBytes)} to go
+        </p>
+      </div>
+      <div className="mt-3 h-2 overflow-hidden rounded-full bg-surface-raised">
+        <div className="h-full rounded-full bg-success transition-[width]" style={{ width: `${Math.round(done * 100)}%` }} />
+      </div>
+      <p className="mt-2 text-sm text-muted">
+        {left === 0
+          ? "Every file is in R2. Empty the old store, then disconnect it from the project in Vercel (Storage tab)."
+          : "A file not copied yet is copied the first time someone plays it; this copies the rest now, songs first."}
+      </p>
+      {copying && (
+        <p className="mt-2 text-sm tabular-nums">
+          Copied {copying.copied} file(s)… {copying.left} left. Keep this page open.
+        </p>
+      )}
+      {error && <p className="mt-2 text-sm text-danger">{error}</p>}
+      <div className="mt-3 flex flex-wrap gap-2">
+        {left > 0 && (
+          <button onClick={copyRest} disabled={!!copying} className="rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-brand-strong disabled:opacity-50">
+            {copying ? "Copying…" : `Copy the rest now (${left})`}
+          </button>
+        )}
+        {legacy.moved > 0 && (
+          <button onClick={emptyOld} disabled={emptying || !!copying} className={dangerButton}>
+            {emptying ? "Deleting…" : `Empty the old store (${legacy.moved} copied file(s))`}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
  * What's in storage, how near the plan's limit it is, and ways to make
  * room: delete leftover files nothing uses, the shared results (worked out
  * again by browsers), or the songs taking the most space.
@@ -869,10 +963,9 @@ function StorageTab({ onChange }: { onChange: () => void }) {
       <div className="rounded-xl border border-danger/40 bg-danger/5 p-5">
         <p className="font-medium text-danger">{loadError}</p>
         <p className="mt-2 text-sm text-muted">
-          While the store refuses, songs can&apos;t play or upload and nothing can be deleted here. On Vercel&apos;s
-          Hobby plan a store is suspended once the team goes over a monthly limit (storage, operations or data
-          transfer): see the store&apos;s Usage page in the Vercel dashboard. Upgrading the team, or the limit
-          resetting, brings it back.
+          While the store refuses, songs can&apos;t play or upload and nothing can be deleted here. A Vercel Blob
+          store on the Hobby plan is suspended once the team goes over a monthly limit (storage, operations or
+          data transfer) and comes back 30 days later; with R2, check the bucket and its API token in Cloudflare.
         </p>
         <button onClick={() => setVersion((v) => v + 1)} className={`${plainButton} mt-3`}>
           Try again
@@ -932,6 +1025,8 @@ function StorageTab({ onChange }: { onChange: () => void }) {
           ))}
         </div>
       </div>
+
+      {report.legacy && <MoveFromBlob legacy={report.legacy} onDone={() => setVersion((v) => v + 1)} />}
 
       {message && <p className={`text-sm ${message.ok ? "text-success" : "text-danger"}`}>{message.text}</p>}
 

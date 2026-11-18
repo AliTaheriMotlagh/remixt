@@ -25,7 +25,26 @@ const server = createServer(async (req, res) => {
     req.on("data", (c) => parts.push(c));
     req.on("end", () => resolve(Buffer.concat(parts)));
   });
-  // The Blob API: head(key) is GET /?url=<key>.
+  // The Blob API: list() is GET / , del() is POST /delete, head(key) is GET /?url=<key>.
+  if (url.pathname === "/" && !url.searchParams.has("url")) {
+    calls.push("blob list");
+    if (blobSuspended) {
+      res.writeHead(403, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: { code: "store_suspended", message: "This store has been suspended." } }));
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    return res.end(
+      JSON.stringify({
+        blobs: [...blobFiles].map(([key, file]) => ({ url: `${base}/blobfile/${key}`, downloadUrl: "", pathname: key, size: file.length, uploadedAt: new Date().toISOString(), etag: "x" })),
+        hasMore: false,
+      })
+    );
+  }
+  if (url.pathname === "/delete" && req.method === "POST") {
+    for (const key of JSON.parse(body.toString()).urls as string[]) blobFiles.delete(key);
+    res.writeHead(200, { "content-type": "application/json" });
+    return res.end("{}");
+  }
   if (url.pathname === "/" && url.searchParams.has("url")) {
     calls.push(`blob head ${url.searchParams.get("url")}`);
     if (blobSuspended) {
@@ -169,5 +188,34 @@ describe("moving from Blob to R2", () => {
     assert.equal(storage.servesThroughApp("stems/a/vocals.mp3"), false);
     assert.equal(storage.storageBackend(), "r2");
     assert.equal(storage.storageLimitBytes(), 10e9);
+  });
+
+  test("the admin's move: list the old store, copy what's left in batches, then empty it", async () => {
+    blobFiles.clear();
+    const songs = Array.from({ length: 7 }, (_, i) => [`stems/m${i}/vocals.mp3`, randomBytes(20_000 + i)] as const);
+    for (const [key, bytes] of songs) blobFiles.set(key, bytes);
+    const listed = await storage.listLegacyBlobFiles();
+    assert.equal(listed.length, 7);
+    assert.equal(storage.hasLegacyBlob(), true);
+
+    const first = await storage.copyFromLegacyBlob(listed.map((f) => f.key), 60_000);
+    assert.deepEqual([first.copied, first.done, first.failed.length], [7, 7, 0]);
+    for (const [key, bytes] of songs) assert.ok(r2Files.get(key)?.equals(bytes), key);
+
+    // An exhausted budget stops before starting more (the page asks again for the rest).
+    const none = await storage.copyFromLegacyBlob(["stems/later/vocals.mp3"], 0);
+    assert.equal(none.done, 0);
+
+    await storage.deleteFromLegacyBlob(listed.map((f) => f.key));
+    assert.equal(blobFiles.size, 0);
+  });
+
+  test("a suspended old store: listing it says why", async () => {
+    blobSuspended = true;
+    try {
+      await assert.rejects(storage.listLegacyBlobFiles(), /suspended/);
+    } finally {
+      blobSuspended = false;
+    }
   });
 });

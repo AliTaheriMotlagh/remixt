@@ -702,6 +702,56 @@ export async function listStoredFiles(max = 20000): Promise<StoredFile[]> {
   return out;
 }
 
+// --- Moving from Blob to R2 (the admin's Storage tab) ------------------------
+
+/** True when R2 is in use and an old Blob store is still connected (read only). */
+export function hasLegacyBlob(): boolean {
+  return !!r2 && !!legacyBlobToken;
+}
+
+/** Every file in the old Blob store. Throws what the store says when it refuses (e.g. suspended). */
+export async function listLegacyBlobFiles(max = 20000): Promise<StoredFile[]> {
+  if (!legacyBlobToken) return [];
+  const out: StoredFile[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await list({ token: legacyBlobToken, cursor, limit: 1000 });
+    for (const b of page.blobs) out.push({ key: b.pathname, size: b.size, uploadedAt: new Date(b.uploadedAt) });
+    cursor = page.hasMore ? page.cursor : undefined;
+  } while (cursor && out.length < max);
+  return out;
+}
+
+/**
+ * Copies these files from the old Blob store into R2 (see ensureStored),
+ * a few at a time, stopping once `budgetMs` has run out so a request
+ * never hits the function's time limit. Says how many went over and
+ * which couldn't.
+ */
+export async function copyFromLegacyBlob(keys: string[], budgetMs: number): Promise<{ copied: number; failed: string[]; done: number }> {
+  const until = Date.now() + budgetMs;
+  const queue = [...keys];
+  let copied = 0;
+  let done = 0;
+  const failed: string[] = [];
+  const worker = async () => {
+    for (let key = queue.shift(); key !== undefined && Date.now() < until; key = queue.shift()) {
+      if (await ensureStored(key)) copied++;
+      else failed.push(key);
+      done++;
+    }
+  };
+  await Promise.all(Array.from({ length: 4 }, worker));
+  keysSeen = null; // the radio's view of the bucket: new files in it
+  return { copied, failed, done };
+}
+
+/** Deletes files from the old Blob store (free on Vercel), a batch per call. */
+export async function deleteFromLegacyBlob(keys: string[]): Promise<void> {
+  if (!legacyBlobToken) return;
+  for (let i = 0; i < keys.length; i += 500) await del(keys.slice(i, i + 500), { token: legacyBlobToken });
+}
+
 let keysSeen: { at: number; keys: Promise<Set<string>> } | null = null;
 const KEYS_FRESH_MS = 2 * 60 * 1000;
 
