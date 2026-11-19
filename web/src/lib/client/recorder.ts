@@ -467,7 +467,8 @@ export async function uploadTake(
 ): Promise<{ stemId: string; trackId: string }> {
   onProgress("encoding", 0);
   const bytes = await encodeMp3Bytes(take.buffer, {
-    bitrate: 192,
+    // Stored like a song's stems (see mp3Core.ts): a take is mostly gaps.
+    bitrate: "vbr",
     trimDelay: true,
     signal,
     onProgress: (f) => onProgress("encoding", f),

@@ -850,9 +850,10 @@ function MoveFromBlob({ legacy, onDone }: { legacy: NonNullable<StorageReport["l
         <p className="font-medium">Moving from Vercel Blob</p>
         <p className="mt-1 text-sm text-danger">The old store refused: {legacy.error}</p>
         <p className="mt-2 text-sm text-muted">
-          New songs are stored in R2 and play normally. Old songs come back once the old store can be read again
-          (on the Hobby plan, 30 days after it went over a limit) — then copy them here. Until then the radio
-          leaves them out.
+          Nothing can be copied while it refuses: a suspended store can&apos;t be read at all, file by file or
+          in one go. New songs are stored in R2 and play normally; the radio leaves old ones out. Either wait
+          until Vercel lifts it (on the Hobby plan, up to 30 days after it went over a limit) and copy them
+          here, or start fresh below and upload the songs again.
         </p>
       </div>
     );
@@ -891,6 +892,95 @@ function MoveFromBlob({ legacy, onDone }: { legacy: NonNullable<StorageReport["l
         {legacy.moved > 0 && (
           <button onClick={emptyOld} disabled={emptying || !!copying} className={dangerButton}>
             {emptying ? "Deleting…" : `Empty the old store (${legacy.moved} copied file(s))`}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+type MissingCounts = { songs: number; remixes: number; emptied: number; covers: number; results: number; jobs: number };
+
+/**
+ * Starting over with what storage really holds — for when the old store is
+ * gone for good: first says what would go (nothing changes), then removes
+ * the songs whose audio isn't there and forgets missing covers, shared
+ * results and queued uploads. Songs whose files are there aren't touched.
+ */
+function StartFresh({ onDone }: { onDone: () => void }) {
+  const [counts, setCounts] = useState<MissingCounts | null>(null);
+  const [busy, setBusy] = useState<"checking" | "removing" | null>(null);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+
+  async function check() {
+    setBusy("checking");
+    setMessage(null);
+    const res = await fetch("/api/admin/files?missing=1").catch(() => null);
+    const data = await res?.json().catch(() => null);
+    if (res?.ok) setCounts(data);
+    else setMessage({ ok: false, text: data?.error ?? "Storage didn't answer" });
+    setBusy(null);
+  }
+
+  async function remove() {
+    if (!counts) return;
+    const lines = [
+      `Delete ${counts.songs} song(s) whose audio isn't in storage?`,
+      counts.remixes ? `${counts.remixes} remix(es) use them: ${counts.emptied} use nothing else and are deleted, the rest lose those lanes.` : "",
+      "Their owners can upload the songs again. This can't be undone.",
+    ];
+    if (!confirm(lines.filter(Boolean).join("\n\n"))) return;
+    setBusy("removing");
+    const res = await fetch("/api/admin/files", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ missing: true }),
+    }).catch(() => null);
+    const data = await res?.json().catch(() => null);
+    setMessage(
+      res?.ok
+        ? {
+            ok: true,
+            text: `Removed ${data.songs} song(s), ${data.remixes} empty remix(es), ${data.jobs} queued song(s); forgot ${data.covers} cover(s) and ${data.results} shared result(s).`,
+          }
+        : { ok: false, text: data?.error ?? "Storage didn't answer" }
+    );
+    setCounts(null);
+    setBusy(null);
+    onDone();
+  }
+
+  const nothing = counts && !counts.songs && !counts.covers && !counts.results && !counts.jobs;
+  return (
+    <div className="rounded-xl border border-border bg-surface p-5">
+      <p className="font-medium">Start fresh</p>
+      <p className="mt-1 text-sm text-muted">
+        For when the old files are gone for good: remove the songs whose audio isn&apos;t in storage, so nothing
+        shows that can&apos;t play, and forget covers and results whose files are gone. Songs whose files are there
+        stay as they are. Check first: nothing changes until you confirm.
+      </p>
+      {counts && !nothing && (
+        <ul className="mt-3 list-disc pl-5 text-sm">
+          <li>{counts.songs} song(s) with audio missing (and recorded takes)</li>
+          {counts.remixes > 0 && (
+            <li>
+              {counts.remixes} remix(es) use them — {counts.emptied} use nothing else and go too
+            </li>
+          )}
+          {counts.covers > 0 && <li>{counts.covers} cover(s) whose picture is gone (a drawn one shows instead)</li>}
+          {counts.results > 0 && <li>{counts.results} shared result(s) (browsers work them out again)</li>}
+          {counts.jobs > 0 && <li>{counts.jobs} song(s) waiting to be split whose upload is gone</li>}
+        </ul>
+      )}
+      {nothing && <p className="mt-3 text-sm text-success">Every row has its file. Nothing to remove.</p>}
+      {message && <p className={`mt-2 text-sm ${message.ok ? "text-success" : "text-danger"}`}>{message.text}</p>}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button onClick={check} disabled={!!busy} className={plainButton}>
+          {busy === "checking" ? "Checking…" : counts ? "Check again" : "Check what would go"}
+        </button>
+        {counts && !nothing && (
+          <button onClick={remove} disabled={!!busy} className={dangerButton}>
+            {busy === "removing" ? "Removing…" : `Remove ${counts.songs} song(s) and the rest`}
           </button>
         )}
       </div>
@@ -1031,6 +1121,8 @@ function StorageTab({ onChange }: { onChange: () => void }) {
       </div>
 
       {report.legacy && <MoveFromBlob legacy={report.legacy} onDone={() => setVersion((v) => v + 1)} />}
+
+      {(report.brokenSongs > 0 || (report.legacy && !report.legacy.ok)) && <StartFresh onDone={() => setVersion((v) => v + 1)} />}
 
       {message && <p className={`text-sm ${message.ok ? "text-success" : "text-danger"}`}>{message.text}</p>}
 

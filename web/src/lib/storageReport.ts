@@ -189,3 +189,111 @@ export async function storageReport() {
     legacy: legacy?.ok ? { ...legacy, left: undefined, leftCount: legacy.left.length } : legacy,
   };
 }
+
+// --- Starting over in storage (e.g. the old Blob store is gone) -----------------
+
+/** Rows whose files aren't in storage, worked out afresh. */
+export type MissingFiles = {
+  /** Songs (and recorded takes) with a stem whose file isn't there: they can't play. */
+  songIds: string[];
+  /** Remixes that use one of those songs; `emptied` of them use nothing else and go too. */
+  remixes: number;
+  emptied: number;
+  /** Covers (songs', remixes', queued songs') whose picture isn't there: they're drawn instead. */
+  covers: number;
+  /** Shared beats and analysis whose file isn't there: browsers work them out again. */
+  results: number;
+  /** Songs waiting to be split whose upload isn't there: they can never be split. */
+  jobs: number;
+};
+
+/**
+ * The listing has to be whole: a key missing from a cut-off one would
+ * look like a file that's gone.
+ */
+const LIST_MAX = 50_000;
+
+async function missingRows() {
+  await ensureSchema();
+  const files = await listStoredFiles(LIST_MAX);
+  if (files.length >= LIST_MAX) throw new Error(`Storage holds over ${LIST_MAX} files: too many to check in one go`);
+  const there = new Set(files.map((f) => f.key));
+  const gone = (key: string | null) => !!key && !there.has(keyOfFileUrl(key));
+  // Anything under an hour old may still be uploading (its row comes before its file).
+  const stems = await sql<{ track_id: string; file_url: string }[]>`
+    SELECT stems.track_id, stems.file_url FROM stems JOIN tracks ON tracks.id = stems.track_id
+    WHERE tracks.created_at < now() - interval '1 hour'
+  `;
+  const songIds = [...new Set(stems.filter((s) => gone(s.file_url)).map((s) => s.track_id))];
+  const trackCovers = await sql<{ id: string; cover_key: string }[]>`SELECT id, cover_key FROM tracks WHERE cover_key IS NOT NULL`;
+  const remixCovers = await sql<{ id: string; cover_key: string }[]>`
+    SELECT id, cover_key FROM remixes WHERE cover_key IS NOT NULL
+  `.catch(() => []);
+  const results = await sql<{ storage_key: string }[]>`SELECT storage_key FROM stem_results WHERE created_at < now() - interval '1 hour'`.catch(() => []);
+  const jobs = await sql<{ id: string; source_key: string; cover_key: string | null; status: string }[]>`
+    SELECT id, source_key, cover_key, status FROM split_jobs WHERE created_at < now() - interval '1 hour'
+  `.catch(() => []);
+  return {
+    songIds,
+    trackCovers: trackCovers.filter((r) => gone(r.cover_key)).map((r) => r.id),
+    remixCovers: remixCovers.filter((r) => gone(r.cover_key)).map((r) => r.id),
+    results: results.filter((r) => gone(r.storage_key)).map((r) => r.storage_key),
+    // A finished job's upload is deleted once split: only waiting ones need theirs.
+    jobs: jobs.filter((j) => j.status !== "done" && j.status !== "failed" && gone(j.source_key)).map((j) => j.id),
+    jobCovers: jobs.filter((j) => gone(j.cover_key)).map((j) => j.id),
+  };
+}
+
+async function remixesUsing(songIds: string[]) {
+  if (!songIds.length) return { remixes: 0, emptied: 0 };
+  const [row] = await sql<{ remixes: number; emptied: number }[]>`
+    WITH hit AS (
+      SELECT DISTINCT rl.remix_id FROM remix_lanes rl JOIN stems s ON s.id = rl.stem_id WHERE s.track_id IN ${sql(songIds)}
+    )
+    SELECT
+      (SELECT COUNT(*) FROM hit)::int AS remixes,
+      (SELECT COUNT(*) FROM hit WHERE NOT EXISTS (
+        SELECT 1 FROM remix_lanes rl JOIN stems s ON s.id = rl.stem_id
+        WHERE rl.remix_id = hit.remix_id AND s.track_id NOT IN ${sql(songIds)}
+      ))::int AS emptied
+  `;
+  return row ?? { remixes: 0, emptied: 0 };
+}
+
+/** What starting over would remove — nothing is changed. */
+export async function findMissing(): Promise<MissingFiles> {
+  const rows = await missingRows();
+  return {
+    songIds: rows.songIds,
+    ...(await remixesUsing(rows.songIds)),
+    covers: rows.trackCovers.length + rows.remixCovers.length + rows.jobCovers.length,
+    results: rows.results.length,
+    jobs: rows.jobs.length,
+  };
+}
+
+/**
+ * Starts over with what storage really holds: deletes the songs whose
+ * audio isn't there (remixes lose those lanes, and a remix left with none
+ * goes), forgets covers and shared results whose files are gone, and drops
+ * queued songs whose upload is gone. Everything that still has its files
+ * stays exactly as it is. Checked afresh, so it only ever takes rows whose
+ * files are missing right now.
+ */
+export async function removeMissing(): Promise<{ songs: number; remixes: number; covers: number; results: number; jobs: number }> {
+  const rows = await missingRows();
+  const { deleteTracks } = await import("./admin");
+  const songs = await deleteTracks(rows.songIds);
+  const remixes = await sql<{ id: string }[]>`
+    DELETE FROM remixes WHERE NOT EXISTS (SELECT 1 FROM remix_lanes WHERE remix_lanes.remix_id = remixes.id) RETURNING id
+  `;
+  let covers = 0;
+  if (rows.trackCovers.length) covers += (await sql`UPDATE tracks SET cover_key = NULL WHERE id IN ${sql(rows.trackCovers)} RETURNING id`).length;
+  if (rows.remixCovers.length) covers += (await sql`UPDATE remixes SET cover_key = NULL WHERE id IN ${sql(rows.remixCovers)} RETURNING id`).length;
+  if (rows.jobCovers.length) covers += (await sql`UPDATE split_jobs SET cover_key = NULL WHERE id IN ${sql(rows.jobCovers)} RETURNING id`).length;
+  const results = rows.results.length
+    ? (await sql`DELETE FROM stem_results WHERE storage_key IN ${sql(rows.results)} RETURNING stem_id`).length
+    : 0;
+  const jobs = rows.jobs.length ? (await sql`DELETE FROM split_jobs WHERE id IN ${sql(rows.jobs)} RETURNING id`).length : 0;
+  return { songs, remixes: remixes.length, covers, results, jobs };
+}

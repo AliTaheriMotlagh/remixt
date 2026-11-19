@@ -93,7 +93,7 @@ cd web && node scripts/migrate.mjs
 | `STORAGE_DIR` | where stems go when R2 isn't configured (`../storage`) |
 | `BLOB_READ_WRITE_TOKEN` | store stems in Vercel Blob (Vercel sets it when a Blob store is connected) |
 | `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_PUBLIC_URL` | store stems in Cloudflare R2 instead (see DEPLOY.md) |
-| `NEXT_PUBLIC_STEM_BITRATE` | MP3 bitrate of the stems, kbit/s (default 192; 128 saves ~30% space) |
+| `NEXT_PUBLIC_STEM_BITRATE` | Leave unset: stems are variable-bitrate MP3 (LAME -V2), as good as 192 kbps and about half the size. A number (128–320) forces a fixed bitrate |
 | `NEXT_PUBLIC_DEMUCS_MODEL_URL` | where browsers download the model (default: Hugging Face) |
 | `NEXT_PUBLIC_ORT_BASE_URL` | where browsers load ONNX Runtime from (default: `/ort/`, copied from `node_modules` before dev/build) |
 

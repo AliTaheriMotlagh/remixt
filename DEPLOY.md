@@ -131,7 +131,6 @@ git push -u origin main
    | Name | Value |
    | --- | --- |
    | `SESSION_SECRET` | a long random string (run `openssl rand -base64 48` in Terminal) |
-   | `NEXT_PUBLIC_STEM_BITRATE` | `128` (stretches the 1 GB free storage; `192` is the default) |
    | `ADMIN_EMAILS` | your email (comma-separate several). These accounts get the **Admin** page for managing users, songs and remixes |
 
 5. Click **Deploy**. It builds and goes live at
@@ -239,7 +238,11 @@ From now on, every `git push` to `main` redeploys the site by itself.
   `node --env-file=.env.migrate scripts/blob-to-r2.mjs` (add `--dry-run`
   first to see what it would copy; it's safe to run again). Once it
   reports every file in R2, disconnect the Blob store. A suspended Blob
-  store can't be read: wait for it to come back first.
+  store can't be read at all (not even one file at a time): wait for
+  Vercel to lift it, or give the old songs up — Admin → Storage → **Start
+  fresh** removes every song whose audio isn't in R2 (it shows what would
+  go first), then delete `BLOB_READ_WRITE_TOKEN` from the project and
+  redeploy.
 - `NEXT_PUBLIC_…` variables are baked in when the site is built, so
   redeploy after changing them.
 

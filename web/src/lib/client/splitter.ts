@@ -32,11 +32,13 @@ const ORT_BASE = process.env.NEXT_PUBLIC_ORT_BASE_URL || "/ort/";
 const EXPECTED_BYTES = 180_534_758 + 28_312_028;
 const SAMPLE_RATE = 44100; // what the model was trained on
 /**
- * Stem quality. 192 kbps is transparent for remixing; 128 kbps makes each
- * song ~30% smaller, which stretches a small free storage tier.
+ * Stem quality: variable bitrate (LAME -V2, see mp3Core.ts) — as good as
+ * 192 kbps or better, and about half the size, since a stem is quiet or
+ * simple much of the time. NEXT_PUBLIC_STEM_BITRATE=192 (or 128 … 320)
+ * goes back to a fixed bitrate.
  */
-const STEM_BITRATE: StemBitrate =
-  STEM_BITRATES.find((b) => b === Number(process.env.NEXT_PUBLIC_STEM_BITRATE)) ?? 192;
+const STEM_BITRATE: StemBitrate | "vbr" =
+  STEM_BITRATES.find((b) => b === Number(process.env.NEXT_PUBLIC_STEM_BITRATE)) ?? "vbr";
 const MAX_SECONDS = 15 * 60;
 /**
  * Keep the beat's drums, bass and other parts as stems of their own, so

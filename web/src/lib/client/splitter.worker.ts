@@ -10,6 +10,7 @@ import { DemucsProcessor } from "demucs-web";
 import { CONSTANTS } from "demucs-web/constants";
 import { prepareModelInput, standaloneIspec, standaloneMask } from "demucs-web/processor";
 import { createMp3Encoder } from "wasm-media-encoders";
+import { finishMp3, mp3Settings } from "./mp3Core";
 import { estimateTempoDecimated, tempoDecimation } from "./analysis";
 import { MODEL_CACHES, cachedDownload } from "./modelCache";
 import type { SplitOutput, SplitResult, SplitterRequest, SplitterResponse, StemBitrate } from "./splitterProtocol";
@@ -135,9 +136,9 @@ const MP3_DELAY = 576 + 529;
 type StemEncoder = { add(left: Float32Array, right: Float32Array): void; finish(): Promise<Uint8Array> };
 
 /** An MP3 encoder fed a piece at a time, as the splitter finishes them. */
-async function inlineMp3(sampleRate: number, bitrate: StemBitrate): Promise<StemEncoder> {
+async function inlineMp3(sampleRate: number, bitrate: StemBitrate | "vbr"): Promise<StemEncoder> {
   const encoder = await createMp3Encoder();
-  encoder.configure({ sampleRate, channels: 2, bitrate });
+  encoder.configure(mp3Settings(sampleRate, bitrate));
   const parts: Uint8Array[] = [];
   let skip = MP3_DELAY;
   const CHUNK = 1152 * 64;
@@ -161,7 +162,7 @@ async function inlineMp3(sampleRate: number, bitrate: StemBitrate): Promise<Stem
         out.set(part, offset);
         offset += part.length;
       }
-      return out;
+      return finishMp3(out, bitrate);
     },
   };
 }

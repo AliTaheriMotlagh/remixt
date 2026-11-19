@@ -20,7 +20,8 @@ export type SplitterRequest =
       left: Float32Array;
       right: Float32Array;
       sampleRate: number;
-      bitrate: StemBitrate;
+      /** "vbr": see mp3Core.ts. */
+      bitrate: StemBitrate | "vbr";
       /** Also keep the beat's drums, bass and other parts as stems of their own. */
       parts: boolean;
     }

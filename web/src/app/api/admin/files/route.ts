@@ -3,7 +3,7 @@ import { z } from "zod";
 import { currentAdmin, deleteStemResults } from "@/lib/admin";
 import { ensureSchema } from "@/lib/schema";
 import { copyFromLegacyBlob, deleteFromLegacyBlob, deleteObjects, hasLegacyBlob } from "@/lib/storage";
-import { findLeftovers, legacyLeft, legacyMovedKeys, storageReport } from "@/lib/storageReport";
+import { findLeftovers, findMissing, legacyLeft, legacyMovedKeys, removeMissing, storageReport } from "@/lib/storageReport";
 
 export const maxDuration = 120;
 
@@ -16,9 +16,14 @@ function storageError(error: unknown) {
   return NextResponse.json({ error: `Storage refused: ${message}` }, { status: 503 });
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   if (!(await currentAdmin())) return NextResponse.json({ error: "Not found" }, { status: 404 });
   try {
+    // Starting over: what would go (a dry run).
+    if (req.nextUrl.searchParams.has("missing")) {
+      const { songIds, ...rest } = await findMissing();
+      return NextResponse.json({ songs: songIds.length, ...rest });
+    }
     return NextResponse.json(await storageReport());
   } catch (error) {
     return storageError(error);
@@ -33,6 +38,8 @@ const deleteSchema = z.union([
   z.object({ results: z.literal(true) }),
   // Moving to R2: the old Blob store's files R2 already holds (deleting from Blob is free).
   z.object({ legacyMoved: z.literal(true) }),
+  // Start over with what storage holds: songs, covers, results and queued songs whose files aren't there.
+  z.object({ missing: z.literal(true) }),
 ]);
 
 export async function DELETE(req: NextRequest) {
@@ -40,6 +47,7 @@ export async function DELETE(req: NextRequest) {
   const parsed = deleteSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Say what to delete" }, { status: 400 });
   try {
+    if ("missing" in parsed.data) return NextResponse.json(await removeMissing());
     if ("legacyMoved" in parsed.data) {
       if (!hasLegacyBlob()) return NextResponse.json({ error: "No old Blob store is connected" }, { status: 400 });
       const keys = await legacyMovedKeys();
