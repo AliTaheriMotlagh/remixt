@@ -387,6 +387,7 @@ export class RadioDeck {
 
   /** Tunes out. The songs mixed stay (the station drops them when they end): tuning back in plays at once. */
   stop() {
+    this.endBreak();
     this.stopped = true;
     for (const p of this.players) this.free(p);
     this.announced = null;
@@ -422,6 +423,96 @@ export class RadioDeck {
 
   setVolume(v: number) {
     this.volume = v;
+  }
+
+  // ——— ad breaks (like a music app's free tier: one per ~20 minutes of listening) ———
+
+  /** Listening since the last break (ms of a song actually sounding). */
+  private listenedMs = 0;
+  private lastListenAt = 0;
+  /** The break playing now: the songs wait; the station's clock goes on, and they rejoin it after. */
+  private adBreak: { p: Player; end: () => void } | null = null;
+
+  /** How long this listener has listened since their last break. */
+  get listenedSinceBreak(): number {
+    return this.listenedMs;
+  }
+
+  get inBreak(): boolean {
+    return !!this.adBreak;
+  }
+
+  /**
+   * Plays an ad (`url`, at most `seconds`) on a player this tap unlocked —
+   * on a phone the one player that never stops — then hands back to the
+   * station where it is by then. `onHeard` once `heardAfter` seconds were
+   * heard (the ad is paid then). Resolves true when it played, false when it
+   * couldn't (the songs go on as if nothing happened).
+   */
+  playBreak(url: string, seconds: number, heardAfter: number, onHeard: () => void): Promise<boolean> {
+    if (this.stopped || this.adBreak || !this.players.length) return Promise.resolve(false);
+    const playing = this.sounding().sort((a, b) => (b.deck!.row.startsAt ?? 0) - (a.deck!.row.startsAt ?? 0));
+    const p = playing[0] ?? this.players.find((x) => !x.deck) ?? this.players[0];
+    return new Promise<boolean>((resolve) => {
+      let heard = false;
+      let started = false;
+      const el = p.el;
+      const finish = () => {
+        if (this.adBreak?.p !== p) return;
+        clearTimeout(timer);
+        el.removeEventListener("timeupdate", onTime);
+        el.removeEventListener("ended", finish);
+        el.removeEventListener("error", finish);
+        el.removeEventListener("pause", onPause);
+        this.adBreak = null;
+        this.listenedMs = 0;
+        // One player: straight to silence (never a pause, which could lose the phone's sound session); the next tick puts the song on.
+        if (this.players.length === 1) this.playSilence(p);
+        else this.free(p);
+        resolve(started);
+        this.onWake();
+      };
+      const onTime = () => {
+        if (el.currentTime > 0.05) started = true;
+        if (!heard && el.currentTime >= Math.min(heardAfter, seconds - 0.5)) {
+          heard = true;
+          onHeard();
+        }
+        if (el.currentTime >= seconds) finish();
+      };
+      // Paused by the phone (a call): the break ends; the radio's own pause handling takes over from there.
+      const onPause = () => {
+        if (performance.now() - p.touchedAt > OWN_CHANGE_MS && !el.ended) finish();
+      };
+      const timer = setTimeout(finish, (seconds + 8) * 1000);
+      this.adBreak = { p, end: finish };
+      for (const other of this.players) {
+        if (other === p || other.el.paused) continue;
+        other.touchedAt = performance.now();
+        other.el.pause();
+      }
+      // The song on this player lets go of it (its deck stays readied and rejoins the station after).
+      p.touchedAt = performance.now();
+      p.deck = null;
+      p.loaded = false;
+      p.silent = false;
+      p.nudging = false;
+      p.landing = null;
+      p.el.loop = false;
+      p.el.playbackRate = 1;
+      p.el.volume = Math.min(1, this.volume);
+      p.el.src = url;
+      el.addEventListener("timeupdate", onTime);
+      el.addEventListener("ended", finish);
+      el.addEventListener("error", finish);
+      el.addEventListener("pause", onPause);
+      this.play(p);
+    });
+  }
+
+  /** Ends a break now (tuning out, leaving the page). */
+  endBreak() {
+    this.adBreak?.end();
   }
 
   /** A deck is ready for `row`. */
@@ -720,6 +811,11 @@ export class RadioDeck {
     // The next song: while tuned in, or about to start (a tap near the change plays at once).
     if (upcoming && (!this.stopped || (!document.hidden && (upcoming.startsAt ?? 0) - serverNow < 20_000))) this.prepare(upcoming, 0);
     if (this.stopped) return;
+    // Listening time, for the next break: only while a song really sounds.
+    const t = performance.now();
+    if (this.lastListenAt && this.sounding().length && !this.adBreak) this.listenedMs += Math.min(2000, t - this.lastListenAt);
+    this.lastListenAt = t;
+    if (this.adBreak) return;
 
     const plan = planDecks(
       this.decks.map((d) => ({ rowId: d.row.rowId, startsAt: d.row.startsAt ?? 0, endsAt: d.row.endsAt ?? 0, offset: d.offset })),

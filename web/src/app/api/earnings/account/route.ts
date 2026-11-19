@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
-import { PAYOUT_METHODS, setPayoutAccount } from "@/lib/monetize/store";
+import { PAYOUT_METHODS } from "@/lib/monetize/policy";
+import { setPayoutAccount } from "@/lib/monetize/store";
 
 const schema = z.object({ method: z.enum(PAYOUT_METHODS), details: z.string().trim().min(4, "Say where to send it").max(400) });
 

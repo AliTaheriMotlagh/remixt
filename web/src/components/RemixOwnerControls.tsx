@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import TagInput from "./TagInput";
@@ -16,6 +17,7 @@ export default function RemixOwnerControls({
   const [tags, setTags] = useState<string[] | null>(null);
   const [published, setPublished] = useState(initialPublished);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const router = useRouter();
 
   async function togglePublish() {
@@ -26,7 +28,11 @@ export default function RemixOwnerControls({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ published: !published }),
       });
-      if (res.ok) setPublished(!published);
+      // Refused when an artist of a song in it chose Block: say which and why.
+      if (res.ok) {
+        setPublished(!published);
+        setError(null);
+      } else setError(((await res.json().catch(() => ({}))) as { error?: string }).error ?? "Couldn't change it");
     } finally {
       setBusy(false);
     }
@@ -91,7 +97,14 @@ export default function RemixOwnerControls({
         >
           Tags
         </button>
+        <Link
+          href={`/earnings/remix/${remixId}`}
+          className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-surface-hover"
+        >
+          Ads &amp; earnings
+        </Link>
       </div>
+      {error && <p className="max-w-md text-xs text-danger">{error}</p>}
       {tags && (
         <div className="w-full max-w-md rounded-xl border border-border bg-surface p-3">
           <TagInput value={tags} onChange={setTags} compact />

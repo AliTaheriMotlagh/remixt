@@ -19,8 +19,9 @@
 
 export const MICROS = 1_000_000;
 
-/** Where an ad sits, which says whose it is. */
-export type Placement = "site" | "remix" | "radio";
+/** Where an ad sits, which says whose it is. "promote": a member's paid-for remix or song shown in a list (Remixt's alone). */
+export type Placement = "site" | "remix" | "radio" | "promote";
+export const PLACEMENTS: readonly Placement[] = ["site", "remix", "radio", "promote"];
 
 /** Shares of an ad's money, in basis points (10,000 = all of it). */
 export type Split = { platform: number; artists: number; remixers: number };
@@ -61,6 +62,19 @@ export function unclaimedCutoff(now: Date): Date {
   return d;
 }
 
+/** How members can be paid. The Iranian bank one is paid in Toman, at the owner's rate on the day it's asked for. */
+export const PAYOUT_METHODS = ["PayPal", "Bank transfer (IBAN)", "Iranian bank (Sheba / card, Toman)", "Crypto (USDT)", "Other"] as const;
+export const PAYOUT_METHOD_FA: Record<string, string> = {
+  PayPal: "پی‌پال",
+  "Bank transfer (IBAN)": "انتقال بانکی بین‌المللی (IBAN)",
+  "Iranian bank (Sheba / card, Toman)": "بانک ایرانی (شبا / کارت، تومان)",
+  "Crypto (USDT)": "رمزارز (تتر)",
+  Other: "روش دیگر",
+};
+export function isTomanMethod(method: string): boolean {
+  return method === "Iranian bank (Sheba / card, Toman)" || /sheba|شبا/i.test(method);
+}
+
 /** A paid view: the ad was at least half on screen for a second in a visible tab (the IAB/MRC display standard). */
 export const VIEWABLE = { fraction: 0.5, ms: 1000 };
 /** Paid views a network address can make in a day (shared Wi-Fi and phone networks share one address). */
@@ -74,7 +88,29 @@ export type Recipient =
   /** A song's rights holder who hasn't been verified yet: held under the song until they are. */
   | { kind: "held"; trackId: string };
 
-export type Role = "platform" | "remixer" | "collaborator" | "parent-remixer" | "artist" | "vocalist";
+export type Role = "platform" | "remixer" | "collaborator" | "parent-remixer" | "artist" | "vocalist" | "uploader" | "miner";
+
+/**
+ * The people who brought a song to Remixt, paid from Remixt's own part (the
+ * artists' and remixers' parts stay exactly as they are): its uploader, and
+ * its miner — the member whose computer split it (the uploader, when it was
+ * split in their own browser). In basis points of each ad that uses the
+ * song, shared between the songs like the artists' part. Nobody there (an
+ * account gone): it stays with Remixt.
+ */
+export const SONG_HELPERS = { uploader: 500, miner: 300 } as const;
+
+/** What each role is called on every page (one place: the ad card, the money pages, statements), and its colour. */
+export const ROLE_TEXT: Record<Role, { en: string; fa: string; color: string }> = {
+  platform: { en: "Remixt", fa: "ریمیکست", color: "var(--muted)" },
+  remixer: { en: "Remixer", fa: "ریمیکسر", color: "var(--brand)" },
+  collaborator: { en: "Collaborator", fa: "همکار", color: "var(--brand-strong)" },
+  "parent-remixer": { en: "Original remix", fa: "ریمیکسِ اصلی", color: "var(--other)" },
+  artist: { en: "Artist", fa: "هنرمند", color: "var(--vocals)" },
+  vocalist: { en: "Vocalist", fa: "خواننده", color: "var(--vocals)" },
+  uploader: { en: "Uploader", fa: "آپلودکننده", color: "var(--beat)" },
+  miner: { en: "Miner (split it)", fa: "ماینر (جداسازی)", color: "var(--drums)" },
+};
 
 export type Share = { to: Recipient; role: Role; weight: number; remixId?: string; trackId?: string };
 
@@ -88,6 +124,10 @@ export type SourceSong = {
    * the singer of a take recorded in the booth — or nobody yet (null): held.
    */
   holderId: string | null;
+  /** Who uploaded it (null: gone). Not for a take: its singer is paid as the vocalist. */
+  uploaderId?: string | null;
+  /** Whose computer split it (null: unknown). */
+  minerId?: string | null;
   /** A take: the holder sang it (role "vocalist" rather than "artist"). */
   take?: boolean;
 };
@@ -126,10 +166,29 @@ function artistShares(sources: SourceSong[], bp: number): Share[] {
   }));
 }
 
+/** The uploaders' and miners' parts of `platformBp`: each song by its weight, each to its person; what nobody takes stays with Remixt. */
+function helperShares(sources: SourceSong[], platformBp: number): { shares: Share[]; platform: number } {
+  const songs = sources.filter((s) => s.parts.length);
+  const weights = songs.map((s) => s.parts.reduce((sum, kind) => sum + partWeight(kind), 0));
+  const shares: Share[] = [];
+  let given = 0;
+  for (const role of ["uploader", "miner"] as const) {
+    const parts = allocate(SONG_HELPERS[role], weights);
+    songs.forEach((s, i) => {
+      const who = s.take ? null : role === "uploader" ? s.uploaderId : s.minerId;
+      if (!who || !parts[i]) return;
+      shares.push({ to: { kind: "user", userId: who }, role, weight: parts[i], trackId: s.trackId });
+      given += parts[i];
+    });
+  }
+  return { shares, platform: platformBp - Math.min(given, platformBp) };
+}
+
 /** Who gets what of one ad on a remix (or a remix on the radio), in basis points adding up to 10,000. */
 export function remixShares(p: RemixParties): Share[] {
   const split = SPLITS.remix;
-  const shares: Share[] = [{ to: { kind: "platform" }, role: "platform", weight: split.platform }];
+  const helpers = helperShares(p.sources, split.platform);
+  const shares: Share[] = [{ to: { kind: "platform" }, role: "platform", weight: helpers.platform }, ...helpers.shares];
   // No songs to pay (a remix of nothing?): their part stays with the remixers rather than vanish.
   const artists = p.sources.some((s) => s.parts.length) ? split.artists : 0;
   shares.push(...artistShares(p.sources, artists));
@@ -150,7 +209,8 @@ export function remixShares(p: RemixParties): Share[] {
 
 /** Who gets what of one ad while a library song plays as it is (the radio). */
 export function songShares(song: SourceSong): Share[] {
-  return merge([{ to: { kind: "platform" }, role: "platform", weight: SPLITS.song.platform }, ...artistShares([song], SPLITS.song.artists)]);
+  const helpers = helperShares([song], SPLITS.song.platform);
+  return merge([{ to: { kind: "platform" }, role: "platform", weight: helpers.platform }, ...helpers.shares, ...artistShares([song], SPLITS.song.artists)]);
 }
 
 /** An ordinary page's ad: the site's. */
@@ -233,14 +293,7 @@ const STATE_LABEL: Record<StatementState, string> = {
   paid: "Paid out",
 };
 
-const ROLE_WORD: Record<Role, string> = {
-  platform: "Remixt",
-  remixer: "Remixer",
-  collaborator: "Collaborator",
-  "parent-remixer": "Original remix",
-  artist: "Artist",
-  vocalist: "Vocalist",
-};
+const ROLE_WORD = Object.fromEntries(Object.entries(ROLE_TEXT).map(([k, v]) => [k, v.en])) as Record<Role, string>;
 
 /** One CSV field: quoted when it must be, and never read as a formula by a spreadsheet. */
 function csvField(value: string | number): string {

@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
-  allocate, earnBadges, formatMoney, isOwnView, MICROS, payOut, remixShares, siteShares, songShares, SPLITS,
+  allocate, earnBadges, formatMoney, isOwnView, MICROS, payOut, remixShares, siteShares, SONG_HELPERS, songShares, SPLITS,
   type RemixParties, type Share,
 } from "../src/lib/monetize/policy.ts";
 
@@ -36,6 +36,7 @@ describe("splits", () => {
   test("a remix: site, the songs' artists (vocal counts double) and the remixer", () => {
     const shares = remixShares(remix);
     assert.equal(sum(shares.map((s) => s.weight)), 10_000);
+    // No uploader or miner known here: Remixt keeps their part.
     assert.equal(byRole(shares, "platform"), SPLITS.remix.platform);
     assert.equal(byRole(shares, "remixer"), SPLITS.remix.remixers);
     const a = shares.find((s) => s.trackId === "song-a")!;
@@ -104,5 +105,57 @@ describe("the game", () => {
     assert.equal(formatMoney(0), "$0.00");
     assert.equal(formatMoney(4_200), "<$0.01");
     assert.equal(formatMoney(12_300_000), "$12.30");
+  });
+});
+
+describe("uploaders and miners", () => {
+  const helped: RemixParties = {
+    ...remix,
+    sources: [
+      { trackId: "song-a", parts: ["vocals"], holderId: "artist-a", uploaderId: "up-a", minerId: "miner-a" },
+      { trackId: "song-b", parts: ["beat"], holderId: null, uploaderId: "up-b", minerId: "up-b" },
+    ],
+  };
+
+  test("paid from Remixt's part: the artists' and remixers' parts don't move", () => {
+    const shares = remixShares(helped);
+    assert.equal(sum(shares.map((s) => s.weight)), 10_000);
+    assert.equal(byRole(shares, "uploader"), SONG_HELPERS.uploader);
+    assert.equal(byRole(shares, "miner"), SONG_HELPERS.miner);
+    assert.equal(byRole(shares, "platform") + byRole(shares, "uploader") + byRole(shares, "miner"), SPLITS.remix.platform);
+    assert.equal(byRole(shares, "artist"), SPLITS.remix.artists);
+    assert.equal(byRole(shares, "remixer"), SPLITS.remix.remixers);
+    assert.ok(byRole(shares, "platform") > 0, "Remixt always keeps a share");
+  });
+
+  test("shared between the songs like the artists' part (a vocal counts double)", () => {
+    const shares = remixShares(helped);
+    const up = (id: string) => shares.find((s) => s.role === "uploader" && s.to.kind === "user" && s.to.userId === id)!.weight;
+    assert.ok(Math.abs(up("up-a") - 2 * up("up-b")) <= 2, `${up("up-a")} vs ${up("up-b")}`);
+  });
+
+  test("a song split in its uploader's own browser pays them both parts", () => {
+    const shares = remixShares(helped);
+    const toB = shares.filter((s) => s.to.kind === "user" && s.to.userId === "up-b").map((s) => s.role).sort();
+    assert.deepEqual(toB, ["miner", "uploader"]);
+  });
+
+  test("an account that's gone: its part stays with Remixt", () => {
+    const shares = remixShares({ ...helped, sources: helped.sources.map((s) => ({ ...s, uploaderId: null, minerId: null })) });
+    assert.equal(byRole(shares, "platform"), SPLITS.remix.platform);
+    assert.equal(byRole(shares, "uploader") + byRole(shares, "miner"), 0);
+  });
+
+  test("a take pays its singer as the vocalist, not again as uploader", () => {
+    const shares = remixShares({ ...remix, sources: [{ trackId: "take", parts: ["vocals"], holderId: "singer", take: true, uploaderId: "singer", minerId: "singer" }] });
+    assert.ok(!shares.some((s) => s.role === "uploader" || s.role === "miner"));
+  });
+
+  test("a song on the radio pays its uploader and miner too", () => {
+    const shares = songShares({ trackId: "s", parts: ["vocals", "beat"], holderId: null, uploaderId: "u", minerId: "m" });
+    assert.equal(sum(shares.map((s) => s.weight)), 10_000);
+    assert.equal(byRole(shares, "artist"), SPLITS.song.artists);
+    assert.equal(byRole(shares, "uploader"), SONG_HELPERS.uploader);
+    assert.equal(byRole(shares, "miner"), SONG_HELPERS.miner);
   });
 });

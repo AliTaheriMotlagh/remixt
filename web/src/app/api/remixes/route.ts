@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { blockedMessage, blockedSongs } from "@/lib/monetize/adStore";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import sql from "@/lib/db";
@@ -189,6 +190,12 @@ export async function POST(req: NextRequest) {
   `;
   if (found.length !== new Set(stemIds).size) {
     return NextResponse.json({ error: "One or more stems no longer exist" }, { status: 400 });
+  }
+
+  // A song whose artist chose Block can't be in a public remix (lib/monetize/adStore.ts).
+  if (published) {
+    const blocked = await blockedSongs(lanes.filter((l) => !l.muted).map((l) => l.stemId));
+    if (blocked.length) return NextResponse.json({ error: blockedMessage(blocked), blocked }, { status: 409 });
   }
 
   const remixId = randomUUID();

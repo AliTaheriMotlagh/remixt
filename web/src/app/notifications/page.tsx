@@ -63,6 +63,31 @@ function describe(n: Notification) {
         </>
       );
     }
+    case "blocked":
+      return (
+        <>
+          The artist of “{n.body ?? "a song"}” doesn&apos;t allow public remixes of it, so {remix} is private now. Take that song out to publish it
+          again.
+        </>
+      );
+    case "ad": {
+      const [state, what, ...note] = (n.body ?? "").split("|");
+      const said = note.join("|");
+      const text =
+        state === "approved"
+          ? <>Your ad “{what}” was approved — it runs while it has budget</>
+          : state === "rejected"
+            ? <>Your ad “{what}” was turned down</>
+            : state === "paid"
+              ? <>Your payment of {what} was received and added to your ad&apos;s budget</>
+              : <>Your payment of {what} couldn&apos;t be found — check the reference and add it again</>;
+      return (
+        <>
+          {text}
+          {said && <span className="mt-1 block text-muted">“{said}”</span>}
+        </>
+      );
+    }
   }
 }
 
@@ -72,6 +97,8 @@ function hrefFor(n: Notification) {
   if (n.type === "split") return "/upload";
   if (n.type === "share") return "/studio";
   if (n.type === "payout") return "/earnings";
+  if (n.type === "ad") return "/advertise";
+  if (n.type === "blocked" && n.remix_id) return `/remixes/${n.remix_id}`;
   if (n.type === "jam" && n.body) return `/studio?join=${encodeURIComponent(n.body.split("|")[0])}`;
   if (n.type === "live" && n.live_id) return `/live/${n.live_id}`;
   return n.remix_id ? `/remixes/${n.remix_id}` : "#";

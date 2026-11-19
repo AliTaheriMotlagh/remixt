@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Heart, Play } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type { StorageReport } from "@/lib/storageReport";
+import SongFixTab from "./admin/SongFixTab";
 import MonetizeTab from "@/components/admin/MonetizeTab";
 
 type Overview = {
@@ -93,7 +94,7 @@ type AdminResult = {
   sender_email: string | null;
 };
 
-type Tab = "reports" | "users" | "songs" | "remixes" | "challenges" | "results" | "storage" | "cleanup" | "money";
+type Tab = "reports" | "users" | "songs" | "fix" | "remixes" | "challenges" | "results" | "storage" | "cleanup" | "money";
 
 function formatDate(value: string) {
   return new Date(value).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
@@ -146,6 +147,7 @@ export default function AdminPanel({ adminId }: { adminId: string }) {
     { id: "reports", label: "Reports" },
     { id: "users", label: "Users" },
     { id: "songs", label: "Songs" },
+    { id: "fix", label: "Fix songs" },
     { id: "remixes", label: "Remixes" },
     { id: "challenges", label: "Challenges" },
     { id: "results", label: "Shared results" },
@@ -213,6 +215,7 @@ export default function AdminPanel({ adminId }: { adminId: string }) {
         {tab === "storage" && <StorageTab onChange={refreshOverview} />}
         {tab === "cleanup" && <CleanupTab onChange={refreshOverview} />}
         {tab === "money" && <MonetizeTab />}
+        {tab === "fix" && <SongFixTab />}
       </div>
     </div>
   );

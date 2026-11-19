@@ -9,6 +9,7 @@ import { pollEvery } from "@/lib/radioPace";
 import { mixEnvelope } from "./lyricsSources";
 import { playPayload, RadioDeck } from "./radioDeck";
 import { within } from "./stemFetch";
+import { AUDIO, FREQUENCY, radioBreakDue } from "@/lib/monetize/adRules";
 import { laneFromApi } from "./remixLanes";
 import { delayed, frequencyBars, loudnessWindow, type Curve } from "@/lib/visualBars";
 
@@ -125,7 +126,16 @@ function askToPersist() {
 }
 
 /** Everything a station page, its embed and its broadcast view need. */
-export function useRadio(slug: string, { heartbeat = true, warm = true }: { heartbeat?: boolean; warm?: boolean } = {}) {
+/** An audio ad playing between songs (the station page only; never in embeds, the broadcast view or the console). */
+export type RadioAdBreak = {
+  advertiser: string; title: string; cta: string; image: string | null; seconds: number; token: string;
+  supports: { name: string; role: string; bp: number }[];
+};
+
+export function useRadio(
+  slug: string,
+  { heartbeat = true, warm = true, ads = false }: { heartbeat?: boolean; warm?: boolean; ads?: boolean } = {}
+) {
   const [feed, setFeed] = useState<RadioFeed | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tune, setTune] = useState<TuneState>("off");
@@ -147,6 +157,11 @@ export function useRadio(slug: string, { heartbeat = true, warm = true }: { hear
   const lockShown = useRef("");
   const lockPositionAt = useRef(0);
   const tuneRef = useRef<TuneState>("off");
+  /** The ad break playing now, and the one fetched ahead for the next song. */
+  const [adBreak, setAdBreak] = useState<RadioAdBreak | null>(null);
+  const adReady = useRef<{ rowId: number; ad: RadioAdBreak; url: string } | null>(null);
+  const adAsked = useRef(new Set<number>());
+  const alive = useRef(true);
 
   /** The lock screen follows the song heard and the line sung — moved on by the decks' own events, so it keeps up with the screen locked. */
   const updateLock = useCallback(() => {
@@ -334,6 +349,27 @@ export function useRadio(slug: string, { heartbeat = true, warm = true }: { hear
     if (!d || tune === "off") return;
     const handlers = { play: () => void tuneIn(), pause: tuneOut };
     const show = (row: RadioFeed["now"]) => {
+      // A break is due (≈20 min listened) and its ad is ready: it plays before this song goes on.
+      const ready = adReady.current;
+      if (ads && row && ready?.rowId === row.rowId && radioBreakDue(d.listenedSinceBreak) && !d.inBreak) {
+        adReady.current = null;
+        setAdBreak(ready.ad);
+        lockScreen({ ...row, title: ready.ad.title, artist: `Ad · ${ready.ad.advertiser || "Sponsored"}` } as typeof row, feedRef.current?.station.name ?? "Remixt Radio", handlers);
+        void d
+          .playBreak(ready.url, ready.ad.seconds, AUDIO.paidAfter, () => {
+            fetch("/api/ads/view", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ token: ready.ad.token, visitor: visitorId() }),
+              keepalive: true,
+            }).catch(() => {});
+          })
+          .finally(() => {
+            URL.revokeObjectURL(ready.url);
+            setAdBreak(null);
+          });
+        return;
+      }
       lockScreen(row, feedRef.current?.station.name ?? "Remixt Radio", handlers);
       lockScreenState("playing");
       // The line sung goes on top of it straight away.
@@ -344,7 +380,45 @@ export function useRadio(slug: string, { heartbeat = true, warm = true }: { hear
     // The phone paused it (a call, headphones out): stay quiet until asked, as any music app does.
     d.onExternalPause = tuneOut;
     if (tune === "on" && d.nowPlaying) show(d.nowPlaying);
-  }, [tune, tuneIn, tuneOut, updateLock]);
+  }, [tune, tuneIn, tuneOut, updateLock, ads]);
+
+  // The next song's break, fetched ahead (≈2 minutes before one is due) so it starts at once at the change: the sound kept in the tab.
+  const upcomingRow = feed?.upcoming ?? null;
+  useEffect(() => {
+    const d = deck.current;
+    if (!ads || !d || tune !== "on" || !upcomingRow) return;
+    if (d.listenedSinceBreak < FREQUENCY.radioEveryMs - 2 * 60_000 || adAsked.current.has(upcomingRow.rowId)) return;
+    adAsked.current.add(upcomingRow.rowId);
+    const q = new URLSearchParams({ placement: "radio", format: "audio", target: `${upcomingRow.kind}:${upcomingRow.id}`, lang: document.documentElement.lang === "fa" ? "fa" : "en" });
+    (async () => {
+      const served = (await fetch(`/api/ads?${q}`, { cache: "no-store" }).then((r) => r.json())) as {
+        ad: { advertiser: string; title: string; cta: string; image: string | null; audio: string | null; seconds: number | null } | null;
+        token: string | null;
+        supports: RadioAdBreak["supports"];
+      };
+      if (!alive.current || !served.ad?.audio || !served.token) return;
+      const blob = await fetch(served.ad.audio).then((r) => (r.ok ? r.blob() : null));
+      if (!alive.current || !blob) return;
+      if (adReady.current) URL.revokeObjectURL(adReady.current.url);
+      adReady.current = {
+        rowId: upcomingRow.rowId,
+        url: URL.createObjectURL(blob),
+        ad: {
+          advertiser: served.ad.advertiser, title: served.ad.title, cta: served.ad.cta, image: served.ad.image,
+          seconds: Math.min(AUDIO.maxSeconds, served.ad.seconds ?? AUDIO.maxSeconds), token: served.token, supports: served.supports,
+        },
+      };
+    })().catch(() => {});
+    // Checked again as listening goes on (each feed answer). A fetch isn't dropped by the next answer: only by leaving the page.
+  }, [ads, tune, upcomingRow, feed]);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      if (adReady.current) URL.revokeObjectURL(adReady.current.url);
+      adReady.current = null;
+    };
+  }, []);
   useEffect(() => {
     tuneRef.current = tune;
   }, [tune]);
@@ -421,7 +495,7 @@ export function useRadio(slug: string, { heartbeat = true, warm = true }: { hear
   );
   const withdraw = useCallback((item: { kind: RadioKind; id: string }) => post("/request", { kind: item.kind, id: item.id }, "DELETE"), [post]);
 
-  return { feed, error, status, tune, tuneIn, tuneOut, showWords, volume, setVolume, position, serverNow, getAnalyser, levels, vote, request, withdraw, refresh: poll };
+  return { feed, error, status, tune, tuneIn, tuneOut, showWords, volume, setVolume, position, serverNow, getAnalyser, levels, vote, request, withdraw, refresh: poll, adBreak };
 }
 
 /** Songs and remixes the station can play, matching `q`. */

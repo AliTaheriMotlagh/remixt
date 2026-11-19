@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { blockedMessage, blockedSongsInRemix } from "@/lib/monetize/adStore";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import sql from "@/lib/db";
@@ -67,6 +68,10 @@ export async function PATCH(
   }
 
   const { title, published } = parsed.data;
+  if (published && !remix.published) {
+    const blocked = await blockedSongsInRemix(id);
+    if (blocked.length) return NextResponse.json({ error: blockedMessage(blocked), blocked }, { status: 409 });
+  }
   const tags = parsed.data.tags ? normaliseTags(parsed.data.tags) : null;
   await sql`
     UPDATE remixes SET

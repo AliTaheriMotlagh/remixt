@@ -13,9 +13,10 @@ import { createHmac, randomUUID } from "crypto";
 import sql from "../db";
 import { ensureSchema } from "../schema";
 import { notify } from "../notifications";
+import { DEFAULT_FLOORS, FORMATS, tomanOf, type Format } from "./adRules";
 import {
-  formatMoney, HOLD_DAYS, isOwnView, MICROS, monthSpan, PAID_VIEWS_PER_ADDRESS_PER_DAY, PAYOUT_MIN_MICROS, payOut, remixShares, siteShares, songShares,
-  unclaimedCutoff, type Placement, type RemixParties, type Role, type Share, type SourceSong, type StatementLine, type StatementState,
+  formatMoney, HOLD_DAYS, isTomanMethod, isOwnView, MICROS, monthSpan, PAID_VIEWS_PER_ADDRESS_PER_DAY, PAYOUT_MIN_MICROS, payOut, remixShares, siteShares, songShares,
+  PLACEMENTS, unclaimedCutoff, type Placement, type RemixParties, type Role, type Share, type SourceSong, type StatementLine, type StatementState,
 } from "./policy";
 
 let ready: Promise<void> | null = null;
@@ -127,6 +128,68 @@ export function ensureMonetizeSchema(): Promise<void> {
         decided_at TIMESTAMPTZ
       )
     `;
+    // ——— everything since "Ads, complete" (PLAN.md) ———
+    // A campaign's kind of ad, topic, its audio, what it promotes, who made it (null: the owner, by hand) and the owner's review.
+    await sql`
+      ALTER TABLE ad_campaigns
+        ADD COLUMN IF NOT EXISTS format TEXT NOT NULL DEFAULT 'card',
+        ADD COLUMN IF NOT EXISTS topic TEXT NOT NULL DEFAULT 'other',
+        ADD COLUMN IF NOT EXISTS image_key TEXT,
+        ADD COLUMN IF NOT EXISTS audio_key TEXT,
+        ADD COLUMN IF NOT EXISTS audio_seconds REAL,
+        ADD COLUMN IF NOT EXISTS promote_target TEXT,
+        ADD COLUMN IF NOT EXISTS owner_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        ADD COLUMN IF NOT EXISTS review TEXT NOT NULL DEFAULT 'approved',
+        ADD COLUMN IF NOT EXISTS review_note TEXT
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS ad_campaigns_owner ON ad_campaigns (owner_id) WHERE owner_id IS NOT NULL`;
+    // A card and an audio ad in the same spot are two views.
+    await sql`ALTER TABLE ad_views ADD COLUMN IF NOT EXISTS format TEXT NOT NULL DEFAULT 'card'`;
+    await sql`ALTER TABLE ad_views DROP CONSTRAINT IF EXISTS ad_views_visitor_placement_target_day_key`;
+    await sql`CREATE UNIQUE INDEX IF NOT EXISTS ad_views_once ON ad_views (visitor, placement, target, day, format)`;
+    await sql`CREATE INDEX IF NOT EXISTS ad_views_campaign_day ON ad_views (campaign_id, day) WHERE campaign_id IS NOT NULL`;
+    await sql`
+      CREATE TABLE IF NOT EXISTS ad_payments (
+        id TEXT PRIMARY KEY,
+        campaign_id TEXT NOT NULL REFERENCES ad_campaigns(id) ON DELETE CASCADE,
+        user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        micros BIGINT NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'USD',
+        toman BIGINT,
+        method TEXT NOT NULL,
+        reference TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        note TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        decided_at TIMESTAMPTZ
+      )
+    `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS monetize_settings (
+        key TEXT PRIMARY KEY,
+        value JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS remix_ad_settings (
+        remix_id TEXT PRIMARY KEY REFERENCES remixes(id) ON DELETE CASCADE,
+        ads_on BOOLEAN NOT NULL DEFAULT true,
+        kinds TEXT[] NOT NULL DEFAULT '{card,preroll,radio}',
+        blocked_topics TEXT[] NOT NULL DEFAULT '{}',
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS track_ad_policy (
+        track_id TEXT PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+        user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        policy TEXT NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `;
+    // A payout in Toman: the amount fixed when it's asked for, at the rate then.
+    await sql`ALTER TABLE payouts ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'USD', ADD COLUMN IF NOT EXISTS toman BIGINT`;
   })().catch((err) => {
     ready = null;
     throw err;
@@ -144,17 +207,27 @@ export function parseTarget(text: string | null | undefined): Target {
   return m ? { kind: m[1] as "remix" | "track", id: m[2] } : null;
 }
 
-type SongRow = { track_id: string; kind: string; take: boolean; holder: string | null };
+type SongRow = { track_id: string; kind: string; take: boolean; holder: string | null; uploader: string | null; miner: string | null };
 
 function songsOf(rows: SongRow[]): SourceSong[] {
   const songs = new Map<string, SourceSong>();
   for (const r of rows) {
-    const s = songs.get(r.track_id) ?? { trackId: r.track_id, parts: [], holderId: r.holder, take: r.take };
+    const s = songs.get(r.track_id) ?? { trackId: r.track_id, parts: [], holderId: r.holder, take: r.take, uploaderId: r.uploader, minerId: r.miner };
     if (!s.parts.includes(r.kind)) s.parts.push(r.kind);
     songs.set(r.track_id, s);
   }
   return [...songs.values()];
 }
+
+/**
+ * Who uploaded a song and whose computer split it: the helper who finished
+ * its split job, else the uploader (split in their own browser).
+ */
+const helpers = () => sql`
+  tracks.owner_id AS uploader,
+  COALESCE((SELECT j.worker_id FROM split_jobs j WHERE j.track_id = tracks.id AND j.status = 'done' AND j.worker_id IS NOT NULL
+            ORDER BY j.updated_at DESC LIMIT 1), tracks.owner_id) AS miner
+`;
 
 /** Who holds a song's rights: a take's singer, the verified claimant — or nobody yet. */
 const holder = () => sql`
@@ -172,7 +245,7 @@ export async function remixParties(remixId: string): Promise<RemixParties | null
   if (!remix) return null;
   const [songs, collaborators] = await Promise.all([
     sql<SongRow[]>`
-      SELECT tracks.id AS track_id, stems.kind, ('studio recording' = ANY(tracks.tags)) AS take, ${holder()} AS holder
+      SELECT tracks.id AS track_id, stems.kind, ('studio recording' = ANY(tracks.tags)) AS take, ${holder()} AS holder, ${helpers()}
       FROM remix_lanes JOIN stems ON stems.id = remix_lanes.stem_id JOIN tracks ON tracks.id = stems.track_id
       WHERE remix_lanes.remix_id = ${remixId} AND NOT remix_lanes.muted
     `,
@@ -189,14 +262,14 @@ export async function remixParties(remixId: string): Promise<RemixParties | null
 
 /** What an ad in `placement` about `target` pays to whom. A target that doesn't exist: the site's. */
 export async function sharesFor(placement: Placement, target: Target): Promise<Share[]> {
-  if (placement === "site" || !target) return siteShares();
+  if (placement === "site" || placement === "promote" || !target) return siteShares();
   if (target.kind === "remix") {
     const parties = await remixParties(target.id);
     return parties ? remixShares(parties) : siteShares();
   }
   await ensureMonetizeSchema();
   const rows = await sql<SongRow[]>`
-    SELECT tracks.id AS track_id, stems.kind, ('studio recording' = ANY(tracks.tags)) AS take, ${holder()} AS holder
+    SELECT tracks.id AS track_id, stems.kind, ('studio recording' = ANY(tracks.tags)) AS take, ${holder()} AS holder, ${helpers()}
     FROM stems JOIN tracks ON tracks.id = stems.track_id WHERE tracks.id = ${target.id}
   `;
   const [song] = songsOf(rows);
@@ -228,20 +301,46 @@ export async function namesFor(shares: Share[]): Promise<{ name: string; role: R
 
 // ——— serving ———
 
+/** Whether a viewer is one of those an ad here would pay (their own work: no audio ads, unpaid views). */
+export function isOwnViewer(viewerId: string | null, shares: Share[]): boolean {
+  return isOwnView(viewerId, shares);
+}
+
 export type Campaign = {
   id: string; name: string; advertiser: string; title: string; body: string; cta: string; link: string; image_url: string | null;
   lang: string; placements: string[]; cpm_micros: number; budget_micros: number; spent_micros: number; views: number; clicks: number;
   starts_at: string; ends_at: string | null; active: boolean; created_at: string;
+  format: Format; topic: string; image_key: string | null; audio_key: string | null; audio_seconds: number | null; promote_target: string | null;
+  owner_id: string | null; review: "draft" | "pending" | "approved" | "rejected"; review_note: string | null;
 };
 
-/** A paying ad for this spot, weighted by what it pays (a dearer one shows more often); null when none fits. */
-export async function pickCampaign(placement: Placement, lang: string): Promise<Campaign | null> {
+/** What a page shows of an ad: its picture and sound come through this app (uploaded ones) or from the advertiser's own address. */
+export function adImageUrl(c: Pick<Campaign, "id" | "image_key" | "image_url">): string | null {
+  return c.image_key ? `/api/ads/media/${c.id}?f=image&v=${encodeURIComponent(c.image_key.split("/").pop() ?? "")}` : c.image_url;
+}
+export function adAudioUrl(c: Pick<Campaign, "id" | "audio_key">): string | null {
+  return c.audio_key ? `/api/ads/media/${c.id}?f=audio&v=${encodeURIComponent(c.audio_key.split("/").pop() ?? "")}` : null;
+}
+
+/**
+ * A paying ad for this spot, weighted by what it pays (a dearer one shows
+ * more often); null when none fits. Only ads the owner approved, of the
+ * wanted format, on no topic the page's maker keeps off.
+ */
+export async function pickCampaign(
+  placement: Placement,
+  lang: string,
+  { format = "card", blockedTopics = [], not = null }: { format?: Format; blockedTopics?: string[]; not?: string | null } = {}
+): Promise<Campaign | null> {
   await ensureMonetizeSchema();
   const [row] = await sql<Campaign[]>`
     SELECT * FROM ad_campaigns
-    WHERE active AND starts_at <= now() AND (ends_at IS NULL OR ends_at > now())
+    WHERE active AND review = 'approved' AND starts_at <= now() AND (ends_at IS NULL OR ends_at > now())
       AND spent_micros + GREATEST(1, cpm_micros / 1000) <= budget_micros
-      AND ${placement} = ANY(placements) AND (lang = 'any' OR lang = ${lang})
+      AND format = ${format} AND (${format} <> 'audio' OR audio_key IS NOT NULL)
+      AND (${format} = 'promote' OR ${placement} = ANY(placements)) AND (lang = 'any' OR lang = ${lang})
+      AND NOT (topic = ANY(${blockedTopics}::text[]))
+      AND (${not}::text IS NULL OR promote_target IS DISTINCT FROM ${not})
     -- Weighted random (exponential keys); 1 - random() is never 0, whose log Postgres refuses.
     ORDER BY -ln(1 - random()) / GREATEST(1, cpm_micros)
     LIMIT 1
@@ -249,8 +348,11 @@ export async function pickCampaign(placement: Placement, lang: string): Promise<
   return row ?? null;
 }
 
-function numbers(c: Campaign): Campaign {
-  return { ...c, cpm_micros: Number(c.cpm_micros), budget_micros: Number(c.budget_micros), spent_micros: Number(c.spent_micros), views: Number(c.views), clicks: Number(c.clicks) };
+export function numbers(c: Campaign): Campaign {
+  return {
+    ...c, cpm_micros: Number(c.cpm_micros), budget_micros: Number(c.budget_micros), spent_micros: Number(c.spent_micros), views: Number(c.views),
+    clicks: Number(c.clicks), audio_seconds: c.audio_seconds === null || c.audio_seconds === undefined ? null : Number(c.audio_seconds),
+  };
 }
 
 function tokenKey() {
@@ -262,20 +364,25 @@ function tokenKey() {
  * which spot, about what — signed, so a view can't be booked for a spot or
  * an ad that was never served.
  */
-export function viewToken(placement: Placement, target: Target, campaignId: string | null, now = Date.now()): string {
-  const body = [placement, target ? `${target.kind}:${target.id}` : "", campaignId ?? "", Math.floor(now / 1000) + 30 * 60].join("|");
+export function viewToken(placement: Placement, target: Target, campaignId: string | null, now = Date.now(), format: Format = "card"): string {
+  const body = [placement, target ? `${target.kind}:${target.id}` : "", campaignId ?? "", Math.floor(now / 1000) + 30 * 60, format].join("|");
   const mac = createHmac("sha256", tokenKey()).update(body).digest("base64url").slice(0, 32);
   return `${Buffer.from(body).toString("base64url")}.${mac}`;
 }
 
-export function readToken(token: string, now = Date.now()): { placement: Placement; target: Target; campaignId: string | null } | null {
+/** The token for a promoted remix or song shown in a list (see components/ads/PromotedRemix.tsx). */
+export function promoteToken(target: NonNullable<Target>, campaignId: string): string {
+  return viewToken("promote", target, campaignId, Date.now(), "promote");
+}
+
+export function readToken(token: string, now = Date.now()): { placement: Placement; target: Target; campaignId: string | null; format: Format } | null {
   const [body64, mac] = String(token).split(".");
   if (!body64 || !mac) return null;
   const body = Buffer.from(body64, "base64url").toString("utf8");
   if (createHmac("sha256", tokenKey()).update(body).digest("base64url").slice(0, 32) !== mac) return null;
-  const [placement, target, campaignId, expires] = body.split("|");
-  if (!["site", "remix", "radio"].includes(placement) || Number(expires) * 1000 < now) return null;
-  return { placement: placement as Placement, target: parseTarget(target), campaignId: campaignId || null };
+  const [placement, target, campaignId, expires, format = "card"] = body.split("|");
+  if (!PLACEMENTS.includes(placement as Placement) || Number(expires) * 1000 < now || !FORMATS.includes(format as Format)) return null;
+  return { placement: placement as Placement, target: parseTarget(target), campaignId: campaignId || null, format: format as Format };
 }
 
 const BOTS = /bot|crawl|spider|slurp|headless|lighthouse|preview|facebookexternalhit|embedly|python|curl|wget|httpclient/i;
@@ -318,9 +425,9 @@ export async function recordView(input: { token: string; visitor: string; addres
       else whyNot = "budget spent";
     }
     const [view] = await tx<{ id: string }[]>`
-      INSERT INTO ad_views (placement, target, campaign_id, visitor, address, viewer_id, paid, micros, why_not)
-      VALUES (${t.placement}, ${target}, ${t.campaignId}, ${input.visitor}, ${input.address}, ${input.viewerId}, ${micros > 0}, ${micros}, ${whyNot})
-      ON CONFLICT (visitor, placement, target, day) DO NOTHING
+      INSERT INTO ad_views (placement, target, campaign_id, visitor, address, viewer_id, paid, micros, why_not, format)
+      VALUES (${t.placement}, ${target}, ${t.campaignId}, ${input.visitor}, ${input.address}, ${input.viewerId}, ${micros > 0}, ${micros}, ${whyNot}, ${t.format})
+      ON CONFLICT (visitor, placement, target, day, format) DO NOTHING
       RETURNING id
     `;
     if (!view) {
@@ -353,8 +460,18 @@ export async function recordClick(token: string): Promise<string | null> {
   const t = readToken(token);
   if (!t?.campaignId) return null;
   await ensureMonetizeSchema();
-  const [c] = await sql<{ link: string }[]>`UPDATE ad_campaigns SET clicks = clicks + 1 WHERE id = ${t.campaignId} RETURNING link`;
-  return c && /^https?:\/\//.test(c.link) ? c.link : null;
+  const [c] = await sql<{ link: string; promote_target: string | null }[]>`
+    UPDATE ad_campaigns SET clicks = clicks + 1 WHERE id = ${t.campaignId} RETURNING link, promote_target
+  `;
+  if (!c) return null;
+  // A promoted remix or song opens on Remixt itself.
+  const promoted = parseTarget(c.promote_target);
+  if (promoted?.kind === "remix") return `/remixes/${promoted.id}`;
+  if (promoted?.kind === "track") {
+    const [song] = await sql<{ title: string }[]>`SELECT title FROM tracks WHERE id = ${promoted.id}`;
+    return song ? `/library?q=${encodeURIComponent(song.title)}` : null;
+  }
+  return /^https?:\/\//.test(c.link) ? c.link : null;
 }
 
 // ——— money nobody claimed ———
@@ -396,7 +513,7 @@ export type EarningsSummary = {
   paidViews: number; last30: { day: string; micros: number }[];
   sources: { key: string; kind: "remix" | "track"; id: string; title: string; roles: Role[]; micros: number; views: number }[];
   claims: { id: string; trackId: string; title: string; status: string; note: string | null; created_at: string; heldMicros: number }[];
-  payouts: { id: string; micros: number; method: string; status: string; note: string | null; created_at: string; decided_at: string | null }[];
+  payouts: { id: string; micros: number; method: string; status: string; note: string | null; created_at: string; decided_at: string | null; currency: string; toman: number | null }[];
   account: { method: string; details: string } | null;
   remixes: { id: string; title: string; splits: { userId: string; name: string; bp: number }[] }[];
   uploads: { id: string; title: string; heldMicros: number; claim: string | null }[];
@@ -433,7 +550,7 @@ export async function earningsFor(userId: string): Promise<EarningsSummary> {
              (SELECT COALESCE(SUM(micros), 0) FROM earnings WHERE held_track_id = c.track_id) AS held
       FROM rights_claims c JOIN tracks t ON t.id = c.track_id WHERE c.user_id = ${userId} ORDER BY c.created_at DESC
     `,
-    sql<EarningsSummary["payouts"]>`SELECT id, micros, method, status, note, created_at, decided_at FROM payouts WHERE user_id = ${userId} ORDER BY created_at DESC LIMIT 20`,
+    sql<EarningsSummary["payouts"]>`SELECT id, micros, method, status, note, created_at, decided_at, currency, toman FROM payouts WHERE user_id = ${userId} ORDER BY created_at DESC LIMIT 20`,
     sql<{ method: string; details: string }[]>`SELECT method, details FROM payout_accounts WHERE user_id = ${userId}`,
     sql<{ id: string; title: string; splits: { userId: string; name: string; bp: number }[] | null }[]>`
       SELECT r.id, r.title,
@@ -451,7 +568,7 @@ export async function earningsFor(userId: string): Promise<EarningsSummary> {
     `,
   ]);
   const t = totals[0] ?? {};
-  const payoutRows = payouts.map((p) => ({ ...p, micros: n(p.micros) }));
+  const payoutRows = payouts.map((p) => ({ ...p, micros: n(p.micros), toman: p.toman === null ? null : n(p.toman) }));
   return {
     asOf: Date.now(),
     available: n(t.available),
@@ -506,7 +623,40 @@ export async function statementFor(userId: string, month: string): Promise<State
   return rows.map((r) => ({ day: r.day, source: r.title ?? "Removed", kind: r.remix ? "remix" : "song", role: r.role, views: n(r.views), micros: n(r.micros), state: r.state }));
 }
 
-export const PAYOUT_METHODS = ["PayPal", "Bank transfer (IBAN / Sheba)", "Crypto (USDT)", "Other"] as const;
+// ——— the owner's settings ———
+
+export type MonetizeSettings = {
+  /** Toman per US dollar; 0 = not set (Persian pages then show dollars). */
+  tomanRate: number;
+  /** Lowest price per 1,000 paid views, by format (micros). */
+  floors: Record<Format, number>;
+  /** How advertisers pay (card number, Sheba, USDT address…), shown on the advertiser page. */
+  payTo: { en: string; fa: string };
+};
+
+const DEFAULT_SETTINGS: MonetizeSettings = { tomanRate: 0, floors: { ...DEFAULT_FLOORS }, payTo: { en: "", fa: "" } };
+
+export async function monetizeSettings(): Promise<MonetizeSettings> {
+  await ensureMonetizeSchema();
+  const rows = await sql<{ key: string; value: unknown }[]>`SELECT key, value FROM monetize_settings`;
+  const got = Object.fromEntries(rows.map((r) => [r.key, r.value])) as Partial<MonetizeSettings>;
+  return {
+    tomanRate: Number(got.tomanRate) > 0 ? Number(got.tomanRate) : 0,
+    floors: { ...DEFAULT_SETTINGS.floors, ...(got.floors ?? {}) },
+    payTo: { ...DEFAULT_SETTINGS.payTo, ...(got.payTo ?? {}) },
+  };
+}
+
+export async function saveMonetizeSettings(s: Partial<MonetizeSettings>) {
+  await ensureMonetizeSchema();
+  for (const [key, value] of Object.entries(s)) {
+    if (value === undefined) continue;
+    await sql`
+      INSERT INTO monetize_settings (key, value) VALUES (${key}, ${sql.json(value as never)})
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+    `;
+  }
+}
 
 export async function setPayoutAccount(userId: string, method: string, details: string) {
   await ensureMonetizeSchema();
@@ -524,6 +674,9 @@ export async function requestPayout(userId: string): Promise<{ id: string; micro
     if (!account) return { error: "Add how you'd like to be paid first" };
     const [open] = await tx`SELECT 1 FROM payouts WHERE user_id = ${userId} AND status = 'requested'`;
     if (open) return { error: "You have a payout on its way already" };
+    const toman = isTomanMethod(account.method);
+    const rate = toman ? (await monetizeSettings()).tomanRate : 0;
+    if (toman && !rate) return { error: "Payouts in Toman open once Remixt sets the rate — choose another way for now" };
     const id = randomUUID();
     const rows = await tx<{ micros: string }[]>`
       UPDATE earnings SET payout_id = ${id}
@@ -532,7 +685,10 @@ export async function requestPayout(userId: string): Promise<{ id: string; micro
     `;
     const micros = rows.reduce((s, r) => s + Number(r.micros), 0);
     if (micros < PAYOUT_MIN_MICROS) throw new TooLittle();
-    await tx`INSERT INTO payouts (id, user_id, micros, method, details) VALUES (${id}, ${userId}, ${micros}, ${account.method}, ${account.details})`;
+    await tx`
+      INSERT INTO payouts (id, user_id, micros, method, details, currency, toman)
+      VALUES (${id}, ${userId}, ${micros}, ${account.method}, ${account.details}, ${toman ? "IRT" : "USD"}, ${toman ? tomanOf(micros, rate) : null})
+    `;
     return { id, micros };
   }).catch((err) => {
     if (err instanceof TooLittle) return { error: `Payouts start from $${PAYOUT_MIN_MICROS / MICROS}` };
@@ -597,8 +753,8 @@ export async function monetizeOverview() {
       FROM rights_claims c JOIN tracks t ON t.id = c.track_id JOIN users u ON u.id = c.user_id
       ORDER BY (c.status = 'pending') DESC, c.created_at DESC LIMIT 100
     `,
-    sql<{ id: string; user_id: string; artist_name: string; email: string; micros: string; method: string; details: string; status: string; created_at: string }[]>`
-      SELECT p.id, p.user_id, u.artist_name, u.email, p.micros, p.method, p.details, p.status, p.created_at
+    sql<{ id: string; user_id: string; artist_name: string; email: string; micros: string; method: string; details: string; status: string; created_at: string; currency: string; toman: string | null }[]>`
+      SELECT p.id, p.user_id, u.artist_name, u.email, p.micros, p.method, p.details, p.status, p.created_at, p.currency, p.toman
       FROM payouts p JOIN users u ON u.id = p.user_id ORDER BY (p.status = 'requested') DESC, p.created_at DESC LIMIT 100
     `,
   ]);
@@ -607,13 +763,13 @@ export async function monetizeOverview() {
     views: { today: n(views.today), paidToday: n(views.paid_today), month: n(views.month), paidMonth: n(views.paid_month) },
     campaigns: campaigns.map(numbers),
     claims: claims.map((c) => ({ ...c, held: n(c.held) })),
-    payouts: payouts.map((p) => ({ ...p, micros: n(p.micros) })),
+    payouts: payouts.map((p) => ({ ...p, micros: n(p.micros), toman: p.toman === null ? null : n(p.toman) })),
   };
 }
 
 export type CampaignInput = {
   name: string; advertiser: string; title: string; body: string; cta: string; link: string; image_url: string | null; lang: string;
-  placements: string[]; cpm_micros: number; budget_micros: number; ends_at: string | null;
+  placements: string[]; cpm_micros: number; budget_micros: number; ends_at: string | null; format?: Format; topic?: string;
 };
 
 export async function saveCampaign(id: string | null, c: CampaignInput) {
@@ -622,16 +778,16 @@ export async function saveCampaign(id: string | null, c: CampaignInput) {
     await sql`
       UPDATE ad_campaigns SET name = ${c.name}, advertiser = ${c.advertiser}, title = ${c.title}, body = ${c.body}, cta = ${c.cta},
         link = ${c.link}, image_url = ${c.image_url}, lang = ${c.lang}, placements = ${c.placements}, cpm_micros = ${c.cpm_micros},
-        budget_micros = ${c.budget_micros}, ends_at = ${c.ends_at}
+        budget_micros = ${c.budget_micros}, ends_at = ${c.ends_at}, format = ${c.format ?? "card"}, topic = ${c.topic ?? "other"}
       WHERE id = ${id}
     `;
     return id;
   }
   const newId = randomUUID();
   await sql`
-    INSERT INTO ad_campaigns (id, name, advertiser, title, body, cta, link, image_url, lang, placements, cpm_micros, budget_micros, ends_at)
+    INSERT INTO ad_campaigns (id, name, advertiser, title, body, cta, link, image_url, lang, placements, cpm_micros, budget_micros, ends_at, format, topic)
     VALUES (${newId}, ${c.name}, ${c.advertiser}, ${c.title}, ${c.body}, ${c.cta}, ${c.link}, ${c.image_url}, ${c.lang}, ${c.placements},
-            ${c.cpm_micros}, ${c.budget_micros}, ${c.ends_at})
+            ${c.cpm_micros}, ${c.budget_micros}, ${c.ends_at}, ${c.format ?? "card"}, ${c.topic ?? "other"})
   `;
   return newId;
 }

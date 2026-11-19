@@ -8,6 +8,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { ensureSchema } from "@/lib/schema";
 import { pageMetadata } from "@/lib/seo";
 import AdCard from "@/components/ads/AdCard";
+import PromotedRemix from "@/components/ads/PromotedRemix";
 import type { Metadata } from "next";
 
 type Tab = "latest" | "trending" | "following";
@@ -190,7 +191,11 @@ export default async function RemixesPage({
           )}
         </div>
       ) : (
-        <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <>
+        <div className="mt-8">
+          <PromotedRemix />
+        </div>
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {remixes.map((remix) => (
             <Link
               key={remix.id}
@@ -239,6 +244,7 @@ export default async function RemixesPage({
             </Link>
           ))}
         </div>
+        </>
       )}
       {remixes.length > 0 && <AdCard placement="site" seed={remixes.length} className="mt-8" />}
     </div>

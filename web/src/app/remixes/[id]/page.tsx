@@ -10,6 +10,12 @@ import ReportButton from "@/components/ReportButton";
 import RemixCredits from "@/components/RemixCredits";
 import RemixCover from "@/components/RemixCover";
 import AdCard from "@/components/ads/AdCard";
+import PrerollGate from "@/components/ads/PrerollGate";
+import WhereTheMoneyGoes from "@/components/ads/WhereTheMoneyGoes";
+import WrongInfoButton from "@/components/WrongInfoButton";
+import { remixAds } from "@/lib/monetize/adStore";
+import { namesFor, remixParties } from "@/lib/monetize/store";
+import { remixShares } from "@/lib/monetize/policy";
 import { getRemixCredits } from "@/lib/credits";
 import { getArtistProgress, getComments } from "@/lib/social";
 import { coverUrl, ensureRemixStats, getRemixCard, getRemixStats, shareImageUrl } from "@/lib/models";
@@ -69,12 +75,16 @@ export default async function RemixDetailPage({
   const isOwner = user?.id === remix.owner_id;
 
   if (!remix.published && !isOwner) notFound();
-  const [stats, comments, artistProgress, credits] = await Promise.all([
+  const [stats, comments, artistProgress, credits, ads, parties] = await Promise.all([
     getRemixStats(remix.id, user?.id ?? null),
     getComments(remix.id),
     getArtistProgress(remix.artist_id),
     getRemixCredits(remix.id),
+    // Ads never break the page: on any trouble, as if they were off.
+    remixAds(remix.id).catch(() => null),
+    remixParties(remix.id).catch(() => null),
   ]);
+  const shares = parties ? await namesFor(remixShares(parties)).catch(() => []) : [];
 
   const url = absoluteUrl(`/remixes/${remix.id}`);
 
@@ -137,6 +147,9 @@ export default async function RemixDetailPage({
       </div>
 
       <RemixCredits credits={credits} remixId={remix.id} />
+      <div className="mt-2 flex justify-end">
+        <WrongInfoButton kind="remix" id={remix.id} title={remix.title} />
+      </div>
 
       <RemixStatsBar remixId={remix.id} title={remix.title} initial={stats} signedIn={!!user} />
 
@@ -148,8 +161,14 @@ export default async function RemixDetailPage({
         user={user}
       />
 
+      {/* The audio ad before it plays, where its maker (or an artist's Monetize) allows one. */}
+      {remix.published && ads?.on && ads.kinds.includes("preroll") && !isOwner && <PrerollGate remixId={remix.id} />}
+
       {/* This remix's spot: a view pays its remixer(s), the songs' artists and the site (lib/monetize/policy.ts). */}
-      {remix.published && <AdCard placement="remix" target={`remix:${remix.id}`} seed={remix.title.length} className="mt-6" />}
+      {remix.published && ads?.on && ads.kinds.includes("card") && (
+        <AdCard placement="remix" target={`remix:${remix.id}`} seed={remix.title.length} className="mt-6" />
+      )}
+      {remix.published && ads && shares.length > 0 && <WhereTheMoneyGoes shares={shares} ads={ads} remixId={remix.id} isOwner={isOwner} />}
 
       <RemixComments remixId={remix.id} initial={comments} userId={user?.id ?? null} isRemixOwner={isOwner} />
     </div>

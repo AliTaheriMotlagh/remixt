@@ -28,7 +28,7 @@ export const LRC_MAX = 60_000;
 
 let schema: Promise<void> | null = null;
 
-function ensureLyricsSchema(): Promise<void> {
+export function ensureLyricsSchema(): Promise<void> {
   schema ??= (async () => {
     await ensureSchema();
     await sql`

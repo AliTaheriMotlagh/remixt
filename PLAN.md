@@ -29,6 +29,49 @@ Everything that could be done and checked from this computer is done. Open:
 
 ---
 
+## Ads, complete (asked 2026-11-19 (4)) — the owner's answers, and the build
+
+"Ads fully built like YouTube / Spotify / SoundCloud: for listeners, artists, remixers, advertisers and the site owner; Persian too; an admin panel to correct songs (name, artist, cover, lyrics)." Answers given in the session:
+
+| Question | Answer |
+|---|---|
+| What the remixer decides on their remix's page | Ads on/off, which ad kinds, blocked topics (per remix) |
+| Remixer says off, verified artist wants pay | The artist chooses per song: **Monetize** (ads stay on any remix of it; the remixer still gets their share) / **Follow the remixer** / **Block** |
+| Ad kinds | Picture card (exists) · audio ad before a remix plays (≤ 15 s, skip after 5 s) · audio ads on the radio · Promote your remix/song — "remixer can decide all, panel and options for all details" |
+| Ad-free paid plan | Not now |
+| Who puts ads on | Self-serve advertiser page; runs only after the owner approves; the owner can still add ads by hand |
+| How advertisers / promoters pay | Manual: card-to-card / bank / USDT; they give a reference, the owner presses "Payment received" |
+| Currency | Ledger stays exact in USD; Persian users see and are paid in Toman at a rate the owner sets in Admin |
+| Persian | Only the money and ad pages (earnings, advertiser, artist, remixer ad panel) |
+| Pages | Artist page · remixer ad panel · advertiser page · public "where the money went" on each remix |
+| Song correction panel | Suggestions (artist/title, cover, lyrics) with one-click approve, doubtful songs first |
+| Who can report wrong info | Anyone ("Wrong info?"), into the admin queue |
+| Shares | Keep 30 / 40 / 30 |
+| Lowest prices per 1,000 | Card $0.50, audio $2, promote $0.50 (changeable in Admin) |
+| Audio ad frequency | Gentle: before a remix at most one per listener per 30 min, never the first remix of a visit; radio one per ~20 min of listening; never for the remix's own makers |
+| Artist picks Block | Published remixes using the song go private; the remixer is told and can take the song out and publish again |
+| Promotion money | Remixt keeps it |
+
+Asked later the same day: **uploaders and miners get a share too**; **the whole site in English and Persian, with SEO**. Taken (change in `policy.ts` `SONG_HELPERS`): each song's uploader 5% and its miner (whose computer split it; the uploader when split in their own browser) 3% of every ad using the song, **out of Remixt's part** — artists 40% and remixers 30% unchanged. A remix page is now 22 Remixt / 40 artists / 30 remixers / 5 uploaders / 3 miners; a song on the radio 32 / 60 / 5 / 3. A take pays its singer as vocalist only; an account that's gone leaves its part with Remixt.
+
+### Ads, complete — build (2026-11-19 (4)), all uncommitted
+
+Done and checked:
+- Rules, pure and tested: `lib/monetize/adRules.ts` (kinds, formats, topics, never-allowed list, artist Monetize/Follow/Block vs remixer settings `effectiveAds`, frequency `prerollDue`/`radioBreakDue`, Toman), `policy.ts` (uploader + miner shares, one `ROLE_TEXT` for every page, `PAYOUT_METHODS` with "Iranian bank (Sheba / card, Toman)"), `moneyText.ts`. Tests: `ad-rules.test.ts` 15/15, `monetize-policy.test.ts` 16/16 (6 new for uploaders/miners), `monetize-statement.test.ts` 7/7, `song-fixes.test.ts` 7/7.
+- Server: `lib/monetize/adStore.ts` (remix ad settings, song policies, Block hides public remixes and tells their makers, self-serve campaigns, payments, review, promotions, remixer and artist panels), `store.ts` (new tables/columns created on first use: `remix_ad_settings`, `track_ad_policy`, `ad_payments`, `monetize_settings`, campaign `format/topic/audio/promote/owner/review`, `ad_views.format`, payouts `currency/toman`), `lib/songFixes.ts` + `songFixRules.ts` (`info_reports`, doubt score, tidied names).
+- Routes: `/api/ads` (formats, `off`, never audio to the music's makers), `/api/ads/media/[id]`, `/api/advertise` (+ `[id]`, `[id]/media`, `[id]/payments`), `/api/remixes/[id]/ads`, `/api/earnings/songs`, `/api/earnings/statement`, `/api/info-reports`, `/api/admin/songfix` (+ `[id]/cover`), admin money route (review, payments, settings, owner audio ads). Publishing refuses a remix with a blocked song (409, names it).
+- Pages, English + Persian (`/fa/…`, Toman at the owner's rate): `/earnings`, `/earnings/songs` (artist), `/earnings/remix/[id]` (remixer's ad panel), `/advertise`. Remix page: pre-roll audio ad (`PrerollGate`, engine `setBeforePlay`), card only where allowed, "Where this remix's ad money goes", "Wrong info?". Radio: ad breaks (`RadioDeck.playBreak`, `useRadio({ ads: true })` on the station page only). Promoted remix in `/remixes`, promoted song in `/library`. Admin: "Waiting for you" (ads + payments), Settings (Toman rate, lowest prices, how advertisers pay), owner audio ads, new **Fix songs** tab (suggestions from Apple's catalogue + the lyrics library, one-click approve, reports).
+- Checked against the dev server with five test accounts (scratch rig, **61/61**): floor price refused; draft → upload → submit → Toman payment → admin approve + received → budget $5; served and paid 300/400/300; remixer off → nothing (page says so); artist Monetize → back on (page explains); topic blocked; audio: 20 s refused, 3 s served, not to its maker, radio break ad, paid; promotion shown "Promoted", paid all to Remixt, click opens the remix; Block → remix private + maker told + republish 409; Sheba payout 1,200,000 Toman at 100,000/$; report → admin queue → rename closes it; lyrics set; all English/Persian money pages 200. Test accounts, campaigns and settings removed afterwards; the local song renamed by an interrupted run was restored ("Dorcci - Moft _320_").
+- tsc clean; lint clean on every changed file (last run before the uploader/miner change, which typechecks).
+
+Not done yet:
+- [ ] **Whole site in Persian + SEO** (asked 2026-11-19 (4)). Plan: a proxy/middleware rewriting `/fa/<path>` to the same page with a locale header (keeping the real `/fa/tools`, `/fa/earnings`, `/fa/advertise` routes); `<html lang dir>` from it in the root layout; a `LocaleLink` in place of `next/link` that keeps `/fa`; typed per-component `{ en, fa }` messages (a missing Persian string is a type error); `pageMetadata` adding hreflang en/fa/x-default to every page and the sitemap listing both. Then every page and component, Studio and DJ last. Read `node_modules/next/dist/docs` first (this Next has its own proxy/middleware rules).
+- [ ] Rerun the 61-check rig after the uploader/miner change (expected shares now 220/400/300/50/30 per 1000 micros when the song has an uploader and a miner).
+- [ ] Screens: phone screenshots of `/advertise`, `/fa/earnings`, the remix ad panel, the pre-roll and the radio break; a real pre-roll and radio break heard in a browser.
+- [ ] Full `npm test` after all of it.
+
+---
+
 ## Decisions for the owner (answer when you can; work starts with the recommended option)
 
 1. **"Kill the app and it keeps playing."** If the app is *swiped away* (force-closed), no web app or PWA can keep playing on iPhone or Android. The phone ends the page, and the sound with it. What a web app *can* do is keep playing when the screen locks, when you switch to another app, or when you go to the home screen. Only a native wrapper (for example Capacitor, with a background audio service) survives a swipe-away.

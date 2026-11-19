@@ -1,6 +1,7 @@
 import { getLibraryStems } from "@/lib/models";
 import { getCurrentUser } from "@/lib/auth";
 import LibraryBrowser from "@/components/LibraryBrowser";
+import PromotedSong from "@/components/ads/PromotedSong";
 import { pageMetadata } from "@/lib/seo";
 
 export const metadata = pageMetadata({
@@ -25,6 +26,7 @@ export default async function LibraryPage({
         Every stem split from an uploaded song — vocals, beats, and on newer songs the drums, bass and melody on
         their own. Preview anything, then send it to the studio to start remixing.
       </p>
+      <PromotedSong />
       <LibraryBrowser
         stems={stems}
         signedIn={!!user}

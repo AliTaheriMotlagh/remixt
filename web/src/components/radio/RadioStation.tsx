@@ -7,6 +7,44 @@ import { clock, useRadio } from "@/lib/client/radioClient";
 import { Countdown, History, ItemRow, LiveDot, Progress, RadioArt, RequestPanel, SourceChip, Visualizer, VoteBoard } from "./RadioBits";
 import RadioLyrics from "./RadioLyrics";
 import AdCard from "@/components/ads/AdCard";
+import WrongInfoButton from "@/components/WrongInfoButton";
+import type { RadioAdBreak } from "@/lib/client/radioClient";
+
+/** The ad break playing between songs: what it is, who it pays, and the advertiser's link. */
+function AdBreakBanner({ ad }: { ad: RadioAdBreak }) {
+  const people = ad.supports.filter((s) => s.role !== "platform" && s.bp > 0);
+  return (
+    <aside
+      role="status"
+      aria-label="Ad break"
+      className="fixed inset-x-3 bottom-20 z-50 mx-auto max-w-lg rounded-2xl border border-border bg-surface-raised p-3 shadow-2xl sm:bottom-6"
+    >
+      <div className="flex items-center gap-3">
+        {ad.image ? (
+          // eslint-disable-next-line @next/next/no-img-element -- the advertiser's picture
+          <img src={ad.image} alt="" className="h-12 w-12 shrink-0 rounded-xl object-cover" />
+        ) : (
+          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand/40 to-vocals/30 font-bold">
+            {(ad.advertiser || ad.title).slice(0, 1)}
+          </span>
+        )}
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-muted">Ad break · the music is back in {Math.round(ad.seconds)}s or less</p>
+          <p className="truncate font-semibold">{ad.title}</p>
+          {people.length > 0 && <p className="truncate text-xs text-muted">Pays {people.slice(0, 3).map((p) => p.name).join(", ")}</p>}
+        </div>
+        <a
+          href={`/api/ads/click?t=${encodeURIComponent(ad.token)}`}
+          target="_blank"
+          rel="sponsored noopener"
+          className="shrink-0 rounded-full bg-brand px-3.5 py-2 text-sm font-semibold text-white"
+        >
+          {ad.cta}
+        </a>
+      </div>
+    </aside>
+  );
+}
 
 // A station's page: what's on (big, with its cover glowing behind it), the
 // vote on what's next, requests, what played, and how to share or embed
@@ -57,7 +95,8 @@ export function ShareStation({ slug }: { slug: string }) {
 }
 
 export default function RadioStation({ slug, name, signedIn }: { slug: string; name?: string; signedIn: boolean }) {
-  const radio = useRadio(slug);
+  // Audio ad breaks only here, on the station's own page (never in embeds, the broadcast view or the console).
+  const radio = useRadio(slug, { ads: true });
   const { feed, tune, error } = radio;
   const now = feed?.now ?? null;
   const on = tune === "on";
@@ -118,6 +157,7 @@ export default function RadioStation({ slug, name, signedIn }: { slug: string; n
                 </div>
                 <Progress row={now} position={radio.position} />
                 <RadioLyrics slug={slug} row={now} position={radio.position} onWords={radio.showWords} />
+                <WrongInfoButton key={`${now.kind}:${now.id}`} kind={now.kind === "remix" ? "remix" : "track"} id={now.id} title={now.title} className="self-start text-white/60" />
               </>
             ) : (
               <div>
@@ -206,6 +246,7 @@ export default function RadioStation({ slug, name, signedIn }: { slug: string; n
           </section>
         </div>
         <div className="flex min-w-0 flex-col gap-4 sm:gap-6">
+          {radio.adBreak && <AdBreakBanner ad={radio.adBreak} />}
           {/* The song on air's: a view pays its artists (and a remix's makers). A new song, a new spot. */}
           <AdCard key={now ? `${now.kind}:${now.id}` : "none"} placement="radio" target={now ? `${now.kind}:${now.id}` : null} seed={now?.rowId ?? 0} className="rounded-3xl" />
           <section className="rounded-3xl border border-border bg-surface/80 p-4 sm:p-5">

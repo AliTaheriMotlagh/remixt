@@ -6,5 +6,5 @@ import { recordClick } from "@/lib/monetize/store";
 // gain by clicking.
 export async function GET(req: NextRequest) {
   const link = await recordClick(req.nextUrl.searchParams.get("t") ?? "").catch(() => null);
-  return NextResponse.redirect(link ?? new URL("/", req.url), 302);
+  return NextResponse.redirect(new URL(link ?? "/", req.url), 302);
 }

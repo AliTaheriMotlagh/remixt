@@ -377,6 +377,20 @@ class AudioEngine {
   private mixKey = keyKeeper();
   /** The context stopped while the page was hidden, with the mix playing: tried again when it's back in view. */
   private heldInBackground = false;
+  /**
+   * Listening mode only: runs before a play from the top of a tap (a remix
+   * page's audio ad, see components/ads/PrerollGate.tsx) and resolves when
+   * the mix may start. Sound is unlocked inside the tap first, so the mix can
+   * still start once the ad has finished.
+   */
+  private beforePlay: (() => Promise<void>) | null = null;
+  /** Stops what beforePlay is doing (the listener paused while the ad played). */
+  private cancelBeforePlay: (() => void) | null = null;
+
+  setBeforePlay(fn: (() => Promise<void>) | null, cancel: (() => void) | null = null) {
+    this.beforePlay = fn;
+    this.cancelBeforePlay = cancel;
+  }
 
   /**
    * Listening mode, for a page that plays a finished mix (a remix's page,
@@ -1191,6 +1205,15 @@ class AudioEngine {
     previewPlayer.stop();
     this.heldInBackground = false;
 
+    if (this.beforePlay && this.rendered.enabled && !join) {
+      const gate = this.beforePlay;
+      // Unlocked in this tap: the mix starts after the ad without another one.
+      this.rendered.prime();
+      void this.unlock().catch(() => {});
+      await gate().catch(() => {});
+      if (request !== this.playRequest) return;
+    }
+
     // Listening mode: the rendered mix when it's ready (and is this mix); else the live engine, with the element
     // unlocked in this tap so playback can move over to the file once it's rendered.
     if (this.rendered.enabled) {
@@ -1360,6 +1383,7 @@ class AudioEngine {
   }
 
   pause() {
+    this.cancelBeforePlay?.();
     if (this.onRendered) {
       this.playRequest++;
       const at = this.rendered.time();
@@ -1394,6 +1418,7 @@ class AudioEngine {
 
   /** Stop: silence everything and return the playhead to the start. */
   stop() {
+    this.cancelBeforePlay?.();
     this.playRequest++;
     this.rendered.pause();
     this.onRendered = false;

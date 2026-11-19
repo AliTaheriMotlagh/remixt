@@ -24,6 +24,7 @@ import {
   type MiningStats,
   type TopMiner,
 } from "@/lib/mining";
+import { SONG_HELPERS } from "@/lib/monetize/policy";
 import { describeStage } from "@/lib/client/uploads";
 import { FEATURES } from "@/lib/client/deviceFeatures";
 
@@ -407,6 +408,14 @@ function RewardRules() {
           </span>
         ))}{" "}
         songs.
+      </p>
+      <p className="mt-2 text-[11px] text-muted">
+        And money: every song you split earns you {SONG_HELPERS.miner / 100}% of each ad on any remix that uses it, for as long as it&apos;s
+        remixed —{" "}
+        <a href="/earnings" className="text-brand-strong hover:underline">
+          see your earnings
+        </a>
+        .
       </p>
     </div>
   );

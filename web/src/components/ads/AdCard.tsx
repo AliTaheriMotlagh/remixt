@@ -15,24 +15,22 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUpRight, HeartHandshake, Info, X } from "lucide-react";
 import { houseAd } from "@/lib/monetize/houseAds";
-import { VIEWABLE, type Placement, type Role } from "@/lib/monetize/policy";
+import { ROLE_TEXT, VIEWABLE, type Placement, type Role } from "@/lib/monetize/policy";
 import { visitorId } from "@/lib/client/presence";
 
 type Supporter = { name: string; role: Role; bp: number; held: boolean };
 type Served = {
+  /** The page's maker keeps ads off here (or an artist blocked it): nothing at all shows. */
+  off?: boolean;
   ad: { id: string; advertiser: string; title: string; body: string; cta: string; image: string | null } | null;
   token: string | null;
   supports: Supporter[];
 };
 
-const ROLE: Record<Role, { en: string; fa: string; color: string }> = {
-  platform: { en: "Remixt", fa: "ریمیکست", color: "var(--muted)" },
-  remixer: { en: "remixer", fa: "ریمیکسر", color: "var(--brand)" },
-  collaborator: { en: "collaborator", fa: "همکار", color: "var(--brand-strong)" },
-  "parent-remixer": { en: "original remix", fa: "ریمیکسِ اصلی", color: "var(--other)" },
-  artist: { en: "artist", fa: "هنرمند", color: "var(--vocals)" },
-  vocalist: { en: "vocalist", fa: "خواننده", color: "var(--vocals)" },
-};
+/** The roles in lowercase, as the line under an ad says them ("Ali · remixer"). */
+const ROLE = Object.fromEntries(
+  Object.entries(ROLE_TEXT).map(([k, v]) => [k, { ...v, en: k === "platform" ? v.en : v.en.toLowerCase() }])
+) as Record<Role, { en: string; fa: string; color: string }>;
 
 const TONE = {
   brand: "from-brand/25 via-brand/10",
@@ -121,6 +119,7 @@ export default function AdCard({
   const supporters = (served?.supports ?? []).filter((s) => s.bp > 0);
   const people = supporters.filter((s) => s.role !== "platform");
 
+  if (served?.off) return null;
   return (
     <aside
       ref={box}
