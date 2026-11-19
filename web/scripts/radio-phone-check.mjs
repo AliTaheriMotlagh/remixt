@@ -41,7 +41,8 @@ await call("POST", `/api/radio/${slug}/console`, { action: "settings", settings:
 log({ step: "station", slug, phone, sleepMs });
 
 const device = phone === "ios" ? devices["iPhone 13"] : devices["Pixel 7"];
-const { defaultBrowserType: _, ...dressed } = device;
+// Every device setting but the browser it names (Playwright refuses that in newContext).
+const dressed = Object.fromEntries(Object.entries(device).filter(([key]) => key !== "defaultBrowserType"));
 const ctx = await listener.newContext(dressed);
 await ctx.addInitScript(
   ({ ios, sleepMs }) => {

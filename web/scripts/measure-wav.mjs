@@ -97,7 +97,6 @@ function bands(wav) {
   for (const c of wav.ch) for (let i = 0; i < wav.frames; i++) mono[i] += c[i] / wav.ch.length;
   const acc = new Float64Array(BANDS.length);
   const win = Float64Array.from({ length: n }, (_, i) => 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / n));
-  let count = 0;
   for (let s = 0; s + n <= wav.frames; s += n * 4) {
     const re = new Float64Array(n), im = new Float64Array(n);
     for (let i = 0; i < n; i++) re[i] = mono[s + i] * win[i];
@@ -107,7 +106,6 @@ function bands(wav) {
       const b = BANDS.findIndex(([lo, hi]) => f >= lo && f < hi);
       if (b >= 0) acc[b] += re[k] * re[k] + im[k] * im[k];
     }
-    count++;
   }
   const total = acc.reduce((a, b) => a + b, 0);
   return Object.fromEntries(BANDS.map(([, , name], i) => [name, +(db(acc[i] / Math.max(total, 1e-20))).toFixed(1)]));

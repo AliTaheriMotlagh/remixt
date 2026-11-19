@@ -39,7 +39,12 @@ function rendererMb() {
     const mine = new Set(root ? [root] : []);
     for (let grew = true; grew; ) {
       grew = false;
-      for (const p of procs) if (mine.has(p.ppid) && !mine.has(p.pid)) mine.add(p.pid), (grew = true);
+      for (const p of procs) {
+        if (mine.has(p.ppid) && !mine.has(p.pid)) {
+          mine.add(p.pid);
+          grew = true;
+        }
+      }
     }
     const renderers = procs.filter((p) => (!root || mine.has(p.pid)) && p.cmd.includes("--type=renderer"));
     return Math.round(Math.max(0, ...renderers.map((p) => p.rss)) / 1024);

@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Third-party libraries copied as they ship (minified builds served to the browser):
+    // ONNX Runtime Web (the splitter's model runtime) and Signalsmith Stretch (time-stretch).
+    // They're never edited here, so their own style isn't ours to lint.
+    "public/ort/**",
+    "public/stretch/**",
   ]),
 ]);
 
