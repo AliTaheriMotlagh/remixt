@@ -588,6 +588,20 @@ class AudioEngine {
     return this.unlock();
   }
 
+  /**
+   * Where the transport is now (seconds). Read from the audio clock while
+   * playing: the store's playhead is moved by animation frames, which stop
+   * in a hidden tab — a live session reading it there saw the sound "behind"
+   * and jumped it every second.
+   */
+  position(): number {
+    const state = useStudioStore.getState();
+    if (!state.isPlaying) return state.playhead;
+    if (this.onRendered) return this.rendered.time();
+    if (!this.ctx) return state.playhead;
+    return this.startedAtPlayhead + Math.max(0, this.ctx.currentTime - this.startedAtContextTime);
+  }
+
   /** Where on the project timeline the audio clock's `contextTime` falls, while playing. */
   timelineAt(contextTime: number) {
     return this.startedAtPlayhead + (contextTime - this.startedAtContextTime);

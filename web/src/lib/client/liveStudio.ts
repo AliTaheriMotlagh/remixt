@@ -1,5 +1,6 @@
 "use client";
 
+import { audioEngine } from "./audioEngine";
 import { activeSheet, useLyrics } from "./lyricsStore";
 import { projectToPayload } from "./remixLanes";
 import { withoutRecording } from "./studioHistory";
@@ -113,7 +114,8 @@ export function startStudioBroadcast(streamId: string): () => void {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           playing: s.isPlaying,
-          position: Math.round(s.playhead * 1000) / 1000,
+          // The engine's own clock: the store's playhead stands still while this tab is hidden.
+          position: Math.round(audioEngine.position() * 1000) / 1000,
           lanes: s.lanes.slice(0, 64).map((l) => ({ muted: l.muted, solo: l.solo, volume: Math.min(2, Math.round(l.volume * 100) / 100) })),
           selected: s.selectedLaneIds.slice(0, 32),
         }),

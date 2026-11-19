@@ -20,6 +20,8 @@ export type { RadioFeed } from "@/lib/radio";
 
 /** "Still listening" goes with a poll at least this often (the server counts a listener for 40 s). */
 const HEARTBEAT_MS = 20_000;
+/** How long a clock reading is trusted (the quickest round trip kept that long wins). */
+const CLOCK_KEEP_MS = 10 * 60_000;
 
 export type TuneState = "off" | "loading" | "on" | "error";
 
@@ -125,7 +127,7 @@ export function useRadio(slug: string, { heartbeat = true, warm = true }: { hear
   /** Server time minus this tab's clock (ms). */
   const offset = useRef(0);
   /** Recent clock readings: the one with the quickest round trip is the truest (as NTP does). */
-  const clockSamples = useRef<{ offset: number; rtt: number }[]>([]);
+  const clockSamples = useRef<{ offset: number; rtt: number; at: number }[]>([]);
   const sid = useRef("");
   const lastBeat = useRef(0);
   const feedRef = useRef<RadioFeed | null>(null);
@@ -189,7 +191,11 @@ export function useRadio(slug: string, { heartbeat = true, warm = true }: { hear
       // The server's clock, taken at the middle of the round trip — trusting the quickest of the last few
       // (a slow answer, while this tab is busy getting the next song ready, would put every tab's idea of "now" off).
       const back = Date.now();
-      clockSamples.current = [...clockSamples.current, { offset: data.serverNow - (sent + back) / 2, rtt: back - sent }].slice(-12);
+      // Kept 10 minutes (clocks drift apart by far less than that): the best reading isn't dropped after a minute for a worse one, which moved
+      // "now" by the difference and the player with it.
+      clockSamples.current = [...clockSamples.current, { offset: data.serverNow - (sent + back) / 2, rtt: back - sent, at: back }]
+        .filter((x) => back - x.at < CLOCK_KEEP_MS)
+        .slice(-150);
       offset.current = clockSamples.current.reduce((best, x) => (x.rtt < best.rtt ? x : best)).offset;
       feedRef.current = data;
       setFeed(data);

@@ -131,7 +131,8 @@ export default function HostConsole({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           playing: s.isPlaying,
-          position: Math.round(s.playhead * 1000) / 1000,
+          // The engine's own clock: the store's playhead stands still while this tab is hidden.
+          position: Math.round(audioEngine.position() * 1000) / 1000,
           lanes: s.lanes.map((l) => ({ muted: l.muted, solo: l.solo, volume: Math.round(l.volume * 100) / 100 })),
           note: noteRef.current.trim() || undefined,
         }),

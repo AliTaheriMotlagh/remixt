@@ -255,6 +255,13 @@ export function hostPosition(state: LiveStageState, stateAt: number, serverNow: 
 
 /** Listeners further out of step than this are moved; a little drift is left alone. */
 const DRIFT_SECONDS = 0.35;
+/**
+ * A move is a short cut in the sound: only when out of step on OUT_OF_STEP
+ * checks in a row (one reading off — the clock's estimate moving — isn't
+ * enough), and at most once per MOVE_GAP_MS.
+ */
+const OUT_OF_STEP = 2;
+const MOVE_GAP_MS = 5000;
 
 export type FollowStatus = "idle" | "loading" | "ready" | "error";
 
@@ -369,6 +376,8 @@ export function useLiveFollower({
     }
     let cancelled = false;
     let busy = false;
+    let outOfStep = 0;
+    let movedAt = -Infinity;
 
     async function sync() {
       const stream = latest.current;
@@ -398,9 +407,15 @@ export function useLiveFollower({
           }
           return;
         }
-        const off = store.playhead - target;
+        // The engine's own clock: the store's playhead stands still while this tab is hidden.
+        const off = audioEngine.position() - target;
         setDrift(off);
-        if (Math.abs(off) > DRIFT_SECONDS) audioEngine.seek(target + 0.1);
+        if (Math.abs(off) <= DRIFT_SECONDS) outOfStep = 0;
+        else if (++outOfStep >= OUT_OF_STEP && performance.now() - movedAt > MOVE_GAP_MS) {
+          outOfStep = 0;
+          movedAt = performance.now();
+          audioEngine.seek(target + 0.1);
+        }
       } finally {
         busy = false;
       }

@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import type { TransactionSql } from "postgres";
 import sql from "./db";
 import { playable } from "./radioPlayable";
+import { storedKeys } from "./storage";
 import { ensureSchema } from "./schema";
 import { coverUrl } from "./cover";
 import { isAdmin } from "./admin";
@@ -598,6 +599,8 @@ export async function tick(station: RadioStation): Promise<boolean> {
   const ended = await sql`UPDATE radio_queue SET status = 'played' WHERE station_id = ${station.id} AND status = 'playing' AND ends_at <= now() RETURNING id`;
   if (last?.ends_at && last.ends_at.getTime() - NEXT_LEAD_SECONDS * 1000 > now) return ended.length > 0;
   const library = await libraryFor(station);
+  // The bucket's keys (what can play) are listed now, not inside the transaction: a listing is network calls, and the lock's connection shouldn't wait on them.
+  await storedKeys()?.catch(() => null);
   return sql.begin(async (tx) => {
     // Someone else is moving it on right now: their answer will do.
     const [{ locked }] = await tx<{ locked: boolean }[]>`SELECT pg_try_advisory_xact_lock(hashtext(${`radio:${station.id}`})) AS locked`;

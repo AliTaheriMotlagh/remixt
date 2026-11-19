@@ -47,11 +47,35 @@ import { useStudioStore } from "./studioStore";
 // again after 2, 5, then 15 s; the listener only hears about it when
 // nothing is playing.
 
-/** Off the station by more than this (seconds): jump back on. */
-const DRIFT = 0.4;
-/** Just started (the first SETTLE_MS): a play takes a moment to begin, so it's put right more tightly while a jump can't be heard. */
-const START_DRIFT = 0.12;
-const SETTLE_MS = 3000;
+// Keeping on the station's clock. A seek stops the sound for a moment
+// (longer on a phone), and that pause puts the player off again: seeking
+// on every small drift was the radio cutting in and out every second. Now:
+// - An element starts (or lands after a seek) a little late: how late is
+//   learned on this device (`lead`), and it's started that far ahead.
+// - Once playing, the media clock keeps time by itself. A small drift
+//   (the station's clock reading moving) is taken up by playing a touch
+//   faster or slower (pitch kept: not heard) — not in Safari's engine
+//   (desktop Safari, every iPhone browser), which stalls on a speed change;
+//   a radio a fraction of a second off isn't heard there.
+// - Only a big drift (a stall, the phone holding the sound) is a jump, at
+//   most one per SEEK_GAP_MS; a start that landed off gets one fix early on.
+/** Off by more than this (seconds): drawn back by the playing speed. */
+const NUDGE_FROM = 0.08;
+/** ...until within this. */
+const NUDGE_TO = 0.02;
+/** At most this much faster or slower (3%: not heard, pitch kept). */
+const MAX_NUDGE = 0.03;
+/** Off by more than this (seconds): jump back on. */
+const JUMP = 1.5;
+const SEEK_GAP_MS = 8000;
+/** After a start or a seek, the element's clock is trusted only this long after it really plays. */
+const SETTLE_MS = 400;
+/** The longest a start or seek is waited for before measuring anyway. */
+const SETTLE_MAX_MS = 3000;
+/** A start (or jump) that landed off by more than this gets one fix while the song is just in. */
+const LANDED_OFF = 0.25;
+/** The most an element is started ahead to make up for its start-up (seconds). */
+const MAX_LEAD = 1;
 /** Tuning in mid-song: the sound comes up over this long instead of with a click. */
 const FADE_IN = 0.35;
 /** Waits before readying a song again after it failed. */
@@ -84,6 +108,14 @@ type Player = {
   unlocked: boolean;
   /** When the player last changed it itself (performance.now()). */
   touchedAt: number;
+  /** When it was last sought to the station's spot (performance.now()). */
+  seekedAt: number;
+  /** Not measured against the station before this (performance.now()): a start or seek still taking effect. */
+  settleUntil: number;
+  /** Drawing back to the station by the playing speed. */
+  nudging: boolean;
+  /** Just started or sought: where it lands is measured once it plays (teaching `lead`); `fix`: it may be put right once if it landed off. */
+  landing: { fix: boolean } | null;
 };
 
 type Mode = "volume" | "switch";
@@ -109,6 +141,12 @@ export function playPayload(slug: string, kind: string, id: string): Promise<Pla
   job.catch(() => payloads.delete(key));
   if (payloads.size > 20) payloads.delete(payloads.keys().next().value!);
   return job;
+}
+
+/** Safari's engine (desktop Safari, every browser on iPhone/iPad): its elements stall when their speed changes. */
+function safariEngine() {
+  const ua = navigator.userAgent;
+  return /AppleWebKit/.test(ua) && !/Chrome|Chromium|CriOS|Edg|Android/.test(ua) || /iPhone|iPad|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 }
 
 /** Can this browser set an <audio> element's volume? (iOS keeps it at 1.) */
@@ -167,6 +205,10 @@ export class RadioDeck {
   private listening = false;
   private analyser: AnalyserNode | null = null;
   private volume = 0.9;
+  /** How far behind an element is once a start or seek takes effect, on this device (s): it's started this far ahead. */
+  private lead = 0;
+  /** Small drifts are taken up by the playing speed (not in Safari's engine). */
+  private nudges = false;
   /** Not tuned in: nothing plays. */
   private stopped = true;
   /** Getting ready before Tune in (the page is open): the song on air is mixed so the tap plays it at once. */
@@ -224,13 +266,14 @@ export class RadioDeck {
 
   private makePlayers() {
     this.mode = volumeWorks() ? "volume" : "switch";
+    this.nudges = !safariEngine();
     const count = this.mode === "switch" ? 1 : 2;
     for (let i = 0; i < count; i++) {
       const el = new Audio();
       el.preload = "auto";
       // Plays in the page, not full screen, and marks it as music.
       el.setAttribute("playsinline", "");
-      const player: Player = { el, tap: null, deck: null, silent: false, loaded: false, unlocked: false, touchedAt: 0 };
+      const player: Player = { el, tap: null, deck: null, silent: false, loaded: false, unlocked: false, touchedAt: 0, seekedAt: -Infinity, settleUntil: 0, nudging: false, landing: null };
       el.addEventListener("loadedmetadata", () => {
         if (player.deck && el.src === player.deck.url) {
           player.loaded = true;
@@ -239,6 +282,11 @@ export class RadioDeck {
         }
       });
       el.addEventListener("timeupdate", () => this.wake());
+      // The element's clock runs true once it really plays; while it waits for data it stands still.
+      const settled = () => (player.settleUntil = Math.min(player.settleUntil, performance.now() + SETTLE_MS));
+      el.addEventListener("playing", settled);
+      el.addEventListener("seeked", () => !el.paused && settled());
+      el.addEventListener("waiting", () => (player.settleUntil = performance.now() + SETTLE_MAX_MS));
       el.addEventListener("ended", () => this.onWake());
       // A new file is new tracks in the element's stream: the visualizer listens to those.
       el.addEventListener("playing", () => this.tapInto(player));
@@ -406,6 +454,7 @@ export class RadioDeck {
 
   private play(p: Player) {
     p.touchedAt = performance.now();
+    p.settleUntil = p.touchedAt + SETTLE_MAX_MS;
     p.el.play().then(
       () => {
         p.unlocked = true;
@@ -424,6 +473,8 @@ export class RadioDeck {
     p.deck = null;
     p.loaded = false;
     p.silent = true;
+    p.nudging = false;
+    p.el.playbackRate = 1;
     p.el.loop = true;
     p.el.src = silenceUrl();
     this.play(p);
@@ -446,8 +497,12 @@ export class RadioDeck {
     p.touchedAt = performance.now();
     p.deck = d;
     p.loaded = false;
+    p.seekedAt = -Infinity;
+    p.nudging = false;
+    p.landing = null;
     p.silent = false;
     p.el.loop = false;
+    p.el.playbackRate = 1;
     if (this.mode === "volume") p.el.volume = 0;
     p.el.src = d.url;
   }
@@ -458,6 +513,39 @@ export class RadioDeck {
     if (p) this.free(p);
     URL.revokeObjectURL(d.url);
     this.decks = this.decks.filter((x) => x !== d);
+  }
+
+  /** Keeps a playing `p` at `into` (its file's second the station is at now): small drift by speed (two players), big by a jump. */
+  private follow(p: Player, into: number) {
+    const t = performance.now();
+    if (t < p.settleUntil) return;
+    const off = p.el.currentTime - into;
+    const landing = p.landing;
+    if (landing) {
+      // How late this device's elements come in: the next start or jump makes up for it.
+      p.landing = null;
+      this.lead = Math.max(0, Math.min(MAX_LEAD, this.lead - off * 0.8));
+    }
+    const jump = Math.abs(off) > JUMP || (landing?.fix && Math.abs(off) > LANDED_OFF);
+    if (jump && t - p.seekedAt > SEEK_GAP_MS) {
+      p.seekedAt = t;
+      p.touchedAt = t;
+      p.settleUntil = t + SETTLE_MAX_MS;
+      p.landing = { fix: false };
+      p.nudging = false;
+      p.el.playbackRate = 1;
+      p.el.currentTime = Math.max(0, into + this.lead);
+      return;
+    }
+    if (!this.nudges) return;
+    if (Math.abs(off) > NUDGE_FROM) p.nudging = true;
+    else if (Math.abs(off) < NUDGE_TO) p.nudging = false;
+    // Ahead: slower; behind: faster. In steps of 0.5%, so the speed isn't changed on every look.
+    const rate = p.nudging ? 1 - Math.round(Math.max(-MAX_NUDGE, Math.min(MAX_NUDGE, off * 0.15)) * 200) / 200 : 1;
+    if (p.el.playbackRate !== rate) {
+      p.el.preservesPitch = true;
+      p.el.playbackRate = rate;
+    }
   }
 
   // ——— mixing ———
@@ -656,12 +744,12 @@ export class RadioDeck {
       if (!p.loaded) continue;
       if (p.el.paused) {
         if (performance.now() < this.blockedUntil) continue;
-        p.el.currentTime = v.into;
+        p.el.currentTime = Math.max(0, v.into + this.lead);
+        p.landing = { fix: !d.joinedAt };
         d.joinedAt ||= performance.now();
         this.play(p);
-      } else if (Math.abs(p.el.currentTime - v.into) > (performance.now() - d.joinedAt < SETTLE_MS ? START_DRIFT : DRIFT)) {
-        p.touchedAt = performance.now();
-        p.el.currentTime = v.into;
+      } else {
+        this.follow(p, v.into);
       }
       let level = v.gain * this.volume;
       if (d.fadeFromStart && d.joinedAt) level *= Math.min(1, (performance.now() - d.joinedAt) / 1000 / FADE_IN);
