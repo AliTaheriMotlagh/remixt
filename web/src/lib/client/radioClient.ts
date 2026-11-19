@@ -8,6 +8,7 @@ import { visitorId } from "./presence";
 import { pollEvery } from "@/lib/radioPace";
 import { mixEnvelope } from "./lyricsSources";
 import { playPayload, RadioDeck } from "./radioDeck";
+import { within } from "./stemFetch";
 import { laneFromApi } from "./remixLanes";
 import { delayed, frequencyBars, loudnessWindow, type Curve } from "@/lib/visualBars";
 
@@ -24,6 +25,13 @@ const HEARTBEAT_MS = 20_000;
 const CLOCK_KEEP_MS = 10 * 60_000;
 
 export type TuneState = "off" | "loading" | "on" | "error";
+
+/**
+ * How long a feed ask may take. The next ask waits for this one, so one a
+ * hanging line never answers would stop the station moving on (no next
+ * song, ever) — what listeners on a poor VPN were left with.
+ */
+const FEED_ANSWER_MS = 15_000;
 
 async function json<T>(res: Response): Promise<T> {
   const data = await res.json().catch(() => ({}));
@@ -187,7 +195,7 @@ export function useRadio(slug: string, { heartbeat = true, warm = true }: { hear
     if (hb) lastBeat.current = Date.now();
     const sent = Date.now();
     try {
-      const data = await fetch(`/api/radio/${encodeURIComponent(slug)}?sid=${encodeURIComponent(sid.current)}${hb ? "&hb=1" : ""}`, { cache: "no-store" }).then((r) => json<RadioFeed>(r));
+      const data = await fetch(`/api/radio/${encodeURIComponent(slug)}?sid=${encodeURIComponent(sid.current)}${hb ? "&hb=1" : ""}`, { cache: "no-store", signal: within(FEED_ANSWER_MS) }).then((r) => json<RadioFeed>(r));
       // The server's clock, taken at the middle of the round trip — trusting the quickest of the last few
       // (a slow answer, while this tab is busy getting the next song ready, would put every tab's idea of "now" off).
       const back = Date.now();

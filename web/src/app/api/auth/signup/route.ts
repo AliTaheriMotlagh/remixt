@@ -5,6 +5,8 @@ import sql from "@/lib/db";
 import { createSessionCookie, hashPassword } from "@/lib/auth";
 import { ensureRemixStats } from "@/lib/models";
 import { REF_COOKIE } from "@/lib/referral";
+import { CAPTCHA_FAILED, verifyCaptcha } from "@/lib/captcha";
+import { allow, clientKey, TOO_MANY } from "@/lib/rateLimit";
 
 const schema = z.object({
   email: z.string().email(),
@@ -22,6 +24,9 @@ export async function POST(req: NextRequest) {
     );
   }
   const { email, password, artistName } = parsed.data;
+  // New accounts per address: enough for a household or a school's shared connection, not for a sign-up bot.
+  if (!(await allow(`signup:${clientKey(req)}`, 5, 60 * 60))) return NextResponse.json(TOO_MANY, { status: 429 });
+  if (!(await verifyCaptcha((body as { captcha?: unknown })?.captcha))) return NextResponse.json(CAPTCHA_FAILED, { status: 403 });
 
   const existing = await sql`SELECT id FROM users WHERE email = ${email.toLowerCase()}`;
   if (existing.length > 0) {

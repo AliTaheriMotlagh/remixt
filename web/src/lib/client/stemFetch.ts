@@ -37,26 +37,95 @@ class Unreachable extends Error {
   final = true;
 }
 
+/**
+ * How long a line may go quiet. A connection through a poor VPN or a
+ * filtered network often hangs rather than fails — no answer, or a body
+ * that stops half-way and never ends — and a download waiting on it would
+ * wait for ever (the radio, which readies one song at a time, with it).
+ * Changeable for tests.
+ */
+export const LINE = {
+  /** No answer at all to a request for this long: asked again. */
+  answerMs: 30_000,
+  /** No bytes of an answer's body for this long: dropped, and the rest asked for again. */
+  stallMs: 20_000,
+};
+
+/**
+ * A signal that gives up on a request after `ms` — so a request a hanging
+ * line never answers can't stall what waits on it (the radio's feed
+ * polling, which only asks again once the last ask is over).
+ */
+export function within(ms: number): AbortSignal {
+  if (typeof AbortSignal.timeout === "function") return AbortSignal.timeout(ms);
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), ms);
+  return controller.signal;
+}
+
+/** Waits before asking again: 1 s, 2 s, 4 s… (a line that's down often comes back within seconds). */
+function backoff(attempt: number) {
+  return new Promise((resolve) => setTimeout(resolve, Math.min(8000, 1000 * 2 ** (attempt - 1))));
+}
+
 async function fetchRange(url: string, start: number, end: number, answerWithin?: number) {
   for (let attempt = 1; ; attempt++) {
     try {
-      // Only the answer's start is timed: a slow line may take long over the body.
-      const controller = answerWithin ? new AbortController() : null;
-      const timer = controller && setTimeout(() => controller.abort(), answerWithin);
-      const res = await fetch(url, { headers: { Range: `bytes=${start}-${end}` }, signal: controller?.signal })
+      // Only the answer's start is timed here: a slow line may take long over the body (readBody watches that).
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), answerWithin ?? LINE.answerMs);
+      const res = await fetch(url, { headers: { Range: `bytes=${start}-${end}` }, signal: controller.signal })
         .catch((err) => {
-          throw controller?.signal.aborted ? new Unreachable("no answer") : err;
+          if (!controller.signal.aborted) throw err;
+          // A CDN being tried out that doesn't answer is given up on (the app serves the file instead);
+          // any other request is asked again.
+          throw answerWithin ? new Unreachable("no answer") : new Error("no answer");
         })
-        .finally(() => timer && clearTimeout(timer));
+        .finally(() => clearTimeout(timer));
       // A 4xx won't get better by asking again.
       if (res.status >= 400 && res.status < 500) throw Object.assign(new Error(`HTTP ${res.status}`), { final: true });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res;
     } catch (err) {
       if (attempt >= ATTEMPTS || (err as { final?: boolean }).final) {
-        throw new Error(`Couldn't download the file (${err instanceof Error ? err.message : "network error"})`);
+        throw Object.assign(new Error(`Couldn't download the file (${err instanceof Error ? err.message : "network error"})`), {
+          final: (err as { final?: boolean }).final,
+        });
       }
-      await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+      await backoff(attempt);
+    }
+  }
+}
+
+/**
+ * An answer's body, chunk by chunk as it arrives, given to `take` (which
+ * returns false once it has all it wants). A body that goes quiet for
+ * LINE.stallMs is dropped with an error — after `take` has had everything
+ * that did arrive, so the caller can carry on from there.
+ */
+export async function readBody(res: Response, take: (chunk: Uint8Array) => boolean | void): Promise<void> {
+  if (!res.body) {
+    take(new Uint8Array(await res.arrayBuffer()));
+    return;
+  }
+  const reader = res.body.getReader();
+  for (;;) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const quiet = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("the line went quiet")), LINE.stallMs);
+    });
+    try {
+      const { done, value } = await Promise.race([reader.read(), quiet]);
+      if (done) return;
+      if (value?.length && take(value) === false) {
+        void reader.cancel().catch(() => {});
+        return;
+      }
+    } catch (err) {
+      void reader.cancel().catch(() => {});
+      throw err;
+    } finally {
+      clearTimeout(timer);
     }
   }
 }
@@ -65,18 +134,29 @@ async function fetchRange(url: string, start: number, end: number, answerWithin?
 async function fetchWhole(url: string, onProgress?: (loaded: number, total: number) => void): Promise<ArrayBuffer> {
   for (let attempt = 1; ; attempt++) {
     try {
-      const res = await fetch(url);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), LINE.answerMs);
+      const res = await fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
       if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { final: res.status >= 400 && res.status < 500 });
-      const bytes = await res.arrayBuffer();
       const announced = Number(res.headers.get("content-length"));
-      if (announced && bytes.byteLength < announced) throw new Error("the download was cut short");
-      onProgress?.(bytes.byteLength, bytes.byteLength);
-      return bytes;
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      await readBody(res, (chunk) => {
+        chunks.push(chunk);
+        size += chunk.length;
+        if (announced) onProgress?.(size, announced);
+      });
+      if (announced && size < announced) throw new Error("the download was cut short");
+      const bytes = new Uint8Array(size);
+      let at = 0;
+      for (const chunk of chunks) bytes.set(chunk, (at += chunk.length) - chunk.length);
+      onProgress?.(size, size);
+      return bytes.buffer;
     } catch (err) {
       if (attempt >= ATTEMPTS || (err as { final?: boolean }).final) {
         throw new Error(`Couldn't download the file (${err instanceof Error ? err.message : "network error"})`);
       }
-      await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+      await backoff(attempt);
     }
   }
 }
@@ -171,13 +251,28 @@ async function fetchSlices(
 ): Promise<ArrayBuffer> {
   await before?.();
   const first = await fetchRange(url, 0, slice - 1, answerWithin);
-  const head = new Uint8Array(await first.arrayBuffer());
   // Redirected to a CDN (R2, a public Blob store): ask it directly for the
   // rest, rather than going through the redirect again for every slice.
   const source = first.redirected && first.url ? first.url : url;
   if (first.status !== 206) {
-    onProgress?.(head.length, head.length);
-    return head.buffer;
+    // The whole file in this answer. Should it break off, it's asked for again whole.
+    const announced = Number(first.headers.get("content-length"));
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    const whole = await readBody(first, (chunk) => {
+      chunks.push(chunk);
+      size += chunk.length;
+      if (announced) onProgress?.(size, announced);
+    }).then(
+      () => !announced || size >= announced,
+      () => false
+    );
+    if (!whole) return fetchWhole(source, onProgress);
+    const bytes = new Uint8Array(size);
+    let at = 0;
+    for (const chunk of chunks) bytes.set(chunk, (at += chunk.length) - chunk.length);
+    onProgress?.(size, size);
+    return bytes.buffer;
   }
   const total = Number(first.headers.get("content-range")?.split("/")[1]);
   if (!total) {
@@ -185,43 +280,72 @@ async function fetchSlices(
     // read — a CDN that doesn't expose Content-Range to other origins. It
     // used to be taken as the whole file, handing on just its first slice
     // (a song cut off, or one that won't decode at all). Get it in one go.
+    void first.body?.cancel().catch(() => {});
     return fetchWhole(source, onProgress);
-  }
-  if (head.length >= total) {
-    onProgress?.(head.length, head.length);
-    return head.buffer;
   }
 
   const out = new Uint8Array(total);
-  out.set(head, 0);
-  let loaded = head.length;
-  onProgress?.(loaded, total);
+  let loaded = 0;
+  /** Writes what arrived for the part starting at `at`, up to `end`; false once it's full. */
+  const writer = (at: number, end: number) => (chunk: Uint8Array) => {
+    const room = end - at + 1;
+    const piece = chunk.length > room ? chunk.subarray(0, room) : chunk;
+    out.set(piece, at);
+    at += piece.length;
+    loaded += piece.length;
+    onProgress?.(loaded, total);
+    return at <= end;
+  };
+
+  // The first answer's body: what arrives is kept even if it breaks off.
+  const firstEnd = Math.min(total - 1, Number(/bytes \d+-(\d+)\//.exec(first.headers.get("content-range") ?? "")?.[1] ?? slice - 1));
+  let headGot = 0;
+  const firstWrite = writer(0, firstEnd);
+  await readBody(first, (chunk) => {
+    headGot += Math.min(chunk.length, firstEnd + 1 - headGot);
+    return firstWrite(chunk);
+  }).catch(() => {});
+  if (headGot >= total) return out.buffer;
+
   const starts: number[] = [];
-  for (let start = head.length; start < total; start += slice) starts.push(start);
+  for (let start = headGot; start < total; start += slice) starts.push(start);
 
   const next = async (): Promise<void> => {
     const start = starts.shift();
     if (start === undefined) return;
     const end = Math.min(total, start + slice) - 1;
-    // A server may answer with less than was asked for (a proxy that caps
-    // its responses): whatever part it says it sent is kept, and the rest
-    // asked for again. A body shorter than it claims was cut off: retried.
+    // Each try carries on from the last byte that arrived: a line that drops
+    // every minute still gets the file, a piece at a time. Only tries in a
+    // row that bring nothing at all count towards giving up. A server may
+    // also answer with less than was asked for (a proxy that caps its
+    // responses): the rest is asked for again.
     for (let from = start, attempt = 1; from <= end; ) {
       await before?.();
-      const res = await fetchRange(source, from, end);
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      const sent = /bytes (\d+)-(\d+)\//.exec(res.headers.get("content-range") ?? "");
-      const whole = sent
-        ? Number(sent[1]) === from && Number(sent[2]) <= end && bytes.length === Number(sent[2]) - from + 1
-        : bytes.length === end - from + 1;
-      if (whole && bytes.length > 0) {
-        out.set(bytes, from);
-        from += bytes.length;
-        loaded += bytes.length;
-        onProgress?.(loaded, total);
+      let got = 0;
+      try {
+        const res = await fetchRange(source, from, end);
+        const sent = /bytes (\d+)-(\d+)\//.exec(res.headers.get("content-range") ?? "");
+        // Not the part asked for (a 200 with the whole file, or another range): nothing of it is used.
+        if (res.status !== 206 || (sent && Number(sent[1]) !== from)) {
+          void res.body?.cancel().catch(() => {});
+        } else {
+          const until = sent ? Math.min(end, Number(sent[2])) : end;
+          const write = writer(from, until);
+          await readBody(res, (chunk) => {
+            got += Math.min(chunk.length, until + 1 - from - got);
+            return write(chunk);
+          }).catch(() => {});
+        }
+      } catch (err) {
+        if ((err as { final?: boolean }).final) throw err;
+      }
+      if (got > 0) {
+        from += got;
         attempt = 1;
       } else if (++attempt > ATTEMPTS) {
         throw new Error("The download was cut short");
+      } else {
+        await backoff(attempt - 1);
       }
     }
     return next();

@@ -44,8 +44,17 @@ const context = await browser.newContext({
 const page = await context.newPage();
 
 const json = { "Content-Type": "application/json" };
-let signedIn = await context.request.post(`${base}/api/auth/login`, { headers: json, data: account });
-if (!signedIn.ok()) signedIn = await context.request.post(`${base}/api/auth/signup`, { headers: json, data: account });
+// Sign-up and log-in ask "are you a person?" (lib/captcha.ts): solved here, a fresh one per request.
+const { createHash } = await import("node:crypto");
+async function withCaptcha(data) {
+  const c = await (await fetch(`${base}/api/captcha`)).json();
+  for (let n = 0; n <= c.maxnumber; n++) {
+    if (createHash("sha256").update(c.salt + n).digest("hex") === c.challenge) return { ...data, captcha: Buffer.from(JSON.stringify({ ...c, number: n })).toString("base64") };
+  }
+  throw new Error("captcha: no answer found");
+}
+let signedIn = await context.request.post(`${base}/api/auth/login`, { headers: json, data: await withCaptcha(account) });
+if (!signedIn.ok()) signedIn = await context.request.post(`${base}/api/auth/signup`, { headers: json, data: await withCaptcha(account) });
 if (!signedIn.ok()) throw new Error(`Couldn't sign in as ${account.email}: HTTP ${signedIn.status()}`);
 
 // What goes over the line: each slice, and how each request ended.

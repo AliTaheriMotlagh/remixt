@@ -6,6 +6,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { JsonLd, breadcrumbJsonLd, faqJsonLd, pageMetadata } from "@/lib/seo";
 import { SITE_NAME, absoluteUrl } from "@/lib/site";
 import { TOOL_LOCALES, toolLanguages, toolPage, toolPath, toolsHubPath, type ToolLocale, type ToolPage } from "@/lib/tools";
+import AdCard from "@/components/ads/AdCard";
 import { TOOL_UI } from "@/lib/toolsUi";
 
 // One tool page (/tools/<slug>, /fa/tools/<slug>), in any language: the
@@ -200,6 +201,8 @@ export default async function ToolPageView({ tool, locale }: { tool: ToolPage; l
             </details>
           ))}
         </div>
+        {/* After the answers, not in the way of the steps: the site's own spot. */}
+        <AdCard placement="site" lang={locale === "fa" ? "fa" : "en"} seed={tool.faq.length} className="mt-10 max-w-3xl" />
       </section>
 
       <section className="border-t border-border bg-surface/40">

@@ -16,6 +16,7 @@ import {
   Shield,
   SlidersVertical,
   Trophy,
+  Wallet,
   Upload,
   UserRound,
   type LucideIcon,
@@ -37,6 +38,7 @@ export type NavIconName =
   | "admin"
   | "profile"
   | "storage"
+  | "earnings"
   | "logout";
 
 export type NavLink = {
@@ -76,6 +78,7 @@ export const MORE_LINKS: NavLink[] = [
   { href: "/examples", label: "Splitting & matching examples", icon: "examples" },
   { href: "/challenges", label: "Challenges", icon: "challenges" },
   { href: "/leaderboard", label: "Top artists & remixes", icon: "top" },
+  { href: "/earnings", label: "Earnings", icon: "earnings" },
   { href: "/storage", label: "Saved on this device", icon: "storage" },
 ];
 
@@ -101,6 +104,7 @@ const ICONS: Record<NavIconName, LucideIcon> = {
   admin: Shield,
   profile: UserRound,
   storage: HardDrive,
+  earnings: Wallet,
   logout: LogOut,
 };
 

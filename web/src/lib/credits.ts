@@ -6,7 +6,7 @@ import { ensureSchema } from "./schema";
 // from it in turn.
 
 export type RemixCredits = {
-  sources: { kind: string; track_title: string; artist_id: string; artist_name: string }[];
+  sources: { kind: string; track_id: string; track_title: string; artist_id: string; artist_name: string }[];
   parent: { id: string; title: string; artist_name: string; published: boolean } | null;
   children: { id: string; title: string; artist_name: string }[];
   tags: string[];
@@ -17,7 +17,7 @@ export async function getRemixCredits(remixId: string): Promise<RemixCredits> {
   await ensureSchema();
   const [sources, [remix], children] = await Promise.all([
     sql<RemixCredits["sources"]>`
-      SELECT DISTINCT stems.kind, tracks.title AS track_title, users.id AS artist_id, users.artist_name
+      SELECT DISTINCT stems.kind, tracks.id AS track_id, tracks.title AS track_title, users.id AS artist_id, users.artist_name
       FROM remix_lanes
       JOIN stems ON stems.id = remix_lanes.stem_id
       JOIN tracks ON tracks.id = stems.track_id

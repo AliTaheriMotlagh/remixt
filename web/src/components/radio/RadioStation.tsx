@@ -6,6 +6,7 @@ import { ArrowLeft, Check, Code2, Copy, Gamepad2, Radio, Headphones, History as 
 import { clock, useRadio } from "@/lib/client/radioClient";
 import { Countdown, History, ItemRow, LiveDot, Progress, RadioArt, RequestPanel, SourceChip, Visualizer, VoteBoard } from "./RadioBits";
 import RadioLyrics from "./RadioLyrics";
+import AdCard from "@/components/ads/AdCard";
 
 // A station's page: what's on (big, with its cover glowing behind it), the
 // vote on what's next, requests, what played, and how to share or embed
@@ -205,6 +206,8 @@ export default function RadioStation({ slug, name, signedIn }: { slug: string; n
           </section>
         </div>
         <div className="flex min-w-0 flex-col gap-4 sm:gap-6">
+          {/* The song on air's: a view pays its artists (and a remix's makers). A new song, a new spot. */}
+          <AdCard key={now ? `${now.kind}:${now.id}` : "none"} placement="radio" target={now ? `${now.kind}:${now.id}` : null} seed={now?.rowId ?? 0} className="rounded-3xl" />
           <section className="rounded-3xl border border-border bg-surface/80 p-4 sm:p-5">
             <h2 className="mb-2 flex items-center gap-2 text-lg font-bold">
               <HistoryIcon className="size-5 text-drums" /> Just played

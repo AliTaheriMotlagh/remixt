@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, describe, test } from "node:test";
 import postgres from "postgres";
+import { authInit } from "./support/auth.ts";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:3999";
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -28,11 +29,7 @@ function client(id: string, name: string, cookie: string): Client {
 }
 
 async function signUp(name: string): Promise<Client> {
-  const res = await fetch(`${BASE_URL}/api/auth/signup`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: `${name}-${randomUUID()}@test.local`, password: "password123", artistName: name }),
-  });
+  const res = await fetch(`${BASE_URL}/api/auth/signup`, await authInit(BASE_URL, { email: `${name}-${randomUUID()}@test.local`, password: "password123", artistName: name }));
   assert.equal(res.status, 200, `signup failed: ${await res.clone().text()}`);
   const { id } = await res.json();
   return client(id, name, res.headers.getSetCookie().map((c) => c.split(";")[0]).join("; "));

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import { createReport, REPORT_KINDS, REPORT_REASONS, targetFromLink, type ReportReason } from "@/lib/reports";
+import { CAPTCHA_FAILED, verifyCaptcha } from "@/lib/captcha";
+import { allow, clientKey, TOO_MANY } from "@/lib/rateLimit";
 
 // Report a remix, comment or song (signed in), or file a takedown request
 // (anyone — rights holders usually don't have an account).
@@ -15,7 +17,8 @@ const schema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const parsed = schema.safeParse(await req.json().catch(() => null));
+  const body = await req.json().catch(() => null);
+  const parsed = schema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid input" }, { status: 400 });
   }
@@ -23,6 +26,9 @@ export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
 
   if (kind === "takedown") {
+    // Anyone may file one, so it's where spam would come in: checked and limited per address (signed-in reporters too).
+    if (!(await allow(`takedown:${clientKey(req)}`, 10, 60 * 60))) return NextResponse.json(TOO_MANY, { status: 429 });
+    if (!user && !(await verifyCaptcha((body as { captcha?: unknown })?.captcha))) return NextResponse.json(CAPTCHA_FAILED, { status: 403 });
     if (!email && !user) return NextResponse.json({ error: "Give an email we can reach you at" }, { status: 400 });
     if (!link?.trim()) return NextResponse.json({ error: "Paste the link to what should come down" }, { status: 400 });
     if (details.length < 20) {

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import RemixtMark from "@/components/RemixtMark";
+import { useCaptcha } from "@/lib/client/captcha";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -11,17 +12,20 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const withCaptcha = useCaptcha();
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setLoading(true);
     try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
+      const res = await withCaptcha((captcha) =>
+        fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password, captcha }),
+        })
+      );
       const data = await res.json();
       if (!res.ok) {
         setError(data.error ?? "Something went wrong");
@@ -29,6 +33,8 @@ export default function LoginPage() {
       }
       router.push("/library");
       router.refresh();
+    } catch {
+      setError("Couldn't reach Remixt — check your connection and try again");
     } finally {
       setLoading(false);
     }

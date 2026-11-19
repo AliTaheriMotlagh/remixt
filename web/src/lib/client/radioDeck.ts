@@ -4,7 +4,7 @@ import type { QueueRow } from "@/lib/radio";
 import { planDecks } from "@/lib/radioPlan";
 import { audioEngine } from "./audioEngine";
 import { encodeWavGently, renderMixWav } from "./mixdown";
-import { fetchStem } from "./stemFetch";
+import { fetchStem, within } from "./stemFetch";
 import { forgetMix, keepMix, keptMix, radioMixKey } from "./radioCache";
 import { laneFromApi, projectFromApi, type RemixApi, type RemixLaneApi } from "./remixLanes";
 import { useStudioStore } from "./studioStore";
@@ -80,6 +80,8 @@ const MAX_LEAD = 1;
 const FADE_IN = 0.35;
 /** Waits before readying a song again after it failed. */
 const RETRY_MS = [2000, 5000, 15_000];
+/** A song's download taking longer than this is shown as it goes, so a listener on a poor line sees it's coming. */
+const SLOW_DOWNLOAD_MS = 2000;
 /** A pause this soon after the player itself changed an element is its own, not the phone's. */
 const OWN_CHANGE_MS = 800;
 
@@ -136,7 +138,7 @@ export function playPayload(slug: string, kind: string, id: string): Promise<Pla
   const key = `${slug}|${kind}|${id}`;
   const kept = payloads.get(key);
   if (kept && Date.now() - kept.at < PAYLOAD_MS) return kept.job;
-  const job = fetch(`/api/radio/${encodeURIComponent(slug)}/play?kind=${kind}&id=${encodeURIComponent(id)}`).then((r) => json<PlayPayload>(r));
+  const job = fetch(`/api/radio/${encodeURIComponent(slug)}/play?kind=${kind}&id=${encodeURIComponent(id)}`, { signal: within(30_000) }).then((r) => json<PlayPayload>(r));
   payloads.set(key, { at: Date.now(), job });
   job.catch(() => payloads.delete(key));
   if (payloads.size > 20) payloads.delete(payloads.keys().next().value!);
@@ -555,10 +557,25 @@ export class RadioDeck {
    * summed — no effects to run, so it's ready in a second or two, where the
    * Studio's full mixdown of a remix takes much longer.
    */
-  private async mixSong(lanes: RemixLaneApi[], from: number, duration: number): Promise<Blob> {
+  private async mixSong(lanes: RemixLaneApi[], from: number, duration: number, onProgress?: (fraction: number) => void): Promise<Blob> {
     const rate = 44100;
     const decoder = new OfflineAudioContext(2, 1, rate);
-    const buffers = await Promise.all(lanes.map(async (l) => decoder.decodeAudioData(await fetchStem(l.stem_id))));
+    // Each lane's download, as a share of all of them (a lane not started yet counts as 0 of unknown).
+    const got = lanes.map(() => ({ loaded: 0, total: 0 }));
+    const report = () => {
+      const total = got.reduce((sum, g) => sum + g.total, 0);
+      if (total && got.every((g) => g.total)) onProgress?.(got.reduce((sum, g) => sum + g.loaded, 0) / total);
+    };
+    const buffers = await Promise.all(
+      lanes.map(async (l, i) =>
+        decoder.decodeAudioData(
+          await fetchStem(l.stem_id, (loaded, total) => {
+            got[i] = { loaded, total };
+            report();
+          })
+        )
+      )
+    );
     const length = Math.max(1, Math.ceil((Math.min(duration, Math.max(...buffers.map((b) => b.duration))) - from) * rate));
     const mix = new OfflineAudioContext(2, length, rate);
     for (const [i, buffer] of buffers.entries()) {
@@ -590,6 +607,7 @@ export class RadioDeck {
     this.keeping?.abort();
     this.busy++;
     const job = this.queue.then(async () => {
+      const asked = Date.now();
       const payload = await playPayload(this.slug, row.kind, row.id);
       const key = await radioMixKey(row.kind, payload, row.duration).catch(() => null);
       const kept = key ? await keptMix(key) : null;
@@ -597,7 +615,12 @@ export class RadioDeck {
       const whole = from < 0.01;
       const blob =
         row.kind === "track"
-          ? await this.mixSong(payload.lanes, from, row.duration)
+          ? await this.mixSong(payload.lanes, from, row.duration, (f) => {
+              // Shown only when it's slow (a poor line, a VPN): on a good one the song is in within a second or two.
+              if (Date.now() - asked > SLOW_DOWNLOAD_MS && f < 1 && !this.stopped && this.sounding().length === 0) {
+                this.onState("loading", `Slow connection — downloading the song… ${Math.round(f * 100)}%`);
+              }
+            })
           : await this.mixRemix(row, payload, from, (f) => {
               if (!this.stopped && this.sounding().length === 0) this.onState("loading", `Getting the remix ready… ${Math.round(f * 100)}%`);
             });

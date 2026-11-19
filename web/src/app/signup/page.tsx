@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { PartyPopper } from "lucide-react";
 import RemixtMark from "@/components/RemixtMark";
+import { useCaptcha } from "@/lib/client/captcha";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -13,6 +14,7 @@ export default function SignupPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const withCaptcha = useCaptcha();
   const [invited, setInvited] = useState(false);
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the URL is only readable after mount here
@@ -24,11 +26,13 @@ export default function SignupPage() {
     setError(null);
     setLoading(true);
     try {
-      const res = await fetch("/api/auth/signup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ artistName, email, password }),
-      });
+      const res = await withCaptcha((captcha) =>
+        fetch("/api/auth/signup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ artistName, email, password, captcha }),
+        })
+      );
       const data = await res.json();
       if (!res.ok) {
         setError(data.error ?? "Something went wrong");
@@ -36,6 +40,8 @@ export default function SignupPage() {
       }
       router.push("/upload");
       router.refresh();
+    } catch {
+      setError("Couldn't reach Remixt — check your connection and try again");
     } finally {
       setLoading(false);
     }

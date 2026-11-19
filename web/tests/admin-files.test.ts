@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { after, before, describe, test } from "node:test";
 import postgres from "postgres";
+import { authInit } from "./support/auth.ts";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:3999";
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -20,21 +21,16 @@ if (!DATABASE_URL || !STORAGE_DIR) throw new Error("Set DATABASE_URL and STORAGE
 const sql = postgres(DATABASE_URL, { onnotice: () => {} });
 
 async function signUp(name: string) {
-  const res = await fetch(`${BASE_URL}/api/auth/signup`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: `${name}-${randomUUID()}@test.local`, password: "password123", artistName: name }),
-  });
+  const res = await fetch(`${BASE_URL}/api/auth/signup`, await authInit(BASE_URL, { email: `${name}-${randomUUID()}@test.local`, password: "password123", artistName: name }));
   assert.equal(res.status, 200, `signup failed: ${await res.clone().text()}`);
   const { id } = await res.json();
   return { id: id as string, cookie: res.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ") };
 }
 
 async function signInAdmin() {
-  const body = JSON.stringify({ email: "test-admin@test.local", password: "password123", artistName: "testAdmin" });
-  const init = { method: "POST", headers: { "Content-Type": "application/json" }, body };
-  let res = await fetch(`${BASE_URL}/api/auth/signup`, init);
-  if (!res.ok) res = await fetch(`${BASE_URL}/api/auth/login`, init);
+  const account = { email: "test-admin@test.local", password: "password123", artistName: "testAdmin" };
+  let res = await fetch(`${BASE_URL}/api/auth/signup`, await authInit(BASE_URL, account));
+  if (!res.ok) res = await fetch(`${BASE_URL}/api/auth/login`, await authInit(BASE_URL, account));
   assert.equal(res.status, 200, `admin sign-in failed: ${await res.clone().text()}`);
   return res.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
 }

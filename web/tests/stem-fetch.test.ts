@@ -9,7 +9,7 @@ import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, before, describe, test } from "node:test";
-import { fetchInSlices } from "../src/lib/client/stemFetch.ts";
+import { fetchInSlices, LINE } from "../src/lib/client/stemFetch.ts";
 
 const FILE = randomBytes(10 * 1024 * 1024 + 777);
 
@@ -171,5 +171,62 @@ describe("a store's CDN that can't be reached", () => {
     const again = await download("/api/audio/stem/hangs");
     assert.ok(Buffer.from(again.bytes).equals(FILE));
     assert.ok(asked.every((u) => u.includes("via=app")), "the next file goes straight through the app");
+  });
+});
+
+describe("a poor line (a VPN that hangs instead of failing)", () => {
+  const saved = { ...LINE };
+  before(() => Object.assign(LINE, { answerMs: 1500, stallMs: 600 }));
+  after(() => Object.assign(LINE, saved));
+
+  test("an answer whose body stops half-way and hangs: what came is kept, the rest asked for", async () => {
+    const asked: { start: number; end: number }[] = [];
+    let hung = 0;
+    handler = (req, res) => {
+      const r = range(req)!;
+      asked.push(r);
+      res.writeHead(206, { "Content-Length": r.end - r.start + 1, "Content-Range": `bytes ${r.start}-${r.end}/${FILE.length}` });
+      // The first two answers send a little and then nothing, for ever (the connection stays open).
+      if (hung < 2) {
+        hung++;
+        res.write(FILE.subarray(r.start, r.start + 100_000));
+        return;
+      }
+      res.end(FILE.subarray(r.start, r.end + 1));
+    };
+    const { bytes } = await download();
+    assert.ok(Buffer.from(bytes).equals(FILE));
+    assert.ok(asked.some((r) => r.start % (4 * 1024 * 1024) === 100_000), "carried on from the last byte that arrived");
+  });
+
+  test("a request that never gets an answer is asked again, not waited on for ever", async () => {
+    let first = true;
+    const serve = ranged();
+    handler = (req, res) => {
+      if (first && range(req)?.start) {
+        first = false;
+        return; // no answer at all
+      }
+      serve(req, res);
+    };
+    const { bytes } = await download();
+    assert.ok(!first);
+    assert.ok(Buffer.from(bytes).equals(FILE));
+  });
+
+  test("a line that drops every answer after 300 KB still gets the whole file", async () => {
+    let requests = 0;
+    handler = (req, res) => {
+      requests++;
+      const r = range(req)!;
+      res.writeHead(206, { "Content-Length": r.end - r.start + 1, "Content-Range": `bytes ${r.start}-${r.end}/${FILE.length}` });
+      const end = Math.min(r.end + 1, r.start + 300_000);
+      if (end > r.end) return res.end(FILE.subarray(r.start, end));
+      // Dropped once those bytes are out: the line goes down mid-answer.
+      res.write(FILE.subarray(r.start, end), () => setTimeout(() => res.destroy(), 20));
+    };
+    const { bytes } = await download();
+    assert.ok(Buffer.from(bytes).equals(FILE));
+    assert.ok(requests > FILE.length / 300_000 - 1);
   });
 });

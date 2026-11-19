@@ -20,6 +20,7 @@ import { after, before, describe, test } from "node:test";
 import postgres from "postgres";
 import { upload, UploadCancelled, type RelayResume, type Send } from "../src/lib/client/directUpload.ts";
 import { fetchInSlices } from "../src/lib/client/stemFetch.ts";
+import { authInit } from "./support/auth.ts";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:3999";
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -34,11 +35,7 @@ const httpFetch = globalThis.fetch;
 type Client = { id: string; name: string; fetch: (path: string, init?: RequestInit) => Promise<Response> };
 
 async function signUp(name: string): Promise<Client> {
-  const res = await fetch(`${BASE_URL}/api/auth/signup`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: `${name}-${randomUUID()}@test.local`, password: "password123", artistName: name }),
-  });
+  const res = await fetch(`${BASE_URL}/api/auth/signup`, await authInit(BASE_URL, { email: `${name}-${randomUUID()}@test.local`, password: "password123", artistName: name }));
   assert.equal(res.status, 200, `signup failed: ${await res.clone().text()}`);
   const { id } = await res.json();
   const cookie = res.headers

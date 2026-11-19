@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useCaptcha } from "@/lib/client/captcha";
 
 export default function TakedownForm({ signedInEmail }: { signedInEmail: string | null }) {
   const [email, setEmail] = useState(signedInEmail ?? "");
@@ -11,6 +12,7 @@ export default function TakedownForm({ signedInEmail }: { signedInEmail: string 
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const withCaptcha = useCaptcha();
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -20,17 +22,20 @@ export default function TakedownForm({ signedInEmail }: { signedInEmail: string 
     }
     setSending(true);
     setError(null);
-    const res = await fetch("/api/reports", {
+    const res = await withCaptcha((captcha) =>
+      fetch("/api/reports", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        captcha,
         kind: "takedown",
         reason: "copyright",
         email: email.trim() || null,
         link: link.trim(),
         details: `From: ${name.trim() || "(no name given)"}\n\n${work.trim()}\n\nThe sender stated in good faith that this use isn't authorised by the rights holder, and that the information is accurate.`,
       }),
-    }).catch(() => null);
+    })
+    ).catch(() => null);
     const data = await res?.json().catch(() => null);
     setSending(false);
     if (res?.ok) setSent(true);

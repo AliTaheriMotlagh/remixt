@@ -9,6 +9,7 @@ import RemixComments from "@/components/RemixComments";
 import ReportButton from "@/components/ReportButton";
 import RemixCredits from "@/components/RemixCredits";
 import RemixCover from "@/components/RemixCover";
+import AdCard from "@/components/ads/AdCard";
 import { getRemixCredits } from "@/lib/credits";
 import { getArtistProgress, getComments } from "@/lib/social";
 import { coverUrl, ensureRemixStats, getRemixCard, getRemixStats, shareImageUrl } from "@/lib/models";
@@ -135,7 +136,7 @@ export default async function RemixDetailPage({
         )}
       </div>
 
-      <RemixCredits credits={credits} />
+      <RemixCredits credits={credits} remixId={remix.id} />
 
       <RemixStatsBar remixId={remix.id} title={remix.title} initial={stats} signedIn={!!user} />
 
@@ -146,6 +147,9 @@ export default async function RemixDetailPage({
         cover={coverUrl(remix.id, remix.cover_key)}
         user={user}
       />
+
+      {/* This remix's spot: a view pays its remixer(s), the songs' artists and the site (lib/monetize/policy.ts). */}
+      {remix.published && <AdCard placement="remix" target={`remix:${remix.id}`} seed={remix.title.length} className="mt-6" />}
 
       <RemixComments remixId={remix.id} initial={comments} userId={user?.id ?? null} isRemixOwner={isOwner} />
     </div>

@@ -11,7 +11,7 @@ const KIND_LABELS: Record<string, string> = {
 };
 
 /** "Remix of …", the songs it's built from, and the remixes made from it. */
-export default function RemixCredits({ credits }: { credits: Credits }) {
+export default function RemixCredits({ credits, remixId }: { credits: Credits; remixId: string }) {
   const { sources, parent, children, tags, challenge } = credits;
   return (
     <section className="mt-4 flex flex-col gap-2 text-sm">
@@ -62,6 +62,10 @@ export default function RemixCredits({ credits }: { credits: Credits }) {
               </Link>
             </span>
           ))}
+          {/* The real artist of a song used here gets a share of this remix's ads, once they're verified. */}
+          <Link href={`/earnings?from=${remixId}#claims`} className="ml-2 whitespace-nowrap text-xs text-brand-strong hover:underline">
+            Your song? Claim your share
+          </Link>
         </p>
       )}
 

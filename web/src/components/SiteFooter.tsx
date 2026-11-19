@@ -34,6 +34,7 @@ const COLUMNS: { heading: string; links: { href: string; label: string; lang?: s
     heading: SITE_NAME,
     links: [
       { href: "/signup", label: "Create a free account" },
+      { href: "/earnings", label: "Earn from your remixes" },
       { href: "/takedown", label: "Copyright & takedowns" },
     ],
   },

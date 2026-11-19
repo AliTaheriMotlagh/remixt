@@ -7,6 +7,7 @@ import RemixOfTheDay from "@/components/RemixOfTheDay";
 import { getCurrentUser } from "@/lib/auth";
 import { ensureSchema } from "@/lib/schema";
 import { pageMetadata } from "@/lib/seo";
+import AdCard from "@/components/ads/AdCard";
 import type { Metadata } from "next";
 
 type Tab = "latest" | "trending" | "following";
@@ -239,6 +240,7 @@ export default async function RemixesPage({
           ))}
         </div>
       )}
+      {remixes.length > 0 && <AdCard placement="site" seed={remixes.length} className="mt-8" />}
     </div>
   );
 }

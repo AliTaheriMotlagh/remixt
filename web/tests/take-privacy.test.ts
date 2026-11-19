@@ -7,6 +7,7 @@
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { describe, test } from "node:test";
+import { authInit } from "./support/auth.ts";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:3999";
 
@@ -14,11 +15,7 @@ type Client = { id: string; name: string; fetch: (path: string, init?: RequestIn
 
 async function signUp(prefix: string): Promise<Client> {
   const name = `${prefix}${randomUUID().slice(0, 6)}`;
-  const res = await fetch(`${BASE_URL}/api/auth/signup`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: `${name}-${randomUUID()}@test.local`, password: "password123", artistName: name }),
-  });
+  const res = await fetch(`${BASE_URL}/api/auth/signup`, await authInit(BASE_URL, { email: `${name}-${randomUUID()}@test.local`, password: "password123", artistName: name }));
   assert.equal(res.status, 200, `signup failed: ${await res.clone().text()}`);
   const cookie = res.headers
     .getSetCookie()

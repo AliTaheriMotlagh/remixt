@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Users } from "lucide-react";
+import InviteOnline from "./InviteOnline";
 import { useCollab } from "@/lib/client/collab";
 
 const SYNC_LABEL = {
@@ -14,7 +15,7 @@ const SYNC_LABEL = {
 
 /** Who's in the shared session, whether it's in sync, and the invite link. */
 export default function CollabBar({ userId, onLeave }: { userId: string | null; onLeave: () => void }) {
-  const { members, inviteCode, sync, lastEditor, error, ownerId, title } = useCollab();
+  const { members, inviteCode, sync, lastEditor, error, ownerId, title, projectId } = useCollab();
   const [copied, setCopied] = useState(false);
   const isOwner = ownerId === userId;
 
@@ -54,6 +55,7 @@ export default function CollabBar({ userId, onLeave }: { userId: string | null; 
         {sync === "synced" && lastEditor ? ` · last change by ${lastEditor}` : ""}
       </span>
       <span className="ml-auto flex gap-2">
+        {projectId && userId && sync !== "ended" && <InviteOnline projectId={projectId} userId={userId} memberIds={members.map((m) => m.id)} />}
         {inviteCode && sync !== "ended" && (
           <button onClick={copyInvite} className="rounded-lg bg-beat px-3 py-1.5 text-xs font-semibold text-white">
             {copied ? "Link copied" : "Copy invite link"}

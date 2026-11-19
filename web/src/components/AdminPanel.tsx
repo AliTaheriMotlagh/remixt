@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Heart, Play } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type { StorageReport } from "@/lib/storageReport";
+import MonetizeTab from "@/components/admin/MonetizeTab";
 
 type Overview = {
   users: number;
@@ -92,7 +93,7 @@ type AdminResult = {
   sender_email: string | null;
 };
 
-type Tab = "reports" | "users" | "songs" | "remixes" | "challenges" | "results" | "storage" | "cleanup";
+type Tab = "reports" | "users" | "songs" | "remixes" | "challenges" | "results" | "storage" | "cleanup" | "money";
 
 function formatDate(value: string) {
   return new Date(value).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
@@ -150,6 +151,7 @@ export default function AdminPanel({ adminId }: { adminId: string }) {
     { id: "results", label: "Shared results" },
     { id: "storage", label: "Storage" },
     { id: "cleanup", label: "Clean up" },
+    { id: "money", label: "Ads & earnings" },
   ];
 
   return (
@@ -210,6 +212,7 @@ export default function AdminPanel({ adminId }: { adminId: string }) {
         {tab === "results" && <ResultsTab />}
         {tab === "storage" && <StorageTab onChange={refreshOverview} />}
         {tab === "cleanup" && <CleanupTab onChange={refreshOverview} />}
+        {tab === "money" && <MonetizeTab />}
       </div>
     </div>
   );
