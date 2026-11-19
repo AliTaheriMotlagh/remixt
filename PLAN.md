@@ -12,18 +12,20 @@ Written 2026-11-17. Last commit at that time: `0fee2ca` (all earlier work commit
 
 ## What's left (2026-11-19) — all of it needs you, a device or hardware
 
+**2026-11-19 (3): the code side is finished.** Built the last earnings items that needed no decision (unclaimed money after 3 years, payout notices, month statements) and ran the signed-in checks against a local account (every page as a new empty account, `/earnings` with money in it, two accounts remixing together). Left open on purpose: an advertiser self-serve page and network ads (decisions 5 and 7 say not yet), and a Persian `/earnings`.
+
 **2026-11-19: the owner reports their parts done** (Start fresh in Admin → Storage, the production settings, the device checks). No problems were reported back; **write any that were found here**, each under its phase, so they get fixed. Still open on the code side: nothing that can be done from this computer.
 
 **0. Production storage (2026-11-19).** The Vercel Blob store `remixt-blob` is suspended ("Billing State: Inactive", 522 files / 940 MB) and can't be read at all, so its songs are given up. Done: `NEXT_PUBLIC_STEM_BITRATE` (was 128) and `BLOB_READ_WRITE_TOKEN` / `BLOB_STORE_ID` / `BLOB_WEBHOOK_PUBLIC_KEY` removed from Production; `96124e6` deployed (R2 only, stems and takes VBR MP3 -V2 with a Xing header, `mp3Xing.ts`). **Owner, still to do:** Admin → Storage → Start fresh → "Check what would go" → Remove (needs a signed-in admin; Vercel won't hand sensitive env values to the CLI, so it couldn't be run from here). Optional: delete the `remixt-blob` store in the Vercel dashboard. Still to check: the real size of a song split after the deploy (Admin → Storage).
 
 Everything that could be done and checked from this computer is done. Open:
 1. **Real phones** (Phase 2, 3, 9): iPhone (installed PWA + Safari tab) and Android Chrome — lock, switch app, home, a call; AI features' timings; a remix tune-in with nothing kept. For the radio: lock the screen through a song change, take a call, unplug headphones (see Phase 9 "Radio on phones").
-2. **A signed-in account** (Phase 4, 7): a tagged MP3 upload shows its cover after splitting; the lazy cover fill on a real library; every page signed in with data and as a new empty account.
+2. **A signed-in account** (Phase 4, 7): a tagged MP3 upload shows its cover after splitting; the lazy cover fill on a real library; every page signed in as a real account with data. (A new empty account was checked locally on 2026-11-19 (3).)
 3. **Genius**: the token is set, but from this computer Genius answers 503/403 (Cloudflare) to the API, the pages and the embed — so nothing Genius-based could be checked here. Check from another network: the lyrics picker's Genius results, and "Remove a singer" naming voices from the credits / reading `[Verse: name]` headers.
 7. **iOS Simulator**: Xcode here has no Simulator.app (devices boot without a screen: "Timeout waiting for screen surfaces"), so the phone checks ran in Playwright's WebKit dressed as an iPhone instead. Install the iOS platform/Simulator in Xcode (Settings → Components) to drive real iOS Safari (`ios_webkit_debug_proxy` is installed).
 4. **DJ** (Phase 6): listen for clicks at loop points; a MIDI controller.
 5. **Look and listen**: the AI panel clicked through with real lanes; the four new clip visualizers in an exported video.
-6. Decisions below: 1 (native wrapper) is still open; 2 and 3 were taken as recommended.
+6. Decisions below: 1 (native wrapper), 4 (the share numbers), 5 (legal, before the first payout) and 7 (ad networks) are yours; 2, 3 and 6 were taken as recommended.
 
 ---
 
@@ -36,7 +38,7 @@ Everything that could be done and checked from this computer is done. Open:
 3. **Song artwork source.** Recommended: take the cover picture that is already inside the uploaded file (MP3/M4A tags). If there is none, use the cover from the music site the song came from. If there is still none, draw one from the waveform and colours.
 4. **(2026-11-19) The shares of ad money.** Built as: remix page 30% Remixt / 40% the songs' artists / 30% remixers; a library song on the radio 40% / 60% artists; ordinary pages 100% Remixt. One file: `web/src/lib/monetize/policy.ts` (`SPLITS`, `PARENT_SHARE_BP` 25%, vocal weight 2). Change the numbers there; the tests insist each party keeps a share.
 5. **(2026-11-19) Paying money out — legal, before the first payout.** Members ask; you send by hand and press "Mark sent" (Admin → Ads & earnings). Methods offered: PayPal, IBAN/Sheba, USDT, other. Things to settle with someone who knows the law where you're registered: sanctions (the site is on US companies — Vercel, Cloudflare — and PayPal/Stripe don't serve Iran; paying people in Iran from abroad, or taking money from foreign advertisers into Iran, has rules), tax on what you pay out, and a short "Creator terms" page (shares can change with notice; false claims forfeit earnings; 30-day hold). Recommended: don't take advertiser money until that's done; run house ads until then (they're on now and pay nobody).
-6. **(2026-11-19) Money held for artists who never claim.** Their share waits under the song (`earnings.held_track_id`). Recommended rule to publish: kept 3 years, then it goes to Remixt (as the big platforms do with unclaimed royalties). Nothing expires it in code yet.
+6. **(2026-11-19) Money held for artists who never claim.** Their share waits under the song (`earnings.held_track_id`). Taken as recommended (2026-11-19 (3)): kept 3 years, then it goes to Remixt — never while a claim on the song is being checked. Code: `UNCLAIMED_YEARS` in `policy.ts`; `expireUnclaimed()` in `store.ts` moves the rows to the platform and stamps `earnings.unclaimed_at` (the row keeps its `track_id`); it runs at most every 6 h per server when `/earnings` or Admin → Ads & earnings is opened (no cron). Said on `/earnings` ("Artists, always"); Admin shows the amount under Remixt's share. Change the years in one place.
 7. **(2026-11-19) Ad networks (AdSense, Yektanet, Mediaad).** Not connected. AdSense doesn't serve or pay for Iranian traffic. Every network's ad is an iframe, and the site sends `Cross-Origin-Embedder-Policy: credentialless` on every page (the splitter's multi-core mode needs it), which blocks those iframes. To add one: send COEP only on `/upload`, `/studio`, `/library` (where the splitter runs) and make links into them full page loads; then give `AdCard` a network fallback when no direct campaign fits, and close each month's network revenue into the ledger pro rata by paid views (not built). Recommended: sell direct campaigns first (Admin → Ads & earnings → New campaign: CPM + budget), which pay exactly per view and need none of this.
 
 ---
@@ -56,10 +58,11 @@ Everything that could be done and checked from this computer is done. Open:
 - Ledger (`earnings`, append-only): one row per recipient, adding to the micro what the advertiser paid. Waits 30 days, then withdrawable from $10 (`payouts`, rows set aside under the payout; turned down → back to the balance). Artists not verified: held under the song; a verified claim (`rights_claims`, checked by an admin) moves it to them. A take sung in the booth pays its singer directly. A remix of a remix: 25% of the remixers' part to the parent's maker. Collaborators (`remix_splits`): the owner shares the remixers' part (keeps ≥ 10%).
 - `/earnings`: balance + progress to $10 + Withdraw, waiting / kept for artists of your uploads / paid / lifetime, 30-day bars, paid views and RPM, 8 milestones (views and pay, never clicks), where it comes from, claim your songs (from a remix's "Your song? Claim your share" link, or your uploads), collaborator splits, how you're paid, payouts; signed out it's a public page explaining the shares (in the sitemap, footer, More menu).
 - Checked against the dev server (scratch `money-check.mjs`, 19/19): campaign served on a remix, shares 30/26.67/13.33/30, a view paid 5,000 micros split 1500/1500/1334/666, same visitor not again, robot and forged token not paid, the last of the budget once, a spent campaign not served, dashboard and payout refusal for a new member. Screens: earnings (desktop + phone), remix page with the ad opened (phone), radio (desktop): no sideways scroll, no errors. Tests: `monetize-policy.test.ts` 10/10.
-- [ ] Not built: an advertiser self-serve page (campaigns are entered by you), network ads (decision 7), unclaimed-money expiry (decision 6), month statements/CSV for members, email when a payout is sent, Persian dashboard.
+- [x] Built 2026-11-19 (3): unclaimed-money expiry (decision 6, above); a notice in the bell when a payout is sent or turned down ("Your payout of $10.50 was sent to your PayPal", with the admin's note; type `payout`, links to `/earnings` — there's no email service in the app, so the bell is the channel); month statements: `/earnings` → Statement → month → Download CSV (`/api/earnings/statement?month=YYYY-MM`, `statementCsv` in `policy.ts`: one line per day/source/role with its state — waiting/available/in a payout/paid out — and the total; BOM for Excel; titles can't run as formulas). Tests: `monetize-statement.test.ts` 7/7. Checked against the dev server with two new accounts (scratch rig, 16/16): payout asked and marked sent → notice written and shown; October/November statements, bad month 400, signed out 401, another member's empty; expiry gives up only the 4-year-old held row (the 1-year-old one and the one under a pending claim stay), a second run gives nothing. Phone screenshots of `/earnings` with money and of the notice: fine.
+- [ ] Not built: an advertiser self-serve page (campaigns are entered by you; decision 5 says don't take advertiser money yet), network ads (decision 7), Persian `/earnings`.
 
 **Remix together with people online**: the Studio's shared session bar has "Invite someone online" — the artists online now (with where they are on the site), or anyone by name; they get a "jam" notification that opens the session (`/api/projects/invite`, member-only, rate-limited). A remix made together can share its earnings (`/earnings` → Share with collaborators); projects aren't tied to the remix they become, so that split is set by hand.
-- [ ] Not checked in a browser with two signed-in accounts.
+- [x] Checked 2026-11-19 (3) with two signed-in accounts (scratch rig, Chrome at phone size): A starts a session and invites B; B can't invite into A's session, A can't invite themselves, a guest is refused; B's bell shows "Earn Check A invites you to remix together in “Jam check”", the tap joins the session, and after the first-run "pick a Studio" screen the session is there.
 
 ---
 
@@ -239,13 +242,14 @@ Done 2026-11-18 (3) as a guest, with `node scripts/page-audit.mjs` (every page o
 - [x] `/admin`: 404 for anyone not an admin — on purpose (`notFound()`, no hint it exists).
 - [x] `/examples` says clearly which is which: "From the library" (real uploads, split by the AI splitter) and "Demo songs" (synthesised in the browser) are separate tabs, each explained.
 - Screens looked at: radio (phone), DJ decks (phone), examples (desktop) — fine.
-- [ ] Signed in as a real account with data, and as a new empty account (needs a login; the test login isn't stored here).
+- [x] As a new empty account (2026-11-19 (3), `COOKIE=` with a fresh local sign-up): every page OK on phone and desktop; `/admin` 404 (not an admin, on purpose). `/earnings`, `/tools`, `/fa/tools` added to the audit's list. A first visit to `/dj` logs 404s for `/api/stems/<id>/results/analysis` — that's the analysis cache saying "not made yet" (the page then makes and saves it); a second visit is clean.
+- [ ] As a real account with data (needs the production login, which isn't stored here).
 
 ---
 
 ## Phase 8 — checks before every commit
 
-Last run (2026-11-19): tsc clean; lint = the 3 old vendored errors (`public/stretch/…`), the changed files clean; full `npm test` (with its own server) **927 passed, 0 failed** (187 s).
+Last run (2026-11-19 (3)): tsc clean; lint = the 3 old vendored errors (`public/stretch/…`), the changed files clean; full `npm test` (with its own server) **952 passed, 0 failed** (93 s).
 
 
 - [ ] `cd web && npx tsc --noEmit && npm run lint && npm test -- --brief` (stop any `next dev` in `web/` first; they share `.next`).
@@ -256,6 +260,7 @@ Last run (2026-11-19): tsc clean; lint = the 3 old vendored errors (`public/stre
 
 ## Notes and tools (from earlier sessions)
 
+- Signed in locally without a password (2026-11-19 (3)): sign up through `tests/support/auth.ts` (`authInit` solves the captcha), or mint the cookie — `new SignJWT({ userId }).setProtectedHeader({ alg: "HS256" })…sign(SESSION_SECRET)` with `jose` — and pass `COOKIE="remix_session=…"` to `page-audit.mjs`. A scratch TS rig importing `src/lib/*` server code needs `next/headers` mapped to `next/headers.js` on top of `tests/support/register.mjs`. Delete the test accounts afterwards (`email LIKE '…@example.test'`).
 - New rigs (2026-11-18 (5)): `OWNER_ID=<id> node scripts/radio-words-check.mjs [slug]` (lock-screen line, "Wrong words?", owner's choice); `radio-phone-check.mjs` takes `ENGINE=webkit` (Safari's engine); `singer-check.mjs` takes `POINT=1`. A CPU profile of a page: CDP `Profiler.start/stop` + a `longtask` PerformanceObserver (as in this session's scratch rigs) found the radio's freezes.
 - New rig (2026-11-18 (4)): `OWNER_ID=<user id> PHONE=ios|android node scripts/radio-phone-check.mjs` — the radio through a song change dressed as a phone, timers asleep (`SLEEP_MS`); logs every `pause()` with its caller.
 - New rigs (2026-11-18 (3)): `scripts/page-audit.mjs` (every page, both sizes), `scripts/singer-check.mjs` (remove a singer + undo; `LYRICS=1` for the headers sheet), `scripts/radio-cache-check.mjs` (kept radio mixes). `window.__remixt.renderMixWav` (development only) times the listening-mode render from a console or rig.

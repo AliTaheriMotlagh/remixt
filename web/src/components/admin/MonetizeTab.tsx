@@ -4,7 +4,7 @@
 // the paying campaigns, artists' claims to their songs, and payouts.
 
 import { useCallback, useEffect, useState } from "react";
-import { formatMoney, MICROS } from "@/lib/monetize/policy";
+import { formatMoney, MICROS, UNCLAIMED_YEARS } from "@/lib/monetize/policy";
 import type { Campaign, monetizeOverview } from "@/lib/monetize/store";
 
 type Overview = Awaited<ReturnType<typeof monetizeOverview>>;
@@ -47,7 +47,11 @@ export default function MonetizeTab() {
     <div className="flex flex-col gap-6">
       {error && <p className="text-sm text-danger">{error}</p>}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Box label="Remixt's share, all time" value={formatMoney(data.money.platform)} />
+        <Box
+          label="Remixt's share, all time"
+          value={formatMoney(data.money.platform)}
+          detail={data.money.unclaimed ? `incl. ${formatMoney(data.money.unclaimed)} never claimed in ${UNCLAIMED_YEARS} years` : undefined}
+        />
         <Box label="Paid to members (incl. waiting)" value={formatMoney(data.money.members)} />
         <Box label="Kept for artists not verified" value={formatMoney(data.money.held)} />
         <Box label="This month, everyone" value={formatMoney(data.money.month)} />

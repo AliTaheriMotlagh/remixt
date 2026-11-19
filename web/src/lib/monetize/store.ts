@@ -12,9 +12,10 @@
 import { createHmac, randomUUID } from "crypto";
 import sql from "../db";
 import { ensureSchema } from "../schema";
+import { notify } from "../notifications";
 import {
-  HOLD_DAYS, isOwnView, MICROS, PAID_VIEWS_PER_ADDRESS_PER_DAY, PAYOUT_MIN_MICROS, payOut, remixShares, siteShares, songShares,
-  type Placement, type RemixParties, type Role, type Share, type SourceSong,
+  formatMoney, HOLD_DAYS, isOwnView, MICROS, monthSpan, PAID_VIEWS_PER_ADDRESS_PER_DAY, PAYOUT_MIN_MICROS, payOut, remixShares, siteShares, songShares,
+  unclaimedCutoff, type Placement, type RemixParties, type Role, type Share, type SourceSong, type StatementLine, type StatementState,
 } from "./policy";
 
 let ready: Promise<void> | null = null;
@@ -81,6 +82,8 @@ export function ensureMonetizeSchema(): Promise<void> {
     `;
     await sql`CREATE INDEX IF NOT EXISTS earnings_user ON earnings (user_id, created_at)`;
     await sql`CREATE INDEX IF NOT EXISTS earnings_held ON earnings (held_track_id) WHERE held_track_id IS NOT NULL`;
+    // Held money given up to Remixt after UNCLAIMED_YEARS: when it happened (the row keeps its track_id, so it can be traced).
+    await sql`ALTER TABLE earnings ADD COLUMN IF NOT EXISTS unclaimed_at TIMESTAMPTZ`;
     await sql`
       CREATE TABLE IF NOT EXISTS rights_claims (
         id TEXT PRIMARY KEY,
@@ -354,6 +357,36 @@ export async function recordClick(token: string): Promise<string | null> {
   return c && /^https?:\/\//.test(c.link) ? c.link : null;
 }
 
+// ——— money nobody claimed ———
+
+/**
+ * Gives Remixt the held money no artist claimed within UNCLAIMED_YEARS
+ * (policy.ts). Skips a song whose claim is still being checked. Returns the
+ * micros given up.
+ */
+export async function expireUnclaimed(now = new Date()): Promise<number> {
+  await ensureMonetizeSchema();
+  const rows = await sql<{ micros: string }[]>`
+    UPDATE earnings e SET platform = true, held_track_id = NULL, unclaimed_at = now()
+    WHERE e.held_track_id IS NOT NULL AND e.created_at < ${unclaimedCutoff(now)}
+      AND NOT EXISTS (SELECT 1 FROM rights_claims c WHERE c.track_id = e.held_track_id AND c.status = 'pending')
+    RETURNING micros
+  `;
+  return rows.reduce((s, r) => s + Number(r.micros), 0);
+}
+
+let lastExpiry = 0;
+
+/** expireUnclaimed at most every 6 hours per server, from the pages that show held money (no cron needed). */
+function expireUnclaimedNow(): Promise<unknown> {
+  if (Date.now() - lastExpiry < 6 * 3_600_000) return Promise.resolve();
+  lastExpiry = Date.now();
+  return expireUnclaimed().catch((err) => {
+    lastExpiry = 0;
+    console.error("expireUnclaimed failed", err);
+  });
+}
+
 // ——— a member's earnings ———
 
 export type EarningsSummary = {
@@ -374,6 +407,7 @@ const n = (x: unknown) => Number(x ?? 0);
 
 export async function earningsFor(userId: string): Promise<EarningsSummary> {
   await ensureMonetizeSchema();
+  await expireUnclaimedNow();
   const [totals, last30, sources, claims, payouts, account, remixes, uploads] = await Promise.all([
     sql`
       SELECT
@@ -451,6 +485,27 @@ export async function earningsFor(userId: string): Promise<EarningsSummary> {
   };
 }
 
+/** A member's month, line by line (day, source, role), for the statement CSV. */
+export async function statementFor(userId: string, month: string): Promise<StatementLine[] | null> {
+  const span = monthSpan(month);
+  if (!span) return null;
+  await ensureMonetizeSchema();
+  const rows = await sql<{ day: string; title: string | null; remix: boolean; role: Role; views: string; micros: string; state: StatementState }[]>`
+    SELECT to_char(e.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
+           COALESCE(r.title, t.title) AS title, (e.remix_id IS NOT NULL) AS remix, e.role,
+           COUNT(DISTINCT e.view_id) AS views, SUM(e.micros) AS micros,
+           CASE WHEN e.payout_id IS NOT NULL THEN (CASE WHEN p.status = 'paid' THEN 'paid' ELSE 'requested' END)
+                WHEN e.available_at > now() THEN 'waiting' ELSE 'available' END AS state
+    FROM earnings e
+    LEFT JOIN remixes r ON r.id = e.remix_id
+    LEFT JOIN tracks t ON t.id = e.track_id AND e.remix_id IS NULL
+    LEFT JOIN payouts p ON p.id = e.payout_id
+    WHERE e.user_id = ${userId} AND e.created_at >= ${span.from} AND e.created_at < ${span.to}
+    GROUP BY 1, 2, 3, 4, 7 ORDER BY 1, SUM(e.micros) DESC
+  `;
+  return rows.map((r) => ({ day: r.day, source: r.title ?? "Removed", kind: r.remix ? "remix" : "song", role: r.role, views: n(r.views), micros: n(r.micros), state: r.state }));
+}
+
 export const PAYOUT_METHODS = ["PayPal", "Bank transfer (IBAN / Sheba)", "Crypto (USDT)", "Other"] as const;
 
 export async function setPayoutAccount(userId: string, method: string, details: string) {
@@ -520,11 +575,13 @@ export async function claimSong(userId: string, trackId: string, evidence: strin
 
 export async function monetizeOverview() {
   await ensureMonetizeSchema();
+  await expireUnclaimedNow();
   const [[money], [views], campaigns, claims, payouts] = await Promise.all([
     sql`
       SELECT COALESCE(SUM(micros) FILTER (WHERE platform), 0) AS platform,
              COALESCE(SUM(micros) FILTER (WHERE user_id IS NOT NULL), 0) AS members,
              COALESCE(SUM(micros) FILTER (WHERE held_track_id IS NOT NULL), 0) AS held,
+             COALESCE(SUM(micros) FILTER (WHERE unclaimed_at IS NOT NULL), 0) AS unclaimed,
              COALESCE(SUM(micros) FILTER (WHERE created_at > date_trunc('month', now())), 0) AS month
       FROM earnings
     `,
@@ -546,7 +603,7 @@ export async function monetizeOverview() {
     `,
   ]);
   return {
-    money: { platform: n(money.platform), members: n(money.members), held: n(money.held), month: n(money.month) },
+    money: { platform: n(money.platform), members: n(money.members), held: n(money.held), unclaimed: n(money.unclaimed), month: n(money.month) },
     views: { today: n(views.today), paidToday: n(views.paid_today), month: n(views.month), paidMonth: n(views.paid_month) },
     campaigns: campaigns.map(numbers),
     claims: claims.map((c) => ({ ...c, held: n(c.held) })),
@@ -602,8 +659,21 @@ export async function decideClaim(id: string, verify: boolean, note: string | nu
 /** A payout sent (paid) — or turned down, which gives the money back to the member's balance. */
 export async function decidePayout(id: string, paid: boolean, note: string | null) {
   await ensureMonetizeSchema();
-  await sql.begin(async (tx) => {
-    const [p] = await tx`UPDATE payouts SET status = ${paid ? "paid" : "rejected"}, note = ${note}, decided_at = now() WHERE id = ${id} AND status = 'requested' RETURNING id`;
+  const decided = await sql.begin(async (tx) => {
+    const [p] = await tx<{ user_id: string; micros: string; method: string }[]>`
+      UPDATE payouts SET status = ${paid ? "paid" : "rejected"}, note = ${note}, decided_at = now()
+      WHERE id = ${id} AND status = 'requested' RETURNING user_id, micros, method
+    `;
     if (p && !paid) await tx`UPDATE earnings SET payout_id = NULL WHERE payout_id = ${id}`;
+    return p ?? null;
   });
+  // Told in the bell (there's no email): "paid|$12.30|PayPal|note" or "rejected|…".
+  if (decided) {
+    await notify({
+      userId: decided.user_id,
+      actorId: null,
+      type: "payout",
+      body: [paid ? "paid" : "rejected", formatMoney(Number(decided.micros)), decided.method, note ?? ""].join("|"),
+    });
+  }
 }

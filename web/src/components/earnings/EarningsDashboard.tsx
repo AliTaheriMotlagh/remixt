@@ -170,6 +170,7 @@ function Activity({ data }: { data: EarningsSummary }) {
           </div>
         ))}
       </div>
+      {data.lifetime > 0 && <Statements asOf={data.asOf} />}
       {data.lifetime === 0 && (
         <p className="mt-4 text-sm text-muted">
           Nothing yet. Publish a remix and share it: every real view of the ad on its page pays you and the artists you used.{" "}
@@ -179,6 +180,43 @@ function Activity({ data }: { data: EarningsSummary }) {
         </p>
       )}
     </section>
+  );
+}
+
+/** The last 12 months, each a CSV download (for taxes and records). */
+function Statements({ asOf }: { asOf: number }) {
+  const months = useMemo(() => {
+    const now = new Date(asOf);
+    return Array.from({ length: 12 }, (_, i) => {
+      const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+      return {
+        value: `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`,
+        label: d.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" }),
+      };
+    });
+  }, [asOf]);
+  const [month, setMonth] = useState(months[0].value);
+  return (
+    <div className="mt-4 flex flex-wrap items-center gap-2 text-sm">
+      <label htmlFor="statement-month" className="text-muted">
+        Statement
+      </label>
+      <select
+        id="statement-month"
+        value={month}
+        onChange={(e) => setMonth(e.target.value)}
+        className="rounded-full border border-border bg-surface-raised px-3 py-1.5"
+      >
+        {months.map((m) => (
+          <option key={m.value} value={m.value}>
+            {m.label}
+          </option>
+        ))}
+      </select>
+      <a href={`/api/earnings/statement?month=${month}`} download className="rounded-full border border-border px-3 py-1.5 font-semibold hover:bg-surface-hover">
+        Download CSV
+      </a>
+    </div>
   );
 }
 

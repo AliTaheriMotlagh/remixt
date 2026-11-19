@@ -47,6 +47,20 @@ export const HOLD_DAYS = 30;
 /** The least that can be paid out at once (bank and transfer fees). */
 export const PAYOUT_MIN_MICROS = 10 * MICROS;
 
+/**
+ * Money kept for an artist who never claims it waits this long, then it
+ * goes to Remixt (the big platforms do the same with unclaimed royalties).
+ * A song with a claim still being checked is never given up.
+ */
+export const UNCLAIMED_YEARS = 3;
+
+/** Held money earned before this moment is given up (see UNCLAIMED_YEARS). */
+export function unclaimedCutoff(now: Date): Date {
+  const d = new Date(now);
+  d.setUTCFullYear(d.getUTCFullYear() - UNCLAIMED_YEARS);
+  return d;
+}
+
 /** A paid view: the ad was at least half on screen for a second in a visible tab (the IAB/MRC display standard). */
 export const VIEWABLE = { fraction: 0.5, ms: 1000 };
 /** Paid views a network address can make in a day (shared Wi-Fi and phone networks share one address). */
@@ -195,6 +209,54 @@ export function earnBadges(f: EarnFacts): EarnBadge[] {
 export function formatMoney(micros: number): string {
   if (micros > 0 && micros < MICROS / 100) return "<$0.01";
   return `$${(micros / MICROS).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+// ——— a month's statement ———
+
+/** "2026-11" → the month's first moment and the next month's (UTC); null when it isn't a month. */
+export function monthSpan(month: string): { from: Date; to: Date } | null {
+  const m = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(month);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  return { from: new Date(Date.UTC(y, mo, 1)), to: new Date(Date.UTC(y, mo + 1, 1)) };
+}
+
+export type StatementState = "waiting" | "available" | "requested" | "paid";
+
+export type StatementLine = { day: string; source: string; kind: "remix" | "song"; role: Role; views: number; micros: number; state: StatementState };
+
+const STATE_LABEL: Record<StatementState, string> = {
+  waiting: `Waiting (${HOLD_DAYS}-day hold)`,
+  available: "Available",
+  requested: "In a payout on its way",
+  paid: "Paid out",
+};
+
+const ROLE_WORD: Record<Role, string> = {
+  platform: "Remixt",
+  remixer: "Remixer",
+  collaborator: "Collaborator",
+  "parent-remixer": "Original remix",
+  artist: "Artist",
+  vocalist: "Vocalist",
+};
+
+/** One CSV field: quoted when it must be, and never read as a formula by a spreadsheet. */
+function csvField(value: string | number): string {
+  let s = String(value);
+  if (typeof value === "string" && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/** A member's month as a CSV a spreadsheet opens: one line per day, source and role, then the total. */
+export function statementCsv(month: string, lines: StatementLine[]): string {
+  const rows: (string | number)[][] = [["Date", "From", "Kind", "Your part", "Paid views", "Amount (USD)", "State"]];
+  for (const l of lines) rows.push([l.day, l.source, l.kind, ROLE_WORD[l.role] ?? l.role, l.views, (l.micros / MICROS).toFixed(6), STATE_LABEL[l.state]]);
+  const total = lines.reduce((s, l) => s + l.micros, 0);
+  // No views total: one view can pay you twice (your remix using your own song), and summing the lines would count it twice.
+  rows.push([`Total ${month}`, "", "", "", "", (total / MICROS).toFixed(6), ""]);
+  return "﻿" + rows.map((r) => r.map(csvField).join(",")).join("\r\n") + "\r\n";
 }
 
 /** What 1,000 paid views earned (RPM). */

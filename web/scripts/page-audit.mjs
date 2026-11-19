@@ -16,7 +16,7 @@ const pages = (
     "/", "/studio", "/library", "/upload", "/remixes", ids.remix && `/remixes/${ids.remix}`, ids.remix && `/embed/${ids.remix}`,
     ids.artist && `/artist/${ids.artist}`, "/dj", "/radio", "/radio/remixt-radio", "/radio/remixt-radio/embed", "/radio/remixt-radio/broadcast",
     "/live", "/live/new", ids.live && `/live/${ids.live}`, "/challenges", "/leaderboard", "/notifications", "/examples",
-    "/login", "/signup", "/storage", "/takedown", "/admin", "/no-such-page",
+    "/login", "/signup", "/storage", "/takedown", "/earnings", "/tools", "/fa/tools", "/admin", "/no-such-page",
   ]
 ).filter(Boolean);
 

@@ -1,4 +1,4 @@
-import { HOLD_DAYS, MICROS, PAYOUT_MIN_MICROS, PARENT_SHARE_BP, SPLITS, VIEWABLE, type Split } from "@/lib/monetize/policy";
+import { HOLD_DAYS, MICROS, PAYOUT_MIN_MICROS, PARENT_SHARE_BP, SPLITS, UNCLAIMED_YEARS, VIEWABLE, type Split } from "@/lib/monetize/policy";
 
 // The rules, drawn from the numbers the ledger uses (lib/monetize/policy.ts),
 // so this page can't promise something the money doesn't do.
@@ -51,10 +51,10 @@ export default function HowEarningWorks() {
 
       <div className="mt-8 grid gap-4 text-sm sm:grid-cols-2">
         {[
-          ["Artists, always", "The artists' share is split between the songs a remix uses (a vocal counts double). A take you sang in the Studio pays you. A song's share is kept for its artist until they claim it and we check it's theirs."],
+          ["Artists, always", `The artists' share is split between the songs a remix uses (a vocal counts double). A take you sang in the Studio pays you. A song's share is kept for its artist until they claim it and we check it's theirs. Money nobody claims within ${UNCLAIMED_YEARS} years goes to Remixt (never while a claim is being checked).`],
           ["Remixers, always", `The remix's maker gets the remixers' share, and can share it with collaborators (keeping at least 10%). A remix of a remix sends ${PARENT_SHARE_BP / 100}% of it to the remix it came from.`],
           ["Real views only", `A view counts when at least half the ad is on screen for ${VIEWABLE.ms / 1000} second in a visible tab, once a day per person and spot. Your own views of your own work don't count, nor do robots. Clicks are never paid, so please don't click ads to help.`],
-          ["Getting paid", `Earnings wait ${HOLD_DAYS} days (in case an advertiser's views turn out to be invalid), then they're yours to withdraw from $${PAYOUT_MIN_MICROS / MICROS}. Taxes on what you earn are yours to declare where you live.`],
+          ["Getting paid", `Earnings wait ${HOLD_DAYS} days (in case an advertiser's views turn out to be invalid), then they're yours to withdraw from $${PAYOUT_MIN_MICROS / MICROS}. You're told in your notifications when a payout is sent, and each month's statement downloads as a CSV. Taxes on what you earn are yours to declare where you live.`],
         ].map(([title, body]) => (
           <div key={title} className="rounded-2xl border border-border bg-surface/60 p-5">
             <h3 className="font-semibold">{title}</h3>

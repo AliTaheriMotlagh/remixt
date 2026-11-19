@@ -49,6 +49,20 @@ function describe(n: Notification) {
       );
     case "share":
       return <>shared their recording “{n.track_title ?? "a take"}” with you — it&apos;s in your library in the Studio</>;
+    case "payout": {
+      const [state, amount, method, ...note] = (n.body ?? "").split("|");
+      const said = note.join("|");
+      return (
+        <>
+          {state === "paid" ? (
+            <>Your payout of {amount} was sent{method ? <> to your {method}</> : null}</>
+          ) : (
+            <>Your payout of {amount} was turned down — the money is back in your balance</>
+          )}
+          {said && <span className="mt-1 block text-muted">“{said}”</span>}
+        </>
+      );
+    }
   }
 }
 
@@ -57,6 +71,7 @@ function hrefFor(n: Notification) {
   if (n.type === "challenge") return "/challenges";
   if (n.type === "split") return "/upload";
   if (n.type === "share") return "/studio";
+  if (n.type === "payout") return "/earnings";
   if (n.type === "jam" && n.body) return `/studio?join=${encodeURIComponent(n.body.split("|")[0])}`;
   if (n.type === "live" && n.live_id) return `/live/${n.live_id}`;
   return n.remix_id ? `/remixes/${n.remix_id}` : "#";
