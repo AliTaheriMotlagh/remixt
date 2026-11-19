@@ -3,11 +3,15 @@ import sql from "@/lib/db";
 import { ensureSchema } from "@/lib/schema";
 import { coverUrl, ensureRemixStats } from "@/lib/models";
 import { absoluteUrl } from "@/lib/site";
-import { TOOL_PAGES, toolPath } from "@/lib/tools";
+import { TOOL_LOCALES, TOOL_PAGES, toolLanguages, toolPath, toolsHubPath } from "@/lib/tools";
 
 // Rebuilt at most once an hour: new remixes and artists show up without
 // every crawler visit hitting the database.
 export const revalidate = 3600;
+
+function absolute(paths: Record<string, string>) {
+  return Object.fromEntries(Object.entries(paths).map(([lang, path]) => [lang, absoluteUrl(path)]));
+}
 
 /** Every public page: the main sections, each published remix (with its cover), and each artist with one. */
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
@@ -17,9 +21,22 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: absoluteUrl("/remixes"), lastModified: now, changeFrequency: "hourly", priority: 0.9 },
     { url: absoluteUrl("/library"), lastModified: now, changeFrequency: "daily", priority: 0.8 },
     { url: absoluteUrl("/studio"), lastModified: now, changeFrequency: "monthly", priority: 0.8 },
-    { url: absoluteUrl("/tools"), changeFrequency: "monthly", priority: 0.8 },
-    // The tool pages answer the searches people make most ("vocal remover"…).
-    ...TOOL_PAGES.map((t) => ({ url: absoluteUrl(toolPath(t.slug)), changeFrequency: "monthly" as const, priority: 0.9 })),
+    // The tool pages answer the searches people make most ("vocal remover"…),
+    // in every language they're written in, each listing its twins (hreflang).
+    ...TOOL_LOCALES.map((locale) => ({
+      url: absoluteUrl(toolsHubPath(locale)),
+      changeFrequency: "monthly" as const,
+      priority: 0.8,
+      alternates: { languages: absolute(toolLanguages()) },
+    })),
+    ...TOOL_LOCALES.flatMap((locale) =>
+      TOOL_PAGES.map((t) => ({
+        url: absoluteUrl(toolPath(t.slug, locale)),
+        changeFrequency: "monthly" as const,
+        priority: 0.9,
+        alternates: { languages: absolute(toolLanguages(t.slug)) },
+      })),
+    ),
     { url: absoluteUrl("/live"), lastModified: now, changeFrequency: "hourly", priority: 0.7 },
     { url: absoluteUrl("/radio"), lastModified: now, changeFrequency: "hourly", priority: 0.7 },
     { url: absoluteUrl("/dj"), lastModified: now, changeFrequency: "monthly", priority: 0.6 },

@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import NavBar from "@/components/NavBar";
 import MobileTabBar from "@/components/MobileTabBar";
@@ -23,6 +24,31 @@ const geistSans = Geist({
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+});
+
+// Persian (and Arabic) script: Geist has none, and its size-adjusted Arial
+// fallback draws Persian letters unjoined — titles, artists and lyrics came
+// out as separate letters. Vazirmatn's Arabic-script cut (variable, every
+// weight, 46 KB; assets/fonts, SIL OFL) is limited to those letters by
+// unicode-range, so it goes first in the stack without touching Latin text,
+// and with no preload a page with no Persian never downloads it.
+const vazirmatn = localFont({
+  src: "../../assets/fonts/Vazirmatn-arabic.woff2",
+  variable: "--font-vazirmatn",
+  weight: "100 900",
+  display: "swap",
+  preload: false,
+  adjustFontFallback: false,
+  // next/font only takes literals here. The Arabic blocks with Persian's extra
+  // letters, presentation forms and the joiners Persian needs (ZWNJ U+200C,
+  // ZWJ, LRM/RLM) — Google Fonts' "arabic" subset, which the file was cut to.
+  declarations: [
+    {
+      prop: "unicode-range",
+      value:
+        "U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0897-08E1, U+08E3-08FF, U+200C-200F, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74, U+FE76-FEFC",
+    },
+  ],
 });
 
 export const metadata: Metadata = {
@@ -77,7 +103,7 @@ export default async function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} ${vazirmatn.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-background text-foreground">
         <a

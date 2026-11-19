@@ -16,6 +16,8 @@ export function pageMetadata({
   noindex = false,
   image = DEFAULT_IMAGE,
   type = "website",
+  languages,
+  locale,
 }: {
   title: string;
   description: string;
@@ -25,14 +27,18 @@ export function pageMetadata({
   /** The share card; defaults to the site-wide one. */
   image?: typeof DEFAULT_IMAGE;
   type?: "website" | "profile" | "music.song";
+  /** hreflang → path of this page in every language it exists in (itself and "x-default" included). */
+  languages?: Record<string, string>;
+  /** Open Graph locale when the page isn't in English, e.g. "fa_IR". */
+  locale?: string;
 }): Metadata {
   const images = [image];
   return {
     title,
     description,
-    alternates: { canonical: path },
+    alternates: { canonical: path, languages },
     robots: noindex ? { index: false, follow: true } : undefined,
-    openGraph: { title, description, url: path, siteName: SITE_NAME, type, images },
+    openGraph: { title, description, url: path, siteName: SITE_NAME, type, images, locale },
     twitter: { card: "summary_large_image", title, description, images },
   };
 }

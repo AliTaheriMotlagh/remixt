@@ -6,10 +6,10 @@ import { TOOL_PAGES, toolPath } from "@/lib/tools";
 // The site's footer: every tool and section, one link each, so people (and
 // search engines) can reach any of them from any page. Shown by FooterGate.
 
-const COLUMNS: { heading: string; links: { href: string; label: string }[] }[] = [
+const COLUMNS: { heading: string; links: { href: string; label: string; lang?: string }[] }[] = [
   {
     heading: "Free tools",
-    links: [...TOOL_PAGES.map((t) => ({ href: toolPath(t.slug), label: t.name })), { href: "/tools", label: "All tools" }],
+    links: [...TOOL_PAGES.map((t) => ({ href: toolPath(t.slug), label: t.name })), { href: "/tools", label: "All tools" }, { href: "/fa/tools", label: "ابزارها به فارسی", lang: "fa" }],
   },
   {
     heading: "Make",
@@ -61,7 +61,7 @@ export default function SiteFooter() {
             <ul className="mt-3 flex flex-col gap-2 text-sm">
               {col.links.map((link) => (
                 <li key={link.href}>
-                  <Link href={link.href} className="text-muted hover:text-foreground hover:underline">
+                  <Link href={link.href} lang={link.lang} hrefLang={link.lang} className="text-muted hover:text-foreground hover:underline">
                     {link.label}
                   </Link>
                 </li>

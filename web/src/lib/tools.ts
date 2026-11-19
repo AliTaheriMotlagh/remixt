@@ -14,6 +14,7 @@
 // Pure data, so tests/seo.test.ts can check lengths, links and uniqueness.
 
 import type { StemKind } from "./stemKinds";
+import { TOOL_PAGES_FA } from "./toolsFa";
 
 export type ToolStep = { name: string; text: string };
 export type ToolSection = { heading: string; paragraphs: string[] };
@@ -399,10 +400,38 @@ export const TOOL_PAGES: ToolPage[] = [
   },
 ];
 
-export function toolPage(slug: string): ToolPage | undefined {
-  return TOOL_PAGES.find((t) => t.slug === slug);
+/** The languages the tool pages are written in. English lives at /tools, the rest under /<locale>/tools. */
+export const TOOL_LOCALES = ["en", "fa"] as const;
+export type ToolLocale = (typeof TOOL_LOCALES)[number];
+
+const PAGES: Record<ToolLocale, ToolPage[]> = { en: TOOL_PAGES, fa: TOOL_PAGES_FA };
+
+export function toolPages(locale: ToolLocale = "en"): ToolPage[] {
+  return PAGES[locale];
 }
 
-export function toolPath(slug: string) {
-  return `/tools/${slug}`;
+export function toolPage(slug: string, locale: ToolLocale = "en"): ToolPage | undefined {
+  return PAGES[locale].find((t) => t.slug === slug);
+}
+
+export function toolsHubPath(locale: ToolLocale = "en") {
+  return locale === "en" ? "/tools" : `/${locale}/tools`;
+}
+
+export function toolPath(slug: string, locale: ToolLocale = "en") {
+  return `${toolsHubPath(locale)}/${slug}`;
+}
+
+/**
+ * Every language's address of one tool page (or of the hub, without a
+ * slug), for hreflang: in the page's <head> and in the sitemap. Each page
+ * lists all of them, itself included, so the links are reciprocal; English
+ * is the default for everyone else.
+ */
+export function toolLanguages(slug?: string): Record<string, string> {
+  const at = (locale: ToolLocale) => (slug ? toolPath(slug, locale) : toolsHubPath(locale));
+  const languages: Record<string, string> = {};
+  for (const locale of TOOL_LOCALES) languages[locale] = at(locale);
+  languages["x-default"] = at("en");
+  return languages;
 }
