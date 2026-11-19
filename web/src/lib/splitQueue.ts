@@ -1,12 +1,11 @@
 import { randomUUID } from "crypto";
 import sql from "./db";
+import { getSettings } from "./settings/server";
 import { notify } from "./notifications";
 import { deleteObject, storedObject } from "./storage";
 import { normaliseTags } from "./tags";
 import { dropUnfinishedTrack, finishTrackUpload } from "./trackUpload";
 import {
-  LONG_SONG_SECONDS,
-  RUSH_AFTER_MINUTES,
   splitReward,
   streakFrom,
   type MiningStats,
@@ -270,17 +269,18 @@ export async function isTrackWorker(trackId: string, userId: string): Promise<bo
 /** What finishing `job` pays its helper: nothing for their own song. */
 async function rewardFor(job: SplitJob): Promise<Reward> {
   if (!job.worker_id || job.worker_id === job.owner_id) return { xp: 0, bonuses: [] };
+  const rules = (await getSettings()).mining;
   const [facts] = await sql<{ long: boolean; first_today: boolean; rush: boolean }[]>`
     SELECT
-      COALESCE((SELECT duration FROM tracks WHERE id = ${job.track_id}), 0) > ${LONG_SONG_SECONDS} AS long,
+      COALESCE((SELECT duration FROM tracks WHERE id = ${job.track_id}), 0) > ${rules.longSongMinutes * 60} AS long,
       NOT EXISTS (
         SELECT 1 FROM split_jobs
         WHERE worker_id = ${job.worker_id} AND owner_id <> worker_id AND status = 'done'
           AND updated_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
       ) AS first_today,
-      now() - ${job.created_at} > make_interval(mins => ${RUSH_AFTER_MINUTES}) AS rush
+      now() - ${job.created_at} > make_interval(mins => ${rules.rushAfterMinutes}) AS rush
   `;
-  return splitReward({ long: facts.long, firstToday: facts.first_today, rush: facts.rush });
+  return splitReward({ long: facts.long, firstToday: facts.first_today, rush: facts.rush }, rules);
 }
 
 /**

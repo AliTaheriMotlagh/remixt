@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getSettings } from "@/lib/settings/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import { notify } from "@/lib/notifications";
@@ -21,7 +22,7 @@ export async function POST(req: NextRequest) {
   const project = await projectForMember(parsed.data.projectId, user.id);
   if (!project) return NextResponse.json({ error: "Not your session" }, { status: 404 });
   // Invites are a nudge, not a way to spam: a few a minute, a good number an hour.
-  if (!(await allow(`jam-invite:${user.id}`, 30, 60 * 60))) return NextResponse.json(TOO_MANY, { status: 429 });
+  if (!(await allow(`jam-invite:${user.id}`, (await getSettings()).limits.jamInvitesPerHour, 60 * 60))) return NextResponse.json(TOO_MANY, { status: 429 });
   await notify({ userId: parsed.data.userId, actorId: user.id, type: "jam", body: `${project.invite_code}|${project.title}`.slice(0, 200) });
   return NextResponse.json({ ok: true });
 }

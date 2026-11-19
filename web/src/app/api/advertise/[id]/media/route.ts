@@ -3,11 +3,12 @@ import { getCurrentUser } from "@/lib/auth";
 import { isAdmin } from "@/lib/admin";
 import { imageExtension } from "@/lib/imageType";
 import { putObject } from "@/lib/storage";
-import { AUDIO } from "@/lib/monetize/adRules";
+import { AUDIO_MAX_BYTES } from "@/lib/monetize/adRules";
+import { getSettings } from "@/lib/settings/server";
 import { campaignOwner, setCampaignMedia } from "@/lib/monetize/adStore";
 
 // An ad's picture (?f=image: JPEG/PNG, 1 MB) or sound (?f=audio&seconds=12.3:
-// MP3/M4A/OGG/WAV, ≤ 15 s, 1 MB). The page measures the sound's length
+// MP3/M4A/OGG/WAV, up to the owner's longest audio ad, 1 MB). The page measures the sound's length
 // before sending it; the player checks it again.
 
 function audioExtension(b: Uint8Array): string | null {
@@ -29,7 +30,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   const kind = req.nextUrl.searchParams.get("f") === "audio" ? "audio" : "image";
   if (kind === "audio" && c.format !== "audio") return NextResponse.json({ error: "Only an audio ad has a sound" }, { status: 400 });
   const body = Buffer.from(await req.arrayBuffer());
-  if (body.length > AUDIO.maxBytes) return NextResponse.json({ error: "Too big (1 MB at most)" }, { status: 413 });
+  if (body.length > AUDIO_MAX_BYTES) return NextResponse.json({ error: "Too big (1 MB at most)" }, { status: 413 });
   let ext: string | null;
   let seconds: number | null = null;
   if (kind === "image") {
@@ -40,7 +41,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     if (!ext) return NextResponse.json({ error: "Use an MP3, M4A, OGG or WAV file" }, { status: 400 });
     seconds = Number(req.nextUrl.searchParams.get("seconds"));
     if (!(seconds > 0)) return NextResponse.json({ error: "Couldn't read the sound's length" }, { status: 400 });
-    if (seconds > AUDIO.maxSeconds + 0.5) return NextResponse.json({ error: `An audio ad is ${AUDIO.maxSeconds} seconds at most` }, { status: 400 });
+    const { maxSeconds } = (await getSettings()).audio;
+    if (seconds > maxSeconds + 0.5) return NextResponse.json({ error: `An audio ad is ${maxSeconds} seconds at most` }, { status: 400 });
   }
   const key = `ads/${id}/${kind}-${Date.now().toString(36)}${ext}`;
   await putObject(key, body);

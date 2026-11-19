@@ -16,15 +16,12 @@ import {
 } from "@/lib/client/splitQueue";
 import { useSplitter } from "@/lib/client/splitter";
 import {
-  LONG_SONG_SECONDS,
   MINING_TIERS,
-  REWARD,
-  RUSH_AFTER_MINUTES,
   nextTier,
   type MiningStats,
   type TopMiner,
 } from "@/lib/mining";
-import { SONG_HELPERS } from "@/lib/monetize/policy";
+import { useSettings } from "@/components/SettingsProvider";
 import { describeStage } from "@/lib/client/uploads";
 import { FEATURES } from "@/lib/client/deviceFeatures";
 
@@ -376,6 +373,7 @@ function LastBlock({ finished }: { finished: NonNullable<HelperState["finished"]
 }
 
 function RewardRules() {
+  const { mining: REWARD, shares } = useSettings();
   return (
     <div className="rounded-xl border border-border bg-background p-3 text-xs">
       <h3 className="font-semibold">Block rewards</h3>
@@ -385,7 +383,7 @@ function RewardRules() {
           <span className="shrink-0 font-semibold text-foreground">{REWARD.base} XP</span>
         </li>
         <li className="flex justify-between gap-3">
-          <span>Song longer than {LONG_SONG_SECONDS / 60} min</span>
+          <span>Song longer than {REWARD.longSongMinutes} min</span>
           <span className="shrink-0 font-semibold text-foreground">+{REWARD.longSong}</span>
         </li>
         <li className="flex justify-between gap-3">
@@ -394,7 +392,7 @@ function RewardRules() {
         </li>
         <li className="flex justify-between gap-3">
           <span>
-            <Flame className="text-orange-400" /> Rush: it waited over {RUSH_AFTER_MINUTES} min
+            <Flame className="text-orange-400" /> Rush: it waited over {REWARD.rushAfterMinutes} min
           </span>
           <span className="shrink-0 font-semibold text-foreground">×{REWARD.rushMultiplier}</span>
         </li>
@@ -410,7 +408,7 @@ function RewardRules() {
         songs.
       </p>
       <p className="mt-2 text-[11px] text-muted">
-        And money: every song you split earns you {SONG_HELPERS.miner / 100}% of each ad on any remix that uses it, for as long as it&apos;s
+        And money: every song you split earns you {shares.miner / 100}% of each ad on any remix that uses it, for as long as it&apos;s
         remixed —{" "}
         <a href="/earnings" className="text-brand-strong hover:underline">
           see your earnings

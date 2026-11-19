@@ -9,7 +9,8 @@
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BarChart3, Check, CircleAlert, Image as ImageIcon, Loader2, Megaphone, Music, Pause, Pencil, Play, Plus, Send, Wallet, X } from "lucide-react";
-import { AUDIO, NEVER, TOPICS, microsOfToman, tomanOf, type Format } from "@/lib/monetize/adRules";
+import { NEVER, TOPICS, microsOfToman, tomanOf, type AudioRules, type Format } from "@/lib/monetize/adRules";
+import { useSettings } from "@/components/SettingsProvider";
 import { MICROS, type Placement } from "@/lib/monetize/policy";
 import { moneyIn, numIn, dateIn, type Lang } from "@/lib/monetize/moneyText";
 import type { AdvertiserCampaign } from "@/lib/monetize/adStore";
@@ -18,7 +19,7 @@ import type { MonetizeSettings } from "@/lib/monetize/store";
 type Promotable = { target: string; title: string; kind: "remix" | "track" };
 type Data = { campaigns: AdvertiserCampaign[]; promotable: Promotable[]; settings: MonetizeSettings };
 
-const T = {
+const makeT = (AUDIO: AudioRules) => ({
   en: {
     title: "Advertise on Remixt",
     intro: "Reach people who make and listen to music. You pay only for real views — at least half the ad on screen for a second, or 5 seconds of an audio ad heard. Clicks are free.",
@@ -81,6 +82,9 @@ const T = {
     rules: "Every ad is checked before it runs. Ads must be true, legal where they show, and lead where they say.",
     reviewNote: "Our note",
     failed: "Something went wrong",
+    adsClosed: "New ads are closed for now — write to us to advertise. Your ads below keep running.",
+    promotionsClosed: "Promotions are closed for now.",
+    allClosed: "New ads and promotions are closed for now. Your ads below keep running.",
     last14: "Last 14 days",
     usd: "Dollars",
     toman: "Toman",
@@ -147,11 +151,20 @@ const T = {
     rules: "هر تبلیغ پیش از اجرا بررسی می‌شود. تبلیغ باید راست باشد، جایی که نمایش داده می‌شود قانونی باشد، و همان‌جا ببرد که می‌گوید.",
     reviewNote: "یادداشت ما",
     failed: "مشکلی پیش آمد",
+    adsClosed: "فعلاً ساخت تبلیغ تازه بسته است — برای تبلیغ به ما پیام دهید. تبلیغ‌های فعلی‌تان ادامه دارند.",
+    promotionsClosed: "فعلاً معرفی ویژه بسته است.",
+    allClosed: "فعلاً تبلیغ تازه و معرفی ویژه بسته است. تبلیغ‌های فعلی‌تان ادامه دارند.",
     last14: "۱۴ روز گذشته",
     usd: "دلار",
     toman: "تومان",
   },
-};
+});
+
+/** The page's words in `lang`, with the owner's audio limits in them. */
+function useT(lang: Lang) {
+  const { audio } = useSettings();
+  return useMemo(() => makeT(audio)[lang], [audio, lang]);
+}
 
 const NEVER_FA = ["قمار و شرط‌بندی", "محتوای بزرگسالان", "سلاح", "مواد مخدر", "الکل و دخانیات", "طرح‌های پولسازی دروغین"];
 
@@ -192,10 +205,11 @@ function soundSeconds(file: File): Promise<number> {
 }
 
 export default function AdvertiserPage({ lang = "en" }: { lang?: Lang }) {
-  const t = T[lang];
+  const t = useT(lang);
   const fa = lang === "fa";
   const params = useSearchParams();
   const promoteFrom = params.get("promote");
+  const { features } = useSettings();
   const [data, setData] = useState<Data | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<Form | null>(null);
@@ -243,9 +257,14 @@ export default function AdvertiserPage({ lang = "en" }: { lang?: Lang }) {
           <Megaphone className="h-7 w-7 text-brand-strong" /> {t.title}
         </h1>
         <p className="mt-2 max-w-3xl text-muted">{t.intro}</p>
+        {(!features.selfServe || !features.promotions) && (
+          <p className="mt-3 rounded-xl border border-drums/40 bg-drums/10 p-3 text-sm">
+            {!features.selfServe && !features.promotions ? t.allClosed : !features.selfServe ? t.adsClosed : t.promotionsClosed}
+          </p>
+        )}
         {!form && (
           <div className="mt-4 grid gap-2 sm:grid-cols-3">
-            {(["card", "audio", "promote"] as Format[]).map((f) => (
+            {(["card", "audio", "promote"] as Format[]).filter((f) => (f === "promote" ? features.promotions : features.selfServe && (f !== "audio" || features.audioAds))).map((f) => (
               <button
                 key={f}
                 type="button"
@@ -415,13 +434,14 @@ function priceMicros(text: string, lang: Lang, rate: number): number {
 }
 
 function AdForm({ lang, form, setForm, data, onDone }: { lang: Lang; form: Form; setForm: (f: Form | null) => void; data: Data; onDone: () => void }) {
-  const t = T[lang];
+  const t = useT(lang);
   const fa = lang === "fa";
   const rate = data.settings.tomanRate;
   const money = moneyIn(lang, rate);
   const floor = data.settings.floors[form.format];
   const [picture, setPicture] = useState<File | null>(null);
   const [sound, setSound] = useState<{ file: File; seconds: number } | null>(null);
+  const { maxSeconds } = useSettings().audio;
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const set = (patch: Partial<Form>) => setForm({ ...form, ...patch });
@@ -434,7 +454,7 @@ function AdForm({ lang, form, setForm, data, onDone }: { lang: Lang; form: Form;
     if (!file) return setSound(null);
     try {
       const seconds = await soundSeconds(file);
-      if (seconds > AUDIO.maxSeconds + 0.5) {
+      if (seconds > maxSeconds + 0.5) {
         setSound(null);
         setNote(t.tooLong(seconds.toFixed(1)));
         return;
@@ -630,7 +650,7 @@ function AdForm({ lang, form, setForm, data, onDone }: { lang: Lang; form: Form;
 }
 
 function PaymentForm({ lang, campaignId, settings, onDone }: { lang: Lang; campaignId: string; settings: MonetizeSettings; onDone: () => void }) {
-  const t = T[lang];
+  const t = useT(lang);
   const fa = lang === "fa";
   const toman = fa && settings.tomanRate > 0;
   const [amount, setAmount] = useState("");

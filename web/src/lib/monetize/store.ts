@@ -13,9 +13,10 @@ import { createHmac, randomUUID } from "crypto";
 import sql from "../db";
 import { ensureSchema } from "../schema";
 import { notify } from "../notifications";
-import { DEFAULT_FLOORS, FORMATS, tomanOf, type Format } from "./adRules";
+import { FORMATS, tomanOf, type Format } from "./adRules";
+import { getSettings } from "../settings/server";
 import {
-  formatMoney, HOLD_DAYS, isTomanMethod, isOwnView, MICROS, monthSpan, PAID_VIEWS_PER_ADDRESS_PER_DAY, PAYOUT_MIN_MICROS, payOut, remixShares, siteShares, songShares,
+  formatMoney, isTomanMethod, isOwnView, monthSpan, payOut, remixShares, siteShares, songShares,
   PLACEMENTS, unclaimedCutoff, type Placement, type RemixParties, type Role, type Share, type SourceSong, type StatementLine, type StatementState,
 } from "./policy";
 
@@ -165,13 +166,6 @@ export function ensureMonetizeSchema(): Promise<void> {
       )
     `;
     await sql`
-      CREATE TABLE IF NOT EXISTS monetize_settings (
-        key TEXT PRIMARY KEY,
-        value JSONB NOT NULL,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-      )
-    `;
-    await sql`
       CREATE TABLE IF NOT EXISTS remix_ad_settings (
         remix_id TEXT PRIMARY KEY REFERENCES remixes(id) ON DELETE CASCADE,
         ads_on BOOLEAN NOT NULL DEFAULT true,
@@ -265,7 +259,7 @@ export async function sharesFor(placement: Placement, target: Target): Promise<S
   if (placement === "site" || placement === "promote" || !target) return siteShares();
   if (target.kind === "remix") {
     const parties = await remixParties(target.id);
-    return parties ? remixShares(parties) : siteShares();
+    return parties ? remixShares(parties, (await getSettings()).shares) : siteShares();
   }
   await ensureMonetizeSchema();
   const rows = await sql<SongRow[]>`
@@ -273,7 +267,7 @@ export async function sharesFor(placement: Placement, target: Target): Promise<S
     FROM stems JOIN tracks ON tracks.id = stems.track_id WHERE tracks.id = ${target.id}
   `;
   const [song] = songsOf(rows);
-  return song ? songShares(song) : siteShares();
+  return song ? songShares(song, (await getSettings()).shares) : siteShares();
 }
 
 /** The names behind shares, for the "your view supports…" line under an ad. */
@@ -399,7 +393,7 @@ export async function recordView(input: { token: string; visitor: string; addres
   const t = readToken(input.token);
   if (!t || !/^[\w-]{6,64}$/.test(input.visitor)) return { counted: false, paid: false, whyNot: "bad view" };
   await ensureMonetizeSchema();
-  const shares = await sharesFor(t.placement, t.target);
+  const [shares, settings] = await Promise.all([sharesFor(t.placement, t.target), getSettings()]);
   const target = t.target ? `${t.target.kind}:${t.target.id}` : "";
 
   let whyNot: string | null = null;
@@ -410,7 +404,7 @@ export async function recordView(input: { token: string; visitor: string; addres
   return sql.begin(async (tx) => {
     if (!whyNot) {
       const [n] = await tx<{ n: number }[]>`SELECT count(*)::int AS n FROM ad_views WHERE address = ${input.address} AND day = CURRENT_DATE AND paid`;
-      if ((n?.n ?? 0) >= PAID_VIEWS_PER_ADDRESS_PER_DAY) whyNot = "address cap";
+      if ((n?.n ?? 0) >= settings.ads.paidViewsPerAddress) whyNot = "address cap";
     }
     let micros = 0;
     let campaign: { cpm_micros: number } | undefined;
@@ -436,7 +430,7 @@ export async function recordView(input: { token: string; visitor: string; addres
       return { counted: false, paid: false, whyNot: "seen today" };
     }
     if (micros > 0) {
-      const availableAt = new Date(Date.now() + HOLD_DAYS * 86_400_000);
+      const availableAt = new Date(Date.now() + settings.payouts.holdDays * 86_400_000);
       for (const p of payOut(micros, shares)) {
         await tx`
           INSERT INTO earnings (view_id, platform, user_id, held_track_id, role, remix_id, track_id, micros, available_at)
@@ -485,7 +479,7 @@ export async function expireUnclaimed(now = new Date()): Promise<number> {
   await ensureMonetizeSchema();
   const rows = await sql<{ micros: string }[]>`
     UPDATE earnings e SET platform = true, held_track_id = NULL, unclaimed_at = now()
-    WHERE e.held_track_id IS NOT NULL AND e.created_at < ${unclaimedCutoff(now)}
+    WHERE e.held_track_id IS NOT NULL AND e.created_at < ${unclaimedCutoff(now, (await getSettings()).payouts.unclaimedYears)}
       AND NOT EXISTS (SELECT 1 FROM rights_claims c WHERE c.track_id = e.held_track_id AND c.status = 'pending')
     RETURNING micros
   `;
@@ -623,7 +617,7 @@ export async function statementFor(userId: string, month: string): Promise<State
   return rows.map((r) => ({ day: r.day, source: r.title ?? "Removed", kind: r.remix ? "remix" : "song", role: r.role, views: n(r.views), micros: n(r.micros), state: r.state }));
 }
 
-// ——— the owner's settings ———
+// ——— the owner's settings (the money part, as the money pages use it) ———
 
 export type MonetizeSettings = {
   /** Toman per US dollar; 0 = not set (Persian pages then show dollars). */
@@ -634,28 +628,10 @@ export type MonetizeSettings = {
   payTo: { en: string; fa: string };
 };
 
-const DEFAULT_SETTINGS: MonetizeSettings = { tomanRate: 0, floors: { ...DEFAULT_FLOORS }, payTo: { en: "", fa: "" } };
-
+/** The money settings from Admin → Settings (lib/settings), in the shape the money pages use. */
 export async function monetizeSettings(): Promise<MonetizeSettings> {
-  await ensureMonetizeSchema();
-  const rows = await sql<{ key: string; value: unknown }[]>`SELECT key, value FROM monetize_settings`;
-  const got = Object.fromEntries(rows.map((r) => [r.key, r.value])) as Partial<MonetizeSettings>;
-  return {
-    tomanRate: Number(got.tomanRate) > 0 ? Number(got.tomanRate) : 0,
-    floors: { ...DEFAULT_SETTINGS.floors, ...(got.floors ?? {}) },
-    payTo: { ...DEFAULT_SETTINGS.payTo, ...(got.payTo ?? {}) },
-  };
-}
-
-export async function saveMonetizeSettings(s: Partial<MonetizeSettings>) {
-  await ensureMonetizeSchema();
-  for (const [key, value] of Object.entries(s)) {
-    if (value === undefined) continue;
-    await sql`
-      INSERT INTO monetize_settings (key, value) VALUES (${key}, ${sql.json(value as never)})
-      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
-    `;
-  }
+  const s = await getSettings();
+  return { tomanRate: s.payouts.tomanRate, floors: s.ads.floors, payTo: s.payTo };
 }
 
 export async function setPayoutAccount(userId: string, method: string, details: string) {
@@ -669,13 +645,14 @@ export async function setPayoutAccount(userId: string, method: string, details: 
 /** Asks for everything available to be paid out: the rows are set aside under the payout, so they can't be asked for twice. */
 export async function requestPayout(userId: string): Promise<{ id: string; micros: number } | { error: string }> {
   await ensureMonetizeSchema();
+  const settings = await getSettings();
   return sql.begin(async (tx) => {
     const [account] = await tx<{ method: string; details: string }[]>`SELECT method, details FROM payout_accounts WHERE user_id = ${userId}`;
     if (!account) return { error: "Add how you'd like to be paid first" };
     const [open] = await tx`SELECT 1 FROM payouts WHERE user_id = ${userId} AND status = 'requested'`;
     if (open) return { error: "You have a payout on its way already" };
     const toman = isTomanMethod(account.method);
-    const rate = toman ? (await monetizeSettings()).tomanRate : 0;
+    const rate = toman ? settings.payouts.tomanRate : 0;
     if (toman && !rate) return { error: "Payouts in Toman open once Remixt sets the rate — choose another way for now" };
     const id = randomUUID();
     const rows = await tx<{ micros: string }[]>`
@@ -684,14 +661,14 @@ export async function requestPayout(userId: string): Promise<{ id: string; micro
       RETURNING micros
     `;
     const micros = rows.reduce((s, r) => s + Number(r.micros), 0);
-    if (micros < PAYOUT_MIN_MICROS) throw new TooLittle();
+    if (micros < settings.payouts.minMicros) throw new TooLittle();
     await tx`
       INSERT INTO payouts (id, user_id, micros, method, details, currency, toman)
       VALUES (${id}, ${userId}, ${micros}, ${account.method}, ${account.details}, ${toman ? "IRT" : "USD"}, ${toman ? tomanOf(micros, rate) : null})
     `;
     return { id, micros };
   }).catch((err) => {
-    if (err instanceof TooLittle) return { error: `Payouts start from $${PAYOUT_MIN_MICROS / MICROS}` };
+    if (err instanceof TooLittle) return { error: `Payouts start from ${formatMoney(settings.payouts.minMicros)}` };
     throw err;
   }) as Promise<{ id: string; micros: number } | { error: string }>;
 }

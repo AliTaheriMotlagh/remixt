@@ -1,7 +1,7 @@
 import sql from "./db";
 import { ensureRemixStats } from "./models";
 import { ensureSchema } from "./schema";
-import { REWARD } from "./mining";
+import { DEFAULTS } from "./settings/registry";
 import { ensureSplitQueueSchema } from "./splitQueue";
 import type { IconName } from "@/components/Icon";
 
@@ -132,8 +132,8 @@ export const XP = {
   followers: 20,
   likeGiven: 2,
   commentedOn: 5,
-  /** The base pay; each split's actual reward (with bonuses) is stored with it. */
-  splitForOthers: REWARD.base,
+  /** Shown as the base pay (the default; each split's actual reward, from the owner's settings, is stored with it). */
+  splitForOthers: DEFAULTS.mining.base,
   playsPer: 5,
   referral: 75,
 };

@@ -2,13 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { currentAdmin } from "@/lib/admin";
 import { MICROS } from "@/lib/monetize/policy";
-import { decideClaim, decidePayout, monetizeOverview, monetizeSettings, saveCampaign, saveMonetizeSettings, setCampaignActive } from "@/lib/monetize/store";
+import { decideClaim, decidePayout, monetizeOverview, monetizeSettings, saveCampaign, setCampaignActive } from "@/lib/monetize/store";
 import { adReviewQueue, decideAdPayment, reviewCampaign } from "@/lib/monetize/adStore";
 import { TOPIC_IDS } from "@/lib/monetize/adRules";
 
 // The owner's side of ads and earnings (admin only): campaigns, artists'
 // claims to their songs, payouts — and advertisers' ads to approve, their
-// payments to check, and the settings (Toman rate, lowest prices, how to pay).
+// payments to check. The money settings it shows are Admin → Settings' (lib/settings).
 export async function GET() {
   if (!(await currentAdmin())) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const [overview, queue, settings] = await Promise.all([monetizeOverview(), adReviewQueue(), monetizeSettings()]);
@@ -43,13 +43,6 @@ const action = z.discriminatedUnion("action", [
   z.object({ action: z.literal("payout"), id: z.string().max(64), paid: z.boolean(), note: z.string().max(500).nullable().optional() }),
   z.object({ action: z.literal("review"), id: z.string().max(64), approve: z.boolean(), note: z.string().max(500).nullable().optional() }),
   z.object({ action: z.literal("ad-payment"), id: z.string().max(64), received: z.boolean(), note: z.string().max(500).nullable().optional() }),
-  z.object({
-    action: z.literal("settings"),
-    tomanRate: z.number().min(0).max(100_000_000),
-    /** Dollars per 1,000. */
-    floors: z.object({ card: z.number().positive().max(1000), audio: z.number().positive().max(1000), promote: z.number().positive().max(1000) }),
-    payTo: z.object({ en: z.string().max(2000), fa: z.string().max(2000) }),
-  }),
 ]);
 
 export async function POST(req: NextRequest) {
@@ -70,12 +63,5 @@ export async function POST(req: NextRequest) {
   if (a.action === "payout") await decidePayout(a.id, a.paid, a.note ?? null);
   if (a.action === "review") await reviewCampaign(a.id, a.approve, a.note ?? null);
   if (a.action === "ad-payment") await decideAdPayment(a.id, a.received, a.note ?? null);
-  if (a.action === "settings") {
-    await saveMonetizeSettings({
-      tomanRate: a.tomanRate,
-      floors: { card: Math.round(a.floors.card * MICROS), audio: Math.round(a.floors.audio * MICROS), promote: Math.round(a.floors.promote * MICROS) },
-      payTo: a.payTo,
-    });
-  }
   return NextResponse.json({ ok: true });
 }

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getSettings } from "@/lib/settings/server";
 import { getCurrentUser } from "@/lib/auth";
 import { adAudioUrl, adImageUrl, isOwnViewer, namesFor, parseTarget, pickCampaign, sharesFor, viewToken } from "@/lib/monetize/store";
 import { adsAllowed, pickPromoted } from "@/lib/monetize/adStore";
@@ -22,6 +23,12 @@ export async function GET(req: NextRequest) {
   const target = placement === "site" || placement === "promote" ? null : parseTarget(params.get("target"));
   const lang = params.get("lang") === "fa" ? "fa" : "en";
   try {
+    const { features } = await getSettings();
+    // The owner's switches (Admin → Settings): no paying ads at all, no audio, no promotions.
+    const none = { ad: null, token: null, supports: [] };
+    if (!features.ads || (format === "audio" && !features.audioAds) || (format === "promote" && !features.promotions)) {
+      return NextResponse.json(format === "card" ? { ...none, token: viewToken(placement, target, null) } : none, { headers: { "Cache-Control": "no-store" } });
+    }
     if (format === "promote") {
       const kind = params.get("kind") === "track" ? "track" : "remix";
       const found = await pickPromoted(lang, kind);

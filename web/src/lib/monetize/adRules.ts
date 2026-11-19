@@ -14,6 +14,10 @@
 //   per ~20 minutes of listening. Never for the music's own makers.
 
 import { MICROS } from "./policy";
+import { DEFAULTS, type AppSettings } from "../settings/registry";
+
+/** The audio-ad rules (Admin → Settings → Audio ads). */
+export type AudioRules = AppSettings["audio"];
 
 // ——— kinds and formats ———
 
@@ -21,26 +25,29 @@ import { MICROS } from "./policy";
 export const AD_KINDS = ["card", "preroll", "radio"] as const;
 export type AdKind = (typeof AD_KINDS)[number];
 
-export const AD_KIND_TEXT: Record<AdKind, { en: string; fa: string; enHelp: string; faHelp: string }> = {
-  card: {
-    en: "Picture ads",
-    fa: "تبلیغ تصویری",
-    enHelp: "A card under the player, and on the radio page while it plays.",
-    faHelp: "یک کارت زیر پخش‌کننده، و در صفحهٔ رادیو هنگام پخش.",
-  },
-  preroll: {
-    en: "Audio ad before it plays",
-    fa: "تبلیغ صوتی پیش از پخش",
-    enHelp: "Up to 15 s before the remix starts, skippable after 5 s. At most once per listener every 30 minutes.",
-    faHelp: "تا ۱۵ ثانیه پیش از شروع ریمیکس، پس از ۵ ثانیه رد شدنی. برای هر شنونده حداکثر هر ۳۰ دقیقه یک بار.",
-  },
-  radio: {
-    en: "Audio ads on the radio",
-    fa: "تبلیغ صوتی در رادیو",
-    enHelp: "A short break before it on the radio, about once every 20 minutes of listening.",
-    faHelp: "یک وقفهٔ کوتاه پیش از آن در رادیو، تقریباً هر ۲۰ دقیقه شنیدن یک بار.",
-  },
-};
+/** Each kind's name and what it means, with the owner's numbers in it. */
+export function adKindText(a: AudioRules = DEFAULTS.audio): Record<AdKind, { en: string; fa: string; enHelp: string; faHelp: string }> {
+  return {
+    card: {
+      en: "Picture ads",
+      fa: "تبلیغ تصویری",
+      enHelp: "A card under the player, and on the radio page while it plays.",
+      faHelp: "یک کارت زیر پخش‌کننده، و در صفحهٔ رادیو هنگام پخش.",
+    },
+    preroll: {
+      en: "Audio ad before it plays",
+      fa: "تبلیغ صوتی پیش از پخش",
+      enHelp: `Up to ${a.maxSeconds} s before the remix starts, skippable after ${a.skipAfter} s. At most once per listener every ${a.prerollEveryMinutes} minutes.`,
+      faHelp: `تا ${persianNumber(a.maxSeconds)} ثانیه پیش از شروع ریمیکس، پس از ${persianNumber(a.skipAfter)} ثانیه رد شدنی. برای هر شنونده حداکثر هر ${persianNumber(a.prerollEveryMinutes)} دقیقه یک بار.`,
+    },
+    radio: {
+      en: "Audio ads on the radio",
+      fa: "تبلیغ صوتی در رادیو",
+      enHelp: `A short break before it on the radio, about once every ${a.radioEveryMinutes} minutes of listening.`,
+      faHelp: `یک وقفهٔ کوتاه پیش از آن در رادیو، تقریباً هر ${persianNumber(a.radioEveryMinutes)} دقیقه شنیدن یک بار.`,
+    },
+  };
+}
 
 /** What an advertiser buys. */
 export const FORMATS = ["card", "audio", "promote"] as const;
@@ -51,11 +58,8 @@ export function kindsOf(format: Format): AdKind[] {
   return format === "card" ? ["card"] : format === "audio" ? ["preroll", "radio"] : [];
 }
 
-/** An audio ad: its longest, when it can be skipped, and when it counts as heard (paid). */
-export const AUDIO = { maxSeconds: 15, skipAfter: 5, paidAfter: 5, maxBytes: 1024 * 1024 } as const;
-
-/** Lowest price per 1,000 paid views (micros); the owner can change them in Admin. */
-export const DEFAULT_FLOORS: Record<Format, number> = { card: MICROS / 2, audio: 2 * MICROS, promote: MICROS / 2 };
+/** An audio ad's file: 1 MB at most (15 s of good MP3 is ~250 KB). */
+export const AUDIO_MAX_BYTES = 1024 * 1024;
 
 // ——— topics ———
 
@@ -154,25 +158,14 @@ export function effectiveAds(settings: RemixAdSettings, policies: (SongPolicy | 
 
 // ——— how often ———
 
-export const FREQUENCY = {
-  /** Before a remix: at most one audio ad per listener per this long. */
-  prerollEveryMs: 30 * 60_000,
-  /** And never on the first remix of a visit. */
-  prerollFreeFirst: true,
-  /** A visit ends after this long without a remix played. */
-  visitGapMs: 30 * 60_000,
-  /** On the radio: one break per this much listening. */
-  radioEveryMs: 20 * 60_000,
-} as const;
-
 export type ListenerAds = { lastAdAt: number; visitStartedAt: number; lastPlayAt: number; playsThisVisit: number };
 
 /** A play is starting: whether an audio ad goes first, and what to remember. */
-export function prerollDue(state: ListenerAds | null, now: number): { due: boolean; next: ListenerAds } {
+export function prerollDue(state: ListenerAds | null, now: number, a: AudioRules = DEFAULTS.audio): { due: boolean; next: ListenerAds } {
   const s = state ?? { lastAdAt: 0, visitStartedAt: now, lastPlayAt: 0, playsThisVisit: 0 };
-  const newVisit = now - s.lastPlayAt > FREQUENCY.visitGapMs;
+  const newVisit = now - s.lastPlayAt > a.visitGapMinutes * 60_000;
   const plays = newVisit ? 0 : s.playsThisVisit;
-  const due = !(FREQUENCY.prerollFreeFirst && plays === 0) && now - s.lastAdAt >= FREQUENCY.prerollEveryMs;
+  const due = !(a.prerollFreeFirst && plays === 0) && now - s.lastAdAt >= a.prerollEveryMinutes * 60_000;
   return {
     due,
     next: { lastAdAt: s.lastAdAt, visitStartedAt: newVisit ? now : s.visitStartedAt, lastPlayAt: now, playsThisVisit: plays + 1 },
@@ -185,8 +178,8 @@ export function adHeard(state: ListenerAds, now: number): ListenerAds {
 }
 
 /** On the radio: a break is due once this much has been listened to since the last one. */
-export function radioBreakDue(listenedMs: number): boolean {
-  return listenedMs >= FREQUENCY.radioEveryMs;
+export function radioBreakDue(listenedMs: number, a: AudioRules = DEFAULTS.audio): boolean {
+  return listenedMs >= a.radioEveryMinutes * 60_000;
 }
 
 // ——— Toman ———

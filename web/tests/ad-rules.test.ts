@@ -6,10 +6,11 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
-  adHeard, cleanSettings, DEFAULT_FLOORS, DEFAULT_REMIX_ADS, effectiveAds, formatToman, FREQUENCY, kindsOf, microsOfToman, persianNumber,
+  adHeard, cleanSettings, DEFAULT_REMIX_ADS, effectiveAds, formatToman, kindsOf, microsOfToman, persianNumber,
   prerollDue, radioBreakDue, tomanOf, type ListenerAds,
 } from "../src/lib/monetize/adRules.ts";
 import { MICROS } from "../src/lib/monetize/policy.ts";
+import { DEFAULTS } from "../src/lib/settings/registry.ts";
 
 describe("who decides", () => {
   const on = DEFAULT_REMIX_ADS;
@@ -62,7 +63,7 @@ describe("who decides", () => {
   });
 
   test("the owner's lowest prices: card $0.50, audio $2, promote $0.50 per 1,000", () => {
-    assert.deepEqual(DEFAULT_FLOORS, { card: 500_000, audio: 2_000_000, promote: 500_000 });
+    assert.deepEqual(DEFAULTS.ads.floors, { card: 500_000, audio: 2_000_000, promote: 500_000 });
   });
 });
 
@@ -91,7 +92,7 @@ describe("how often audio ads play", () => {
   test("a long gap starts a new visit, whose first remix is free again", () => {
     let s = prerollDue(null, 0).next;
     s = adHeard(prerollDue(s, 2 * min).next, 2 * min);
-    const back = prerollDue(s, 2 * min + FREQUENCY.visitGapMs + 1);
+    const back = prerollDue(s, 2 * min + DEFAULTS.audio.visitGapMinutes * min + 1);
     assert.equal(back.due, false);
     assert.equal(back.next.playsThisVisit, 1);
   });
@@ -119,5 +120,25 @@ describe("Toman", () => {
   test("a price typed in Toman back to dollars", () => {
     assert.equal(microsOfToman(50_000, 100_000), MICROS / 2);
     assert.equal(microsOfToman(50_000, 0), 0);
+  });
+});
+
+describe("the owner's audio rules", () => {
+  const min = 60_000;
+  const rules = { ...DEFAULTS.audio, prerollEveryMinutes: 5, prerollFreeFirst: false, radioEveryMinutes: 10 };
+
+  test("a first remix can have one when the owner allows it", () => {
+    assert.equal(prerollDue(null, 100 * min, rules).due, true);
+  });
+
+  test("the wait between ads is the owner's", () => {
+    const s = adHeard(prerollDue(null, 100 * min, rules).next, 100 * min);
+    assert.equal(prerollDue(s, 104 * min, rules).due, false);
+    assert.equal(prerollDue(s, 105 * min, rules).due, true);
+  });
+
+  test("the radio's break comes when the owner says", () => {
+    assert.equal(radioBreakDue(10 * min, rules), true);
+    assert.equal(radioBreakDue(9 * min, rules), false);
   });
 });

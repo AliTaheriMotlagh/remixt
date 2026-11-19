@@ -7,9 +7,10 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Ban, CircleDollarSign, ExternalLink, Loader2, Megaphone } from "lucide-react";
-import { AD_KIND_TEXT, AD_KINDS, SONG_POLICY_TEXT, TOPICS, type AdKind, type RemixAdSettings } from "@/lib/monetize/adRules";
+import { adKindText, AD_KINDS, SONG_POLICY_TEXT, TOPICS, type AdKind, type RemixAdSettings } from "@/lib/monetize/adRules";
 import { moneyIn, moneyPath, numIn, type Lang } from "@/lib/monetize/moneyText";
 import type { RemixMoney } from "@/lib/monetize/adStore";
+import { useSettings } from "@/components/SettingsProvider";
 
 const T = {
   en: {
@@ -77,6 +78,7 @@ const T = {
 export default function RemixAdPanel({ remixId, lang = "en", rate = 0 }: { remixId: string; lang?: Lang; rate?: number }) {
   const t = T[lang];
   const fa = lang === "fa";
+  const kindText = adKindText(useSettings().audio);
   const money = useMemo(() => moneyIn(lang, rate), [lang, rate]);
   const num = useMemo(() => numIn(lang), [lang]);
   const [data, setData] = useState<RemixMoney | null>(null);
@@ -163,8 +165,8 @@ export default function RemixAdPanel({ remixId, lang = "en", rate = 0 }: { remix
               <label key={k} className={`flex cursor-pointer items-start gap-2 rounded-2xl border p-3 ${form.kinds.includes(k) ? "border-brand bg-brand/10" : "border-border"}`}>
                 <input type="checkbox" checked={form.kinds.includes(k)} onChange={() => toggleKind(k)} className="mt-1 accent-[var(--brand)]" />
                 <span>
-                  <span className="block text-sm font-semibold">{fa ? AD_KIND_TEXT[k].fa : AD_KIND_TEXT[k].en}</span>
-                  <span className="block text-xs text-muted">{fa ? AD_KIND_TEXT[k].faHelp : AD_KIND_TEXT[k].enHelp}</span>
+                  <span className="block text-sm font-semibold">{fa ? kindText[k].fa : kindText[k].en}</span>
+                  <span className="block text-xs text-muted">{fa ? kindText[k].faHelp : kindText[k].enHelp}</span>
                 </span>
               </label>
             ))}

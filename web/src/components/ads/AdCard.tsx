@@ -15,7 +15,8 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUpRight, HeartHandshake, Info, X } from "lucide-react";
 import { houseAd } from "@/lib/monetize/houseAds";
-import { ROLE_TEXT, VIEWABLE, type Placement, type Role } from "@/lib/monetize/policy";
+import { ROLE_TEXT, type Placement, type Role } from "@/lib/monetize/policy";
+import { useSettings } from "@/components/SettingsProvider";
 import { visitorId } from "@/lib/client/presence";
 
 type Supporter = { name: string; role: Role; bp: number; held: boolean };
@@ -58,6 +59,8 @@ export default function AdCard({
   const [served, setServed] = useState<Served | null>(null);
   const [why, setWhy] = useState(false);
   const fa = lang === "fa";
+  const { ads: adRules } = useSettings();
+  const viewable = { fraction: adRules.viewShare / 10_000, ms: adRules.viewMs };
 
   // Asked for only once the spot comes near the screen (an ad below the fold costs nothing until then).
   useEffect(() => {
@@ -99,10 +102,10 @@ export default function AdCard({
     const seen = new IntersectionObserver(
       ([entry]) => {
         clearTimeout(timer);
-        if (done || !entry || entry.intersectionRatio < VIEWABLE.fraction || document.hidden) return;
-        timer = setTimeout(() => !document.hidden && send(), VIEWABLE.ms);
+        if (done || !entry || entry.intersectionRatio < viewable.fraction || document.hidden) return;
+        timer = setTimeout(() => !document.hidden && send(), viewable.ms);
       },
-      { threshold: [0, VIEWABLE.fraction, 1] }
+      { threshold: [0, viewable.fraction, 1] }
     );
     seen.observe(el);
     const onHidden = () => document.hidden && clearTimeout(timer);
@@ -112,7 +115,7 @@ export default function AdCard({
       seen.disconnect();
       document.removeEventListener("visibilitychange", onHidden);
     };
-  }, [served?.token]);
+  }, [served?.token, viewable.fraction, viewable.ms]);
 
   const house = useMemo(() => houseAd(lang, seed), [lang, seed]);
   const ad = served?.ad;

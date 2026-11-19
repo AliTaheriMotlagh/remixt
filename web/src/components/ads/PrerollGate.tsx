@@ -16,7 +16,8 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowUpRight, HeartHandshake, SkipForward } from "lucide-react";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { visitorId } from "@/lib/client/presence";
-import { adHeard, AUDIO, prerollDue, type ListenerAds } from "@/lib/monetize/adRules";
+import { adHeard, prerollDue, type ListenerAds } from "@/lib/monetize/adRules";
+import { useSettings } from "@/components/SettingsProvider";
 
 type Served = {
   ad: { id: string; advertiser: string; title: string; body: string; cta: string; image: string | null; audio: string | null; seconds: number | null } | null;
@@ -43,6 +44,12 @@ function writeState(s: ListenerAds) {
 
 export default function PrerollGate({ remixId, lang = "en" }: { remixId: string; lang?: "en" | "fa" }) {
   const fa = lang === "fa";
+  const { audio: AUDIO } = useSettings();
+  const rules = useRef(AUDIO);
+  // The latest rules, for the players' own events (they outlive a render).
+  useEffect(() => {
+    rules.current = AUDIO;
+  }, [AUDIO]);
   const ready = useRef<{ served: Served; el: HTMLAudioElement } | null>(null);
   const running = useRef<Promise<void> | null>(null);
   const finish = useRef<(() => void) | null>(null);
@@ -54,7 +61,7 @@ export default function PrerollGate({ remixId, lang = "en" }: { remixId: string;
     let cancelled = false;
     const load = () => {
       if (ready.current || cancelled) return;
-      if (!prerollDue(readState(), Date.now()).due) return;
+      if (!prerollDue(readState(), Date.now(), rules.current).due) return;
       const q = new URLSearchParams({ placement: "remix", format: "audio", target: `remix:${remixId}`, lang });
       fetch(`/api/ads?${q}`, { cache: "no-store" })
         .then((r) => r.json() as Promise<Served>)
@@ -81,7 +88,7 @@ export default function PrerollGate({ remixId, lang = "en" }: { remixId: string;
     const gate = () => {
       if (running.current) return running.current;
       const now = Date.now();
-      const { due, next } = prerollDue(readState(), now);
+      const { due, next } = prerollDue(readState(), now, rules.current);
       writeState(next);
       const got = ready.current;
       if (!due || !got) return Promise.resolve();
@@ -91,13 +98,13 @@ export default function PrerollGate({ remixId, lang = "en" }: { remixId: string;
       const started = el.play();
       running.current = new Promise<void>((resolve) => {
         let paid = false;
-        const total = Math.min(AUDIO.maxSeconds, served.ad?.seconds ?? AUDIO.maxSeconds);
+        const total = Math.min(rules.current.maxSeconds, served.ad?.seconds ?? rules.current.maxSeconds);
         // A sound that stalls never holds the remix back for long.
         const timeout = setTimeout(() => done(), (total + 7) * 1000);
         const tick = () => {
           setAt(el.currentTime);
           // Heard, not seen: it counts with the screen locked too.
-          if (!paid && (el.currentTime >= Math.min(AUDIO.paidAfter, total - 0.5) || el.ended)) {
+          if (!paid && (el.currentTime >= Math.min(rules.current.paidAfter, total - 0.5) || el.ended)) {
             paid = true;
             writeState(adHeard(next, Date.now()));
             fetch("/api/ads/view", {

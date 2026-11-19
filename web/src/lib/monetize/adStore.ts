@@ -7,11 +7,12 @@ import sql from "../db";
 import { notify } from "../notifications";
 import { deleteObject } from "../storage";
 import {
-  AUDIO, cleanSettings, effectiveAds, FORMATS, microsOfToman, TOPIC_IDS,
+  cleanSettings, effectiveAds, FORMATS, microsOfToman, TOPIC_IDS,
   type AdKind, type EffectiveAds, type Format, type RemixAdSettings, type SongPolicy,
 } from "./adRules";
 import { MICROS, type Placement } from "./policy";
 import { ensureMonetizeSchema, monetizeSettings, numbers, parseTarget, type Campaign, type Target } from "./store";
+import { getSettings } from "../settings/server";
 
 const n = (x: unknown) => Number(x ?? 0);
 
@@ -300,7 +301,10 @@ export async function setCampaignMedia(id: string, kind: "image" | "audio", key:
   await ensureMonetizeSchema();
   const [old] = await sql<{ image_key: string | null; audio_key: string | null }[]>`SELECT image_key, audio_key FROM ad_campaigns WHERE id = ${id}`;
   if (kind === "image") await sql`UPDATE ad_campaigns SET image_key = ${key} WHERE id = ${id}`;
-  else await sql`UPDATE ad_campaigns SET audio_key = ${key}, audio_seconds = ${seconds !== null ? Math.min(AUDIO.maxSeconds, seconds) : null} WHERE id = ${id}`;
+  else {
+    const { maxSeconds } = (await getSettings()).audio;
+    await sql`UPDATE ad_campaigns SET audio_key = ${key}, audio_seconds = ${seconds !== null ? Math.min(maxSeconds, seconds) : null} WHERE id = ${id}`;
+  }
   const was = kind === "image" ? old?.image_key : old?.audio_key;
   if (was && was !== key) await deleteObject(was).catch(() => {});
 }

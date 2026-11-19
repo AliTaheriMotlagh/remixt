@@ -86,7 +86,7 @@ export default function SongFixTab() {
         ))}
         <label className="relative ms-auto">
           <Search className="pointer-events-none absolute start-2.5 top-2.5 h-4 w-4 text-muted" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a song" className="input ps-8" dir="auto" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a song" className="input" style={{ paddingInlineStart: "2rem" }} dir="auto" />
         </label>
       </div>
       {error && <p className="text-sm text-danger">{error}</p>}

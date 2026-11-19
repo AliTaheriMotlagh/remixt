@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getSettings } from "@/lib/settings/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import { allow, TOO_MANY } from "@/lib/rateLimit";
@@ -18,7 +19,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const { id } = await params;
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ error: "Sign in required" }, { status: 401 });
-  if (!(await allow(`ad-payment:${user.id}`, 10, 24 * 60 * 60))) return NextResponse.json(TOO_MANY, { status: 429 });
+  if (!(await allow(`ad-payment:${user.id}`, (await getSettings()).limits.adPaymentsPerDay, 24 * 60 * 60))) return NextResponse.json(TOO_MANY, { status: 429 });
   const parsed = schema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid input" }, { status: 400 });
   const result = await addPayment(user.id, id, parsed.data);

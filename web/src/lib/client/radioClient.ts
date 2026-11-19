@@ -9,7 +9,8 @@ import { pollEvery } from "@/lib/radioPace";
 import { mixEnvelope } from "./lyricsSources";
 import { playPayload, RadioDeck } from "./radioDeck";
 import { within } from "./stemFetch";
-import { AUDIO, FREQUENCY, radioBreakDue } from "@/lib/monetize/adRules";
+import { radioBreakDue } from "@/lib/monetize/adRules";
+import { useSettings } from "@/components/SettingsProvider";
 import { laneFromApi } from "./remixLanes";
 import { delayed, frequencyBars, loudnessWindow, type Curve } from "@/lib/visualBars";
 
@@ -157,6 +158,12 @@ export function useRadio(
   const lockShown = useRef("");
   const lockPositionAt = useRef(0);
   const tuneRef = useRef<TuneState>("off");
+  const { audio: audioRules } = useSettings();
+  const audio = useRef(audioRules);
+  // The latest rules, for the players' own events (they outlive a render).
+  useEffect(() => {
+    audio.current = audioRules;
+  }, [audioRules]);
   /** The ad break playing now, and the one fetched ahead for the next song. */
   const [adBreak, setAdBreak] = useState<RadioAdBreak | null>(null);
   const adReady = useRef<{ rowId: number; ad: RadioAdBreak; url: string } | null>(null);
@@ -351,12 +358,12 @@ export function useRadio(
     const show = (row: RadioFeed["now"]) => {
       // A break is due (≈20 min listened) and its ad is ready: it plays before this song goes on.
       const ready = adReady.current;
-      if (ads && row && ready?.rowId === row.rowId && radioBreakDue(d.listenedSinceBreak) && !d.inBreak) {
+      if (ads && row && ready?.rowId === row.rowId && radioBreakDue(d.listenedSinceBreak, audio.current) && !d.inBreak) {
         adReady.current = null;
         setAdBreak(ready.ad);
         lockScreen({ ...row, title: ready.ad.title, artist: `Ad · ${ready.ad.advertiser || "Sponsored"}` } as typeof row, feedRef.current?.station.name ?? "Remixt Radio", handlers);
         void d
-          .playBreak(ready.url, ready.ad.seconds, AUDIO.paidAfter, () => {
+          .playBreak(ready.url, ready.ad.seconds, audio.current.paidAfter, () => {
             fetch("/api/ads/view", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -387,7 +394,7 @@ export function useRadio(
   useEffect(() => {
     const d = deck.current;
     if (!ads || !d || tune !== "on" || !upcomingRow) return;
-    if (d.listenedSinceBreak < FREQUENCY.radioEveryMs - 2 * 60_000 || adAsked.current.has(upcomingRow.rowId)) return;
+    if (d.listenedSinceBreak < audio.current.radioEveryMinutes * 60_000 - 2 * 60_000 || adAsked.current.has(upcomingRow.rowId)) return;
     adAsked.current.add(upcomingRow.rowId);
     const q = new URLSearchParams({ placement: "radio", format: "audio", target: `${upcomingRow.kind}:${upcomingRow.id}`, lang: document.documentElement.lang === "fa" ? "fa" : "en" });
     (async () => {
@@ -405,7 +412,7 @@ export function useRadio(
         url: URL.createObjectURL(blob),
         ad: {
           advertiser: served.ad.advertiser, title: served.ad.title, cta: served.ad.cta, image: served.ad.image,
-          seconds: Math.min(AUDIO.maxSeconds, served.ad.seconds ?? AUDIO.maxSeconds), token: served.token, supports: served.supports,
+          seconds: Math.min(audio.current.maxSeconds, served.ad.seconds ?? audio.current.maxSeconds), token: served.token, supports: served.supports,
         },
       };
     })().catch(() => {});

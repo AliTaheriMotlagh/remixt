@@ -4,8 +4,9 @@
 // the paying campaigns, artists' claims to their songs, and payouts.
 
 import { useCallback, useEffect, useState } from "react";
-import { formatMoney, MICROS, UNCLAIMED_YEARS } from "@/lib/monetize/policy";
-import { AUDIO, persianNumber, TOPICS } from "@/lib/monetize/adRules";
+import { formatMoney, MICROS } from "@/lib/monetize/policy";
+import { TOPICS } from "@/lib/monetize/adRules";
+import { useSettings } from "@/components/SettingsProvider";
 import type { Campaign, monetizeOverview, MonetizeSettings } from "@/lib/monetize/store";
 import type { adReviewQueue } from "@/lib/monetize/adStore";
 
@@ -14,7 +15,7 @@ type Overview = Awaited<ReturnType<typeof monetizeOverview>> & { queue: Awaited<
 const topicName = (id: string) => TOPICS.find((t) => t.id === id)?.en ?? id;
 
 /** Uploads an ad's picture or sound (the owner's own campaigns too). */
-async function uploadMedia(id: string, kind: "image" | "audio", file: File) {
+async function uploadMedia(id: string, kind: "image" | "audio", file: File, maxSeconds: number) {
   let q = `f=${kind}`;
   if (kind === "audio") {
     const seconds = await new Promise<number>((resolve, reject) => {
@@ -24,7 +25,7 @@ async function uploadMedia(id: string, kind: "image" | "audio", file: File) {
       el.onerror = () => (URL.revokeObjectURL(url), reject(new Error("Couldn't read the sound")));
       el.src = url;
     });
-    if (seconds > AUDIO.maxSeconds + 0.5) throw new Error(`The sound is ${seconds.toFixed(1)} s — ${AUDIO.maxSeconds} s at most`);
+    if (seconds > maxSeconds + 0.5) throw new Error(`The sound is ${seconds.toFixed(1)} s — ${maxSeconds} s at most`);
     q += `&seconds=${seconds.toFixed(2)}`;
   }
   const res = await fetch(`/api/advertise/${id}/media?${q}`, { method: "PUT", body: file });
@@ -42,7 +43,8 @@ const EMPTY = {
   placements: ["site", "remix", "radio"], cpm: 2, budget: 100, endsAt: "", format: "card" as "card" | "audio", topic: "other",
 };
 
-export default function MonetizeTab() {
+export default function MonetizeTab({ onOpenSettings }: { onOpenSettings?: () => void } = {}) {
+  const settings = useSettings();
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<typeof EMPTY | null>(null);
@@ -71,8 +73,8 @@ export default function MonetizeTab() {
       const res = await fetch("/api/admin/monetize", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "campaign", ...f }) });
       const d = (await res.json().catch(() => ({}))) as { id?: string; error?: string };
       if (!res.ok || !d.id) throw new Error(d.error ?? "Couldn't save");
-      if (files.image) await uploadMedia(d.id, "image", files.image);
-      if (files.audio) await uploadMedia(d.id, "audio", files.audio);
+      if (files.image) await uploadMedia(d.id, "image", files.image, settings.audio.maxSeconds);
+      if (files.audio) await uploadMedia(d.id, "audio", files.audio, settings.audio.maxSeconds);
       setForm(null);
       load();
     } catch (e) {
@@ -89,7 +91,7 @@ export default function MonetizeTab() {
         <Box
           label="Remixt's share, all time"
           value={formatMoney(data.money.platform)}
-          detail={data.money.unclaimed ? `incl. ${formatMoney(data.money.unclaimed)} never claimed in ${UNCLAIMED_YEARS} years` : undefined}
+          detail={data.money.unclaimed ? `incl. ${formatMoney(data.money.unclaimed)} never claimed in ${settings.payouts.unclaimedYears} years` : undefined}
         />
         <Box label="Paid to members (incl. waiting)" value={formatMoney(data.money.members)} />
         <Box label="Kept for artists not verified" value={formatMoney(data.money.held)} />
@@ -103,7 +105,13 @@ export default function MonetizeTab() {
       </div>
 
       <ReviewQueue queue={data.queue} act={act} />
-      <SettingsForm settings={data.settings} act={act} />
+      <p className="rounded-xl border border-border bg-surface p-3 text-sm text-muted">
+        Shares, prices, the Toman rate, how advertisers pay you, audio-ad rules and every other number are in{" "}
+        <button type="button" onClick={onOpenSettings} className="font-semibold text-brand-strong hover:underline">
+          Settings
+        </button>
+        .
+      </p>
 
       <section>
         <div className="flex items-center justify-between">
@@ -243,6 +251,7 @@ function CampaignForm({
   onCancel: () => void;
 }) {
   const [f, setF] = useState(initial);
+  const { maxSeconds } = useSettings().audio;
   const [image, setImage] = useState<File | null>(null);
   const [audio, setAudio] = useState<File | null>(null);
   const set = (k: keyof typeof EMPTY) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
@@ -257,7 +266,7 @@ function CampaignForm({
     >
       <select className="input" value={f.format} onChange={set("format")} aria-label="Kind">
         <option value="card">Picture ad</option>
-        <option value="audio">Audio ad (≤ {AUDIO.maxSeconds} s)</option>
+        <option value="audio">Audio ad (≤ {maxSeconds} s)</option>
       </select>
       <select className="input" value={f.topic} onChange={set("topic")} aria-label="Topic">
         {TOPICS.map((t) => (
@@ -279,7 +288,7 @@ function CampaignForm({
       </label>
       {f.format === "audio" && (
         <label className="grid gap-1 text-xs text-muted">
-          The sound (≤ {AUDIO.maxSeconds} s, 1 MB){!f.id && " — required"}
+          The sound (≤ {maxSeconds} s, 1 MB){!f.id && " — required"}
           <input type="file" accept="audio/*" onChange={(e) => setAudio(e.target.files?.[0] ?? null)} />
         </label>
       )}
@@ -409,70 +418,6 @@ function ReviewQueue({ queue, act }: { queue: Queue; act: (body: unknown) => Pro
             ))}
           </ul>
         </>
-      )}
-    </section>
-  );
-}
-
-/** The Toman rate, the lowest prices, and how advertisers pay. */
-function SettingsForm({ settings, act }: { settings: MonetizeSettings; act: (body: unknown) => Promise<void> }) {
-  const [open, setOpen] = useState(!settings.tomanRate);
-  const [rate, setRate] = useState(String(settings.tomanRate || ""));
-  const [floors, setFloors] = useState({
-    card: settings.floors.card / MICROS,
-    audio: settings.floors.audio / MICROS,
-    promote: settings.floors.promote / MICROS,
-  });
-  const [payEn, setPayEn] = useState(settings.payTo.en);
-  const [payFa, setPayFa] = useState(settings.payTo.fa);
-  return (
-    <section className="rounded-2xl border border-border bg-surface p-4">
-      <button type="button" onClick={() => setOpen(!open)} className="flex w-full items-center justify-between text-start">
-        <h3 className="font-semibold">Settings: Toman rate, lowest prices, how advertisers pay</h3>
-        <span className="text-xs text-muted">
-          {settings.tomanRate ? `1 $ = ${settings.tomanRate.toLocaleString()} Toman` : "Toman rate not set — Persian pages show dollars"}
-        </span>
-      </button>
-      {open && (
-        <form
-          className="mt-3 grid gap-3 text-sm sm:grid-cols-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void act({ action: "settings", tomanRate: Number(rate) || 0, floors, payTo: { en: payEn, fa: payFa } });
-          }}
-        >
-          <label className="grid gap-1">
-            Toman per US dollar (today&apos;s rate; Persian pages and Sheba payouts use it)
-            <input className="input" inputMode="numeric" value={rate} onChange={(e) => setRate(e.target.value.replace(/[^\d]/g, ""))} dir="ltr" />
-            {Number(rate) > 0 && <span className="text-xs text-muted">$10 = {persianNumber(Number(rate) * 10)} تومان</span>}
-          </label>
-          <div className="grid grid-cols-3 gap-2">
-            {(["card", "audio", "promote"] as const).map((k) => (
-              <label key={k} className="grid gap-1">
-                Lowest {k} $/1,000
-                <input
-                  className="input"
-                  type="number"
-                  min={0.01}
-                  step={0.01}
-                  value={floors[k]}
-                  onChange={(e) => setFloors({ ...floors, [k]: Number(e.target.value) })}
-                />
-              </label>
-            ))}
-          </div>
-          <label className="grid gap-1">
-            How advertisers pay you (English page): card number, IBAN, USDT address…
-            <textarea className="input" rows={3} value={payEn} onChange={(e) => setPayEn(e.target.value)} maxLength={2000} />
-          </label>
-          <label className="grid gap-1">
-            The same for the Persian page
-            <textarea className="input" rows={3} value={payFa} onChange={(e) => setPayFa(e.target.value)} maxLength={2000} dir="rtl" />
-          </label>
-          <button type="submit" className="self-start rounded-lg bg-brand px-4 py-1.5 font-semibold text-white">
-            Save settings
-          </button>
-        </form>
       )}
     </section>
   );

@@ -8,9 +8,14 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
-  allocate, earnBadges, formatMoney, isOwnView, MICROS, payOut, remixShares, siteShares, SONG_HELPERS, songShares, SPLITS,
+  allocate, earnBadges, formatMoney, isOwnView, MICROS, payOut, remixShares, siteShares, songShares,
   type RemixParties, type Share,
 } from "../src/lib/monetize/policy.ts";
+import { DEFAULTS } from "../src/lib/settings/registry.ts";
+
+// The rules as the site starts (Admin → Settings can change them; the rules take them as an argument).
+const SPLITS = DEFAULTS.shares;
+const SONG_HELPERS = DEFAULTS.shares;
 
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 const byRole = (shares: Share[], role: string) => sum(shares.filter((s) => s.role === role).map((s) => s.weight));
@@ -28,7 +33,7 @@ const remix: RemixParties = {
 
 describe("splits", () => {
   test("every split adds up to the whole, and a remix's always pays all three", () => {
-    for (const s of Object.values(SPLITS)) assert.equal(s.platform + s.artists + s.remixers, 10_000);
+    for (const s of [SPLITS.remix, SPLITS.song]) assert.equal(s.platform + s.artists + s.remixers, 10_000);
     assert.ok(SPLITS.remix.platform > 0 && SPLITS.remix.artists > 0 && SPLITS.remix.remixers > 0);
     assert.ok(SPLITS.song.platform > 0 && SPLITS.song.artists > 0);
   });
@@ -157,5 +162,50 @@ describe("uploaders and miners", () => {
     assert.equal(byRole(shares, "artist"), SPLITS.song.artists);
     assert.equal(byRole(shares, "uploader"), SONG_HELPERS.uploader);
     assert.equal(byRole(shares, "miner"), SONG_HELPERS.miner);
+  });
+});
+
+describe("the owner's own numbers", () => {
+  const rules = {
+    ...DEFAULTS.shares,
+    remix: { platform: 2_000, artists: 5_000, remixers: 3_000 },
+    uploader: 700,
+    miner: 0,
+    parent: 5_000,
+    vocalWeight: 3,
+    ownerKeeps: 5_000,
+  };
+
+  test("a remix is shared by the shares the owner set", () => {
+    const shares = remixShares(
+      {
+        ...remix,
+        parent: { remixId: "r0", ownerId: "first" },
+        collaborators: [{ userId: "c", bp: 9_000 }],
+        sources: remix.sources.map((x) => ({ ...x, uploaderId: "up", minerId: "m" })),
+      },
+      rules
+    );
+    assert.equal(sum(shares.map((s) => s.weight)), 10_000);
+    assert.equal(byRole(shares, "artist") + byRole(shares, "vocalist"), 5_000);
+    assert.equal(byRole(shares, "uploader"), 700);
+    assert.equal(byRole(shares, "miner"), 0, "a 0% miner share pays nobody");
+    assert.equal(byRole(shares, "platform"), 1_300);
+    assert.equal(byRole(shares, "parent-remixer"), 1_500, "half of the remixers' 30%");
+    // The maker keeps at least half of what's left of the remixers' part, however much they gave.
+    assert.ok(byRole(shares, "remixer") >= 750, String(byRole(shares, "remixer")));
+  });
+
+  test("a vocal can count more", () => {
+    const shares = remixShares(remix, rules);
+    const a = shares.find((s) => s.trackId === "song-a" && s.role === "artist")!;
+    const b = shares.find((s) => s.trackId === "song-b")!;
+    assert.ok(Math.abs(a.weight - 3 * b.weight) <= 3, `${a.weight} vs ${b.weight}`);
+  });
+
+  test("a remixers' part set for songs stays with Remixt (a song has no remixer)", () => {
+    const shares = songShares({ trackId: "s", parts: ["vocals"], holderId: null }, { ...DEFAULTS.shares, song: { platform: 3_000, artists: 6_000, remixers: 1_000 } });
+    assert.equal(sum(shares.map((s) => s.weight)), 10_000);
+    assert.equal(byRole(shares, "platform"), 4_000);
   });
 });

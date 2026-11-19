@@ -6,6 +6,7 @@
 
 import { useState } from "react";
 import { Check, Flag, Loader2, X } from "lucide-react";
+import { useSettings } from "@/components/SettingsProvider";
 
 const FIELDS = [
   { id: "name", en: "Song name", fa: "نام آهنگ" },
@@ -34,6 +35,7 @@ export default function WrongInfoButton({
   const [suggestion, setSuggestion] = useState("");
   const [state, setState] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
+  const reportsOpen = useSettings().features.wrongInfo;
 
   async function send() {
     setState("sending");
@@ -53,6 +55,7 @@ export default function WrongInfoButton({
     }
   }
 
+  if (!reportsOpen) return null;
   if (!open)
     return (
       <button

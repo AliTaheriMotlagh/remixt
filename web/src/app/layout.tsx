@@ -13,6 +13,9 @@ import { BackgroundActivity } from "@/components/UploadActivity";
 import FooterGate from "@/components/FooterGate";
 import SiteFooter from "@/components/SiteFooter";
 import { getCurrentUser } from "@/lib/auth";
+import { getSettings } from "@/lib/settings/server";
+import { publicSettings } from "@/lib/settings/registry";
+import { SettingsProvider } from "@/components/SettingsProvider";
 import { isAdmin } from "@/lib/admin";
 import { SITE_CREATOR, SITE_DESCRIPTION, SITE_NAME, SITE_TAGLINE, siteUrl } from "@/lib/site";
 
@@ -98,7 +101,7 @@ export default async function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const user = await getCurrentUser();
+  const [user, settings] = await Promise.all([getCurrentUser(), getSettings()]);
 
   return (
     <html
@@ -106,6 +109,7 @@ export default async function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} ${vazirmatn.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-background text-foreground">
+        <SettingsProvider value={publicSettings(settings)}>
         <a
           href="#main"
           className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[80] focus:rounded-lg focus:bg-brand focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-white"
@@ -126,6 +130,7 @@ export default async function RootLayout({
         <SplitterStatus signedIn={!!user} />
         <BackgroundActivity signedIn={!!user} userId={user?.id ?? null} />
         <MobileTabBar user={user} isAdmin={isAdmin(user)} />
+        </SettingsProvider>
       </body>
     </html>
   );

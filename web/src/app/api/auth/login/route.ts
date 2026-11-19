@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getSettings } from "@/lib/settings/server";
 import { z } from "zod";
 import sql from "@/lib/db";
 import { createSessionCookie, verifyPassword } from "@/lib/auth";
@@ -21,7 +22,8 @@ export async function POST(req: NextRequest) {
   // for 15 minutes (a right password included, so a guesser can't tell when they've found it).
   const account = `login-fail:${email.toLowerCase()}`;
   const from = `login:${clientKey(req)}`;
-  if ((await hitsIn(account, 15 * 60)) >= 8 || !(await allow(from, 30, 15 * 60))) {
+  const { limits } = await getSettings();
+  if ((await hitsIn(account, 15 * 60)) >= limits.wrongPasswordsPerAccount || !(await allow(from, limits.loginsPerAddress, 15 * 60))) {
     return NextResponse.json(TOO_MANY, { status: 429 });
   }
   if (!(await verifyCaptcha((body as { captcha?: unknown })?.captcha))) return NextResponse.json(CAPTCHA_FAILED, { status: 403 });

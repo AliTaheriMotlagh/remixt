@@ -4,7 +4,10 @@
 
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { monthSpan, statementCsv, unclaimedCutoff, UNCLAIMED_YEARS, type StatementLine } from "../src/lib/monetize/policy.ts";
+import { monthSpan, statementCsv, unclaimedCutoff, type StatementLine } from "../src/lib/monetize/policy.ts";
+import { DEFAULTS } from "../src/lib/settings/registry.ts";
+
+const UNCLAIMED_YEARS = DEFAULTS.payouts.unclaimedYears;
 
 describe("unclaimed money", () => {
   test("held money is given up only after the published years", () => {
@@ -47,5 +50,15 @@ describe("month statement", () => {
 
   test("an empty month still has its header and a zero total", () => {
     assert.equal(statementCsv("2026-10", []), "﻿Date,From,Kind,Your part,Paid views,Amount (USD),State\r\nTotal 2026-10,,,,,0.000000,\r\n");
+  });
+});
+
+describe("the owner's numbers in statements and expiry", () => {
+  test("the years before unclaimed money goes are the owner's", () => {
+    assert.equal(unclaimedCutoff(new Date("2030-01-01T00:00:00Z"), 5).toISOString(), "2025-01-01T00:00:00.000Z");
+  });
+  test("the hold in a statement is the owner's", () => {
+    const csv = statementCsv("2026-11", [{ day: "2026-11-02", source: "x", kind: "song", role: "artist", views: 1, micros: 1, state: "waiting" }], 14);
+    assert.ok(csv.includes("Waiting (14-day hold)"));
   });
 });

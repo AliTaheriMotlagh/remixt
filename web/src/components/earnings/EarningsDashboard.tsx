@@ -12,9 +12,11 @@ import {
   Award, BadgeCheck, Banknote, CircleDollarSign, Clock3, Eye, Hourglass, Loader2, Lock, Megaphone, Music2, Plus, Settings2, Sparkles, Trash2,
   Users, Wallet,
 } from "lucide-react";
-import { earnBadges, HOLD_DAYS, isTomanMethod, PAYOUT_METHOD_FA, ROLE_TEXT, PAYOUT_METHODS, PAYOUT_MIN_MICROS, rpm, type Role } from "@/lib/monetize/policy";
+import { earnBadges, isTomanMethod, PAYOUT_METHOD_FA, ROLE_TEXT, PAYOUT_METHODS, rpm, type Role } from "@/lib/monetize/policy";
 import { dateIn, moneyIn, moneyPath, numIn, type Lang } from "@/lib/monetize/moneyText";
 import type { EarningsSummary } from "@/lib/monetize/store";
+import { persianNumber } from "@/lib/monetize/adRules";
+import { useSettings } from "@/components/SettingsProvider";
 
 type Data = EarningsSummary & { tomanRate: number };
 
@@ -30,7 +32,7 @@ const T = {
     onItsWay: (m: string) => `${m} is on its way to you.`,
     asked: (m: string, how: string) => `Asked for ${m} — we'll send it to your ${how}.`,
     askFailed: "Couldn't ask for a payout",
-    waiting: `Waiting (${HOLD_DAYS} days)`,
+    waiting: (days: number) => `Waiting (${days} days)`,
     keptForUploads: "Kept for artists of your uploads",
     paidToYou: "Paid to you",
     earnedInAll: "Earned in all",
@@ -98,7 +100,7 @@ const T = {
     onItsWay: (m: string) => `${m} در راه است.`,
     asked: (m: string, how: string) => `درخواست ${m} ثبت شد — به ${how} شما واریز می‌کنیم.`,
     askFailed: "درخواست برداشت ثبت نشد",
-    waiting: `در انتظار (${HOLD_DAYS} روز)`,
+    waiting: (days: number) => `در انتظار (${persianNumber(days)} روز)`,
     keptForUploads: "نگه‌داشته برای هنرمندانِ آپلودهای شما",
     paidToYou: "پرداخت‌شده به شما",
     earnedInAll: "کل درآمد",
@@ -230,11 +232,12 @@ export default function EarningsDashboard({ artistName, lang = "en" }: { artistN
 }
 
 function Balance({ data, artistName, onChange }: { data: Data; artistName: string; onChange: () => void }) {
+  const { minMicros, holdDays } = useSettings().payouts;
   const { t, money, lang } = useM();
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
-  const progress = Math.min(1, data.available / PAYOUT_MIN_MICROS);
-  const canPay = data.available >= PAYOUT_MIN_MICROS && !!data.account && data.requested === 0;
+  const progress = Math.min(1, data.available / minMicros);
+  const canPay = data.available >= minMicros && !!data.account && data.requested === 0;
   async function payout() {
     setBusy(true);
     setNote(null);
@@ -268,8 +271,8 @@ function Balance({ data, artistName, onChange }: { data: Data; artistName: strin
       </div>
       <div className="mt-5">
         <div className="flex justify-between gap-3 text-xs text-muted">
-          <span>{progress < 1 ? t.toFirst(money(PAYOUT_MIN_MICROS - data.available)) : t.canWithdraw}</span>
-          <span className="tabular-nums">{money(PAYOUT_MIN_MICROS)}</span>
+          <span>{progress < 1 ? t.toFirst(money(minMicros - data.available)) : t.canWithdraw}</span>
+          <span className="tabular-nums">{money(minMicros)}</span>
         </div>
         <div className="mt-1.5 h-2.5 overflow-hidden rounded-full bg-surface-raised">
           <div className="h-full rounded-full bg-gradient-to-r from-brand to-vocals transition-[width] duration-700" style={{ width: `${Math.max(2, progress * 100)}%` }} />
@@ -279,7 +282,7 @@ function Balance({ data, artistName, onChange }: { data: Data; artistName: strin
         {note && <p className="mt-2 text-sm">{note}</p>}
       </div>
       <dl className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat icon={Hourglass} label={t.waiting} value={money(data.waiting)} />
+        <Stat icon={Hourglass} label={t.waiting(holdDays)} value={money(data.waiting)} />
         <Stat icon={Lock} label={t.keptForUploads} value={money(data.heldForYourUploads)} />
         <Stat icon={Wallet} label={t.paidToYou} value={money(data.paid)} />
         <Stat icon={CircleDollarSign} label={t.earnedInAll} value={money(data.lifetime)} />
@@ -750,12 +753,13 @@ function PayoutAccount({ data, onChange }: { data: Data; onChange: () => void })
 }
 
 function PayoutHistory({ data }: { data: Data }) {
+  const { minMicros } = useSettings().payouts;
   const { t, money, date, num, lang } = useM();
   return (
     <section className="rounded-3xl border border-border bg-surface p-5">
       <h2 className="text-lg font-bold">{t.payouts}</h2>
       {data.payouts.length === 0 ? (
-        <p className="mt-2 text-sm text-muted">{t.noPayouts(money(PAYOUT_MIN_MICROS))}</p>
+        <p className="mt-2 text-sm text-muted">{t.noPayouts(money(minMicros))}</p>
       ) : (
         <ul className="mt-3 flex flex-col gap-2">
           {data.payouts.map((p) => (

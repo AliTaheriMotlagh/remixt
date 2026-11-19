@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getSettings } from "@/lib/settings/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import { allow, clientKey, TOO_MANY } from "@/lib/rateLimit";
@@ -15,7 +16,9 @@ const schema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  if (!(await allow(`info-report:${clientKey(req)}`, 10, 60 * 60))) return NextResponse.json(TOO_MANY, { status: 429 });
+  const settings = await getSettings();
+  if (!settings.features.wrongInfo) return NextResponse.json({ error: "Reports are closed for now" }, { status: 403 });
+  if (!(await allow(`info-report:${clientKey(req)}`, settings.limits.wrongInfoPerHour, 60 * 60))) return NextResponse.json(TOO_MANY, { status: 429 });
   const parsed = schema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Say what's wrong" }, { status: 400 });
   const user = await getCurrentUser().catch(() => null);

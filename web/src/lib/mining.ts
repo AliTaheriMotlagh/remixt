@@ -7,39 +7,34 @@
 // and stores it with the job) and the page (which explains the rules), so
 // the two never disagree. No server-only imports here.
 
-export const REWARD = {
-  /** Every song split for someone else. */
-  base: 10,
-  /** Songs longer than LONG_SONG_SECONDS: more work, more pay. */
-  longSong: 5,
-  /** The first song a helper splits each (UTC) day. */
-  firstToday: 5,
-  /** Songs that had waited longer than RUSH_AFTER_MINUTES pay double. */
-  rushMultiplier: 2,
-};
+import { DEFAULTS, type AppSettings } from "./settings/registry";
 
-export const LONG_SONG_SECONDS = 5 * 60;
-export const RUSH_AFTER_MINUTES = 15;
+/**
+ * The rewards (Admin → Settings → Mining rewards): XP for every song split
+ * for someone else, more for a long song and for the first one each (UTC)
+ * day, times the rush multiplier for a song that had waited long.
+ */
+export type MiningRules = AppSettings["mining"];
 
 export type RewardFacts = { long: boolean; firstToday: boolean; rush: boolean };
 
 export type Reward = { xp: number; bonuses: string[] };
 
 /** What a finished split pays, and why. */
-export function splitReward({ long, firstToday, rush }: RewardFacts): Reward {
+export function splitReward({ long, firstToday, rush }: RewardFacts, rules: MiningRules = DEFAULTS.mining): Reward {
   const bonuses: string[] = [];
-  let xp = REWARD.base;
+  let xp = rules.base;
   if (long) {
-    xp += REWARD.longSong;
-    bonuses.push(`long song +${REWARD.longSong}`);
+    xp += rules.longSong;
+    bonuses.push(`long song +${rules.longSong}`);
   }
   if (firstToday) {
-    xp += REWARD.firstToday;
-    bonuses.push(`first today +${REWARD.firstToday}`);
+    xp += rules.firstToday;
+    bonuses.push(`first today +${rules.firstToday}`);
   }
   if (rush) {
-    xp *= REWARD.rushMultiplier;
-    bonuses.push(`rush ×${REWARD.rushMultiplier}`);
+    xp = Math.round(xp * rules.rushMultiplier);
+    bonuses.push(`rush ×${rules.rushMultiplier}`);
   }
   return { xp, bonuses };
 }

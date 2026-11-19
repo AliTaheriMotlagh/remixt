@@ -3,11 +3,13 @@ import { getCurrentUser } from "@/lib/auth";
 import EarningsDashboard from "./EarningsDashboard";
 import HowEarningWorks from "./HowEarningWorks";
 import type { Lang } from "@/lib/monetize/moneyText";
+import { getSettings } from "@/lib/settings/server";
+import { publicSettings } from "@/lib/settings/registry";
 
 // /earnings and /fa/earnings: a member's dashboard, or (signed out) the
 // public page explaining how ads pay the people behind the music.
 export default async function EarningsPage({ lang }: { lang: Lang }) {
-  const user = await getCurrentUser();
+  const [user, settings] = await Promise.all([getCurrentUser(), getSettings()]);
   const fa = lang === "fa";
   const next = fa ? "/fa/earnings" : "/earnings";
   return (
@@ -43,7 +45,7 @@ export default async function EarningsPage({ lang }: { lang: Lang }) {
           </div>
         </header>
       )}
-      <HowEarningWorks lang={lang} />
+      <HowEarningWorks lang={lang} settings={publicSettings(settings)} />
     </div>
   );
 }

@@ -5,11 +5,13 @@
 // AdCard does for its own box. For promoted remixes and songs in lists.
 
 import { useEffect, useRef, type ReactNode } from "react";
-import { VIEWABLE } from "@/lib/monetize/policy";
+import { useSettings } from "@/components/SettingsProvider";
 import { visitorId } from "@/lib/client/presence";
 
 export default function SeenOnce({ token, children, className = "" }: { token: string; children: ReactNode; className?: string }) {
   const box = useRef<HTMLDivElement>(null);
+  const { ads } = useSettings();
+  const viewable = { fraction: ads.viewShare / 10_000, ms: ads.viewMs };
   useEffect(() => {
     const el = box.current;
     if (!el) return;
@@ -18,7 +20,7 @@ export default function SeenOnce({ token, children, className = "" }: { token: s
     const seen = new IntersectionObserver(
       ([entry]) => {
         clearTimeout(timer);
-        if (done || !entry || entry.intersectionRatio < VIEWABLE.fraction || document.hidden) return;
+        if (done || !entry || entry.intersectionRatio < viewable.fraction || document.hidden) return;
         timer = setTimeout(() => {
           if (document.hidden || done) return;
           done = true;
@@ -29,16 +31,16 @@ export default function SeenOnce({ token, children, className = "" }: { token: s
             body: JSON.stringify({ token, visitor: visitorId() }),
             keepalive: true,
           }).catch(() => {});
-        }, VIEWABLE.ms);
+        }, viewable.ms);
       },
-      { threshold: [0, VIEWABLE.fraction, 1] }
+      { threshold: [0, viewable.fraction, 1] }
     );
     seen.observe(el);
     return () => {
       clearTimeout(timer);
       seen.disconnect();
     };
-  }, [token]);
+  }, [token, viewable.fraction, viewable.ms]);
   return (
     <div ref={box} className={className}>
       {children}

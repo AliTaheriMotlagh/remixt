@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getSettings } from "@/lib/settings/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import { createReport, REPORT_KINDS, REPORT_REASONS, targetFromLink, type ReportReason } from "@/lib/reports";
@@ -27,7 +28,7 @@ export async function POST(req: NextRequest) {
 
   if (kind === "takedown") {
     // Anyone may file one, so it's where spam would come in: checked and limited per address (signed-in reporters too).
-    if (!(await allow(`takedown:${clientKey(req)}`, 10, 60 * 60))) return NextResponse.json(TOO_MANY, { status: 429 });
+    if (!(await allow(`takedown:${clientKey(req)}`, (await getSettings()).limits.takedownsPerHour, 60 * 60))) return NextResponse.json(TOO_MANY, { status: 429 });
     if (!user && !(await verifyCaptcha((body as { captcha?: unknown })?.captcha))) return NextResponse.json(CAPTCHA_FAILED, { status: 403 });
     if (!email && !user) return NextResponse.json({ error: "Give an email we can reach you at" }, { status: 400 });
     if (!link?.trim()) return NextResponse.json({ error: "Paste the link to what should come down" }, { status: 400 });
