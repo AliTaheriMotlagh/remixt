@@ -7,6 +7,7 @@ import { useStudioStore } from "@/lib/client/studioStore";
 import { shortPath } from "@/lib/shareLinks";
 import ShareMenu from "./ShareMenu";
 import type { RemixStats } from "@/lib/models";
+import { trackEvent } from "@/lib/client/analytics";
 
 /** Seconds of listening before a play counts. */
 const COUNT_AFTER_SECONDS = 5;
@@ -59,6 +60,7 @@ export default function RemixStatsBar({
     if (counted.current) return;
     const timer = setTimeout(async () => {
       counted.current = true;
+      trackEvent("remix_play", { remix: remixId });
       const res = await fetch(`/api/remixes/${remixId}/play`, { method: "POST" }).catch(() => null);
       const data = await res?.json().catch(() => null);
       if (data?.plays !== undefined) setStats((s) => ({ ...s, plays: data.plays }));

@@ -3,6 +3,7 @@ import { getCurrentUser } from "@/lib/auth";
 import LibraryBrowser from "@/components/LibraryBrowser";
 import PromotedSong from "@/components/ads/PromotedSong";
 import { pageMetadata } from "@/lib/seo";
+import { packPeaksJson } from "@/lib/peaksCodec";
 
 export const metadata = pageMetadata({
   title: "Free vocal & beat stems library",
@@ -17,7 +18,23 @@ export default async function LibraryPage({
   searchParams: Promise<{ q?: string; tag?: string; kind?: string }>;
 }) {
   const [user, params] = await Promise.all([getCurrentUser(), searchParams]);
-  const stems = await getLibraryStems(user?.id ?? null);
+  // Only what the list draws, and each waveform as a short string (lib/peaksCodec.ts):
+  // the full rows made this page's navigation payload grow ~4 KB per stem.
+  const stems = (await getLibraryStems(user?.id ?? null)).map((s) => ({
+    id: s.id,
+    track_id: s.track_id,
+    kind: s.kind,
+    peaks: packPeaksJson(s.peaks_json),
+    track_title: s.track_title,
+    track_tags: s.track_tags,
+    track_duration: s.track_duration,
+    track_bpm: s.track_bpm,
+    artist_name: s.artist_name,
+    artist_id: s.artist_id,
+    track_has_cover: s.track_has_cover,
+    track_private: s.track_private,
+    track_mine: s.track_mine,
+  }));
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-12">

@@ -46,11 +46,13 @@ const bodySchema = z.union([
     size: z.number().int().positive(),
     tags,
     rightsConfirmed: rights,
+    /** Kept to its owner when split (they share or publish it later). */
+    private: z.boolean().default(false),
     // The job an earlier try at this same file was going into: carried on, if it's still there.
     resume: z.string().uuid().optional(),
   }),
   // A link: fetched here, straight into the queue.
-  z.object({ link: z.string().trim().min(1).max(2000), tags, rightsConfirmed: rights }),
+  z.object({ link: z.string().trim().min(1).max(2000), tags, rightsConfirmed: rights, private: z.boolean().default(false) }),
 ]);
 
 /** Puts a song in the queue for a helper's computer to split. */
@@ -77,7 +79,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Couldn't import that link" }, { status: 500 });
     }
     const title = song.title.slice(0, 200) || "Untitled";
-    const job = await createJob(user.id, { title, filename: `${title}.${song.ext}`, tags: body.tags, ext: song.ext });
+    const job = await createJob(user.id, { title, filename: `${title}.${song.ext}`, tags: body.tags, ext: song.ext, keepPrivate: body.private });
     try {
       await putObject(job.source_key, song.bytes);
     } catch (err) {
@@ -111,7 +113,7 @@ export async function POST(req: NextRequest) {
   // into the same job, where the relay kept what it had been sent.
   const earlier = body.resume ? await getJob(body.resume) : undefined;
   const resumed = !!earlier && earlier.owner_id === user.id && earlier.status === "uploading" && earlier.filename === body.filename;
-  const job = resumed ? earlier : await createJob(user.id, { title: body.title, filename: body.filename, tags: body.tags, ext });
+  const job = resumed ? earlier : await createJob(user.id, { title: body.title, filename: body.filename, tags: body.tags, ext, keepPrivate: body.private });
   if (resumed) await stillUploading(job);
   const upload = await createUploadTarget(job.source_key, `/api/split-jobs/${job.id}/source`, MAX_SOURCE_BYTES);
   return NextResponse.json({ id: job.id, upload, resumed });

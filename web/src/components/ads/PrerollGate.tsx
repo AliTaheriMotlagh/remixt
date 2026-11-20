@@ -18,12 +18,24 @@ import { audioEngine } from "@/lib/client/audioEngine";
 import { visitorId } from "@/lib/client/presence";
 import { adHeard, prerollDue, type ListenerAds } from "@/lib/monetize/adRules";
 import { useSettings } from "@/components/SettingsProvider";
+import RemixtMark from "@/components/RemixtMark";
 
+type Ad = { id: string; advertiser: string; title: string; body: string; cta: string; image: string | null; audio: string | null; seconds: number | null };
 type Served = {
-  ad: { id: string; advertiser: string; title: string; body: string; cta: string; image: string | null; audio: string | null; seconds: number | null } | null;
+  ad: Ad | null;
+  /** One of Remixt's own sounds (only when the owner turned that on: Admin → Settings). */
+  house?: { id: string; title: string; body: string; cta: string; href: string; media: string | null; seconds: number | null } | null;
   token: string | null;
   supports: { name: string; role: string; bp: number }[];
 };
+
+/** A paying ad as it is, or one of ours dressed as one (with where its button goes). */
+function playable(s: Served): (Ad & { own: boolean; href: string | null }) | null {
+  if (s.ad?.audio) return { ...s.ad, own: false, href: null };
+  const h = s.house;
+  if (!h?.media) return null;
+  return { id: h.id, advertiser: "Remixt", title: h.title, body: h.body, cta: h.cta, image: null, audio: h.media, seconds: h.seconds, own: true, href: h.href };
+}
 
 const KEY = "remixt-audio-ads";
 
@@ -66,11 +78,12 @@ export default function PrerollGate({ remixId, lang = "en" }: { remixId: string;
       fetch(`/api/ads?${q}`, { cache: "no-store" })
         .then((r) => r.json() as Promise<Served>)
         .then((served) => {
-          if (cancelled || !served.ad?.audio || !served.token) return;
+          const sound = playable(served);
+          if (cancelled || !sound?.audio || !served.token) return;
           const el = new Audio();
           el.preload = "auto";
           el.setAttribute("playsinline", "");
-          el.src = served.ad.audio;
+          el.src = sound.audio;
           ready.current = { served, el };
         })
         .catch(() => {});
@@ -98,7 +111,7 @@ export default function PrerollGate({ remixId, lang = "en" }: { remixId: string;
       const started = el.play();
       running.current = new Promise<void>((resolve) => {
         let paid = false;
-        const total = Math.min(rules.current.maxSeconds, served.ad?.seconds ?? rules.current.maxSeconds);
+        const total = Math.min(rules.current.maxSeconds, playable(served)?.seconds ?? rules.current.maxSeconds);
         // A sound that stalls never holds the remix back for long.
         const timeout = setTimeout(() => done(), (total + 7) * 1000);
         const tick = () => {
@@ -144,9 +157,10 @@ export default function PrerollGate({ remixId, lang = "en" }: { remixId: string;
     };
   }, []);
 
-  if (!playing?.ad) return null;
-  const ad = playing.ad;
-  const left = Math.max(0, Math.ceil(AUDIO.skipAfter - at));
+  const ad = playing ? playable(playing) : null;
+  if (!playing || !ad) return null;
+  // One of ours can be skipped straight away: it pays nobody, so it shouldn't hold anyone up.
+  const left = ad.own ? 0 : Math.max(0, Math.ceil(AUDIO.skipAfter - at));
   const total = Math.min(AUDIO.maxSeconds, ad.seconds ?? AUDIO.maxSeconds);
   const people = playing.supports.filter((s) => s.role !== "platform" && s.bp > 0);
 
@@ -161,7 +175,11 @@ export default function PrerollGate({ remixId, lang = "en" }: { remixId: string;
         <div className="h-full bg-brand transition-[width] duration-300" style={{ width: `${Math.min(100, (at / total) * 100)}%` }} />
       </div>
       <div className="flex items-center gap-3 p-3">
-        {ad.image ? (
+        {ad.own ? (
+          <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand via-vocals to-beat">
+            <RemixtMark className="h-10 w-10" />
+          </span>
+        ) : ad.image ? (
           // eslint-disable-next-line @next/next/no-img-element -- the advertiser's picture
           <img src={ad.image} alt="" className="h-14 w-14 shrink-0 rounded-xl object-cover" />
         ) : (
@@ -171,13 +189,20 @@ export default function PrerollGate({ remixId, lang = "en" }: { remixId: string;
         )}
         <div className="min-w-0 flex-1">
           <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
-            {fa ? "تبلیغ" : "Ad"} · {Math.max(0, Math.ceil(total - at))}s{ad.advertiser ? ` · ${ad.advertiser}` : ""}
+            {ad.own ? (fa ? "از ریمیکست" : "From Remixt") : fa ? "تبلیغ" : "Ad"} · {Math.max(0, Math.ceil(total - at))}s
+            {!ad.own && ad.advertiser ? ` · ${ad.advertiser}` : ""}
           </p>
           <p className="truncate font-semibold">{ad.title}</p>
           <a
-            href={`/api/ads/click?t=${encodeURIComponent(playing.token ?? "")}`}
+            href={ad.own ? (ad.href ?? "/") : `/api/ads/click?t=${encodeURIComponent(playing.token ?? "")}`}
+            onClick={() => {
+              if (!ad.own || !playing.token) return;
+              try {
+                navigator.sendBeacon?.("/api/ads/click", playing.token);
+              } catch {}
+            }}
             target="_blank"
-            rel="sponsored noopener"
+            rel={ad.own ? "noopener" : "sponsored noopener"}
             className="inline-flex items-center gap-1 text-sm text-brand-strong hover:underline"
           >
             {ad.cta} <ArrowUpRight className="h-3.5 w-3.5 rtl:-scale-x-100" />

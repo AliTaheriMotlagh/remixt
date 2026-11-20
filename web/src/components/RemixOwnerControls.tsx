@@ -9,30 +9,42 @@ export default function RemixOwnerControls({
   remixId,
   initialPublished,
   initialTags,
+  initialWaiting,
 }: {
   remixId: string;
   initialPublished: boolean;
   initialTags: string[];
+  /** Publishing was asked for and some song's owner hasn't agreed yet. */
+  initialWaiting?: string | null;
 }) {
   const [tags, setTags] = useState<string[] | null>(null);
   const [published, setPublished] = useState(initialPublished);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Publishing asked for, waiting on the owners of private songs in it to agree (lib/publishConsent.ts).
+  const [waiting, setWaiting] = useState<string | null>(initialWaiting ?? null);
+  const [declined, setDeclined] = useState(false);
   const router = useRouter();
 
-  async function togglePublish() {
+  async function togglePublish(askAgain = false) {
     setBusy(true);
     try {
       const res = await fetch(`/api/remixes/${remixId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ published: !published }),
+        body: JSON.stringify({ published: !published, ...(askAgain ? { askAgain: true } : {}) }),
       });
-      // Refused when an artist of a song in it chose Block: say which and why.
+      const data = (await res.json().catch(() => ({}))) as { error?: string; published?: boolean; message?: string; waitingFor?: { status: string }[] };
+      // Refused when an artist of a song in it chose Block, or an owner said no: say which and why.
       if (res.ok) {
-        setPublished(!published);
+        setPublished(!!data.published);
+        setWaiting(data.waitingFor?.length ? (data.message ?? "Waiting for the songs' owners to agree") : null);
+        setDeclined(false);
         setError(null);
-      } else setError(((await res.json().catch(() => ({}))) as { error?: string }).error ?? "Couldn't change it");
+      } else {
+        setError(data.error ?? "Couldn't change it");
+        setDeclined(!!data.waitingFor?.some((w) => w.status === "declined"));
+      }
     } finally {
       setBusy(false);
     }
@@ -75,10 +87,10 @@ export default function RemixOwnerControls({
             published ? "bg-success/15 text-success" : "bg-surface-raised text-muted"
           }`}
         >
-          {published ? "Published" : "Private"}
+          {published ? "Published" : waiting ? "Waiting for approval" : "Private"}
         </span>
         <button
-          onClick={togglePublish}
+          onClick={() => togglePublish()}
           disabled={busy}
           className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-surface-hover disabled:opacity-50"
         >
@@ -104,7 +116,17 @@ export default function RemixOwnerControls({
           Ads &amp; earnings
         </Link>
       </div>
-      {error && <p className="max-w-md text-xs text-danger">{error}</p>}
+      {error && (
+        <p className="max-w-md text-xs text-danger">
+          {error}{" "}
+          {declined && (
+            <button onClick={() => togglePublish(true)} disabled={busy} className="font-semibold underline">
+              Ask again
+            </button>
+          )}
+        </p>
+      )}
+      {waiting && !published && <p className="max-w-md text-xs text-muted">{waiting}</p>}
       {tags && (
         <div className="w-full max-w-md rounded-xl border border-border bg-surface p-3">
           <TagInput value={tags} onChange={setTags} compact />

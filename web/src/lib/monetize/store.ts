@@ -15,6 +15,7 @@ import { ensureSchema } from "../schema";
 import { notify } from "../notifications";
 import { FORMATS, tomanOf, type Format } from "./adRules";
 import { getSettings } from "../settings/server";
+import { countHouseClick, countHouseView } from "./houseStore";
 import {
   formatMoney, isTomanMethod, isOwnView, monthSpan, payOut, remixShares, siteShares, songShares,
   PLACEMENTS, unclaimedCutoff, type Placement, type RemixParties, type Role, type Share, type SourceSong, type StatementLine, type StatementState,
@@ -174,6 +175,10 @@ export function ensureMonetizeSchema(): Promise<void> {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )
     `;
+    // Where and how its maker wants picture ads, and whether Remixt's own may fill in (added later).
+    await sql`ALTER TABLE remix_ad_settings ADD COLUMN IF NOT EXISTS spots TEXT[] NOT NULL DEFAULT '{player,radio}'`;
+    await sql`ALTER TABLE remix_ad_settings ADD COLUMN IF NOT EXISTS style TEXT NOT NULL DEFAULT 'full'`;
+    await sql`ALTER TABLE remix_ad_settings ADD COLUMN IF NOT EXISTS house BOOLEAN NOT NULL DEFAULT true`;
     await sql`
       CREATE TABLE IF NOT EXISTS track_ad_policy (
         track_id TEXT PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
@@ -358,8 +363,16 @@ function tokenKey() {
  * which spot, about what — signed, so a view can't be booked for a spot or
  * an ad that was never served.
  */
-export function viewToken(placement: Placement, target: Target, campaignId: string | null, now = Date.now(), format: Format = "card"): string {
-  const body = [placement, target ? `${target.kind}:${target.id}` : "", campaignId ?? "", Math.floor(now / 1000) + 30 * 60, format].join("|");
+export function viewToken(
+  placement: Placement,
+  target: Target,
+  campaignId: string | null,
+  now = Date.now(),
+  format: Format = "card",
+  /** One of Remixt's own ads (houseStore.ts) shown in the spot: counted for the owner's report, never paid. */
+  houseId: string | null = null
+): string {
+  const body = [placement, target ? `${target.kind}:${target.id}` : "", campaignId ?? "", Math.floor(now / 1000) + 30 * 60, format, houseId ?? ""].join("|");
   const mac = createHmac("sha256", tokenKey()).update(body).digest("base64url").slice(0, 32);
   return `${Buffer.from(body).toString("base64url")}.${mac}`;
 }
@@ -369,14 +382,24 @@ export function promoteToken(target: NonNullable<Target>, campaignId: string): s
   return viewToken("promote", target, campaignId, Date.now(), "promote");
 }
 
-export function readToken(token: string, now = Date.now()): { placement: Placement; target: Target; campaignId: string | null; format: Format } | null {
+export function readToken(
+  token: string,
+  now = Date.now()
+): { placement: Placement; target: Target; campaignId: string | null; format: Format; houseId: string | null } | null {
   const [body64, mac] = String(token).split(".");
   if (!body64 || !mac) return null;
   const body = Buffer.from(body64, "base64url").toString("utf8");
   if (createHmac("sha256", tokenKey()).update(body).digest("base64url").slice(0, 32) !== mac) return null;
-  const [placement, target, campaignId, expires, format = "card"] = body.split("|");
+  const [placement, target, campaignId, expires, format = "card", houseId = ""] = body.split("|");
   if (!PLACEMENTS.includes(placement as Placement) || Number(expires) * 1000 < now || !FORMATS.includes(format as Format)) return null;
-  return { placement: placement as Placement, target: parseTarget(target), campaignId: campaignId || null, format: format as Format };
+  return {
+    placement: placement as Placement,
+    target: parseTarget(target),
+    // A token names a paying ad or one of ours, never both.
+    campaignId: campaignId || null,
+    format: format as Format,
+    houseId: campaignId ? null : houseId || null,
+  };
 }
 
 const BOTS = /bot|crawl|spider|slurp|headless|lighthouse|preview|facebookexternalhit|embedly|python|curl|wget|httpclient/i;
@@ -393,6 +416,8 @@ export async function recordView(input: { token: string; visitor: string; addres
   const t = readToken(input.token);
   if (!t || !/^[\w-]{6,64}$/.test(input.visitor)) return { counted: false, paid: false, whyNot: "bad view" };
   await ensureMonetizeSchema();
+  // One of Remixt's own: counted for its report (robots left out), and booked below like any unpaid view.
+  if (t.houseId && !BOTS.test(input.userAgent)) await countHouseView(t.houseId, t.placement).catch(() => {});
   const [shares, settings] = await Promise.all([sharesFor(t.placement, t.target), getSettings()]);
   const target = t.target ? `${t.target.kind}:${t.target.id}` : "";
 
@@ -452,6 +477,7 @@ class AlreadyCounted extends Error {}
 /** A click on a paying ad: counted (never paid — pay is per view, so clicking earns nobody anything) and where it goes. */
 export async function recordClick(token: string): Promise<string | null> {
   const t = readToken(token);
+  if (t?.houseId) return countHouseClick(t.houseId, t.placement);
   if (!t?.campaignId) return null;
   await ensureMonetizeSchema();
   const [c] = await sql<{ link: string; promote_target: string | null }[]>`

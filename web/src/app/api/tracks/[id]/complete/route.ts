@@ -1,3 +1,4 @@
+import { trackServer } from "@/lib/analyticsStore";
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { getTrackById } from "@/lib/models";
@@ -14,12 +15,13 @@ export async function POST(
   if (!user) return NextResponse.json({ error: "Sign in required" }, { status: 401 });
 
   const { id } = await params;
-  const track = await getTrackById(id);
-  if (!track || track.owner_id !== user.id) {
+  const song = await getTrackById(id);
+  if (!song || song.owner_id !== user.id) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   if (!(await finishTrackUpload(id))) {
     return NextResponse.json({ error: "The stems haven't finished uploading" }, { status: 409 });
   }
+  trackServer("upload", user.id, { private: song.visibility === "private" });
   return NextResponse.json({ id, status: "ready" });
 }

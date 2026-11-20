@@ -8,6 +8,8 @@ import { fetchStem, within } from "./stemFetch";
 import { forgetMix, keepMix, keptMix, radioMixKey } from "./radioCache";
 import { laneFromApi, projectFromApi, type RemixApi, type RemixLaneApi } from "./remixLanes";
 import { useStudioStore } from "./studioStore";
+import { renderTransition } from "./radioTransition";
+import { isRendered } from "@/lib/radioTransitions";
 
 // The radio's player. Every song on air is mixed to a WAV in this tab (the
 // Studio's own mixdown, so a remix sounds exactly as made) and played by an
@@ -95,6 +97,8 @@ type Deck = {
   fadeFromStart: boolean;
   /** The kept mix it plays, if it came from the cache (forgotten if it won't play). */
   keptKey: string | null;
+  /** Its file begins with the transition from the song before (lib/radioTransitions.ts): hand over at its start. */
+  cut: boolean;
 };
 
 type Player = {
@@ -767,16 +771,50 @@ export class RadioDeck {
     else this.onState("loading", "The connection dropped — trying again…");
   }
 
+  /**
+   * The station's style for this change (AutoMix, filter sweep, echo…) built
+   * into the start of the incoming song's file, from the outgoing song's own
+   * file: then every device plays the same change, locked screens included.
+   * Only for a song readied from its start, with the song before it ready;
+   * otherwise (a tune-in mid-change, a failure) the plain crossfade plays.
+   */
+  private async withTransition(
+    row: QueueRow,
+    ready: { url: string; offset: number; keptKey: string | null }
+  ): Promise<{ url: string; offset: number; keptKey: string | null; cut: boolean }> {
+    const plain = { ...ready, cut: false };
+    if (!isRendered(row.transition) || ready.offset > 0.01 || !row.startsAt) return plain;
+    const before = this.decks.find((d) => d.row.startsAt && d.row.endsAt && d.row.startsAt < row.startsAt! && d.row.endsAt > row.startsAt!);
+    if (!before?.row.endsAt || !before.row.startsAt) return plain;
+    try {
+      const seconds = (before.row.endsAt - row.startsAt) / 1000;
+      const decoder = new OfflineAudioContext(2, 1, 44_100);
+      const [a, b] = await Promise.all(
+        [before.url, ready.url].map(async (u) => decoder.decodeAudioData(await (await fetch(u)).arrayBuffer()))
+      );
+      const tailFrom = (row.startsAt - before.row.startsAt) / 1000 - before.offset;
+      if (tailFrom < 0 || tailFrom >= a.duration) return plain;
+      const mixed = await renderTransition(row.transition!, { buffer: a, from: tailFrom }, b, seconds, before.row.bpm ?? null, row.bpm ?? null);
+      const blob = await encodeWavGently(mixed);
+      URL.revokeObjectURL(ready.url);
+      // Not the kept whole song any more (the change is in it): nothing to forget if it won't play.
+      return { url: URL.createObjectURL(blob), offset: 0, keptKey: null, cut: true };
+    } catch {
+      return plain;
+    }
+  }
+
   /** Makes sure `row` is (being) prepared; `from`: the song's second to mix from. */
   prepare(row: QueueRow, from: number) {
     if (this.has(row.rowId) || this.rendering.has(row.rowId) || this.idle) return;
     const failed = this.failures.get(row.rowId);
     if (failed && Date.now() < failed.retryAt) return;
     const job = this.render(row, from)
-      .then(({ url, offset, keptKey }) => {
+      .then((ready) => this.withTransition(row, ready))
+      .then(({ url, offset, keptKey, cut }) => {
         if (this.idle) return URL.revokeObjectURL(url);
         this.failures.delete(row.rowId);
-        this.decks.push({ row, url, offset, joinedAt: 0, fadeFromStart: from > 0.5, keptKey });
+        this.decks.push({ row, url, offset, joinedAt: 0, fadeFromStart: from > 0.5, keptKey, cut });
         this.onWake();
       })
       .catch((e) => this.fail(row.rowId, e instanceof Error ? e.message : "Couldn't get the song ready"))
@@ -818,7 +856,7 @@ export class RadioDeck {
     if (this.adBreak) return;
 
     const plan = planDecks(
-      this.decks.map((d) => ({ rowId: d.row.rowId, startsAt: d.row.startsAt ?? 0, endsAt: d.row.endsAt ?? 0, offset: d.offset })),
+      this.decks.map((d) => ({ rowId: d.row.rowId, startsAt: d.row.startsAt ?? 0, endsAt: d.row.endsAt ?? 0, offset: d.offset, cut: d.cut })),
       serverNow,
       this.players.length === 1 ? 1 : 2
     );

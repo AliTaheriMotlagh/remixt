@@ -7,7 +7,7 @@ import { ensureLiveSchema } from "./live";
 // read from the bell in the nav bar. Nobody is told about their own
 // actions, and toggling a like on and off doesn't send a pile of them.
 
-export type NotificationType = "like" | "comment" | "follow" | "remix" | "challenge" | "split" | "live" | "share" | "jam" | "payout" | "blocked" | "ad";
+export type NotificationType = "like" | "comment" | "follow" | "remix" | "challenge" | "split" | "live" | "share" | "jam" | "payout" | "blocked" | "ad" | "consent";
 
 export type Notification = {
   id: string;
@@ -51,7 +51,7 @@ export async function notify({
           AND actor_id IS NOT DISTINCT FROM ${actorId}
           AND remix_id IS NOT DISTINCT FROM ${remixId}
           AND track_id IS NOT DISTINCT FROM ${trackId}
-          AND ${type} NOT IN ('comment', 'jam', 'payout', 'ad')
+          AND ${type} NOT IN ('comment', 'jam', 'payout', 'ad', 'consent')
           AND created_at > now() - interval '1 day'
       )
     `;

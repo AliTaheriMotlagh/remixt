@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useOnScreen } from "@/lib/client/useOnScreen";
 import { X } from "lucide-react";
 import { embedCode, shortPath } from "@/lib/shareLinks";
+import { trackEvent } from "@/lib/client/analytics";
 
 /** Short link, QR code and embed snippet for a remix. */
 export default function ShareMenu({ remixId, title, onClose }: { remixId: string; title: string; onClose: () => void }) {
@@ -37,6 +38,7 @@ export default function ShareMenu({ remixId, title, onClose }: { remixId: string
   async function copy(label: string, text: string) {
     try {
       await navigator.clipboard.writeText(text);
+      trackEvent("share", { how: label.slice(0, 40) });
       setCopied(label);
       setTimeout(() => setCopied(null), 2000);
     } catch {

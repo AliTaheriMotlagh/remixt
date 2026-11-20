@@ -8,11 +8,13 @@ import { Countdown, History, ItemRow, LiveDot, Progress, RadioArt, RequestPanel,
 import RadioLyrics from "./RadioLyrics";
 import AdCard from "@/components/ads/AdCard";
 import WrongInfoButton from "@/components/WrongInfoButton";
+import RemixtMark from "@/components/RemixtMark";
 import type { RadioAdBreak } from "@/lib/client/radioClient";
 
 /** The ad break playing between songs: what it is, who it pays, and the advertiser's link. */
 function AdBreakBanner({ ad }: { ad: RadioAdBreak }) {
   const people = ad.supports.filter((s) => s.role !== "platform" && s.bp > 0);
+  if (ad.own) return <StationIdBanner ad={ad} own={ad.own} />;
   return (
     <aside
       role="status"
@@ -41,6 +43,40 @@ function AdBreakBanner({ ad }: { ad: RadioAdBreak }) {
         >
           {ad.cta}
         </a>
+      </div>
+    </aside>
+  );
+}
+
+/** Remixt's own station ID between songs: the sound plays, this says what it is (and counts a tap). */
+function StationIdBanner({ ad, own }: { ad: RadioAdBreak; own: NonNullable<RadioAdBreak["own"]> }) {
+  return (
+    <aside
+      role="status"
+      aria-label="Station ID"
+      className="fixed inset-x-3 bottom-20 z-50 mx-auto max-w-lg overflow-hidden rounded-2xl border border-brand/40 bg-surface-raised shadow-2xl shadow-brand/20 sm:bottom-6"
+    >
+      <div className="station-id-sweep h-0.5 bg-gradient-to-r from-brand via-vocals to-beat" style={{ animationDuration: `${ad.seconds}s` }} />
+      <div className="flex items-center gap-3 p-3">
+        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand via-vocals to-beat">
+          <RemixtMark className="h-9 w-9" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-muted">From Remixt · back to the music in a moment</p>
+          <p className="truncate font-semibold">{ad.title}</p>
+          <p className="truncate text-xs text-muted">{own.body}</p>
+        </div>
+        <Link
+          href={own.href}
+          onClick={() => {
+            try {
+              navigator.sendBeacon?.("/api/ads/click", ad.token);
+            } catch {}
+          }}
+          className="shrink-0 rounded-full bg-brand px-3.5 py-2 text-sm font-semibold text-white"
+        >
+          {ad.cta}
+        </Link>
       </div>
     </aside>
   );
@@ -248,7 +284,7 @@ export default function RadioStation({ slug, name, signedIn }: { slug: string; n
         <div className="flex min-w-0 flex-col gap-4 sm:gap-6">
           {radio.adBreak && <AdBreakBanner ad={radio.adBreak} />}
           {/* The song on air's: a view pays its artists (and a remix's makers). A new song, a new spot. */}
-          <AdCard key={now ? `${now.kind}:${now.id}` : "none"} placement="radio" target={now ? `${now.kind}:${now.id}` : null} seed={now?.rowId ?? 0} className="rounded-3xl" />
+          <AdCard key={now ? `${now.kind}:${now.id}` : "none"} placement="radio" target={now ? `${now.kind}:${now.id}` : null} spot="radio" className="rounded-3xl" />
           <section className="rounded-3xl border border-border bg-surface/80 p-4 sm:p-5">
             <h2 className="mb-2 flex items-center gap-2 text-lg font-bold">
               <HistoryIcon className="size-5 text-drums" /> Just played

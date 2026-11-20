@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSettings } from "@/lib/settings/server";
 import { z } from "zod";
 import sql from "@/lib/db";
+import { trackServer } from "@/lib/analyticsStore";
 import { createSessionCookie, verifyPassword } from "@/lib/auth";
 import { CAPTCHA_FAILED, verifyCaptcha } from "@/lib/captcha";
 import { allow, clientKey, hit, hitsIn, TOO_MANY } from "@/lib/rateLimit";
@@ -39,5 +40,6 @@ export async function POST(req: NextRequest) {
   }
 
   await createSessionCookie(user.id);
+  trackServer("login", user.id);
   return NextResponse.json({ id: user.id, artistName: user.artist_name });
 }

@@ -161,7 +161,11 @@ export async function queueFile(
   tags: string[],
   onStage: (stage: UploadStage) => void,
   signal?: AbortSignal,
-  { resume = null, onResume = () => {} }: { resume?: QueueResume | null; onResume?: (state: QueueResume | null) => void } = {}
+  {
+    resume = null,
+    onResume = () => {},
+    keepPrivate = false,
+  }: { resume?: QueueResume | null; onResume?: (state: QueueResume | null) => void; keepPrivate?: boolean } = {}
 ) {
   const file = await shrinkForQueue(original, onStage);
   signal?.throwIfAborted();
@@ -181,6 +185,7 @@ export async function queueFile(
           tags,
           // The upload form doesn't start without the box ticked.
           rightsConfirmed: true,
+          ...(keepPrivate ? { private: true } : {}),
           ...(earlier ? { resume: earlier.jobId } : {}),
         }),
       },
@@ -216,13 +221,13 @@ export async function queueFile(
 }
 
 /** Queues the song behind a link; the server fetches it straight into the queue. */
-export async function queueLink(link: string, tags: string[], onStage: (stage: UploadStage) => void) {
+export async function queueLink(link: string, tags: string[], onStage: (stage: UploadStage) => void, keepPrivate = false) {
   onStage({ stage: "fetching-link" });
   return json<{ id: string; title: string }>(
     await fetch("/api/split-jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ link, tags, rightsConfirmed: true }),
+      body: JSON.stringify({ link, tags, rightsConfirmed: true, ...(keepPrivate ? { private: true } : {}) }),
     }),
     "Couldn't queue that link"
   );

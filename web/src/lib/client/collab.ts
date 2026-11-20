@@ -28,7 +28,10 @@ const POLL_MS = 2000;
 type SharedLane = Omit<StudioLane, "solo">;
 export type SharedState = { lanes: SharedLane[]; project: ProjectSettings };
 
-export type CollabMember = { id: string; artist_name: string; avatar_color: string; online: boolean; owner: boolean };
+export type CollabMember = {
+  id: string; artist_name: string; avatar_color: string; online: boolean; owner: boolean;
+  role?: string; can_edit?: boolean;
+};
 
 type Status = {
   projectId: string | null;
@@ -243,6 +246,10 @@ class CollabSession {
         this.schedulePush();
       } else if (res.status === 404) {
         this.end();
+      } else if (res.status === 403) {
+        // Here to listen: what was changed here goes back to the shared mix.
+        if (this.base) this.apply(this.base);
+        useCollab.setState({ sync: "synced", error: data?.error ?? "You can listen here, not edit" });
       } else {
         useCollab.setState({ sync: "offline", error: data?.error ?? "Couldn't save — retrying" });
         this.schedulePush();

@@ -7,7 +7,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Ban, CircleDollarSign, ExternalLink, Loader2, Megaphone } from "lucide-react";
-import { adKindText, AD_KINDS, SONG_POLICY_TEXT, TOPICS, type AdKind, type RemixAdSettings } from "@/lib/monetize/adRules";
+import { adKindText, AD_KINDS, AD_SPOT_TEXT, AD_SPOTS, AD_STYLE_TEXT, AD_STYLES, SONG_POLICY_TEXT, TOPICS, type AdKind, type RemixAdSettings } from "@/lib/monetize/adRules";
 import { moneyIn, moneyPath, numIn, type Lang } from "@/lib/monetize/moneyText";
 import type { RemixMoney } from "@/lib/monetize/adStore";
 import { useSettings } from "@/components/SettingsProvider";
@@ -171,6 +171,58 @@ export default function RemixAdPanel({ remixId, lang = "en", rate = 0 }: { remix
               </label>
             ))}
           </div>
+        </fieldset>
+
+        {/* Where and how: the remixer's choice for picture ads (lib/monetize/adRules.ts AD_SPOTS, AD_STYLES). */}
+        <fieldset className={`mt-5 ${form.on && form.kinds.includes("card") ? "" : "opacity-50"}`}>
+          <legend className="font-semibold">{fa ? "تبلیغ تصویری کجا باشد" : "Where picture ads sit"}</legend>
+          <div className="mt-2 grid gap-2 sm:grid-cols-3">
+            {AD_SPOTS.map((spot) => {
+              const on = form.spots.includes(spot);
+              const last = on && form.spots.length === 1;
+              return (
+                <label key={spot} className={`flex cursor-pointer items-start gap-2 rounded-2xl border p-3 ${on ? "border-brand bg-brand/10" : "border-border"}`}>
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    disabled={last}
+                    onChange={() => setForm({ ...form, spots: on ? form.spots.filter((x) => x !== spot) : [...form.spots, spot] })}
+                    className="mt-1 accent-[var(--brand)]"
+                  />
+                  <span>
+                    <span className="block text-sm font-semibold">{fa ? AD_SPOT_TEXT[spot].fa : AD_SPOT_TEXT[spot].en}</span>
+                    <span className="block text-xs text-muted">{fa ? AD_SPOT_TEXT[spot].faHelp : AD_SPOT_TEXT[spot].enHelp}</span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        </fieldset>
+
+        <fieldset className={`mt-5 ${form.on && form.kinds.includes("card") ? "" : "opacity-50"}`}>
+          <legend className="font-semibold">{fa ? "چه شکلی باشد" : "How they look"}</legend>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            {AD_STYLES.map((style) => (
+              <label key={style} className={`flex cursor-pointer items-start gap-2 rounded-2xl border p-3 ${form.style === style ? "border-brand bg-brand/10" : "border-border"}`}>
+                <input type="radio" name="ad-style" checked={form.style === style} onChange={() => setForm({ ...form, style })} className="mt-1 accent-[var(--brand)]" />
+                <span>
+                  <span className="block text-sm font-semibold">{fa ? AD_STYLE_TEXT[style].fa : AD_STYLE_TEXT[style].en}</span>
+                  <span className="block text-xs text-muted">{fa ? AD_STYLE_TEXT[style].faHelp : AD_STYLE_TEXT[style].enHelp}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+          <label className="mt-2 flex cursor-pointer items-start gap-2 rounded-2xl border border-border p-3">
+            <input type="checkbox" checked={form.house} onChange={(e) => setForm({ ...form, house: e.target.checked })} className="mt-1 accent-[var(--brand)]" />
+            <span>
+              <span className="block text-sm font-semibold">{fa ? "وقتی تبلیغ پولی نیست، تبلیغ خودِ ریمیکست" : "Remixt's own ads when no paying ad fits"}</span>
+              <span className="block text-xs text-muted">
+                {fa
+                  ? "پولی ندارد، ولی به شنونده‌ها ابزارهای ریمیکست را نشان می‌دهد. خاموش: آن جا خالی می‌ماند."
+                  : "They pay nobody, but show listeners what they can make here. Off: the spot stays empty."}
+              </span>
+            </span>
+          </label>
         </fieldset>
 
         <fieldset className="mt-5">

@@ -14,8 +14,16 @@ import { crossfadeGains } from "./radioPick";
 //   crossfade, where both are equally loud, so the cut lands in the blend
 //   rather than at the start of the next song's intro.
 
-/** A song ready to play: its place on the station's clock (ms) and the song's second at its file's start. */
-export type PlanDeck = { rowId: number; startsAt: number; endsAt: number; offset: number };
+/**
+ * A song ready to play: its place on the station's clock (ms) and the song's
+ * second at its file's start. `cut`: its file already begins with the
+ * transition from the song before (a rendered style, lib/radioTransitions.ts),
+ * so the player hands over at its start instead of crossfading the two.
+ */
+export type PlanDeck = { rowId: number; startsAt: number; endsAt: number; offset: number; cut?: boolean };
+
+/** A handover is this quick (seconds): the two files are the same sound there, so it's never heard. */
+export const HANDOVER_SECONDS = 0.05;
 
 /** A song to sound now: seconds into its file, and its gain (0–1, before the listener's volume). */
 export type PlanVoice = { rowId: number; into: number; gain: number };
@@ -38,7 +46,8 @@ export function planDecks(decks: PlanDeck[], serverNow: number, players: 1 | 2):
     for (const [i, d] of live.entries()) {
       const before = live[i - 1];
       const overlap = before ? Math.max(0, before.endsAt - d.startsAt) : 0;
-      if (!before || serverNow >= d.startsAt + overlap / 2) pick = d;
+      // A rendered change starts in this song's file: switch at its start. A plain crossfade: halfway.
+      if (!before || serverNow >= d.startsAt + (d.cut ? 0 : overlap / 2)) pick = d;
     }
     return { sound: pick ? [{ rowId: pick.rowId, into: into(pick), gain: 1 }] : [], preload: null };
   }
@@ -49,11 +58,11 @@ export function planDecks(decks: PlanDeck[], serverNow: number, players: 1 | 2):
     const before = sounding[i - 1];
     const after = sounding[i + 1];
     if (before && before.endsAt > d.startsAt) {
-      const overlap = (before.endsAt - d.startsAt) / 1000;
+      const overlap = d.cut ? HANDOVER_SECONDS : (before.endsAt - d.startsAt) / 1000;
       gain *= crossfadeGains((serverNow - d.startsAt) / 1000 / overlap).in;
     }
     if (after && after.startsAt < d.endsAt) {
-      const overlap = (d.endsAt - after.startsAt) / 1000;
+      const overlap = after.cut ? HANDOVER_SECONDS : (d.endsAt - after.startsAt) / 1000;
       gain *= crossfadeGains((serverNow - after.startsAt) / 1000 / overlap).out;
     }
     return { rowId: d.rowId, into: into(d), gain };

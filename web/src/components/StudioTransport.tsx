@@ -39,6 +39,7 @@ import TagInput from "./TagInput";
 import SocialClipButton from "./studio/SocialClipButton";
 import ExportSheet from "./studio/ExportSheet";
 import StemLoadPill from "./studio/StemLoadPill";
+import { trackEvent } from "@/lib/client/analytics";
 
 function formatTime(seconds: number) {
   const m = Math.floor(seconds / 60);
@@ -402,6 +403,8 @@ export default function StudioTransport({
   const challenge = useStudioStore((s) => s.challenge);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Saved, but publishing waits for the owners of private songs in it to agree (lib/publishConsent.ts).
+  const [saveNote, setSaveNote] = useState<string | null>(null);
   const [savedId, setSavedId] = useState<string | null>(null);
   const exporting = useExportJob((j) => j.progress !== null);
   const runExport = useExportJob((j) => j.run);
@@ -467,6 +470,7 @@ export default function StudioTransport({
 
   function handleExport(range: "full" | "loop") {
     const info = useExportJob.getState().info;
+    trackEvent("export", { range, format });
     void runExport(range === "loop" ? "The loop" : "The whole mix", (onProgress, signal) =>
       exportMixdown(info, { range, format, onProgress, signal })
     );
@@ -483,6 +487,7 @@ export default function StudioTransport({
     }
     setSaving(true);
     setSaveError(null);
+    setSaveNote(null);
     try {
       const state = useStudioStore.getState();
       const res = await fetch("/api/remixes", {
@@ -504,6 +509,7 @@ export default function StudioTransport({
         return;
       }
       setSavedId(data.id);
+      if (data.waitingFor?.length) setSaveNote(data.message ?? "Saved privately — waiting for the songs' owners to agree.");
       // It's on the server now; the local copy is only for unsaved work.
       markDraftClean({ discard: true });
     } finally {
@@ -889,6 +895,7 @@ export default function StudioTransport({
                 {saving ? "Saving…" : "Confirm save"}
               </button>
               {saveError && <p className="text-sm text-danger">{saveError}</p>}
+              {saveNote && <p className="max-w-sm text-sm text-muted">{saveNote}</p>}
             </div>
           )}
         </div>

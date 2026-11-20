@@ -26,6 +26,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     filename: job.filename,
     tags: job.tags,
     recording: false,
+    // Whoever queued it chose (the helper can't make it public).
+    private: !!job.private,
   });
   if ("error" in created) return NextResponse.json({ error: created.error }, { status: 400 });
   // The cover found when it was queued (its file's tags, or its page) is the song's.

@@ -9,6 +9,9 @@ import { ensureSchema } from "@/lib/schema";
 import { normaliseTags } from "@/lib/tags";
 import { STEM_KINDS } from "@/lib/stemKinds";
 import { MAX_AUTOMATION_POINTS } from "@/lib/client/automationPatterns";
+import { askToPublish, songsOfStems } from "@/lib/publishConsent";
+import { waitingFor, waitingMessage } from "@/lib/songPrivacy";
+import { trackServer } from "@/lib/analyticsStore";
 
 // The lane effect rack and the project mix settings are stored as JSON
 // blobs (remix_lanes.settings_json / remixes.project_json) rather than a
@@ -193,16 +196,20 @@ export async function POST(req: NextRequest) {
   }
 
   // A song whose artist chose Block can't be in a public remix (lib/monetize/adStore.ts).
+  const heard = lanes.filter((l) => !l.muted).map((l) => l.stemId);
   if (published) {
-    const blocked = await blockedSongs(lanes.filter((l) => !l.muted).map((l) => l.stemId));
+    const blocked = await blockedSongs(heard);
     if (blocked.length) return NextResponse.json({ error: blockedMessage(blocked), blocked }, { status: 409 });
   }
+  // Someone else's private song in it: saved private, and its owner is asked (lib/publishConsent.ts).
+  const waiting = published ? waitingFor(await songsOfStems(heard), user.id, new Map()) : [];
+  const publishNow = published && waiting.length === 0;
 
   const remixId = randomUUID();
   await sql.begin(async (tx) => {
     await tx`
       INSERT INTO remixes (id, owner_id, title, published, project_json, tags, parent_id, challenge_id)
-      VALUES (${remixId}, ${user.id}, ${title}, ${published}, ${JSON.stringify(project)},
+      VALUES (${remixId}, ${user.id}, ${title}, ${publishNow}, ${JSON.stringify(project)},
               ${tags}, ${parent?.id ?? null}, ${challenge?.id ?? null})
     `;
 
@@ -219,6 +226,13 @@ export async function POST(req: NextRequest) {
     }
   });
 
-  if (published) await notifyRemixCreated(remixId, user.id).catch(() => {});
-  return NextResponse.json({ id: remixId });
+  if (waiting.length) {
+    await askToPublish(remixId, user.id, waiting);
+    return NextResponse.json({ id: remixId, published: false, waitingFor: waiting, message: waitingMessage(waiting.map((w) => ({ ...w, status: "asked" as const }))) });
+  }
+  if (publishNow) {
+    trackServer("publish", user.id, { what: "remix" });
+    await notifyRemixCreated(remixId, user.id).catch(() => {});
+  }
+  return NextResponse.json({ id: remixId, published: publishNow });
 }

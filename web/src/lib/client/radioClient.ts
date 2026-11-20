@@ -13,6 +13,7 @@ import { radioBreakDue } from "@/lib/monetize/adRules";
 import { useSettings } from "@/components/SettingsProvider";
 import { laneFromApi } from "./remixLanes";
 import { delayed, frequencyBars, loudnessWindow, type Curve } from "@/lib/visualBars";
+import { trackEvent } from "@/lib/client/analytics";
 
 // A radio station in this tab: the feed polled every few seconds (with the
 // server's clock, so every listener plays the same moment), and — once
@@ -131,6 +132,8 @@ function askToPersist() {
 export type RadioAdBreak = {
   advertiser: string; title: string; cta: string; image: string | null; seconds: number; token: string;
   supports: { name: string; role: string; bp: number }[];
+  /** Remixt's own station ID (no paying ad took the break): its page on the site. */
+  own?: { href: string; body: string };
 };
 
 export function useRadio(
@@ -345,11 +348,12 @@ export function useRadio(
     if (process.env.NODE_ENV !== "production") (window as unknown as { __remixtRadio?: RadioDeck }).__remixtRadio = d;
     setTune("loading");
     setError(null);
+    trackEvent("radio_tune", { station: slug });
     d.start();
     askToPersist();
     const f = feedRef.current;
     if (f) d.tick(f.now, f.upcoming, serverNow(), f.fading);
-  }, [volume, serverNow, deckFor]);
+  }, [volume, serverNow, deckFor, slug]);
   // The lock screen follows the song heard: set when one starts (and again now if one already has).
   useEffect(() => {
     const d = deck.current;
@@ -400,21 +404,28 @@ export function useRadio(
     (async () => {
       const served = (await fetch(`/api/ads?${q}`, { cache: "no-store" }).then((r) => r.json())) as {
         ad: { advertiser: string; title: string; cta: string; image: string | null; audio: string | null; seconds: number | null } | null;
+        house?: { title: string; body: string; cta: string; href: string; media: string | null; seconds: number | null } | null;
         token: string | null;
         supports: RadioAdBreak["supports"];
       };
-      if (!alive.current || !served.ad?.audio || !served.token) return;
-      const blob = await fetch(served.ad.audio).then((r) => (r.ok ? r.blob() : null));
+      // A paying ad, or (none fits) Remixt's own station ID.
+      const sound = served.ad?.audio ?? served.house?.media ?? null;
+      if (!alive.current || !sound || !served.token) return;
+      const blob = await fetch(sound).then((r) => (r.ok ? r.blob() : null));
       if (!alive.current || !blob) return;
       if (adReady.current) URL.revokeObjectURL(adReady.current.url);
-      adReady.current = {
-        rowId: upcomingRow.rowId,
-        url: URL.createObjectURL(blob),
-        ad: {
-          advertiser: served.ad.advertiser, title: served.ad.title, cta: served.ad.cta, image: served.ad.image,
-          seconds: Math.min(audio.current.maxSeconds, served.ad.seconds ?? audio.current.maxSeconds), token: served.token, supports: served.supports,
-        },
-      };
+      const max = audio.current.maxSeconds;
+      const ad: RadioAdBreak = served.ad
+        ? {
+            advertiser: served.ad.advertiser, title: served.ad.title, cta: served.ad.cta, image: served.ad.image,
+            seconds: Math.min(max, served.ad.seconds ?? max), token: served.token, supports: served.supports,
+          }
+        : {
+            advertiser: "Remixt", title: served.house!.title, cta: served.house!.cta, image: null,
+            seconds: Math.min(max, served.house!.seconds ?? max), token: served.token, supports: [],
+            own: { href: served.house!.href, body: served.house!.body },
+          };
+      adReady.current = { rowId: upcomingRow.rowId, url: URL.createObjectURL(blob), ad };
     })().catch(() => {});
     // Checked again as listening goes on (each feed answer). A fetch isn't dropped by the next answer: only by leaving the page.
   }, [ads, tune, upcomingRow, feed]);

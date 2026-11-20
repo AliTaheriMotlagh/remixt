@@ -70,6 +70,23 @@ function describe(n: Notification) {
           again.
         </>
       );
+    case "consent": {
+      const [state, ...note] = (n.body ?? "").split("|");
+      const song = n.track_title ? `“${n.track_title}”` : "your song";
+      const said = note.join("|");
+      return state === "asked" ? (
+        <>wants to publish {remix}, which uses your private song {song}. Listen, then agree or say no.</>
+      ) : state === "declined" ? (
+        <>
+          doesn&apos;t want {song} in a public {remix}. It stays private.
+          {said && <span className="mt-1 block text-muted">“{said}”</span>}
+        </>
+      ) : state === "published" ? (
+        <>agreed to share {song} — {remix} is public now</>
+      ) : (
+        <>agreed to share {song} in {remix}</>
+      );
+    }
     case "ad": {
       const [state, what, ...note] = (n.body ?? "").split("|");
       const said = note.join("|");
@@ -98,6 +115,7 @@ function hrefFor(n: Notification) {
   if (n.type === "share") return "/studio";
   if (n.type === "payout") return "/earnings";
   if (n.type === "ad") return "/advertise";
+  if (n.type === "consent" && n.body === "asked") return "/approvals";
   if (n.type === "blocked" && n.remix_id) return `/remixes/${n.remix_id}`;
   if (n.type === "jam" && n.body) return `/studio?join=${encodeURIComponent(n.body.split("|")[0])}`;
   if (n.type === "live" && n.live_id) return `/live/${n.live_id}`;

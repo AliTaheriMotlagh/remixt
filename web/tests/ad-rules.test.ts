@@ -24,7 +24,7 @@ describe("who decides", () => {
   });
 
   test("an artist's Monetize keeps ads on when the remixer turned them off — in the kinds the remixer ticked", () => {
-    const e = effectiveAds({ on: false, kinds: ["card", "radio"], blockedTopics: ["dating"] }, ["follow", "monetize"]);
+    const e = effectiveAds({ ...on, on: false, kinds: ["card", "radio"], blockedTopics: ["dating"] }, ["follow", "monetize"]);
     assert.equal(e.on, true);
     assert.equal(e.forced, true);
     assert.deepEqual(e.kinds, ["card", "radio"]);
@@ -32,13 +32,13 @@ describe("who decides", () => {
   });
 
   test("Monetize with no kind ticked still shows the picture card", () => {
-    const e = effectiveAds({ on: true, kinds: [], blockedTopics: [] }, ["monetize"]);
+    const e = effectiveAds({ ...on, kinds: [], blockedTopics: [] }, ["monetize"]);
     assert.deepEqual(e.kinds, ["card"]);
     assert.equal(e.forced, true);
   });
 
   test("a remixer with no kind ticked and no Monetize: nothing", () => {
-    assert.equal(effectiveAds({ on: true, kinds: [], blockedTopics: [] }, [null]).on, false);
+    assert.equal(effectiveAds({ ...on, kinds: [], blockedTopics: [] }, [null]).on, false);
   });
 
   test("Block wins over everything: the remix can't be public", () => {
@@ -53,7 +53,29 @@ describe("who decides", () => {
       on: false,
       kinds: ["card"],
       blockedTopics: ["games"],
+      spots: ["player", "radio"],
+      style: "full",
+      house: true,
     });
+  });
+
+  test("where and how: known spots only, never none, a known style, Remixt's own on unless turned off", () => {
+    const s = cleanSettings({ spots: ["comments", "sidebar" as never], style: "huge" as never, house: false });
+    assert.deepEqual(s.spots, ["comments"]);
+    assert.equal(s.style, "full");
+    assert.equal(s.house, false);
+    assert.deepEqual(cleanSettings({ spots: [] }).spots, ["player"], "picture ads on with nowhere to sit go under the player");
+    assert.equal(cleanSettings({ style: "compact" }).style, "compact");
+  });
+
+  test("the maker's spots, style and Remixt's-own choice carry through, also when an artist forces ads on", () => {
+    const mine = { ...on, on: false, spots: ["comments" as const], style: "compact" as const, house: false };
+    const e = effectiveAds(mine, ["monetize"]);
+    assert.equal(e.on, true);
+    assert.deepEqual(e.spots, ["comments"]);
+    assert.equal(e.style, "compact");
+    assert.equal(e.house, false);
+    assert.deepEqual(effectiveAds(mine, ["block"]).spots, ["comments"]);
   });
 
   test("formats fill kinds", () => {

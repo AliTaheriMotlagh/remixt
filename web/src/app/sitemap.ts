@@ -39,7 +39,19 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     ),
     { url: absoluteUrl("/live"), lastModified: now, changeFrequency: "hourly", priority: 0.7 },
     { url: absoluteUrl("/radio"), lastModified: now, changeFrequency: "hourly", priority: 0.7 },
-    { url: absoluteUrl("/earnings"), lastModified: now, changeFrequency: "monthly", priority: 0.6 },
+    // The money pages in both languages, each listing its twin (as their own heads do).
+    ...[
+      ["/earnings", "/fa/earnings"],
+      ["/advertise", "/fa/advertise"],
+    ].flatMap(([en, fa]) =>
+      [en, fa].map((path) => ({
+        url: absoluteUrl(path),
+        lastModified: now,
+        changeFrequency: "monthly" as const,
+        priority: 0.6,
+        alternates: { languages: absolute({ en, fa, "x-default": en }) },
+      }))
+    ),
     { url: absoluteUrl("/dj"), lastModified: now, changeFrequency: "monthly", priority: 0.6 },
     { url: absoluteUrl("/examples"), lastModified: now, changeFrequency: "monthly", priority: 0.6 },
     { url: absoluteUrl("/challenges"), lastModified: now, changeFrequency: "weekly", priority: 0.7 },

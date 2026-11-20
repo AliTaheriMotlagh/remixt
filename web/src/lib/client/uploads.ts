@@ -396,13 +396,13 @@ class Uploads {
    * Songs from this device. Anything that isn't audio is left out, and so
    * is a file already on its way (picked twice); the result says which.
    */
-  addFiles(files: File[], { tags, mode }: { tags: string[]; mode: UploadMode }): AddResult {
+  addFiles(files: File[], { tags, mode, keepPrivate = false }: { tags: string[]; mode: UploadMode; keepPrivate?: boolean }): AddResult {
     const result: AddResult = { added: 0, notAudio: [], duplicates: [] };
     for (const file of files) {
       if (!isAudioFile(file)) result.notAudio.push(file.name);
       else if (this.onTheirWay.has(keyOf({ kind: "file", file }))) result.duplicates.push(file.name);
       else {
-        this.push({ kind: "file", file }, file.name, tags, mode);
+        this.push({ kind: "file", file }, file.name, tags, mode, newId(), true, keepPrivate);
         result.added++;
       }
     }
@@ -424,11 +424,11 @@ class Uploads {
   }
 
   /** The songs behind some links (a link already on its way is left out). */
-  addLinks(urls: string[], { tags, mode }: { tags: string[]; mode: UploadMode }): number {
+  addLinks(urls: string[], { tags, mode, keepPrivate = false }: { tags: string[]; mode: UploadMode; keepPrivate?: boolean }): number {
     let added = 0;
     for (const url of urls) {
       if (this.onTheirWay.has(keyOf({ kind: "link", url }))) continue;
-      this.push({ kind: "link", url }, url, tags, mode);
+      this.push({ kind: "link", url }, url, tags, mode, newId(), true, keepPrivate);
       added++;
     }
     this.pump();
@@ -676,10 +676,11 @@ class Uploads {
     try {
       if (mode === "queue") {
         if (source.kind === "link") {
-          const queued = await queueLink(source.url, tags, report);
+          const queued = await queueLink(source.url, tags, report, keepPrivate);
           name = queued.title;
         } else {
           const jobId = await queueFile(source.file, tags, report, signal, {
+            keepPrivate,
             resume: readResume(id),
             onResume: (state) => writeResume(id, state),
           });

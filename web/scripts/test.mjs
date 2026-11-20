@@ -176,6 +176,8 @@ try {
   // Asked for once first, so the tests don't wait on compiling it.
   await waitFor(`${baseUrl}/api/auth/me`, server);
   code = await runTests({ BASE_URL: baseUrl, DATABASE_URL: databaseUrl, STORAGE_DIR: storage });
+  // SHOW_SERVER_LOG=1: the server's own errors after a failed run (a 500's stack is only there).
+  if (code !== 0 && process.env.SHOW_SERVER_LOG) console.error(Buffer.concat(log).toString().split("\n").filter((l) => /error|Error|⨯/.test(l)).slice(-40).join("\n"));
 } catch (err) {
   console.error(String(err));
   console.error(Buffer.concat(log).toString().slice(-4000));

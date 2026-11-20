@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -14,6 +14,7 @@ import {
   ListMusic,
   ListPlus,
   Loader2,
+  Pause,
   Play,
   Plus,
   Radio as RadioIcon,
@@ -26,6 +27,9 @@ import {
 import { clock, useRadio } from "@/lib/client/radioClient";
 import type { RadioReport, RadioSettings } from "@/lib/radio";
 import type { RadioItem } from "@/lib/radioPick";
+import { resolveStyle, transitionSeconds, TRANSITIONS, TRANSITION_TEXT, type TransitionChoice } from "@/lib/radioTransitions";
+import { demoSongs, renderTransition } from "@/lib/client/radioTransition";
+import { encodeWavGently } from "@/lib/client/mixdown";
 import { ItemRow, LiveDot, Progress, RadioArt, SearchBox, SourceChip, useStationSearch, VoteBoard } from "./RadioBits";
 import { ShareStation } from "./RadioStation";
 
@@ -540,6 +544,9 @@ function SettingsCard({ data, busy, onSave, onDelete }: { data: ConsoleData; bus
           <Trash2 className="size-4" /> Delete the station
         </button>
       </Card>
+      <Card title="Transitions">
+        <TransitionPicker value={s.transition} onChange={(v) => set({ transition: v })} />
+      </Card>
       <Card title="How it plays">
         <div className="flex flex-col gap-2">
           <Toggle label="Listeners vote on the next song" hint={`${s.choices} choices each time, from requests and the playlist.`} on={s.voting} onChange={(v) => set({ voting: v })} />
@@ -581,6 +588,100 @@ function SettingsCard({ data, busy, onSave, onDelete }: { data: ConsoleData; bus
           <Toggle label="Remixes" hint="Published remixes." on={s.remixes} onChange={(v) => set({ remixes: v })} />
         </div>
       </Card>
+    </div>
+  );
+}
+
+
+/**
+ * How one song goes into the next (lib/radioTransitions.ts): each style with
+ * what it does and a button to hear it on two built-in loops — rendered by
+ * the same code the listeners' players use.
+ */
+function TransitionPicker({ value, onChange }: { value: TransitionChoice; onChange: (v: TransitionChoice) => void }) {
+  const [playing, setPlaying] = useState<TransitionChoice | null>(null);
+  const audio = useRef<HTMLAudioElement | null>(null);
+  useEffect(() => () => audio.current?.pause(), []);
+
+  async function hear(choice: TransitionChoice) {
+    audio.current?.pause();
+    if (playing === choice) return setPlaying(null);
+    setPlaying(choice);
+    try {
+      const bpm = 124;
+      const style = resolveStyle(choice, bpm, choice === "auto" ? 128 : 126, 1);
+      const { a, b } = demoSongs(44_100, bpm);
+      const seconds = transitionSeconds(style, { bpm, duration: a.duration }, { bpm: 126, duration: b.duration });
+      // Six seconds of the old loop, then the change, then the new one.
+      const lead = Math.min(6, a.duration - seconds);
+      const tailFrom = a.duration - seconds;
+      let file: Blob;
+      if (style === "blend") {
+        const ctx = new OfflineAudioContext(2, Math.round((lead + seconds + 6) * 44_100), 44_100);
+        const sa = ctx.createBufferSource();
+        sa.buffer = a;
+        const ga = ctx.createGain();
+        const sb = ctx.createBufferSource();
+        sb.buffer = b;
+        const gb = ctx.createGain();
+        const steps = 32;
+        ga.gain.setValueCurveAtTime(Float32Array.from({ length: steps }, (_, i) => Math.cos((i / (steps - 1)) * (Math.PI / 2))), lead, seconds);
+        gb.gain.setValueCurveAtTime(Float32Array.from({ length: steps }, (_, i) => Math.sin((i / (steps - 1)) * (Math.PI / 2))), lead, seconds);
+        sa.connect(ga).connect(ctx.destination);
+        sb.connect(gb).connect(ctx.destination);
+        sa.start(0, tailFrom - lead);
+        sb.start(lead);
+        file = await encodeWavGently(await ctx.startRendering());
+      } else {
+        const changed = await renderTransition(style, { buffer: a, from: tailFrom }, b, seconds, bpm, 126);
+        const ctx = new OfflineAudioContext(2, Math.round((lead + Math.min(changed.duration, seconds + 6)) * 44_100), 44_100);
+        const sa = ctx.createBufferSource();
+        sa.buffer = a;
+        sa.connect(ctx.destination);
+        sa.start(0, tailFrom - lead, lead);
+        const sc = ctx.createBufferSource();
+        sc.buffer = changed;
+        sc.connect(ctx.destination);
+        sc.start(lead);
+        file = await encodeWavGently(await ctx.startRendering());
+      }
+      const el = new Audio(URL.createObjectURL(file));
+      audio.current = el;
+      el.onended = () => setPlaying(null);
+      await el.play();
+    } catch {
+      setPlaying(null);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-xs text-muted">
+        The same on every listener&apos;s device, with their screen locked too. A style needs both songs&apos; tempos for its timing; without them the station
+        blends.
+      </p>
+      {TRANSITIONS.map((t) => (
+        <div
+          key={t}
+          className={`flex items-start gap-3 rounded-2xl border p-3 text-sm transition-colors ${value === t ? "border-brand bg-brand/10" : "border-border"}`}
+        >
+          <button type="button" onClick={() => onChange(t)} aria-pressed={value === t} className="min-w-0 flex-1 text-left">
+            <span className="flex items-center gap-2 font-semibold">
+              <span className={`size-3 shrink-0 rounded-full border-2 ${value === t ? "border-brand bg-brand" : "border-muted"}`} aria-hidden />
+              {TRANSITION_TEXT[t].en}
+            </span>
+            <span className="mt-0.5 block text-xs text-muted">{TRANSITION_TEXT[t].help}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => hear(t)}
+            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-surface-raised px-3 py-1.5 text-xs font-semibold hover:bg-surface-hover"
+            aria-label={playing === t ? "Stop" : `Hear ${TRANSITION_TEXT[t].en}`}
+          >
+            {playing === t ? <Pause className="size-3.5" /> : <Play className="size-3.5" />} {playing === t ? "Stop" : "Hear it"}
+          </button>
+        </div>
+      ))}
     </div>
   );
 }

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
-import { LoaderCircle, Music, Pause, Play } from "lucide-react";
+import { Globe, LoaderCircle, Lock, Music, Pause, Play } from "lucide-react";
 import { previewPlayer, usePreviewState } from "@/lib/client/previewPlayer";
 import Waveform from "./Waveform";
 import TagInput from "./TagInput";
@@ -69,6 +69,20 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
   const [link, setLink] = useState("");
   const [rights, setRights] = useState(false);
   const [newTags, setNewTags] = useState<string[]>([]);
+  // Who hears the next songs: everyone (the public library) or only you (share or publish them later).
+  const [keepPrivate, setKeepPrivateState] = useState(false);
+  useEffect(() => {
+    try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- the last choice, read once after the first paint
+      setKeepPrivateState(localStorage.getItem("remixt-upload-private") === "1");
+    } catch {}
+  }, []);
+  const setKeepPrivate = (v: boolean) => {
+    setKeepPrivateState(v);
+    try {
+      localStorage.setItem("remixt-upload-private", v ? "1" : "0");
+    } catch {}
+  };
   const splitterState = useSplitter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
@@ -132,7 +146,7 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
 
   function handleFiles(files: File[]) {
     if (files.length === 0 || !confirmRights()) return;
-    const result = uploads.addFiles(files, { tags: newTags, mode: queueMode ? "queue" : "split" });
+    const result = uploads.addFiles(files, { tags: newTags, mode: queueMode ? "queue" : "split", keepPrivate });
     setUploadError(skippedMessage(result));
   }
 
@@ -144,7 +158,7 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
       return;
     }
     setUploadError(null);
-    uploads.addLinks(links, { tags: newTags, mode: queueMode ? "queue" : "split" });
+    uploads.addLinks(links, { tags: newTags, mode: queueMode ? "queue" : "split", keepPrivate });
     setLink("");
   }
 
@@ -187,6 +201,35 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
           .
         </span>
       </label>
+      <fieldset className="mb-4">
+        <legend className="mb-1.5 text-xs font-medium text-muted">Who can hear the next songs</legend>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {[
+            { value: false, title: "Everyone", body: "In the public library for anyone to remix.", icon: <Globe className="h-4 w-4" /> },
+            {
+              value: true,
+              title: "Only me, for now",
+              body: "Private. Share it with the people you make it with, and choose what to publish when it's ready.",
+              icon: <Lock className="h-4 w-4" />,
+            },
+          ].map((o) => (
+            <label
+              key={String(o.value)}
+              className={`flex cursor-pointer items-start gap-2.5 rounded-xl border p-3 text-sm transition-colors ${
+                keepPrivate === o.value ? "border-brand bg-brand/10" : "border-border bg-surface hover:border-brand/40"
+              }`}
+            >
+              <input type="radio" name="upload-visibility" checked={keepPrivate === o.value} onChange={() => setKeepPrivate(o.value)} className="mt-0.5 accent-brand" />
+              <span>
+                <span className="flex items-center gap-1.5 font-medium">
+                  {o.icon} {o.title}
+                </span>
+                <span className="mt-0.5 block text-xs text-muted">{o.body}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
       <div className="mb-4">
         <p className="mb-1.5 text-xs font-medium text-muted">Tags for the next songs (optional)</p>
         <TagInput value={newTags} onChange={setNewTags} compact />
@@ -382,12 +425,13 @@ function TrackRow({
           )}
         </h3>
         <div className="flex shrink-0 items-center gap-2">
-          {isTake && track.status === "ready" && (
+          {track.status === "ready" && (
             <TakeShareButton
               trackId={track.id}
               title={track.title}
               visibility={track.visibility}
               sharedWith={track.shared_with ?? 0}
+              what={isTake ? "take" : "song"}
             />
           )}
           <StatusBadge status={track.status} />

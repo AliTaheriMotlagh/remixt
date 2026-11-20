@@ -22,6 +22,9 @@ import { coverUrl, ensureRemixStats, getRemixCard, getRemixStats, shareImageUrl 
 import type { Metadata } from "next";
 import { JsonLd, breadcrumbJsonLd, pageMetadata } from "@/lib/seo";
 import { SITE_NAME, absoluteUrl, remixDescription } from "@/lib/site";
+import { consentsForMaker, requestsFor, wasAsked } from "@/lib/publishConsent";
+import ConsentAnswer from "@/components/ConsentAnswer";
+import { waitingMessage } from "@/lib/songPrivacy";
 
 type RemixRow = {
   id: string;
@@ -73,8 +76,11 @@ export default async function RemixDetailPage({
 
   const user = await getCurrentUser();
   const isOwner = user?.id === remix.owner_id;
-
-  if (!remix.published && !isOwner) notFound();
+  // A private remix opens for its owner, and for the owner of a private song in it who was asked to agree to publishing it.
+  const asked = !remix.published && !isOwner && (await wasAsked(remix.id, user?.id ?? null).catch(() => false));
+  if (!remix.published && !isOwner && !asked) notFound();
+  const consent = isOwner && !remix.published ? await consentsForMaker(remix.id, remix.owner_id).catch(() => null) : null;
+  const waitingText = consent?.requested && consent.waiting.length ? waitingMessage(consent.waiting.map((w) => ({ ...w, status: w.status === "declined" ? "declined" as const : "asked" as const }))) : null;
   const [stats, comments, artistProgress, credits, ads, parties] = await Promise.all([
     getRemixStats(remix.id, user?.id ?? null),
     getComments(remix.id),
@@ -140,7 +146,7 @@ export default async function RemixDetailPage({
           </div>
         </div>
         {isOwner ? (
-          <RemixOwnerControls remixId={remix.id} initialPublished={remix.published} initialTags={credits.tags} />
+          <RemixOwnerControls remixId={remix.id} initialPublished={remix.published} initialTags={credits.tags} initialWaiting={waitingText} />
         ) : (
           <ReportButton kind="remix" targetId={remix.id} signedIn={!!user} />
         )}
@@ -150,6 +156,8 @@ export default async function RemixDetailPage({
       <div className="mt-2 flex justify-end">
         <WrongInfoButton kind="remix" id={remix.id} title={remix.title} />
       </div>
+
+      {asked && <AskedBanner remixId={remix.id} userId={user!.id} />}
 
       <RemixStatsBar remixId={remix.id} title={remix.title} initial={stats} signedIn={!!user} />
 
@@ -164,13 +172,35 @@ export default async function RemixDetailPage({
       {/* The audio ad before it plays, where its maker (or an artist's Monetize) allows one. */}
       {remix.published && ads?.on && ads.kinds.includes("preroll") && !isOwner && <PrerollGate remixId={remix.id} />}
 
-      {/* This remix's spot: a view pays its remixer(s), the songs' artists and the site (lib/monetize/policy.ts). */}
-      {remix.published && ads?.on && ads.kinds.includes("card") && (
-        <AdCard placement="remix" target={`remix:${remix.id}`} seed={remix.title.length} className="mt-6" />
+      {/* This remix's spot, where its maker put it: a view pays its remixer(s), the songs' artists and the site (lib/monetize/policy.ts). */}
+      {remix.published && ads?.on && ads.kinds.includes("card") && ads.spots.includes("player") && (
+        <AdCard placement="remix" target={`remix:${remix.id}`} spot="player" className="mt-6" />
       )}
       {remix.published && ads && shares.length > 0 && <WhereTheMoneyGoes shares={shares} ads={ads} remixId={remix.id} isOwner={isOwner} />}
 
       <RemixComments remixId={remix.id} initial={comments} userId={user?.id ?? null} isRemixOwner={isOwner} />
+
+      {remix.published && ads?.on && ads.kinds.includes("card") && ads.spots.includes("comments") && (
+        <AdCard placement="remix" target={`remix:${remix.id}`} spot="comments" className="mt-8" />
+      )}
+    </div>
+  );
+}
+
+
+/** For the owner of a private song in this private remix: the request, answerable here after listening. */
+async function AskedBanner({ remixId, userId }: { remixId: string; userId: string }) {
+  const mine = (await requestsFor(userId)).filter((r) => r.remix_id === remixId);
+  if (!mine.length) return null;
+  return (
+    <div className="mt-4 rounded-2xl border border-brand/40 bg-brand/5 p-4 text-sm">
+      <p>
+        <span className="font-semibold">{mine[0].asked_by_name}</span> wants to publish this remix. It uses your private{" "}
+        {mine.map((r) => `“${r.track_title}”`).join(", ")}. Listen, then answer — only this remix would be public, not your song.
+      </p>
+      {mine.map((r) => (
+        <ConsentAnswer key={r.track_id} remixId={remixId} trackId={r.track_id} status={r.status} />
+      ))}
     </div>
   );
 }

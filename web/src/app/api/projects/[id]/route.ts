@@ -8,6 +8,7 @@ import {
   projectMembers,
   projectState,
   saveProject,
+  memberMayEdit,
 } from "@/lib/projects";
 
 // GET: the shared mix and who's here (?since=<version> skips the mix when
@@ -33,6 +34,10 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   const id = (await params).id;
   const project = await projectForMember(id, user.id);
   if (!project) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  // A listener hears and comments; only members who can edit change the mix.
+  if (!(await memberMayEdit(id, user.id))) {
+    return NextResponse.json({ error: "You're listening in this session — its owner can let you edit" }, { status: 403 });
+  }
   const parsed = putSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Invalid input" }, { status: 400 });
   const state = JSON.stringify(parsed.data.state ?? {});

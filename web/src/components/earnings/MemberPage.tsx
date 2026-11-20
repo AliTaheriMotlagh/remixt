@@ -10,8 +10,11 @@ export default async function MemberPage({
   lang,
   path,
   children,
+  publicView,
 }: {
   lang: Lang;
+  /** What someone signed out sees instead of "sign in" (a page that should explain itself to visitors and search engines). */
+  publicView?: React.ReactNode;
   /** The English path: the Persian one is /fa + it. */
   path: string;
   children: (rate: number) => React.ReactNode;
@@ -29,6 +32,8 @@ export default async function MemberPage({
       </p>
       {user ? (
         children(rate)
+      ) : publicView ? (
+        publicView
       ) : (
         <div className="rounded-3xl border border-border bg-surface p-8 text-center">
           <p className="text-muted">{fa ? "برای دیدن این صفحه وارد شوید." : "Sign in to see this page."}</p>

@@ -438,3 +438,95 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .lyrics-sweep { animation: none; }
 }
+
+/* Loading pages (components/PageSkeleton): a soft light passing over the shapes. */
+.skeleton {
+  background: linear-gradient(100deg, var(--surface) 30%, var(--surface-raised) 50%, var(--surface) 70%);
+  background-size: 300% 100%;
+  animation: skeleton-shine 1.6s ease-in-out infinite;
+}
+@keyframes skeleton-shine {
+  from { background-position: 100% 0; }
+  to { background-position: 0 0; }
+}
+
+/* The bar across the top while the next page is on its way (components/NavProgress). */
+.nav-progress {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 90;
+  height: 2px;
+  pointer-events: none;
+  transform-origin: left;
+  background: linear-gradient(90deg, var(--brand), var(--vocals), var(--beat));
+  box-shadow: 0 0 10px var(--brand);
+  transition: transform 0.25s ease-out, opacity 0.3s ease 0.15s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
+}
+
+/* Remixt's animated ad (components/ads/HouseMotion): four beats on an 8 s loop. */
+.house-motion .hm-line {
+  opacity: 0;
+  animation: hm-line 8s infinite both;
+}
+@keyframes hm-line {
+  0% { opacity: 0; transform: translateY(8px); }
+  4%, 21% { opacity: 1; transform: none; }
+  25%, 100% { opacity: 0; transform: translateY(-6px); }
+}
+/* The last line stays up longer: it holds through the end of the loop. */
+.house-motion .hm-line.hm-last { animation-name: hm-line-last; }
+@keyframes hm-line-last {
+  0%, 74% { opacity: 0; transform: translateY(8px); }
+  78%, 97% { opacity: 1; transform: none; }
+  100% { opacity: 0; }
+}
+.house-motion .hm-vocal,
+.house-motion .hm-beat {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: 8s infinite both ease-in-out;
+}
+.house-motion .hm-vocal { fill: var(--brand-strong); animation-name: hm-vocal; }
+.house-motion .hm-beat { fill: var(--beat); opacity: 0; animation-name: hm-beat; }
+/* One waveform (purple) → split: vocals up (pink), beat down (cyan) → together again as a mix → fade under the mark. */
+@keyframes hm-vocal {
+  0%, 20% { fill: var(--brand-strong); transform: none; opacity: 1; }
+  30%, 45% { fill: var(--vocals); transform: translateY(-28px) scaleY(0.55); opacity: 1; }
+  58%, 70% { fill: var(--vocals); transform: translateY(-10px) scaleY(0.6); opacity: 0.95; }
+  80%, 100% { fill: var(--vocals); transform: scaleY(0.3); opacity: 0.15; }
+}
+@keyframes hm-beat {
+  0%, 20% { transform: none; opacity: 0; }
+  30%, 45% { transform: translateY(28px) scaleY(0.55); opacity: 1; }
+  58%, 70% { transform: translateY(10px) scaleY(0.6); opacity: 0.95; }
+  80%, 100% { transform: scaleY(0.3); opacity: 0.15; }
+}
+.house-motion .hm-mark { opacity: 0; animation: hm-mark 8s infinite both; }
+@keyframes hm-mark {
+  0%, 74% { opacity: 0; transform: scale(0.8); }
+  80%, 96% { opacity: 1; transform: none; }
+  100% { opacity: 0; }
+}
+/* Off screen: nothing moves. */
+.house-motion.paused *,
+.house-motion.paused { animation-play-state: paused !important; }
+/* Reduced motion: the last beat, still. */
+@media (prefers-reduced-motion: reduce) {
+  .house-motion .hm-line { animation: none; opacity: 0; }
+  .house-motion .hm-line.hm-last { animation: none; opacity: 1; }
+  .house-motion .hm-vocal, .house-motion .hm-beat { animation: none; opacity: 0.15; }
+  .house-motion .hm-mark { animation: none; opacity: 1; }
+}
+
+/* A station ID's progress line (components/radio/RadioStation): fills over the sound's length. */
+.station-id-sweep {
+  transform-origin: left;
+  animation: station-id-sweep linear both;
+}
+@keyframes station-id-sweep {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}

@@ -3,6 +3,8 @@ import { Geist, Geist_Mono } from "next/font/google";
 import localFont from "next/font/local";
 import "./globals.css";
 import NavBar from "@/components/NavBar";
+import NavProgress from "@/components/NavProgress";
+import AnalyticsBeacon from "@/components/AnalyticsBeacon";
 import MobileTabBar from "@/components/MobileTabBar";
 import PreviewBar from "@/components/PreviewBar";
 import SplitterStatus from "@/components/SplitterStatus";
@@ -116,6 +118,7 @@ export default async function RootLayout({
         >
           Skip to content
         </a>
+        <NavProgress />
         <NavBar user={user} isAdmin={isAdmin(user)} />
         <main id="main" className="flex min-w-0 flex-1 flex-col">
           {children}
@@ -125,6 +128,7 @@ export default async function RootLayout({
         </FooterGate>
         <PreviewBar />
         <PresenceHeartbeat />
+        <AnalyticsBeacon />
         <InstallPrompt />
         <UpdatePrompt />
         <SplitterStatus signedIn={!!user} />

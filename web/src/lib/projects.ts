@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from "crypto";
 import sql from "./db";
 import { ensureSchema } from "./schema";
+import { isRole, mayEdit, type Role } from "./songPrivacy";
 
 // Shared projects: a Studio mix that several artists edit together. The
 // whole mix is one JSON document with a version number; a save names the
@@ -14,7 +15,11 @@ const ONLINE_SECONDS = 15;
 /** A shared mix can't grow past this (peaks included). */
 export const MAX_STATE_BYTES = 1_500_000;
 
-export type ProjectMember = { id: string; artist_name: string; avatar_color: string; online: boolean; owner: boolean };
+export type ProjectMember = {
+  id: string; artist_name: string; avatar_color: string; online: boolean; owner: boolean;
+  /** What they do here (lib/songPrivacy.ts ROLES), and whether they can change the mix. */
+  role: Role; can_edit: boolean;
+};
 
 export type ProjectInfo = {
   id: string;
@@ -71,13 +76,53 @@ export async function projectMembers(id: string): Promise<ProjectMember[]> {
   return sql<ProjectMember[]>`
     SELECT users.id, users.artist_name, users.avatar_color,
            (project_members.last_seen_at > now() - make_interval(secs => ${ONLINE_SECONDS})) AS online,
-           (projects.owner_id = users.id) AS owner
+           (projects.owner_id = users.id) AS owner, project_members.role, project_members.can_edit
     FROM project_members
     JOIN users ON users.id = project_members.user_id
     JOIN projects ON projects.id = project_members.project_id
     WHERE project_members.project_id = ${id}
     ORDER BY project_members.joined_at
   `;
+}
+
+/** Whether this member may change the shared mix (a listener can't, unless the owner lets them). */
+export async function memberMayEdit(projectId: string, userId: string): Promise<boolean> {
+  const [m] = await sql<{ owner: boolean; can_edit: boolean }[]>`
+    SELECT (p.owner_id = m.user_id) AS owner, m.can_edit
+    FROM project_members m JOIN projects p ON p.id = m.project_id
+    WHERE m.project_id = ${projectId} AND m.user_id = ${userId}
+  `;
+  return !!m && mayEdit({ owner: m.owner, canEdit: m.can_edit });
+}
+
+/**
+ * Sets a member's role (and whether they can edit). The owner sets anyone's;
+ * a member sets only their own role. Choosing "listener" stops editing;
+ * another role lets them edit again — unless the owner says otherwise.
+ */
+export async function setMemberRole(
+  projectId: string,
+  actorId: string,
+  targetId: string,
+  change: { role?: string; canEdit?: boolean }
+): Promise<{ error: string } | null> {
+  await ensureSchema();
+  const [p] = await sql<{ owner_id: string }[]>`SELECT owner_id FROM projects WHERE id = ${projectId}`;
+  if (!p) return { error: "Not found" };
+  const actorIsOwner = p.owner_id === actorId;
+  if (!actorIsOwner && actorId !== targetId) return { error: "Only the session's owner can change someone else's role" };
+  if (!actorIsOwner && change.canEdit !== undefined) return { error: "Only the session's owner decides who can edit" };
+  if (change.role !== undefined && !isRole(change.role)) return { error: "Unknown role" };
+  if (targetId === p.owner_id && change.canEdit === false) return { error: "The owner can always edit" };
+  const canEdit = change.canEdit ?? (change.role !== undefined ? change.role !== "listener" : undefined);
+  const rows = await sql`
+    UPDATE project_members SET
+      role = COALESCE(${change.role ?? null}, role),
+      can_edit = COALESCE(${canEdit ?? null}, can_edit)
+    WHERE project_id = ${projectId} AND user_id = ${targetId}
+    RETURNING 1
+  `;
+  return rows.length ? null : { error: "They're not in this session" };
 }
 
 /**

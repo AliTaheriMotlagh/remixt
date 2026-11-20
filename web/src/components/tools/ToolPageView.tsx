@@ -7,6 +7,7 @@ import { JsonLd, breadcrumbJsonLd, faqJsonLd, pageMetadata } from "@/lib/seo";
 import { SITE_NAME, absoluteUrl } from "@/lib/site";
 import { TOOL_LOCALES, toolLanguages, toolPage, toolPath, toolsHubPath, type ToolLocale, type ToolPage } from "@/lib/tools";
 import AdCard from "@/components/ads/AdCard";
+import ToolWorkbench from "./ToolWorkbench";
 import { TOOL_UI } from "@/lib/toolsUi";
 
 // One tool page (/tools/<slug>, /fa/tools/<slug>), in any language: the
@@ -124,20 +125,23 @@ export default async function ToolPageView({ tool, locale }: { tool: ToolPage; l
           </div>
           <h1 className="mt-5 text-3xl font-black tracking-tight text-balance sm:text-5xl">{tool.h1}</h1>
           <p className="mt-5 max-w-2xl text-base text-muted sm:text-lg">{tool.lead}</p>
-          <div className="mt-7 flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
-            <Link
-              href={user ? "/upload" : "/signup"}
-              className="rounded-xl bg-brand px-6 py-3.5 text-center text-sm font-semibold text-white shadow-lg shadow-brand/25 transition-transform hover:scale-[1.03] hover:bg-brand-strong"
-            >
-              {ui.ctaFree(tool.cta)}
-            </Link>
-            <Link
-              href="/examples"
-              className="rounded-xl border border-border bg-surface px-6 py-3.5 text-center text-sm font-semibold transition-colors hover:bg-surface-hover"
-            >
+          {/* The tool itself, working right here: drop a song, get what this page is for (lib/toolWorkbench.ts). */}
+          <div className="mt-7" id="try">
+            <ToolWorkbench slug={tool.slug} locale={locale} />
+          </div>
+          <p className="mt-3 text-sm text-muted">
+            <Link href="/examples" className="font-medium text-brand-strong hover:underline">
               {ui.hearFirst}
             </Link>
-          </div>
+            {!user && (
+              <>
+                {" · "}
+                <Link href="/signup" className="font-medium text-brand-strong hover:underline">
+                  {ui.ctaFree(tool.cta)}
+                </Link>
+              </>
+            )}
+          </p>
           <ul className="mt-6 flex flex-wrap gap-x-5 gap-y-2 text-sm text-muted">
             {ui.points.map((point) => (
               <li key={point} className="flex items-center gap-1.5">

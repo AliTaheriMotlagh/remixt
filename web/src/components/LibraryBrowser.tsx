@@ -9,13 +9,15 @@ import Waveform from "./Waveform";
 import ReportButton from "./ReportButton";
 import { previewPlayer, usePreviewState } from "@/lib/client/previewPlayer";
 import { useStudioStore } from "@/lib/client/studioStore";
+import { decodePeaks } from "@/lib/peaksCodec";
 import { KIND_INFO, STEM_KINDS, isStemKind, type StemKind } from "@/lib/stemKinds";
 
 type StemWithTrack = {
   id: string;
   track_id: string;
   kind: StemKind;
-  peaks_json: string;
+  /** The waveform, packed (lib/peaksCodec.ts). */
+  peaks: string;
   track_title: string;
   track_tags: string[] | null;
   track_duration: number | null;
@@ -23,6 +25,8 @@ type StemWithTrack = {
   artist_name: string;
   artist_id: string;
   track_has_cover?: boolean;
+  track_private?: boolean;
+  track_mine?: boolean;
 };
 
 function formatDuration(seconds: number | null) {
@@ -63,7 +67,7 @@ export default function LibraryBrowser({
   // Parsed once: a fresh array per render made every waveform redraw on
   // every preview progress tick.
   const peaksById = useMemo(
-    () => new Map(all.map((s) => [s.id, JSON.parse(s.peaks_json || "[]") as number[]])),
+    () => new Map(all.map((s) => [s.id, decodePeaks(s.peaks)])),
     [all]
   );
 
@@ -105,7 +109,7 @@ export default function LibraryBrowser({
       kind: stem.kind,
       track_title: stem.track_title,
       artist_name: stem.artist_name,
-      peaks_json: stem.peaks_json,
+      peaks_json: JSON.stringify(peaksById.get(stem.id) ?? []),
       track_duration: stem.track_duration,
       track_bpm: stem.track_bpm,
     });

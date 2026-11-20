@@ -2,7 +2,7 @@ import { cache } from "react";
 import sql from "./db";
 import type { StemKind } from "./stemKinds";
 import { ensureSchema } from "./schema";
-import { visibleTo } from "./trackAccess";
+import { stemVisibleTo, visibleTo } from "./trackAccess";
 
 export type TrackRow = {
   id: string;
@@ -87,11 +87,11 @@ export async function getStemsByKindWithArtist(
   return sql<StemWithTrack[]>`
     SELECT stems.*, tracks.title as track_title, tracks.tags as track_tags, tracks.duration as track_duration,
            tracks.bpm as track_bpm, users.artist_name, users.id as artist_id, tracks.cover_key IS NOT NULL AS track_has_cover,
-           tracks.visibility <> 'public' AS track_private, tracks.owner_id = ${viewerId ?? ""} AS track_mine
+           (tracks.visibility <> 'public' OR stems.held_back) AS track_private, tracks.owner_id = ${viewerId ?? ""} AS track_mine
     FROM stems
     JOIN tracks ON tracks.id = stems.track_id
     JOIN users ON users.id = tracks.owner_id
-    WHERE stems.kind = ${kind} AND tracks.status = 'ready' AND ${visibleTo(viewerId)}
+    WHERE stems.kind = ${kind} AND tracks.status = 'ready' AND ${stemVisibleTo(viewerId)}
     ORDER BY tracks.created_at DESC
   `;
 }
@@ -106,11 +106,11 @@ export async function getLibraryStems(viewerId: string | null): Promise<StemWith
     SELECT stems.*, tracks.title as track_title, tracks.tags as track_tags, tracks.duration as track_duration,
            tracks.bpm as track_bpm, users.artist_name, users.id as artist_id, tracks.cover_key IS NOT NULL AS track_has_cover,
            tracks.featured_example AS track_featured, tracks.example_credit AS track_credit,
-           tracks.visibility <> 'public' AS track_private, tracks.owner_id = ${viewerId ?? ""} AS track_mine
+           (tracks.visibility <> 'public' OR stems.held_back) AS track_private, tracks.owner_id = ${viewerId ?? ""} AS track_mine
     FROM stems
     JOIN tracks ON tracks.id = stems.track_id
     JOIN users ON users.id = tracks.owner_id
-    WHERE tracks.status = 'ready' AND ${visibleTo(viewerId)}
+    WHERE tracks.status = 'ready' AND ${stemVisibleTo(viewerId)}
     ORDER BY tracks.created_at DESC
   `;
 }

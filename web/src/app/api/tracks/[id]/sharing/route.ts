@@ -5,13 +5,17 @@ import sql from "@/lib/db";
 import { getTrackById } from "@/lib/models";
 import { notify } from "@/lib/notifications";
 import { ensureSchema } from "@/lib/schema";
+import { PART_KINDS, publishPlan } from "@/lib/songPrivacy";
+import { trackServer } from "@/lib/analyticsStore";
 
-// Who can see and use a track — its owner decides. A take recorded in the
-// booth starts private ("only me"); its owner can share it with chosen
-// people, or with everyone (it joins the public library like any song).
+// Who can see and use a track — its owner decides (rules: lib/songPrivacy.ts).
+// A take recorded in the booth starts private ("only me"), and so does any
+// song uploaded "only me"; its owner can share it with chosen people, and
+// publish it — all of it, or only some parts (the beat, not the vocal).
 //
-// GET: { visibility, people }
-// PATCH { visibility }: "private" (only me and the people below) or "public".
+// GET: { visibility, people, parts: [{ kind, public }] }
+// PATCH { visibility }: "private" (only me and the people below) or "public" (every part).
+// PATCH { parts: ["beat"] }: publish exactly these parts; none = private.
 // POST { userId }: share with one more person (they're notified).
 // DELETE ?user=<id>: stop sharing with them.
 
@@ -34,13 +38,18 @@ async function ownTrack(params: Params["params"]) {
 
 async function state(trackId: string) {
   const [track] = await sql<{ visibility: string }[]>`SELECT visibility FROM tracks WHERE id = ${trackId}`;
+  const stems = await sql<{ kind: string; held_back: boolean }[]>`SELECT kind, held_back FROM stems WHERE track_id = ${trackId}`;
+  const parts = PART_KINDS.flatMap((kind) => {
+    const stem = stems.find((x) => x.kind === kind);
+    return stem ? [{ kind, public: track?.visibility === "public" && !stem.held_back }] : [];
+  });
   const people = await sql<SharePerson[]>`
     SELECT users.id, users.artist_name, users.avatar_color
     FROM track_shares JOIN users ON users.id = track_shares.user_id
     WHERE track_shares.track_id = ${trackId}
     ORDER BY track_shares.created_at
   `;
-  return { visibility: track?.visibility ?? "private", people };
+  return { visibility: track?.visibility ?? "private", people, parts };
 }
 
 export async function GET(_req: NextRequest, { params }: Params) {
@@ -49,14 +58,24 @@ export async function GET(_req: NextRequest, { params }: Params) {
   return NextResponse.json(await state(found.track.id), { headers: { "Cache-Control": "private, no-store" } });
 }
 
-const patchSchema = z.object({ visibility: z.enum(["public", "private"]) });
+const patchSchema = z
+  .object({ visibility: z.enum(["public", "private"]).optional(), parts: z.array(z.enum(PART_KINDS)).max(PART_KINDS.length).optional() })
+  .refine((b) => b.visibility || b.parts, "Say who can hear it");
 
 export async function PATCH(req: NextRequest, { params }: Params) {
   const found = await ownTrack(params);
   if (found.error) return found.error;
   const parsed = patchSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Invalid input" }, { status: 400 });
-  await sql`UPDATE tracks SET visibility = ${parsed.data.visibility} WHERE id = ${found.track.id}`;
+  const has = (await sql<{ kind: string }[]>`SELECT kind FROM stems WHERE track_id = ${found.track.id}`).map((r) => r.kind);
+  // Everyone = every part; only me = none; or exactly the parts chosen.
+  const chosen = parsed.data.parts ?? (parsed.data.visibility === "public" ? has : []);
+  const plan = publishPlan(has, chosen);
+  await sql.begin(async (tx) => {
+    await tx`UPDATE tracks SET visibility = ${plan.visibility} WHERE id = ${found.track.id}`;
+    await tx`UPDATE stems SET held_back = (kind = ANY(${plan.heldBack})) WHERE track_id = ${found.track.id}`;
+  });
+  if (plan.visibility === "public") trackServer("publish", found.user.id, { what: "song", parts: plan.published.join(",") });
   return NextResponse.json(await state(found.track.id));
 }
 

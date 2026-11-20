@@ -7,6 +7,9 @@ import type { StorageReport } from "@/lib/storageReport";
 import SongFixTab from "./admin/SongFixTab";
 import SettingsTab from "./admin/SettingsTab";
 import MonetizeTab from "@/components/admin/MonetizeTab";
+import HouseAdsTab from "@/components/admin/HouseAdsTab";
+import AnalyticsTab from "@/components/admin/AnalyticsTab";
+import UserDetail from "@/components/admin/UserDetail";
 
 type Overview = {
   users: number;
@@ -95,7 +98,7 @@ type AdminResult = {
   sender_email: string | null;
 };
 
-type Tab = "reports" | "users" | "songs" | "fix" | "remixes" | "challenges" | "results" | "storage" | "cleanup" | "money" | "settings";
+type Tab = "analytics" | "reports" | "users" | "songs" | "fix" | "remixes" | "challenges" | "results" | "storage" | "cleanup" | "money" | "house" | "settings";
 
 function formatDate(value: string) {
   return new Date(value).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
@@ -128,7 +131,7 @@ function useList<T>(url: string, key: string, q: string) {
 }
 
 export default function AdminPanel({ adminId }: { adminId: string }) {
-  const [tab, setTab] = useState<Tab>("reports");
+  const [tab, setTab] = useState<Tab>("analytics");
   const [overview, setOverview] = useState<Overview | null>(null);
   const [overviewVersion, setOverviewVersion] = useState(0);
   const refreshOverview = useCallback(() => setOverviewVersion((v) => v + 1), []);
@@ -145,6 +148,7 @@ export default function AdminPanel({ adminId }: { adminId: string }) {
   }, [overviewVersion]);
 
   const tabs: { id: Tab; label: string }[] = [
+    { id: "analytics", label: "Analytics" },
     { id: "reports", label: "Reports" },
     { id: "users", label: "Users" },
     { id: "songs", label: "Songs" },
@@ -155,6 +159,7 @@ export default function AdminPanel({ adminId }: { adminId: string }) {
     { id: "storage", label: "Storage" },
     { id: "cleanup", label: "Clean up" },
     { id: "money", label: "Ads & earnings" },
+    { id: "house", label: "Remixt ads" },
     { id: "settings", label: "Settings" },
   ];
 
@@ -218,6 +223,8 @@ export default function AdminPanel({ adminId }: { adminId: string }) {
         {tab === "cleanup" && <CleanupTab onChange={refreshOverview} />}
         {tab === "money" && <MonetizeTab onOpenSettings={() => setTab("settings")} />}
         {tab === "settings" && <SettingsTab />}
+        {tab === "house" && <HouseAdsTab />}
+        {tab === "analytics" && <AnalyticsTab />}
         {tab === "fix" && <SongFixTab />}
       </div>
     </div>
@@ -268,6 +275,7 @@ function UsersTab({ adminId, onChange }: { adminId: string; onChange: () => void
   const [q, setQ] = useState("");
   const { items, reload } = useList<AdminUser>("/api/admin/users", "users", q);
   const [busy, setBusy] = useState<string | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function remove(user: AdminUser) {
@@ -308,14 +316,20 @@ function UsersTab({ adminId, onChange }: { adminId: string; onChange: () => void
                 {user.email} · joined {formatDate(user.created_at)} · {user.songs} songs · {user.remixes} remixes
               </p>
             </div>
-            {!user.admin && user.id !== adminId && (
-              <button onClick={() => remove(user)} disabled={busy === user.id} className={dangerButton}>
-                {busy === user.id ? "Deleting…" : "Delete user"}
+            <div className="flex shrink-0 gap-2">
+              <button onClick={() => setOpen(user.id)} className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-surface-hover">
+                Details
               </button>
-            )}
+              {!user.admin && user.id !== adminId && (
+                <button onClick={() => remove(user)} disabled={busy === user.id} className={dangerButton}>
+                  {busy === user.id ? "Deleting…" : "Delete user"}
+                </button>
+              )}
+            </div>
           </Row>
         ))}
       </div>
+      {open && <UserDetail userId={open} onClose={() => setOpen(null)} />}
     </div>
   );
 }

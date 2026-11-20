@@ -59,6 +59,14 @@ export type AppSettings = {
     promotions: boolean;
     signups: boolean;
     wrongInfo: boolean;
+    /** Remixt's own ads fill a picture spot no paying ad takes. */
+    houseAds: boolean;
+    /** Remixt's own audio (a station ID) in a radio break no paying ad takes. */
+    houseRadio: boolean;
+    /** Remixt's own audio before a remix when no paying ad takes the spot (pays nobody, so off unless chosen). */
+    housePreroll: boolean;
+    /** First-party analytics (Admin → Analytics): page views, sessions, sources. */
+    analytics: boolean;
   };
   mining: {
     base: number;
@@ -102,7 +110,18 @@ export const DEFAULTS: AppSettings = {
   payouts: { holdDays: 30, minMicros: 10 * M, unclaimedYears: 3, tomanRate: 0 },
   ads: { viewShare: 5_000, viewMs: 1_000, paidViewsPerAddress: 60, floors: { card: M / 2, audio: 2 * M, promote: M / 2 } },
   audio: { maxSeconds: 15, skipAfter: 5, paidAfter: 5, prerollEveryMinutes: 30, prerollFreeFirst: true, visitGapMinutes: 30, radioEveryMinutes: 20 },
-  features: { ads: true, audioAds: true, selfServe: true, promotions: true, signups: true, wrongInfo: true },
+  features: {
+    ads: true,
+    audioAds: true,
+    selfServe: true,
+    promotions: true,
+    signups: true,
+    wrongInfo: true,
+    houseAds: true,
+    houseRadio: true,
+    housePreroll: false,
+    analytics: true,
+  },
   mining: { base: 10, longSong: 5, firstToday: 5, rushMultiplier: 2, longSongMinutes: 5, rushAfterMinutes: 15 },
   limits: {
     signupsPerHour: 5,
@@ -198,6 +217,10 @@ export const FIELDS: Field[] = [
   { path: "features.promotions", group: "features", unit: "switch", en: "Members can promote their remixes and songs", fa: "معرفی ویژه توسط اعضا", public: true },
   { path: "features.signups", group: "features", unit: "switch", en: "New accounts", fa: "ثبت‌نام", help: "Off: sign-up is closed (log-in still works).", public: true },
   { path: "features.wrongInfo", group: "features", unit: "switch", en: "“Wrong info?” reports", fa: "گزارش اطلاعات اشتباه", public: true },
+  { path: "features.houseAds", group: "features", unit: "switch", en: "Remixt's own ads in empty spots", fa: "تبلیغ خودِ ریمیکست در جای خالی", help: "Off: a picture spot no paying ad takes stays empty. Each ad is managed in Admin → Remixt ads.", public: true },
+  { path: "features.houseRadio", group: "features", unit: "switch", en: "Remixt station IDs in radio breaks", fa: "معرفی ایستگاه ریمیکست در وقفهٔ رادیو", help: "A radio break no paying audio ad takes plays Remixt's own short sound instead of being skipped.", public: true },
+  { path: "features.housePreroll", group: "features", unit: "switch", en: "Remixt's own audio before remixes", fa: "صدای ریمیکست پیش از ریمیکس", help: "Pays nobody and makes listeners wait, so it's off unless you want it. The same how-often rules as paying audio ads.", public: true },
+  { path: "features.analytics", group: "features", unit: "switch", en: "Analytics", fa: "آمار بازدید", help: "Page views, visits, sources and devices, kept on this site (no Google, no cookies; addresses never stored). Off: nothing new is recorded.", public: true },
 
   { path: "mining.base", group: "mining", unit: "count", en: "XP per song split for someone", fa: "امتیاز برای هر آهنگ", min: 0, max: 10_000, int: true, public: true },
   { path: "mining.longSong", group: "mining", unit: "count", en: "Extra XP for a long song", fa: "امتیاز اضافهٔ آهنگ بلند", min: 0, max: 10_000, int: true, public: true },

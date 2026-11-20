@@ -36,7 +36,10 @@ export function ensureSchema(): Promise<void> {
     // Already set up (the usual case): one quick look instead of twenty
     // statements on every cold start. project_members is created last.
     const [ready] = await sql<{ ok: boolean }[]>`SELECT to_regclass('project_members') IS NOT NULL AS ok`;
-    if (ready?.ok) return;
+    if (ready?.ok) {
+      await ensureMakingTogether();
+      return;
+    }
 
     // Rights and moderation.
     await sql`ALTER TABLE tracks ADD COLUMN IF NOT EXISTS rights_confirmed_at TIMESTAMPTZ`;
@@ -120,9 +123,49 @@ export function ensureSchema(): Promise<void> {
       )
     `;
     await sql`CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members(user_id)`;
+    await ensureMakingTogether();
   })();
   applied.catch(() => (applied = null));
   return applied;
+}
+
+/**
+ * Private songs and making music together (lib/songPrivacy.ts):
+ * - a public song's parts its owner keeps out of the public library
+ *   (`stems.held_back`: a producer publishes the beat, keeps the vocal);
+ * - what each member of a shared project does there (`role`), and whether
+ *   they can change the mix or only listen and comment (`can_edit`);
+ * - a song queued from a phone kept private (`split_jobs.private`);
+ * - publishing a remix that uses someone else's private song waits for
+ *   that song's owner to agree (`remix_consents`).
+ */
+async function ensureMakingTogether() {
+  // Already there (the usual case): one look instead of seven statements.
+  const [done] = await sql<{ ok: boolean }[]>`
+    SELECT to_regclass('remix_consents') IS NOT NULL
+       AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'stems' AND column_name = 'held_back') AS ok
+  `;
+  if (done?.ok) return;
+  await sql`ALTER TABLE stems ADD COLUMN IF NOT EXISTS held_back BOOLEAN NOT NULL DEFAULT false`;
+  await sql`ALTER TABLE project_members ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'producer'`;
+  await sql`ALTER TABLE project_members ADD COLUMN IF NOT EXISTS can_edit BOOLEAN NOT NULL DEFAULT true`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS remix_consents (
+      remix_id TEXT NOT NULL REFERENCES remixes(id) ON DELETE CASCADE,
+      track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      asked_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'asked',
+      note TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      decided_at TIMESTAMPTZ,
+      PRIMARY KEY (remix_id, track_id)
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_remix_consents_owner ON remix_consents(owner_id, status)`;
+  // split_jobs is made by lib/splitQueue.ts, which may not have run yet on a new database.
+  const [jobs] = await sql<{ ok: boolean }[]>`SELECT to_regclass('split_jobs') IS NOT NULL AS ok`;
+  if (jobs?.ok) await sql`ALTER TABLE split_jobs ADD COLUMN IF NOT EXISTS private BOOLEAN NOT NULL DEFAULT false`;
 }
 
 /** The tag every vocal recorded in the Studio's booth is saved with. */

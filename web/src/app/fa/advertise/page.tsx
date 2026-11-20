@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { pageMetadata } from "@/lib/seo";
 import MemberPage from "@/components/earnings/MemberPage";
 import AdvertiserPage from "@/components/earnings/AdvertiserPage";
+import AdvertiseIntro from "@/components/earnings/AdvertiseIntro";
 
 export const metadata = pageMetadata({
   title: "تبلیغ در ریمیکست — تصویری، صوتی و معرفی ویژهٔ ریمیکس",
@@ -12,7 +13,7 @@ export const metadata = pageMetadata({
 
 export default function Page() {
   return (
-    <MemberPage lang="fa" path="/advertise">
+    <MemberPage lang="fa" path="/advertise" publicView={<AdvertiseIntro lang="fa" />}>
       {() => (
         <Suspense>
           <AdvertiserPage lang="fa" />

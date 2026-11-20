@@ -113,17 +113,57 @@ export const SONG_POLICY_TEXT: Record<SongPolicy, { en: string; fa: string; enHe
   },
 };
 
-export type RemixAdSettings = { on: boolean; kinds: AdKind[]; blockedTopics: string[] };
+/** Where on (and around) a remix's page a picture ad may sit. */
+export const AD_SPOTS = ["player", "comments", "radio"] as const;
+export type AdSpot = (typeof AD_SPOTS)[number];
 
-export const DEFAULT_REMIX_ADS: RemixAdSettings = { on: true, kinds: [...AD_KINDS], blockedTopics: [] };
+export const AD_SPOT_TEXT: Record<AdSpot, { en: string; fa: string; enHelp: string; faHelp: string }> = {
+  player: { en: "Under the player", fa: "زیر پخش‌کننده", enHelp: "Seen by most listeners.", faHelp: "بیشترِ شنونده‌ها می‌بینند." },
+  comments: { en: "Below the comments", fa: "زیر نظرها", enHelp: "Out of the way: only people who scroll down see it.", faHelp: "دور از دید: فقط کسی که پایین برود می‌بیند." },
+  radio: { en: "On the radio page while it plays", fa: "در صفحهٔ رادیو هنگام پخش", enHelp: "When your remix is on air.", faHelp: "وقتی ریمیکست در رادیو پخش می‌شود." },
+};
 
-/** Settings as stored or sent, made safe: known kinds and topics only. */
+/** How a picture ad looks on the page. */
+export const AD_STYLES = ["full", "compact"] as const;
+export type AdStyle = (typeof AD_STYLES)[number];
+
+export const AD_STYLE_TEXT: Record<AdStyle, { en: string; fa: string; enHelp: string; faHelp: string }> = {
+  full: { en: "Full card", fa: "کارت کامل", enHelp: "Picture, words and a button.", faHelp: "تصویر، متن و دکمه." },
+  compact: { en: "Slim strip", fa: "نوار باریک", enHelp: "One quiet line with a small picture.", faHelp: "یک خطِ آرام با تصویر کوچک." },
+};
+
+export type RemixAdSettings = {
+  on: boolean;
+  kinds: AdKind[];
+  blockedTopics: string[];
+  /** Where picture ads sit (at least one while picture ads are on). */
+  spots: AdSpot[];
+  style: AdStyle;
+  /** Remixt's own ads may fill the spots no paying ad takes (they pay nobody). */
+  house: boolean;
+};
+
+export const DEFAULT_REMIX_ADS: RemixAdSettings = {
+  on: true,
+  kinds: [...AD_KINDS],
+  blockedTopics: [],
+  spots: ["player", "radio"],
+  style: "full",
+  house: true,
+};
+
+/** Settings as stored or sent, made safe: known kinds, topics and spots only. */
 export function cleanSettings(s: Partial<RemixAdSettings> | null | undefined): RemixAdSettings {
-  if (!s) return { ...DEFAULT_REMIX_ADS, kinds: [...DEFAULT_REMIX_ADS.kinds] };
+  if (!s) return { ...DEFAULT_REMIX_ADS, kinds: [...DEFAULT_REMIX_ADS.kinds], spots: [...DEFAULT_REMIX_ADS.spots] };
+  const spots = AD_SPOTS.filter((x) => (s.spots ?? DEFAULT_REMIX_ADS.spots).includes(x));
   return {
     on: s.on !== false,
     kinds: AD_KINDS.filter((k) => (s.kinds ?? AD_KINDS).includes(k)),
     blockedTopics: TOPIC_IDS.filter((t) => (s.blockedTopics ?? []).includes(t)),
+    // Picture ads on with nowhere to sit would be "on" in name only: under the player, then.
+    spots: spots.length ? spots : ["player"],
+    style: s.style === "compact" ? "compact" : "full",
+    house: s.house !== false,
   };
 }
 
@@ -137,6 +177,11 @@ export type EffectiveAds = {
   forced: boolean;
   /** A song in it is blocked by its artist: the remix can't be public. */
   blocked: boolean;
+  /** Where picture ads sit, and how they look. */
+  spots: AdSpot[];
+  style: AdStyle;
+  /** Remixt's own ads may fill an empty spot. */
+  house: boolean;
 };
 
 /**
@@ -146,14 +191,16 @@ export type EffectiveAds = {
  * remix can't be public). Topics the remixer blocked stay blocked always.
  */
 export function effectiveAds(settings: RemixAdSettings, policies: (SongPolicy | null)[]): EffectiveAds {
-  const blockedTopics = settings.blockedTopics;
-  if (policies.includes("block")) return { on: false, kinds: [], blockedTopics, forced: false, blocked: true };
+  const { blockedTopics, style, house } = settings;
+  const spots = settings.spots.length ? settings.spots : (["player"] as AdSpot[]);
+  const none = { on: false, kinds: [] as AdKind[], blockedTopics, forced: false, spots, style, house };
+  if (policies.includes("block")) return { ...none, blocked: true };
   const monetize = policies.includes("monetize");
   const remixerOn = settings.on && settings.kinds.length > 0;
-  if (!remixerOn && !monetize) return { on: false, kinds: [], blockedTopics, forced: false, blocked: false };
+  if (!remixerOn && !monetize) return { ...none, blocked: false };
   // The remixer's ticked kinds always count; an artist's Monetize adds the picture card when none are ticked.
   const kinds: AdKind[] = settings.kinds.length ? [...settings.kinds] : ["card"];
-  return { on: true, kinds, blockedTopics, forced: !remixerOn, blocked: false };
+  return { on: true, kinds, blockedTopics, forced: !remixerOn, blocked: false, spots, style, house };
 }
 
 // ——— how often ———

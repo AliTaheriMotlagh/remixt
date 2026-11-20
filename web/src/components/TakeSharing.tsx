@@ -3,13 +3,18 @@
 import { useEffect, useState } from "react";
 import { Globe, Lock, Share2, Users, X } from "lucide-react";
 
-// Who can see and use a take recorded in the booth. It starts private —
-// only its singer sees it, in their library and the Studio. From here they
-// can share it with chosen artists (who are notified, and find it in their
-// own library), or with everyone (it joins the public library).
+// Who can see and use a song or a take recorded in the booth. A take starts
+// private — only its singer sees it, in their library and the Studio — and
+// so does a song uploaded "only me". From here its owner can share it with
+// chosen artists (who are notified, and find it in their own library), or
+// publish it: all of it, or only some parts (a producer can publish the
+// beat and keep the vocal). Rules: lib/songPrivacy.ts.
 
 type Person = { id: string; artist_name: string; avatar_color: string };
-type Sharing = { visibility: "public" | "private"; people: Person[] };
+type Part = { kind: string; public: boolean };
+type Sharing = { visibility: "public" | "private"; people: Person[]; parts?: Part[] };
+
+const PART_NAME: Record<string, string> = { vocals: "Vocals", beat: "Beat", drums: "Drums", bass: "Bass", other: "Melody" };
 
 async function call(url: string, init?: RequestInit): Promise<Sharing> {
   const res = await fetch(url, init);
@@ -18,9 +23,13 @@ async function call(url: string, init?: RequestInit): Promise<Sharing> {
   return data as Sharing;
 }
 
-/** "Private", "Shared with 2", "Everyone" — what a take's sharing button says. */
-export function sharingLabel(visibility: string | undefined, sharedWith?: number) {
-  if (visibility === "public") return "Everyone";
+/** "Private", "Shared with 2", "Everyone", "Beat public" — what a sharing button says. */
+export function sharingLabel(visibility: string | undefined, sharedWith?: number, parts?: Part[]) {
+  if (visibility === "public") {
+    const open = parts?.filter((p) => p.public) ?? [];
+    if (parts && open.length && open.length < parts.length) return `${open.map((p) => PART_NAME[p.kind] ?? p.kind).join(" + ")} public`;
+    return "Everyone";
+  }
   if (sharedWith === undefined) return "Private";
   return sharedWith > 0 ? `Shared with ${sharedWith}` : "Only you";
 }
@@ -31,6 +40,7 @@ export function TakeShareButton({
   visibility: initialVisibility,
   sharedWith: initialSharedWith,
   compact = false,
+  what = "take",
   onChange,
 }: {
   trackId: string;
@@ -38,6 +48,8 @@ export function TakeShareButton({
   visibility: "public" | "private" | undefined;
   sharedWith?: number;
   compact?: boolean;
+  /** A take recorded in the booth, or an uploaded song (which can publish some parts only). */
+  what?: "take" | "song";
   onChange?: (sharing: Sharing) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -57,16 +69,17 @@ export function TakeShareButton({
         className={`flex shrink-0 items-center gap-1 rounded-full border border-border font-medium text-muted hover:border-brand/50 hover:text-foreground ${
           compact ? "px-1.5 py-px text-[10px]" : "px-2 py-0.5 text-[11px]"
         }`}
-        title="Who can see and use this take"
-        aria-label={`Sharing: ${sharingLabel(visibility, sharedWith)}. Change who can use “${title}”`}
+        title={`Who can see and use this ${what}`}
+        aria-label={`Sharing: ${sharingLabel(visibility, sharedWith, changed?.parts)}. Change who can use “${title}”`}
       >
-        <Icon className="h-3 w-3" /> {sharingLabel(visibility, sharedWith)}
+        <Icon className="h-3 w-3" /> {sharingLabel(visibility, sharedWith, changed?.parts)}
         {!compact && <Share2 className="h-3 w-3" />}
       </button>
       {open && (
         <SharingDialog
           trackId={trackId}
           title={title}
+          what={what}
           onClose={() => setOpen(false)}
           onChange={(next) => {
             setChanged(next);
@@ -81,11 +94,13 @@ export function TakeShareButton({
 function SharingDialog({
   trackId,
   title,
+  what,
   onClose,
   onChange,
 }: {
   trackId: string;
   title: string;
+  what: "take" | "song";
   onClose: () => void;
   onChange?: (sharing: Sharing) => void;
 }) {
@@ -150,6 +165,11 @@ function SharingDialog({
   const json = { "Content-Type": "application/json" };
   const setVisibility = (visibility: Sharing["visibility"]) =>
     change(() => call(base, { method: "PATCH", headers: json, body: JSON.stringify({ visibility }) }));
+  const setParts = (parts: string[]) => change(() => call(base, { method: "PATCH", headers: json, body: JSON.stringify({ parts }) }));
+  const parts = sharing?.parts ?? [];
+  const publicParts = parts.filter((p) => p.public).map((p) => p.kind);
+  // Something stays out of the public library: sharing with people still matters.
+  const somethingPrivate = sharing?.visibility === "private" || parts.some((p) => !p.public);
   const add = (person: Person) => {
     setQuery("");
     setFound([]);
@@ -173,7 +193,7 @@ function SharingDialog({
       >
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
-            <h2 className="font-bold">Who can use this take</h2>
+            <h2 className="font-bold">Who can use this {what}</h2>
             <p dir="auto" className="truncate text-xs text-muted">
               “{title}”
             </p>
@@ -202,14 +222,45 @@ function SharingDialog({
                 onSelect={() => setVisibility("public")}
                 icon={<Globe className="h-4 w-4" />}
                 title="Everyone"
-                text="It joins the public library, for anyone to hear and remix."
+                text={what === "song" && parts.length > 1 ? "Publish it to the public library — all of it, or only the parts you pick below." : "It joins the public library, for anyone to hear and remix."}
               />
             </div>
 
-            {sharing.visibility === "private" && (
+            {sharing.visibility === "public" && parts.length > 1 && (
+              <fieldset className="flex flex-col gap-2 rounded-xl border border-border p-3">
+                <legend className="px-1 text-xs font-semibold">In the public library</legend>
+                <p className="text-[11px] text-muted">
+                  Untick a part to keep it to you and the people you share with — say, publish the beat and keep the vocal for your own release.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {parts.map((p) => {
+                    const on = p.public;
+                    const last = on && publicParts.length === 1;
+                    return (
+                      <label
+                        key={p.kind}
+                        className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs ${on ? "border-brand bg-brand/10" : "border-border"} ${last ? "opacity-70" : ""}`}
+                        title={last ? "One part at least — choose “Only me” to keep it all private" : undefined}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          disabled={busy || last}
+                          onChange={() => setParts(on ? publicParts.filter((k) => k !== p.kind) : [...publicParts, p.kind])}
+                          className="accent-brand"
+                        />
+                        {PART_NAME[p.kind] ?? p.kind}
+                      </label>
+                    );
+                  })}
+                </div>
+              </fieldset>
+            )}
+
+            {somethingPrivate && (
               <div className="flex flex-col gap-2 rounded-xl border border-border p-3">
                 <label htmlFor={`share-${trackId}`} className="text-xs font-semibold">
-                  Share with an artist
+                  {sharing.visibility === "public" ? "Share the private parts with an artist" : "Share with an artist"}
                 </label>
                 <input
                   id={`share-${trackId}`}
@@ -269,7 +320,9 @@ function SharingDialog({
               </div>
             )}
             <p className="text-[11px] text-muted">
-              A take you put in a remix or a shared project plays there for whoever listens to it.
+              {what === "take"
+                ? "A take you put in a remix or a shared project plays there for whoever listens to it."
+                : "People you share with can use it in their Studio and in projects with you. Before a remix of it goes public, you're asked."}
             </p>
           </>
         )}

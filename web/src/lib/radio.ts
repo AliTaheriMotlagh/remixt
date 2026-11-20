@@ -5,10 +5,10 @@ import { playable } from "./radioPlayable";
 import { storedKeys } from "./storage";
 import { ensureSchema } from "./schema";
 import { coverUrl } from "./cover";
+import { resolveStyle, transitionSeconds, TRANSITIONS, type TransitionChoice, type TransitionStyle } from "./radioTransitions";
 import { isAdmin } from "./admin";
 import type { User } from "./auth";
 import {
-  crossfadeFor,
   itemKey,
   NEXT_LEAD_SECONDS,
   nextStart,
@@ -53,9 +53,21 @@ export type RadioSettings = {
   /** What the station plays: songs, remixes or both. */
   songs: boolean;
   remixes: boolean;
+  /** How one song goes into the next (lib/radioTransitions.ts). */
+  transition: TransitionChoice;
 };
 
-export const DEFAULT_SETTINGS: RadioSettings = { voting: true, choices: 3, requests: "open", perListener: 3, autoFill: true, songs: true, remixes: true };
+export const DEFAULT_SETTINGS: RadioSettings = {
+  voting: true,
+  choices: 3,
+  requests: "open",
+  perListener: 3,
+  autoFill: true,
+  songs: true,
+  remixes: true,
+  // AutoMix where the tempos allow, a DJ-style change otherwise (lib/radioTransitions.ts).
+  transition: "auto",
+};
 
 export const HOUSE_SLUG = "remixt-radio";
 export const NAME_MAX = 60;
@@ -88,6 +100,8 @@ export type QueueRow = RadioItem & {
   requestedBy: string | null;
   listenersPeak: number;
   votes: number;
+  /** How it comes in after the song before (null: a plain crossfade, or none). */
+  transition: TransitionStyle | null;
 };
 
 let schema: Promise<void> | null = null;
@@ -191,6 +205,8 @@ export function ensureRadioSchema(): Promise<void> {
     await sql`CREATE INDEX IF NOT EXISTS idx_radio_listeners_seen ON radio_listeners(station_id, last_seen DESC)`;
     // Tempo, for crossfading on the beat (added after the first version).
     for (const table of ["radio_queue", "radio_playlist", "radio_requests"]) await sql`ALTER TABLE ${sql(table)} ADD COLUMN IF NOT EXISTS bpm DOUBLE PRECISION`;
+    // How each song came in (the station's transition style when it was scheduled).
+    await sql`ALTER TABLE radio_queue ADD COLUMN IF NOT EXISTS transition TEXT`;
   })().catch((error) => {
     schema = null;
     throw error;
@@ -231,6 +247,7 @@ export function settingsOf(raw: Partial<RadioSettings> | null | undefined): Radi
     autoFill: !!s.autoFill,
     songs: s.songs !== false,
     remixes: s.remixes !== false,
+    transition: (TRANSITIONS as readonly string[]).includes(s.transition) ? s.transition : DEFAULT_SETTINGS.transition,
   };
 }
 
@@ -270,6 +287,7 @@ type QRow = ItemRow & {
   requested_by: string | null;
   listeners_peak: number;
   votes: number;
+  transition?: string | null;
 };
 
 const queueOf = (r: QRow): QueueRow => ({
@@ -282,6 +300,7 @@ const queueOf = (r: QRow): QueueRow => ({
   requestedBy: r.requested_by,
   listenersPeak: r.listeners_peak,
   votes: r.votes,
+  transition: (TRANSITIONS as readonly string[]).includes(r.transition ?? "") && r.transition !== "auto" ? (r.transition as TransitionStyle) : null,
 });
 
 // --------------------------------------------------------------- catalogue
@@ -619,7 +638,10 @@ export async function tick(station: RadioStation): Promise<boolean> {
     }
     // Still on air: the next one comes in a crossfade before its end. Ended a while ago: now.
     const endsOut = cur?.ends_at?.getTime() ?? 0;
-    const xfade = cur && endsOut > Date.now() ? crossfadeFor(itemOf(cur), pick.item).seconds : 0;
+    // How it comes in: the station's style ("auto" chooses for this pair), on the outgoing song's bars.
+    const onAir = cur && endsOut > Date.now();
+    const style = onAir ? resolveStyle(st.settings.transition, cur.bpm ? Number(cur.bpm) : null, pick.item.bpm ?? null, Number(cur.id) + 1) : null;
+    const xfade = onAir && style ? transitionSeconds(style, itemOf(cur), pick.item) : 0;
     const startsAt = new Date(endsOut > Date.now() ? Math.max(Date.now(), endsOut - xfade * 1000) : nextStart(endsOut, Date.now()));
     const endsAt = new Date(startsAt.getTime() + pick.item.duration * 1000);
     const votesFor = input.votes.find((v) => itemKey(v.item) === itemKey(pick.item))?.votes ?? 0;
@@ -633,12 +655,12 @@ export async function tick(station: RadioStation): Promise<boolean> {
     if (pick.source === "dj") {
       const row = input.djRows.find((r) => r.kind === pick.item.kind && r.item_id === pick.item.id)!;
       rowId = Number(row.id);
-      await tx`UPDATE radio_queue SET status = 'playing', starts_at = ${startsAt}, ends_at = ${endsAt} WHERE id = ${row.id}`;
+      await tx`UPDATE radio_queue SET status = 'playing', starts_at = ${startsAt}, ends_at = ${endsAt}, transition = ${style} WHERE id = ${row.id}`;
     } else {
       const inserted = await tx<{ id: string }[]>`
-        INSERT INTO radio_queue (station_id, kind, item_id, title, artist, cover, duration, bpm, source, status, requested_by, starts_at, ends_at, votes)
+        INSERT INTO radio_queue (station_id, kind, item_id, title, artist, cover, duration, bpm, source, status, requested_by, starts_at, ends_at, votes, transition)
         VALUES (${st.id}, ${pick.item.kind}, ${pick.item.id}, ${pick.item.title}, ${pick.item.artist}, ${pick.item.cover}, ${pick.item.duration}, ${pick.item.bpm ?? null},
-                ${pick.source}, 'playing', ${requester}, ${startsAt}, ${endsAt}, ${votesFor})
+                ${pick.source}, 'playing', ${requester}, ${startsAt}, ${endsAt}, ${votesFor}, ${style})
         RETURNING id
       `;
       rowId = Number(inserted[0].id);

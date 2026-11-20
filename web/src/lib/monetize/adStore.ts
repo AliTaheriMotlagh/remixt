@@ -8,7 +8,7 @@ import { notify } from "../notifications";
 import { deleteObject } from "../storage";
 import {
   cleanSettings, effectiveAds, FORMATS, microsOfToman, TOPIC_IDS,
-  type AdKind, type EffectiveAds, type Format, type RemixAdSettings, type SongPolicy,
+  type AdKind, type AdSpot, type AdStyle, type EffectiveAds, type Format, type RemixAdSettings, type SongPolicy,
 } from "./adRules";
 import { MICROS, type Placement } from "./policy";
 import { ensureMonetizeSchema, monetizeSettings, numbers, parseTarget, type Campaign, type Target } from "./store";
@@ -20,10 +20,14 @@ const n = (x: unknown) => Number(x ?? 0);
 
 export async function remixAdSettings(remixId: string): Promise<RemixAdSettings> {
   await ensureMonetizeSchema();
-  const [row] = await sql<{ ads_on: boolean; kinds: string[]; blocked_topics: string[] }[]>`
-    SELECT ads_on, kinds, blocked_topics FROM remix_ad_settings WHERE remix_id = ${remixId}
+  const [row] = await sql<{ ads_on: boolean; kinds: string[]; blocked_topics: string[]; spots: string[]; style: string; house: boolean }[]>`
+    SELECT ads_on, kinds, blocked_topics, spots, style, house FROM remix_ad_settings WHERE remix_id = ${remixId}
   `;
-  return cleanSettings(row ? { on: row.ads_on, kinds: row.kinds as AdKind[], blockedTopics: row.blocked_topics } : null);
+  return cleanSettings(
+    row
+      ? { on: row.ads_on, kinds: row.kinds as AdKind[], blockedTopics: row.blocked_topics, spots: row.spots as AdSpot[], style: row.style as AdStyle, house: row.house }
+      : null
+  );
 }
 
 export async function saveRemixAdSettings(ownerId: string, remixId: string, input: Partial<RemixAdSettings>): Promise<{ error: string } | null> {
@@ -32,8 +36,10 @@ export async function saveRemixAdSettings(ownerId: string, remixId: string, inpu
   if (!remix) return { error: "Not your remix" };
   const s = cleanSettings(input);
   await sql`
-    INSERT INTO remix_ad_settings (remix_id, ads_on, kinds, blocked_topics) VALUES (${remixId}, ${s.on}, ${s.kinds}, ${s.blockedTopics})
-    ON CONFLICT (remix_id) DO UPDATE SET ads_on = EXCLUDED.ads_on, kinds = EXCLUDED.kinds, blocked_topics = EXCLUDED.blocked_topics, updated_at = now()
+    INSERT INTO remix_ad_settings (remix_id, ads_on, kinds, blocked_topics, spots, style, house)
+    VALUES (${remixId}, ${s.on}, ${s.kinds}, ${s.blockedTopics}, ${s.spots}, ${s.style}, ${s.house})
+    ON CONFLICT (remix_id) DO UPDATE SET ads_on = EXCLUDED.ads_on, kinds = EXCLUDED.kinds, blocked_topics = EXCLUDED.blocked_topics,
+      spots = EXCLUDED.spots, style = EXCLUDED.style, house = EXCLUDED.house, updated_at = now()
   `;
   return null;
 }
@@ -58,10 +64,16 @@ export async function remixAds(remixId: string): Promise<EffectiveAds & { settin
 }
 
 /** Whether ads of `kind` may show for `target` (a remix: its settings; a song as it is, or an ordinary page: yes). */
-export async function adsAllowed(target: Target, kind: AdKind): Promise<{ allowed: boolean; blockedTopics: string[] }> {
-  if (!target || target.kind !== "remix") return { allowed: true, blockedTopics: [] };
+export async function adsAllowed(
+  target: Target,
+  kind: AdKind,
+  /** A picture ad's spot on the page; left out, any. */
+  spot?: AdSpot | null
+): Promise<{ allowed: boolean; blockedTopics: string[]; style: AdStyle; house: boolean }> {
+  if (!target || target.kind !== "remix") return { allowed: true, blockedTopics: [], style: "full", house: true };
   const e = await remixAds(target.id);
-  return { allowed: e.on && e.kinds.includes(kind), blockedTopics: e.blockedTopics };
+  const inSpot = kind !== "card" || !spot || e.spots.includes(spot);
+  return { allowed: e.on && e.kinds.includes(kind) && inSpot, blockedTopics: e.blockedTopics, style: e.style, house: e.house };
 }
 
 /** Songs among these stems whose artist chose Block (publishing a remix of them is refused). */

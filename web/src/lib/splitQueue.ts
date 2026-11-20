@@ -52,6 +52,8 @@ export type SplitJob = {
   worker_session: string | null;
   /** The song's cover picture, for the track it becomes. */
   cover_key?: string | null;
+  /** Kept to its owner once split. */
+  private?: boolean;
   heartbeat_at: Date | null;
   progress: number;
   stage: string | null;
@@ -96,6 +98,8 @@ export function ensureSplitQueueSchema(): Promise<void> {
     await sql`ALTER TABLE split_jobs ADD COLUMN IF NOT EXISTS reward INTEGER NOT NULL DEFAULT 10`;
     // The song's cover, read from its file (or its page) when it was queued; the track gets it (see .../track).
     await sql`ALTER TABLE split_jobs ADD COLUMN IF NOT EXISTS cover_key TEXT`;
+    // Kept to its owner when split (see lib/schema.ts ensureMakingTogether).
+    await sql`ALTER TABLE split_jobs ADD COLUMN IF NOT EXISTS private BOOLEAN NOT NULL DEFAULT false`;
     // Helpers' tabs that have asked for work lately — "rigs online".
     await sql`
       CREATE TABLE IF NOT EXISTS split_rigs (
@@ -122,19 +126,21 @@ export function sourceExtension(filename: string): string | null {
 
 export async function createJob(
   ownerId: string,
-  { title, filename, tags, ext, status = "uploading" }: {
+  { title, filename, tags, ext, status = "uploading", keepPrivate = false }: {
     title: string;
     filename: string;
     tags: string[];
     ext: string;
     status?: "uploading" | "queued";
+    /** Kept to its owner once split. */
+    keepPrivate?: boolean;
   }
 ): Promise<SplitJob> {
   await ensureSplitQueueSchema();
   const id = randomUUID();
   const [job] = await sql<SplitJob[]>`
-    INSERT INTO split_jobs (id, owner_id, title, filename, source_key, tags, status)
-    VALUES (${id}, ${ownerId}, ${title}, ${filename}, ${`queue/${ownerId}/${id}.${ext}`}, ${normaliseTags(tags)}, ${status})
+    INSERT INTO split_jobs (id, owner_id, title, filename, source_key, tags, status, private)
+    VALUES (${id}, ${ownerId}, ${title}, ${filename}, ${`queue/${ownerId}/${id}.${ext}`}, ${normaliseTags(tags)}, ${status}, ${keepPrivate})
     RETURNING *
   `;
   return job;

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSettings } from "@/lib/settings/server";
 import { z } from "zod";
 import sql from "@/lib/db";
+import { trackServer } from "@/lib/analyticsStore";
 import { createSessionCookie, hashPassword } from "@/lib/auth";
 import { ensureRemixStats } from "@/lib/models";
 import { REF_COOKIE } from "@/lib/referral";
@@ -58,6 +59,7 @@ export async function POST(req: NextRequest) {
   }
 
   await createSessionCookie(id);
+  trackServer("signup", id);
 
   const res = NextResponse.json({ id, email, artistName });
   res.cookies.delete(REF_COOKIE);
