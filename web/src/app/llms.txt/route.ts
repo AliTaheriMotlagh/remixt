@@ -1,10 +1,12 @@
 import { SITE_DESCRIPTION, SITE_NAME, absoluteUrl } from "@/lib/site";
 import { TOOL_PAGES, toolPages, toolPath } from "@/lib/tools";
+import { GUIDES, guidePath } from "@/lib/guides";
 
 // /llms.txt (llmstxt.org): a plain summary of the site and its main pages for
 // AI assistants and AI search, which read this instead of the app's markup.
 export function GET() {
   const tools = TOOL_PAGES.map((t) => `- [${t.name}](${absoluteUrl(toolPath(t.slug))}): ${t.description}`);
+  const guides = GUIDES.map((g) => `- [${g.h1}](${absoluteUrl(guidePath(g.slug))}): ${g.description}`);
   const toolsFa = toolPages("fa").map((t) => `- [${t.name}](${absoluteUrl(toolPath(t.slug, "fa"))}): ${t.description}`);
   const body = [
     `# ${SITE_NAME}`,
@@ -16,6 +18,10 @@ export function GET() {
     "## Tools",
     "",
     ...tools,
+    "",
+    "## Guides",
+    "",
+    ...guides,
     "",
     "## Tools in Persian (فارسی)",
     "",

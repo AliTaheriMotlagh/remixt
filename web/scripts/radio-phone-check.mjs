@@ -7,6 +7,9 @@
 // fire at most once every SLEEP_MS.
 //   cd web && OWNER_ID=<user id> PHONE=ios|android [ENGINE=webkit] node scripts/radio-phone-check.mjs
 // ENGINE=webkit: the listener in Safari's engine (Playwright's WebKit) rather than Chrome.
+// FRESH=1: tune in after the next song is already announced, so the change checked is the first one
+// after tuning in (the iPad report: that one fell back to a hard cut).
+// TRANSITION=auto|automix|blend|bassSwap|filter|echo|rise|tapeStop: the station's style (default: the station default).
 // Needs the app running (BASE_URL) and the test database in Docker (remixt-test-pg).
 import { chromium, devices, webkit } from "playwright-core";
 import { SignJWT } from "jose";
@@ -23,6 +26,10 @@ const secret = process.env.SESSION_SECRET ?? env.SESSION_SECRET ?? "dev-only-sec
 const token = await new SignJWT({ userId: process.env.OWNER_ID }).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setExpirationTime("1h").sign(new TextEncoder().encode(secret));
 const log = (x) => console.log(JSON.stringify(x));
 
+// Which change was made, and whether the rendered one played (cut) or it fell back to the plain crossfade.
+const changes = async (p) =>
+  p.evaluate(() => (window.__remixtRadio?.decks ?? []).map((d) => ({ row: d.row.rowId, title: d.row.title, bpm: d.row.bpm ?? null, transition: d.row.transition ?? null, rendered: !!d.cut })));
+
 const browser = await chromium.launch({ channel: "chrome", args: ["--autoplay-policy=no-user-gesture-required"] });
 const listener = process.env.ENGINE === "webkit" ? await webkit.launch() : browser;
 const owner = await browser.newContext();
@@ -37,8 +44,10 @@ const call = async (method, path, data) => {
 const { slug } = await call("POST", "/api/radio", { name: `Phone FM ${Date.now() % 10000}`, tagline: "rig" });
 const found = (await call("GET", `/api/radio/${slug}/search?q=`)).items.filter((i) => i.kind === "track");
 for (const item of found.slice(0, 3)) await call("POST", `/api/radio/${slug}/console`, { action: "playlist-add", kind: item.kind, id: item.id });
-await call("POST", `/api/radio/${slug}/console`, { action: "settings", settings: { voting: false, autoFill: false, requests: "off" } });
+await call("POST", `/api/radio/${slug}/console`, { action: "settings", settings: { voting: false, autoFill: false, requests: "off", ...(process.env.TRANSITION ? { transition: process.env.TRANSITION } : {}) } });
 log({ step: "station", slug, phone, sleepMs });
+// Whatever happens below, the rig's station goes at the end.
+try {
 
 const device = phone === "ios" ? devices["iPhone 13"] : devices["Pixel 7"];
 // Every device setting but the browser it names (Playwright refuses that in newContext).
@@ -79,13 +88,21 @@ await ctx.addInitScript(
 const page = await ctx.newPage();
 page.on("pageerror", (e) => log({ pageerror: e.message }));
 await page.goto(`${base}/radio/${slug}`, { waitUntil: "load" });
+// The song on air ends in 100 s; anything announced after it is withdrawn, so the next is picked ~10 s from now.
+const st = `(SELECT id FROM radio_stations WHERE slug = '${slug}')`;
+const shorten = () =>
+  execSync(`docker exec remixt-test-pg psql -U postgres -d remixt -c "DELETE FROM radio_queue WHERE status = 'playing' AND starts_at > now() AND station_id = ${st}; UPDATE radio_queue SET ends_at = now() + interval '100 seconds' WHERE status = 'playing' AND station_id = ${st}"`);
+const fresh = !!process.env.FRESH;
+if (fresh) {
+  shorten();
+  // Until the station has announced the next song: tuning in then readies both at once.
+  for (let i = 0; i < 60 && !(await (await fetch(`${base}/api/radio/${slug}`)).json()).upcoming; i++) await page.waitForTimeout(1000);
+  log({ step: "next song announced before tuning in" });
+}
 await page.getByRole("button", { name: "Tune in" }).click({ timeout: 30_000 });
 await page.waitForFunction(() => window.__remixtRadio?.heard(), null, { timeout: 120_000 });
 log({ step: "tuned in", mode: await page.evaluate(() => window.__remixtRadio.playMode), players: await page.evaluate(() => window.__remixtRadio.players.length) });
-
-// The song on air ends in 100 s; anything announced after it is withdrawn, so the next is picked ~10 s from now.
-const st = `(SELECT id FROM radio_stations WHERE slug = '${slug}')`;
-execSync(`docker exec remixt-test-pg psql -U postgres -d remixt -c "DELETE FROM radio_queue WHERE status = 'playing' AND starts_at > now() AND station_id = ${st}; UPDATE radio_queue SET ends_at = now() + interval '100 seconds' WHERE status = 'playing' AND station_id = ${st}"`);
+if (!fresh) shorten();
 await page.evaluate(() => (window.__asleep = true));
 
 const samples = [];
@@ -106,8 +123,11 @@ while (Date.now() < until) {
 }
 log({ step: "through the change, every 0.5 s (row×players sounding:ms off the station)", samples: samples.join(" ") });
 log({ step: "pauses", pauses: await page.evaluate(() => window.__pauses.slice(-8)), button: await page.locator('section[aria-label="On air"] button').first().innerText() });
+log({ step: "the change", decks: await changes(page) });
 log({ step: "result", songsHeard: [...rows], silentSamples: silent, ok: rows.size >= 2 && silent <= 2 });
 
-await call("DELETE", `/api/radio/${slug}`);
-if (listener !== browser) await listener.close();
-await browser.close();
+} finally {
+  await call("DELETE", `/api/radio/${slug}`).catch((e) => log({ cleanup: e.message }));
+  if (listener !== browser) await listener.close();
+  await browser.close();
+}

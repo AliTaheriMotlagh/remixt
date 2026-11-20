@@ -1,4 +1,6 @@
 import Link from "next/link";
+import RadioBanner from "@/components/radio/RadioBanner";
+import { listStations } from "@/lib/radio";
 import {
   ArrowLeft,
   ArrowRight,
@@ -116,6 +118,8 @@ export default async function Home() {
   await ensureRemixStats();
   const user = await getCurrentUser();
 
+  // The radio on air, for the banner (no stations, or no database: no banner).
+  const radioStations = listStations(user?.id ?? null).catch(() => []);
   const [statsRows, freshRemixes, trending, podium, challenges, presence, activity, progress, liveSessions] = await Promise.all([
     sql<{ tracks: number; remixes: number; artists: number; plays: number }[]>`
       SELECT
@@ -284,10 +288,13 @@ export default async function Home() {
       <section className="border-b border-border bg-surface/40">
         <div className="mx-auto w-full max-w-6xl px-4 py-14 sm:px-6 sm:py-20">
           <SectionHeading
-            eyebrow="Watch & play"
-            title="Go live, learn to DJ, see it in action"
-            lead="Perform your remixes for a live room, mix your songs on two DJ decks, or hear exactly what splitting and matching does — no account needed."
+            eyebrow="Listen, watch & play"
+            title="Tune in, go live, learn to DJ"
+            lead="Listen to stations of remixes mixed like a DJ, perform your remixes for a live room, mix your songs on two DJ decks, or hear exactly what splitting and matching does — no account needed."
           />
+          <div className="mt-8">
+            <RadioBanner stations={await radioStations} />
+          </div>
           {liveSessions.length > 0 && (
             <div className="mt-8">
               <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold">

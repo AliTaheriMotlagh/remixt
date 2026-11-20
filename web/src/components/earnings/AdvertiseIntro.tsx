@@ -2,7 +2,7 @@ import Link from "next/link";
 import { AudioLines, BadgeCheck, Image as ImageIcon, Megaphone, Radio, ShieldCheck, Sparkles } from "lucide-react";
 import { getSettings } from "@/lib/settings/server";
 import { formatMoney } from "@/lib/monetize/policy";
-import { NEVER } from "@/lib/monetize/adRules";
+import { NEVER, NEVER_FA } from "@/lib/monetize/adRules";
 
 // What /advertise says to someone not signed in (and to search engines): what
 // can be bought, where it shows, how it's paid for — the owner's real numbers.
@@ -96,7 +96,7 @@ export default async function AdvertiseIntro({ lang }: { lang: "en" | "fa" }) {
           <h2 className="flex items-center gap-2 font-bold">
             <ShieldCheck className="h-5 w-5 text-brand-strong" aria-hidden /> {fa ? "هرگز در ریمیکست" : "Never on Remixt"}
           </h2>
-          <p className="mt-2 text-muted">{NEVER.join(" · ")}</p>
+          <p className="mt-2 text-muted">{(fa ? NEVER_FA : NEVER).join(" · ")}</p>
           <p className="mt-4 flex items-center gap-2 text-muted">
             <Radio className="h-4 w-4" aria-hidden />
             {fa ? "سازندهٔ هر ریمیکس انتخاب می‌کند چه نوع تبلیغی و کجای صفحه‌اش باشد." : "Each remix's maker chooses which kinds of ad show on their page, and where."}

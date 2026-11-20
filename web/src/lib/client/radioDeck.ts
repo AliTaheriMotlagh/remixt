@@ -809,8 +809,16 @@ export class RadioDeck {
     if (this.has(row.rowId) || this.rendering.has(row.rowId) || this.idle) return;
     const failed = this.failures.get(row.rowId);
     if (failed && Date.now() < failed.retryAt) return;
+    // The change into this song is built from the song before it, which may still be getting ready
+    // (on tuning in, the song on air and the next one start together): wait for those first, or the
+    // first change after tuning in fell back to the plain crossfade — a hard cut on an iPhone or iPad.
+    // Only songs already being readied are waited for, so two can never wait on each other.
+    const earlier = [...this.rendering.values()];
     const job = this.render(row, from)
-      .then((ready) => this.withTransition(row, ready))
+      .then(async (ready) => {
+        await Promise.allSettled(earlier);
+        return this.withTransition(row, ready);
+      })
       .then(({ url, offset, keptKey, cut }) => {
         if (this.idle) return URL.revokeObjectURL(url);
         this.failures.delete(row.rowId);

@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import RemixtMark from "@/components/RemixtMark";
 import { useCaptcha } from "@/lib/client/captcha";
+import { safeNext } from "@/lib/client/navigation";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -13,6 +14,13 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const withCaptcha = useCaptcha();
+  // ?next= carried to "Sign up" too, so either way ends where they started.
+  const [next, setNext] = useState<string | null>(null);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the URL is only readable after mount here
+    setNext(new URLSearchParams(window.location.search).get("next"));
+  }, []);
+  const withNext = (href: string) => (next ? `${href}?next=${encodeURIComponent(next)}` : href);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -31,7 +39,8 @@ export default function LoginPage() {
         setError(data.error ?? "Something went wrong");
         return;
       }
-      router.push("/library");
+      // Back to where they were asked to sign in (?next=), else /library.
+      router.push(safeNext(window.location.search, "/library"));
       router.refresh();
     } catch {
       setError("Couldn't reach Remixt — check your connection and try again");
@@ -92,7 +101,7 @@ export default function LoginPage() {
 
         <p className="mt-6 text-center text-sm text-muted">
           New here?{" "}
-          <Link href="/signup" className="font-medium text-brand-strong hover:underline">
+          <Link href={withNext("/signup")} className="font-medium text-brand-strong hover:underline">
             Create an artist account
           </Link>
         </p>

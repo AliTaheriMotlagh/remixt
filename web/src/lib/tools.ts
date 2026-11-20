@@ -41,6 +41,8 @@ export type ToolPage = {
   library?: { kind: StemKind; label: string };
   /** The main button's words. */
   cta: string;
+  /** The ticks under the tool, when the usual ones (lib/toolsUi.ts points) aren't all true of it. */
+  points?: string[];
 };
 
 /** Said on every page, so it's written once. */
@@ -267,21 +269,21 @@ export const TOOL_PAGES: ToolPage[] = [
   {
     slug: "drum-extractor",
     name: "Drum extractor",
-    title: "Drum extractor: isolate or remove the drums",
+    title: "Drum extractor: isolate the drums from a song",
     description:
-      "Isolate the drums from any song, or remove them for a drumless practice track. AI drum separation in your browser, free, with MP3 or WAV export.",
-    h1: "Isolate or remove the drums from a song",
+      "Isolate the drums from any song: the whole kit on its own, to sample a break, study a groove or hear the kick against the bass. Free, in your browser.",
+    h1: "Isolate the drums from any song",
     lead:
-      "Remixt splits the drums out of a finished song. Keep only the drums to study a groove or sample a break, or keep everything except the drums to get a drumless track you can play along to.",
+      "Remixt pulls the drums out of a finished song and gives you the kit on its own: kick, snare, hats and cymbals as one clean stem. Sample a break, study how a groove is played, or line your own sounds up under it.",
     steps: SPLIT_STEPS({
-      name: "Keep or drop the drums",
-      text: "In the Studio, solo the Drums lane to hear the kit alone, or mute it for a drumless mix. Export either as an MP3 or WAV.",
+      name: "Hear the drums alone",
+      text: "In the Studio, solo the Drums lane to hear the kit on its own and loop the bar you want. Export it as an MP3 or WAV.",
     }),
     sections: [
       {
-        heading: "Drumless tracks for drummers",
+        heading: "Hear exactly how a groove is played",
         paragraphs: [
-          "Practising along to a record is the fastest way to learn a song, but the original drummer is in the way. Take the drums out and you're the drummer, with the band, the bass and the vocal still there.",
+          "With the band gone, every ghost note, hi-hat accent and fill is easy to hear. Loop a bar in the Studio and slow it down without changing the pitch to work out how it's played. Want the opposite — the song without its drums? That's the drum remover.",
         ],
       },
       {
@@ -302,9 +304,57 @@ export const TOOL_PAGES: ToolPage[] = [
       },
       ...SHARED_FAQ,
     ],
-    related: ["bass-extractor", "stem-splitter", "vocal-remover"],
+    related: ["drum-remover", "bass-extractor", "stem-splitter"],
     library: { kind: "drums", label: "Browse drum stems already split" },
     cta: "Split the drums out of a song",
+  },
+  {
+    slug: "drum-remover",
+    name: "Drum remover",
+    title: "Drum remover: make a drumless version of a song",
+    description:
+      "Remove the drums from any song for a drumless track to play along to. AI in your browser keeps the band, bass and vocal. Free, as MP3 or WAV.",
+    h1: "Remove the drums from any song",
+    lead:
+      "Remixt's drum remover takes the whole kit out of a finished song and keeps everything else: the vocal, the bass, the guitars and keys. Drop a song above and the drumless version plays as soon as it's split, ready to practise along to or save as a WAV.",
+    steps: SPLIT_STEPS({
+      name: "Play along, or download it",
+      text: "The drumless mix plays as soon as the split is done. Switch any part back on, then download the mix as a WAV or each part as an MP3.",
+    }),
+    sections: [
+      {
+        heading: "Practise with the real band",
+        paragraphs: [
+          "Drumless tracks are how drummers learn songs: the record keeps its feel, its bass line and its vocal cues, and the gap where the drums were is yours to fill. With the original kit gone, you hear your own timing against the band instead of against another drummer.",
+          "Slow a hard section down in the Studio without changing its pitch, loop it, and bring it back up to speed once it's under your hands.",
+        ],
+      },
+      {
+        heading: "Cleaner than an EQ cut",
+        paragraphs: [
+          "Turning the lows and highs down only muffles a kit, and takes the bass and the shine of the mix with it. The splitter is a neural network trained to tell drums from everything else, so the bass line and the top end of the song stay where they were.",
+        ],
+      },
+      {
+        heading: "For covers, lessons and sessions",
+        paragraphs: [
+          "Drum teachers make play-along tracks for their students, cover bands rehearse against the original arrangement, and session drummers try a part over a demo before the studio date.",
+        ],
+      },
+    ],
+    faq: [
+      {
+        q: "Can I keep a little of the original drums as a guide?",
+        a: "Yes. Switch Drums back on in the tool above before you download, or open the song in the Studio and turn the Drums lane down instead of off.",
+      },
+      {
+        q: "Will a ghost of the drums be left over?",
+        a: "On most songs the kit is gone. Loud, washy cymbals in a dense mix can leave a faint trace in the melody part, which disappears under a live kit.",
+      },
+      ...SHARED_FAQ,
+    ],
+    related: ["drum-extractor", "bass-extractor", "karaoke-maker"],
+    cta: "Remove the drums from a song",
   },
   {
     slug: "bass-extractor",
@@ -397,6 +447,123 @@ export const TOOL_PAGES: ToolPage[] = [
     related: ["acapella-extractor", "vocal-remover", "stem-splitter"],
     library: { kind: "vocals", label: "Pick a vocal from the library" },
     cta: "Make a mashup",
+  },
+  {
+    slug: "remix-maker",
+    name: "Remix maker",
+    title: "Remix maker: make a remix online for free",
+    description:
+      "Make a remix online: split any song into vocals, drums, bass and melody, then rebuild it in a browser studio with effects, tempo and key changes. Free.",
+    h1: "Make a remix of any song, online",
+    lead:
+      "A remix starts with the parts of a song. Drop one above to split it into vocals, drums, bass and melody and hear each on its own, then open it in Remixt's Studio: a multitrack editor in your browser where you rearrange, retime and reshape those parts into something new.",
+    steps: [
+      {
+        name: "Split the song",
+        text: "Drop a song in the tool above. It's split in your browser into vocals, drums, bass and melody, and you can switch each one on and off.",
+      },
+      {
+        name: "Build the remix in the Studio",
+        text: "Open the parts as lanes, add a beat or a vocal from another song or the library, change the tempo and key, cut and loop clips, and add effects.",
+      },
+      {
+        name: "Export or publish",
+        text: "Export the remix as an MP3 or WAV, or publish it on Remixt with its own page, player and credits to the songs it came from.",
+      },
+    ],
+    sections: [
+      {
+        heading: "Everything a remix needs, in one tab",
+        paragraphs: [
+          "The Studio has a lane for each part and a timeline of clips you can cut, loop and move; volume, pan and EQ on every lane; reverb, delay and filters; tempo changes that keep the pitch, and pitch shifts in semitones. It runs in the browser, so there's nothing to install, and your project is there on your next visit.",
+        ],
+      },
+      {
+        heading: "Ideas when you're stuck",
+        paragraphs: [
+          "The AI producer listens to your project and suggests changes — a drop before the chorus, a filter sweep into the verse, a chopped vocal — and can plan a whole new song from several. Every suggestion is made of ordinary edits you can undo or change.",
+        ],
+      },
+      {
+        heading: "Remix with other people",
+        paragraphs: [
+          "Invite people into a shared session with a role each — producer, vocalist, mix engineer — and choose who can edit. When the remix is published, everyone's part is credited.",
+        ],
+      },
+    ],
+    faq: [
+      {
+        q: "Do I need any music software?",
+        a: "No. The splitter and the Studio both run in an up-to-date browser on a computer. On a phone, send the song to the split queue and open it in the Studio when it's ready.",
+      },
+      {
+        q: "Can I earn from my remix?",
+        a: "Published remixes can show ads if you switch them on, and you're paid a share; the artists of the songs you used are paid theirs too.",
+      },
+      ...SHARED_FAQ,
+    ],
+    related: ["mashup-maker", "stem-splitter", "acapella-extractor"],
+    library: { kind: "beat", label: "Find a beat to remix in the library" },
+    cta: "Make a remix",
+  },
+  {
+    slug: "bpm-key-finder",
+    name: "BPM & key finder",
+    title: "BPM and key finder: tempo and key of any song",
+    description:
+      "Find the BPM and key of any song in seconds: tempo, key, Camelot code and the keys it mixes with. Runs in your browser, works on phones, free.",
+    h1: "Find the BPM and key of any song",
+    lead:
+      "Drop a song and Remixt measures its tempo and key right in your browser — no splitting, no upload, a few seconds even on a phone. You get the BPM, the key with its Camelot code, the keys that blend with it and, with a second song, exactly how to match the two.",
+    steps: [
+      {
+        name: "Drop a song",
+        text: "Choose an MP3, WAV, M4A, FLAC or OGG file. It's read on your device: nothing is uploaded and nothing is kept.",
+      },
+      {
+        name: "Read the tempo and key",
+        text: "The finder listens for the beat and the notes. You get the BPM, the key, its Camelot code and how sure the reading is.",
+      },
+      {
+        name: "Compare a second song",
+        text: "Add another song to see how far apart they are: the tempo change and the semitone shift that make them fit, for a mashup or a DJ set.",
+      },
+    ],
+    sections: [
+      {
+        heading: "How the tempo is found",
+        paragraphs: [
+          "The finder follows the song's onsets — the moments drums and notes start — tests which beat grid lines up with most of them across the whole song, and sharpens the reading to a hundredth of a BPM. Songs often read at half or double the tempo you feel (70 or 140 for a 140 BPM trap beat); both mix the same way.",
+        ],
+      },
+      {
+        heading: "How the key is found",
+        paragraphs: [
+          "It measures how much of each of the twelve notes sounds through the song (a chromagram) and compares that with the Krumhansl–Kessler profiles of all 24 major and minor keys. A song that borrows chords or changes key reads with lower confidence, and its relative major or minor is the usual second guess.",
+        ],
+      },
+      {
+        heading: "Camelot codes for harmonic mixing",
+        paragraphs: [
+          "DJs mix by the Camelot wheel: 8A is A minor and 8B is C major. The same number means the same notes, and one step either way is a fifth apart and still blends. The finder lists those neighbours, so you know what can come next.",
+        ],
+      },
+    ],
+    faq: [
+      {
+        q: "How accurate is it?",
+        a: "Tempo is right on nearly every song with a steady beat; live recordings and songs that change tempo give an average. Key is harder: on clear pop, rock and electronic songs it's usually right or the relative key, and the confidence shown tells you when to trust your ear.",
+      },
+      {
+        q: "Does it need the AI splitter?",
+        a: "No. It doesn't load the splitter model, so it starts at once and works on phones and tablets too.",
+      },
+      SHARED_FAQ[0],
+      SHARED_FAQ[2],
+    ],
+    related: ["mashup-maker", "remix-maker", "stem-splitter"],
+    cta: "Find a song's BPM and key",
+    points: ["Free", "Runs in your browser", "Nothing uploaded", "Works on phones"],
   },
 ];
 

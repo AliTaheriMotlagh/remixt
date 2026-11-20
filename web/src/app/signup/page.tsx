@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { PartyPopper } from "lucide-react";
 import RemixtMark from "@/components/RemixtMark";
 import { useCaptcha } from "@/lib/client/captcha";
+import { safeNext } from "@/lib/client/navigation";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -16,10 +17,15 @@ export default function SignupPage() {
   const [loading, setLoading] = useState(false);
   const withCaptcha = useCaptcha();
   const [invited, setInvited] = useState(false);
+  // ?next= carried to "Log in" too, so either way ends where they started.
+  const [next, setNext] = useState<string | null>(null);
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the URL is only readable after mount here
-    setInvited(new URLSearchParams(window.location.search).has("invited"));
+    setInvited(params.has("invited"));
+    setNext(params.get("next"));
   }, []);
+  const withNext = (href: string) => (next ? `${href}?next=${encodeURIComponent(next)}` : href);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -38,7 +44,8 @@ export default function SignupPage() {
         setError(data.error ?? "Something went wrong");
         return;
       }
-      router.push("/upload");
+      // Back to where they were asked to sign in (?next=), else /upload.
+      router.push(safeNext(window.location.search, "/upload"));
       router.refresh();
     } catch {
       setError("Couldn't reach Remixt — check your connection and try again");
@@ -120,7 +127,7 @@ export default function SignupPage() {
 
         <p className="mt-6 text-center text-sm text-muted">
           Already have an account?{" "}
-          <Link href="/login" className="font-medium text-brand-strong hover:underline">
+          <Link href={withNext("/login")} className="font-medium text-brand-strong hover:underline">
             Log in
           </Link>
         </p>

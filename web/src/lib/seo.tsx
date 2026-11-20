@@ -26,7 +26,7 @@ export function pageMetadata({
   noindex?: boolean;
   /** The share card; defaults to the site-wide one. */
   image?: typeof DEFAULT_IMAGE;
-  type?: "website" | "profile" | "music.song";
+  type?: "website" | "profile" | "music.song" | "article";
   /** hreflang → path of this page in every language it exists in (itself and "x-default" included). */
   languages?: Record<string, string>;
   /** Open Graph locale when the page isn't in English, e.g. "fa_IR". */

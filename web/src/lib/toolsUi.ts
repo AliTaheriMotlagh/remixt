@@ -14,6 +14,8 @@ export type ToolUi = {
   selfName: string;
   home: string;
   tools: string;
+  /** The breadcrumb's name for screen readers. */
+  breadcrumb: string;
   ctaFree: (cta: string) => string;
   hearFirst: string;
   points: string[];
@@ -35,6 +37,7 @@ export const TOOL_UI: Record<ToolLocale, ToolUi> = {
     selfName: "English",
     home: "Home",
     tools: "Tools",
+    breadcrumb: "Breadcrumb",
     ctaFree: (cta) => `${cta} — free`,
     hearFirst: "Hear a real split first",
     points: ["Free", "Runs in your browser", "Nothing to install", "MP3 or WAV export"],
@@ -48,7 +51,7 @@ export const TOOL_UI: Record<ToolLocale, ToolUi> = {
         "Free AI music tools in your browser: vocal remover, acapella extractor, karaoke maker, stem splitter, drum and bass extractor, and a mashup maker.",
       h1: "Free AI music tools",
       intro:
-        "Every tool here uses the same AI splitter, running in your browser: it takes a finished song apart into vocals, drums, bass and melody. Pick what you want to do with the parts.",
+        "Almost every tool here uses the same AI splitter, running in your browser: it takes a finished song apart into vocals, drums, bass and melody. Pick what you want to do with the parts — or just measure a song's tempo and key.",
       listName: "Remixt music tools",
     },
     number: (n) => String(n),
@@ -60,6 +63,7 @@ export const TOOL_UI: Record<ToolLocale, ToolUi> = {
     selfName: "فارسی",
     home: "خانه",
     tools: "ابزارها",
+    breadcrumb: "مسیر صفحه",
     ctaFree: (cta) => `${cta} — رایگان`,
     hearFirst: "اول یک نمونه‌ی واقعی را بشنوید",
     points: ["رایگان", "در مرورگر اجرا می‌شود", "بدون نصب", "خروجی MP3 یا WAV"],
@@ -79,7 +83,7 @@ export const TOOL_UI: Record<ToolLocale, ToolUi> = {
         "ابزارهای رایگان موسیقی در مرورگر: حذف صدای خواننده، جدا کردن آکاپلا، کارائوکه‌ساز، جدا کردن سازها، درامز و بیس، و ماشاپ‌ساز. بدون نصب.",
       h1: "ابزارهای رایگان موسیقی",
       intro:
-        "همه‌ی این ابزارها از یک جداکننده‌ی هوش مصنوعی استفاده می‌کنند که در مرورگر شما اجرا می‌شود: یک آهنگ کامل را به صدای خواننده، درامز، بیس و ملودی تقسیم می‌کند. انتخاب کنید با بخش‌ها چه کار می‌خواهید بکنید.",
+        "تقریباً همه‌ی این ابزارها از یک جداکننده‌ی هوش مصنوعی استفاده می‌کنند که در مرورگر شما اجرا می‌شود: یک آهنگ کامل را به صدای خواننده، درامز، بیس و ملودی تقسیم می‌کند. انتخاب کنید با بخش‌ها چه کار می‌خواهید بکنید — یا فقط تمپو و گام یک آهنگ را اندازه بگیرید.",
       listName: "ابزارهای موسیقی Remixt",
     },
     number: (n) => n.toLocaleString("fa-IR"),

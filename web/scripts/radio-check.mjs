@@ -3,6 +3,8 @@
 // must hear the same moment, one votes, one requests, the DJ skips, the
 // vote's winner comes on in both tabs, and the reports count it all.
 //   cd web && OWNER_ID=<user id> node scripts/radio-check.mjs     (needs the app running; BASE_URL; SESSION_SECRET from .env.local)
+// SHORTEN=1: the song on air ends early instead of a skip (a real change, with the station's transition).
+// TRANSITION=auto|automix|blend|bassSwap|filter|echo|rise|tapeStop: the station's style (default: the station default).
 import { chromium } from "playwright-core";
 import { SignJWT } from "jose";
 import fs from "node:fs";
@@ -14,6 +16,10 @@ const env = Object.fromEntries(
 const secret = process.env.SESSION_SECRET ?? env.SESSION_SECRET ?? "dev-only-secret-change-me";
 const token = await new SignJWT({ userId: process.env.OWNER_ID }).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setExpirationTime("1h").sign(new TextEncoder().encode(secret));
 const log = (x) => console.log(JSON.stringify(x));
+
+// Which change was made, and whether the rendered one played (cut) or it fell back to the plain crossfade.
+const changes = async (p) =>
+  p.evaluate(() => (window.__remixtRadio?.decks ?? []).map((d) => ({ row: d.row.rowId, title: d.row.title, bpm: d.row.bpm ?? null, transition: d.row.transition ?? null, rendered: !!d.cut })));
 
 const browser = await chromium.launch({ channel: "chrome", args: ["--autoplay-policy=no-user-gesture-required"] });
 const owner = await browser.newContext();
@@ -28,9 +34,11 @@ const call = async (method, path, data) => {
 
 const { slug } = await call("POST", "/api/radio", { name: `Check FM ${Date.now() % 10000}`, tagline: "rig" });
 log({ step: "station", slug });
+// Whatever happens below, the rig's station goes at the end (a failed run left stations behind, up to the limit of 5).
+try {
 const found = (await call("GET", `/api/radio/${slug}/search?q=`)).items;
 for (const item of found.slice(0, 4)) await call("POST", `/api/radio/${slug}/console`, { action: "playlist-add", kind: item.kind, id: item.id });
-await call("POST", `/api/radio/${slug}/console`, { action: "settings", settings: { voting: true, autoFill: false, requests: "open" } });
+await call("POST", `/api/radio/${slug}/console`, { action: "settings", settings: { voting: true, autoFill: false, requests: "open", ...(process.env.TRANSITION ? { transition: process.env.TRANSITION } : {}) } });
 const consoleData = await call("GET", `/api/radio/${slug}/console`);
 log({ step: "playlist", songs: consoleData.playlist.map((p) => p.title) });
 
@@ -78,10 +86,11 @@ if (process.env.SHORTEN) {
   const samples = [];
   const until = Date.now() + 120_000;
   while (Date.now() < until) {
-    samples.push(await a.evaluate(() => { const h = window.__remixtRadio?.heard(Date.now() + window.__remixtRadio.serverClock); const r = window.__remixtRadio; return h ? `${h.rowId}[${h.levels.join("/")}]${h.offMs}` : `silent(rendering ${[...(r?.rendering?.keys() ?? [])]}; players ${(r?.players ?? []).map((p) => `${p.deck?.row.rowId ?? (p.silent ? "silence" : "-")}:${p.el.paused ? "paused" : "on"}:${Math.round(p.el.currentTime)}:${p.el.error?.code ?? ""}`).join(",")}; ${document.querySelector('[role=alert], .text-danger')?.textContent ?? ""})`; }));
+    samples.push(await a.evaluate(() => { const h = window.__remixtRadio?.heard(Date.now() + window.__remixtRadio.serverClock); const r = window.__remixtRadio; return h ? `${h.rowId}[${h.levels.join("/")}]${h.offMs}` : `silent(rendering ${[...(r?.rendering?.keys() ?? [])]}; players ${(r?.players ?? []).map((p) => `${p.deck?.row.rowId ?? (p.silent ? "silence" : "-")}:${p.el.paused ? "paused" : "on"}:${Math.round(p.el.currentTime)}:${p.el.error?.code ?? ""}`).join(",")}; decks ${(r?.decks ?? []).map((d) => { const n = Date.now() + r.serverClock; return `${d.row.rowId}@${Math.round(((d.row.startsAt ?? 0) - n) / 100) / 10}..${Math.round(((d.row.endsAt ?? 0) - n) / 100) / 10}s+${d.offset}${d.cut ? "cut" : ""}`; }).join(",")}; break ${!!r?.inBreak}; stopped ${!!r?.stopped}; ${document.querySelector('[role=alert], .text-danger')?.textContent ?? ""})`; }));
     await a.waitForTimeout(500);
   }
   log({ step: "through the change (tab A every 0.5 s: newest row [gain of each sounding deck])", samples: samples.join(" ") });
+  log({ step: "the change", decks: await changes(a) });
 } else {
   await call("POST", `/api/radio/${slug}/console`, { action: "skip" });
   t0 = Date.now();
@@ -109,6 +118,8 @@ log({ step: "csv", lines: csv.split("\n").length, head: csv.split("\n")[0] });
 const pub = await (await fetch(`${base}/api/radio/${slug}/now`)).json();
 log({ step: "public api", now: pub.now?.title, listeners: pub.listeners, cors: true });
 
-await call("DELETE", `/api/radio/${slug}`);
-log({ step: "deleted" });
-await browser.close();
+} finally {
+  await call("DELETE", `/api/radio/${slug}`).catch((e) => log({ cleanup: e.message }));
+  log({ step: "deleted" });
+  await browser.close();
+}

@@ -17,3 +17,7 @@ separation-service/*.pyc
 # GRAPH_REPORT.md after every commit, so a tracked report left the tree
 # dirty after each commit and needed a "graph" commit of its own.
 graphify-out/
+
+# Next.js docs copied from node_modules/next/dist/docs by
+# web/scripts/copy-next-docs.mjs on every npm install.
+web/.next-docs/

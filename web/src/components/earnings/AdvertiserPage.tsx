@@ -9,7 +9,7 @@
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BarChart3, Check, CircleAlert, Image as ImageIcon, Loader2, Megaphone, Music, Pause, Pencil, Play, Plus, Send, Wallet, X } from "lucide-react";
-import { NEVER, TOPICS, microsOfToman, tomanOf, type AudioRules, type Format } from "@/lib/monetize/adRules";
+import { NEVER, NEVER_FA, TOPICS, microsOfToman, tomanOf, type AudioRules, type Format } from "@/lib/monetize/adRules";
 import { useSettings } from "@/components/SettingsProvider";
 import { MICROS, type Placement } from "@/lib/monetize/policy";
 import { moneyIn, numIn, dateIn, type Lang } from "@/lib/monetize/moneyText";
@@ -165,8 +165,6 @@ function useT(lang: Lang) {
   const { audio } = useSettings();
   return useMemo(() => makeT(audio)[lang], [audio, lang]);
 }
-
-const NEVER_FA = ["قمار و شرط‌بندی", "محتوای بزرگسالان", "سلاح", "مواد مخدر", "الکل و دخانیات", "طرح‌های پولسازی دروغین"];
 
 type Form = {
   id: string | null; format: Format; advertiser: string; title: string; body: string; cta: string; link: string; topic: string;

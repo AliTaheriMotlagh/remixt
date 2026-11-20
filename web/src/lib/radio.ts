@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { STATIONS_PER_ACCOUNT } from "./radioPage";
 import type { TransactionSql } from "postgres";
 import sql from "./db";
 import { playable } from "./radioPlayable";
@@ -477,7 +478,7 @@ export async function createStation(owner: User, name: string, tagline: string) 
   const clean = name.trim().slice(0, NAME_MAX);
   if (!clean) throw new Error("Give the station a name");
   const mine = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM radio_stations WHERE owner_id = ${owner.id}`;
-  if (mine[0].n >= 5 && !isAdmin(owner)) throw new Error("You can run up to 5 stations");
+  if (mine[0].n >= STATIONS_PER_ACCOUNT && !isAdmin(owner)) throw new Error(`You can run up to ${STATIONS_PER_ACCOUNT} stations`);
   const base = slugOf(clean);
   for (let i = 0; i < 20; i++) {
     const slug = i ? `${base}-${i + 1}` : base;

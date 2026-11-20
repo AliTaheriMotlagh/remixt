@@ -8,6 +8,10 @@ import { SITE_NAME, absoluteUrl } from "@/lib/site";
 import { TOOL_LOCALES, toolLanguages, toolPage, toolPath, toolsHubPath, type ToolLocale, type ToolPage } from "@/lib/tools";
 import AdCard from "@/components/ads/AdCard";
 import ToolWorkbench from "./ToolWorkbench";
+import KeyBpmFinder from "./KeyBpmFinder";
+import GuideCards from "@/components/guides/GuideCards";
+import { guidesForTool } from "@/lib/guides";
+import { workbenchFor } from "@/lib/toolWorkbench";
 import { TOOL_UI } from "@/lib/toolsUi";
 
 // One tool page (/tools/<slug>, /fa/tools/<slug>), in any language: the
@@ -53,6 +57,8 @@ export default async function ToolPageView({ tool, locale }: { tool: ToolPage; l
   const related = tool.related.map((slug) => toolPage(slug, locale)).filter((t) => t !== undefined);
   const hub = toolsHubPath(locale);
   const url = absoluteUrl(toolPath(tool.slug, locale));
+  // The guides are in English: linked from the English pages only.
+  const guides = locale === "en" ? guidesForTool(tool.slug).slice(0, 3) : [];
 
   return (
     <div className="flex flex-1 flex-col">
@@ -98,7 +104,7 @@ export default async function ToolPageView({ tool, locale }: { tool: ToolPage; l
         />
         <div className="relative mx-auto max-w-4xl px-4 py-10 sm:px-6 sm:py-16">
           <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted">
-            <nav aria-label="Breadcrumb">
+            <nav aria-label={ui.breadcrumb}>
               <ol className="flex flex-wrap items-center gap-1">
                 <li>
                   <Link href="/" className="hover:text-foreground hover:underline">
@@ -127,7 +133,7 @@ export default async function ToolPageView({ tool, locale }: { tool: ToolPage; l
           <p className="mt-5 max-w-2xl text-base text-muted sm:text-lg">{tool.lead}</p>
           {/* The tool itself, working right here: drop a song, get what this page is for (lib/toolWorkbench.ts). */}
           <div className="mt-7" id="try">
-            <ToolWorkbench slug={tool.slug} locale={locale} />
+            {workbenchFor(tool.slug).analyze ? <KeyBpmFinder locale={locale} /> : <ToolWorkbench slug={tool.slug} locale={locale} />}
           </div>
           <p className="mt-3 text-sm text-muted">
             <Link href="/examples" className="font-medium text-brand-strong hover:underline">
@@ -143,7 +149,7 @@ export default async function ToolPageView({ tool, locale }: { tool: ToolPage; l
             )}
           </p>
           <ul className="mt-6 flex flex-wrap gap-x-5 gap-y-2 text-sm text-muted">
-            {ui.points.map((point) => (
+            {(tool.points ?? ui.points).map((point) => (
               <li key={point} className="flex items-center gap-1.5">
                 <Check className="text-success" aria-hidden /> {point}
               </li>
@@ -208,6 +214,15 @@ export default async function ToolPageView({ tool, locale }: { tool: ToolPage; l
         {/* After the answers, not in the way of the steps: the site's own spot. */}
         <AdCard placement="site" lang={locale === "fa" ? "fa" : "en"} seed={tool.faq.length} className="mt-10 max-w-3xl" />
       </section>
+
+      {guides.length > 0 && (
+        <section className="mx-auto w-full max-w-4xl px-4 pb-12 sm:px-6 sm:pb-16">
+          <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">Learn how</h2>
+          <div className="mt-6">
+            <GuideCards guides={guides} />
+          </div>
+        </section>
+      )}
 
       <section className="border-t border-border bg-surface/40">
         <div className="mx-auto max-w-4xl px-4 py-12 sm:px-6 sm:py-16">

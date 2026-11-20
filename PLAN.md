@@ -10,6 +10,40 @@ Written 2026-11-17. Last commit at that time: `0fee2ca` (all earlier work commit
 
 ---
 
+## Session 2026-11-20 (2) — Next docs, tools & guides from the SEO content map, radio page, first-change fix
+
+Last session's work was already committed (`82a48f1`). This session is uncommitted.
+
+**Next.js docs.** `web/scripts/copy-next-docs.mjs` (run by `postinstall`) wipes and copies `node_modules/next/dist/docs` to `web/.next-docs/` (gitignored; Next 16.3.5, 457 files). Line in `web/CLAUDE.md`. The Dockerfile copies the script before `npm ci` (it would fail without it); `.dockerignore` skips the folder.
+
+**Checked against the docs (no app code needed changing):**
+- `loading.tsx` wraps `page`, nested `layout` and `not-found` below it; once its fallback streams the status is fixed at 200. Neither `library/` nor `remixes/(list)/` calls `notFound()`/`redirect()`. The guard test now also covers nested layouts, `not-found.tsx`, `permanentRedirect`/`forbidden`/`unauthorized`, and no longer matches sibling folders by prefix.
+- Route group `remixes/(list)`: organisation only, one root layout, no conflicting paths. Fine.
+- Prefetching without Cache Components: dynamic pages are prefetched only when they have a `loading.js`; the docs list a progress bar as a valid slow-network pattern, so `NavProgress` stands. Six internal plain `<a>` links remain (full reloads, mostly old; leaving the Studio by reload frees audio memory). Left as they are.
+- Route handlers aren't cached by default; the new API routes all read cookies/request; every `cookies()`/`headers()` is awaited; house-ad media is cached publicly only behind a versioned `?v=`.
+
+**Fixed / built**
+- Persian: "Never on Remixt" list (`NEVER_FA` in `adRules.ts`, used by both pages), tool breadcrumb label, split errors on `/fa` tools (also fixed "failed: failed" doubling in EN). Header/footer on `/fa` pages are still English (roadmap item 9).
+- **Login/sign-up ignored `?next=`** (many links used it): `safeNext()` in `lib/client/navigation.ts` (same-site paths only), carried between the two pages.
+- **Phones on tool pages → split queue**: signed in, the song goes to the queue as private (`workflowFor`, `PhoneQueue`); signed out, sign up/log in and come back; "try on this phone anyway" keeps the in-browser split.
+- **New tool pages (EN+FA):** `drum-remover` (drumless mix, download "(No drums).wav"), `remix-maker`, `bpm-key-finder` (`KeyBpmFinder`: `analyzeMono` + `refineTempo`, key with Camelot code, keys it mixes with, second song shows speed % and semitone shift; no splitter, nothing uploaded or kept, works on phones). `drum-extractor` refocused on isolating so it doesn't compete with drum-remover. New analytics event `tool_use`.
+- **Content map, honestly mapped:** Tier 1 "AI vocal remover" and "remove vocals from a song" are one intent (`vocal-remover`); "instrumental maker" is the same intent too; Tier 2 format pages (MP3/WAV, "without uploading", "separate vocals and instrumental") would be doorway pages, so they're covered by existing pages. Tier 3: **8 guides** at `/guides` (`lib/guides.ts`; Article + FAQ + Breadcrumb JSON-LD, table of contents, tool links), linked from EN tool pages ("Learn how"), the footer, sitemap and `llms.txt`. English only.
+- **Footer redesigned:** call-to-action band + radio "Tune in" card, Guides column, Radio highlighted, bottom bar with languages.
+- **Radio:** `/radio` redesigned and server-rendered with its stations (it was a client fetch: empty for search engines, spinner first). Hero with house station and equalizer, live stats, stations, "Mixed like a DJ" styles, features, start-a-station band, FAQ + JSON-LD. Station limit is one constant (`STATIONS_PER_ACCOUNT`). **Radio banner on the home page.**
+- **Radio: first change after tuning in could fall back to a hard cut (owner's iPad report in production).** On tune-in the song on air and the next one were prepared at once; the next one's change is built from the song before, and if it finished first it found no deck and fell back to the plain crossfade (one player on iPhone/iPad = a hard cut). Now each song waits for the ones already being prepared (`radioDeck.ts` `prepare`). Not reproducible on localhost (downloads are instant): `radio-phone-check.mjs FRESH=1` is the rig for it; confirm on the iPad in production after deploy.
+- Rigs: `TRANSITION=<style>` option, a "the change" report (style used, rendered or fell back), stations deleted even when a run fails (a failed run had left 4 behind, hitting the 5-station limit; removed).
+
+**Rig results (this computer, real song changes)**
+- Desktop, Auto: echo, rendered, both tabs together (26 ms apart).
+- iPhone (Chrome engine), iPhone (WebKit), Android, screen "locked", Auto → AutoMix: rendered, 0 silence (1 sample on WebKit).
+- [ ] **Desktop with AutoMix forced on songs too far apart (82 → 106 BPM): ~110 s of silence after the change, rig timed out.** Diagnostic rerun (deck timings in the samples) was still running at the end of the session: `OWNER_ID=… SHORTEN=1 TRANSITION=automix node scripts/radio-check.mjs`. Also consider: forced AutoMix with no reachable glide should resolve to bass swap (`resolveStyle`).
+- [ ] After-fix FRESH iPad-style run was still running at the end.
+
+**Not done this session (do first next time)**
+- [ ] Full `npm test -- --brief` (needs the dev server stopped; only the touched test files were run: 76/76), Lighthouse SEO on the new/changed public pages (`/guides`, 8 guides, 3 new tools EN/FA, `/radio`, `/`), `scripts/seo-audit.mjs`.
+- [ ] Look at the phone/tablet screenshots of `/radio`, `/tools/bpm-key-finder`, a guide and `/` (taken, not yet reviewed); the finder on a real phone.
+- [ ] Guides in Persian.
+
 ## Session 2026-11-20 — Remixt's own ads, private music together, analytics, radio transitions, tool pages, speed
 
 Asked: Remixt's own ad everywhere an ad can be (and managed in admin); remixers decide what/how/where; private uploads → share → choose what to publish → several people on one project; GA-style admin analytics with every user's details; DJ transitions on the radio "like Apple Music"; tool pages that really do their tool; SEO 100; faster navigation; a plan for a mature platform. All uncommitted.
@@ -27,8 +61,8 @@ Asked: Remixt's own ad everywhere an ad can be (and managed in admin); remixers 
 
 **Open (from this session)**
 - [ ] Listen on real devices: each radio transition across a real song change (rigs: `radio-check.mjs`, `radio-phone-check.mjs`), especially AutoMix's glide and the iPhone single-player handover.
-- [ ] Tool pages on a phone: splitting is heavy there (the page says so); consider sending phones to the helper queue from the tool page too.
-- [ ] Persian words still in English in a few new places (the "Never on Remixt" list, the analytics/admin pages are English-only by design).
+- [x] Tool pages on a phone → helper queue — done 2026-11-20 (2).
+- [x] Persian words still in English in a few new places — done 2026-11-20 (2) (admin/analytics stay English by design).
 - [ ] Production: check navigation timing after deploy; if the DB is Neon, consider a pooled connection and disabling scale-to-zero for the main branch.
 
 ## A mature music platform — the roadmap (asked 2026-11-20)

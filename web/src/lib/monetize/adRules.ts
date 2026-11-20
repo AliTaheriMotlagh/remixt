@@ -87,6 +87,8 @@ export const TOPIC_IDS: readonly string[] = TOPICS.map((t) => t.id);
 
 /** Never on Remixt, whoever pays: not offered to advertisers at all. */
 export const NEVER = ["Gambling and betting", "Adult content", "Weapons", "Drugs", "Alcohol and tobacco", "Fake money-making schemes"];
+/** The same list, in Persian (same order). */
+export const NEVER_FA = ["قمار و شرط‌بندی", "محتوای بزرگسالان", "سلاح", "مواد مخدر", "الکل و دخانیات", "طرح‌های پولسازی دروغین"];
 
 // ——— who decides ———
 

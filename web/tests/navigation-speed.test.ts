@@ -10,7 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, test } from "node:test";
 import { decodePeaks, encodePeaks, packPeaksJson } from "../src/lib/peaksCodec.ts";
-import { isPageNavigation } from "../src/lib/client/navigation.ts";
+import { isPageNavigation, safeNext } from "../src/lib/client/navigation.ts";
 
 const root = path.join(import.meta.dirname, "..");
 
@@ -47,14 +47,19 @@ describe("loading screens", () => {
   });
 
   test("never above a page that answers 404 or redirects: the loading screen would send 200 first (a soft 404, a client-side redirect)", () => {
-    // Every folder with a loading.tsx: no page.tsx at or below it may call notFound() or redirect().
+    // Every folder with a loading.tsx: no page.tsx, nested layout.tsx or
+    // not-found.tsx at or below it (the docs: loading.js wraps all three,
+    // .next-docs/01-app/03-api-reference/03-file-conventions/loading.md) may
+    // call anything that sets the status code.
     const walk = (dir: string): string[] =>
       fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]));
     const files = walk(path.join(root, "src/app"));
+    const setsStatus = /\b(notFound|redirect|permanentRedirect|forbidden|unauthorized)\(/;
     for (const loading of files.filter((f) => f.endsWith("loading.tsx"))) {
-      const dir = path.dirname(loading);
-      for (const page of files.filter((f) => f.startsWith(dir) && f.endsWith("page.tsx"))) {
-        assert.doesNotMatch(fs.readFileSync(page, "utf8"), /notFound\(\)|redirect\(/, `${path.relative(root, page)} under ${path.relative(root, loading)}`);
+      const dir = path.dirname(loading) + path.sep;
+      const wrapped = files.filter((f) => f.startsWith(dir) && /(^|[\\/])(page|layout|not-found)\.tsx$/.test(f) && !(f === dir + "layout.tsx"));
+      for (const file of wrapped) {
+        assert.doesNotMatch(fs.readFileSync(file, "utf8"), setsStatus, `${path.relative(root, file)} under ${path.relative(root, loading)}`);
       }
     }
   });
@@ -78,5 +83,18 @@ describe("the bar across the top", () => {
     assert.equal(isPageNavigation({ href: "/api/ads/click?t=x" }, click, here), false);
     assert.equal(isPageNavigation({ href: "/remixes" }, { button: 0, meta: true }, here), false);
     assert.equal(isPageNavigation({ href: "/remixes" }, { button: 1 }, here), false);
+  });
+});
+
+describe("after signing in: back where they were asked (?next=)", () => {
+  test("a page of this site, with its query", () => {
+    assert.equal(safeNext("?next=/tools/vocal-remover", "/library"), "/tools/vocal-remover");
+    assert.equal(safeNext("?next=%2Fremixes%3Ftab%3Dfollowing", "/library"), "/remixes?tab=following");
+    assert.equal(safeNext("?next=/fa/tools/karaoke-maker", "/upload"), "/fa/tools/karaoke-maker");
+  });
+  test("never another site, a script, an API or nothing", () => {
+    for (const bad of ["", "?next=", "?next=https://evil.example", "?next=//evil.example", "?next=/\\evil.example", "?next=javascript:alert(1)", "?next=/api/auth/logout", "?next=/%0aevil", "?other=/x"]) {
+      assert.equal(safeNext(bad, "/library"), "/library", bad);
+    }
   });
 });

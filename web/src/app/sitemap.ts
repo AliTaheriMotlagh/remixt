@@ -4,6 +4,7 @@ import { ensureSchema } from "@/lib/schema";
 import { coverUrl, ensureRemixStats } from "@/lib/models";
 import { absoluteUrl } from "@/lib/site";
 import { TOOL_LOCALES, TOOL_PAGES, toolLanguages, toolPath, toolsHubPath } from "@/lib/tools";
+import { GUIDES, GUIDES_PATH, guidePath } from "@/lib/guides";
 
 // Rebuilt at most once an hour: new remixes and artists show up without
 // every crawler visit hitting the database.
@@ -37,6 +38,14 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
         alternates: { languages: absolute(toolLanguages(t.slug)) },
       })),
     ),
+    // The guides answer the questions asked before a tool is needed ("how to make a mashup").
+    { url: absoluteUrl(GUIDES_PATH), changeFrequency: "monthly", priority: 0.7 },
+    ...GUIDES.map((g) => ({
+      url: absoluteUrl(guidePath(g.slug)),
+      lastModified: new Date(`${g.updated}T00:00:00Z`),
+      changeFrequency: "monthly" as const,
+      priority: 0.7,
+    })),
     { url: absoluteUrl("/live"), lastModified: now, changeFrequency: "hourly", priority: 0.7 },
     { url: absoluteUrl("/radio"), lastModified: now, changeFrequency: "hourly", priority: 0.7 },
     // The money pages in both languages, each listing its twin (as their own heads do).

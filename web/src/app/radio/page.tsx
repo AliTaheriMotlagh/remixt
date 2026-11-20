@@ -1,18 +1,24 @@
 import RadioHome from "@/components/radio/RadioHome";
 import { getCurrentUser } from "@/lib/auth";
-import { pageMetadata } from "@/lib/seo";
+import { listStations } from "@/lib/radio";
+import { RADIO_FAQ } from "@/lib/radioPage";
+import { JsonLd, breadcrumbJsonLd, faqJsonLd, pageMetadata } from "@/lib/seo";
 
 export const metadata = pageMetadata({
-  title: "Radio: vote on what plays next",
-  description: "Live radio of songs and remixes: everyone hears the same moment, listeners vote on the next song and send requests. Start, embed or broadcast your own.",
+  title: "Live radio stations, mixed like a DJ",
+  description:
+    "Live radio of songs and remixes, every change mixed like a DJ. Everyone hears the same moment, votes on the next song and sends requests. Start your own.",
   path: "/radio",
 });
 
 export default async function RadioPage() {
   const user = await getCurrentUser();
+  // The stations come with the page (no spinner, and search engines see them); the page keeps them fresh.
+  const stations = await listStations(user?.id ?? null).catch(() => null);
   return (
     <div className="mx-auto w-full max-w-7xl px-3 py-4 sm:px-5 sm:py-8">
-      <RadioHome signedIn={!!user} />
+      <JsonLd data={[faqJsonLd(RADIO_FAQ), breadcrumbJsonLd([{ name: "Radio", path: "/radio" }])]} />
+      <RadioHome signedIn={!!user} initial={stations} />
     </div>
   );
 }

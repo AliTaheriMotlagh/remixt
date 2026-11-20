@@ -7,13 +7,15 @@
 // Audio), and download. Which parts each tool gives: lib/toolWorkbench.ts.
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Download, Loader2, Music, Pause, Play, RotateCcw, Upload, Wand2 } from "lucide-react";
+import { CheckCircle2, Download, Loader2, Music, Pause, Play, RotateCcw, Send, Smartphone, Upload, Wand2 } from "lucide-react";
 import Waveform from "@/components/Waveform";
 import { splitSong, isConstrainedDevice, useSplitter, type UploadStage } from "@/lib/client/splitter";
 import { encodeWavGently } from "@/lib/client/mixdown";
 import { trackEvent } from "@/lib/client/analytics";
-import { downloadName, mashupRate, PART_TEXT, shownParts, WB_TEXT, workbenchFor, type Part } from "@/lib/toolWorkbench";
+import { uploads } from "@/lib/client/uploads";
+import { downloadName, mashupRate, PART_TEXT, shownParts, signInLinks, WB_TEXT, workbenchFor, workflowFor, type Part } from "@/lib/toolWorkbench";
 import type { ToolLocale } from "@/lib/tools";
 
 type Song = {
@@ -59,6 +61,21 @@ export default function ToolWorkbench({ slug, locale }: { slug: string; locale: 
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the device is only known in the browser
     setPhone(isConstrainedDevice());
   }, []);
+  // On a phone: the split queue first (lib/toolWorkbench.ts workflowFor), which needs to know who's here.
+  const [tryHere, setTryHere] = useState(false);
+  const [signedIn, setSignedIn] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!phone) return;
+    let live = true;
+    fetch("/api/auth/me")
+      .then((r) => r.json())
+      .then((d) => live && setSignedIn(!!d?.user))
+      .catch(() => live && setSignedIn(false));
+    return () => {
+      live = false;
+    };
+  }, [phone]);
+  const flow = workflowFor({ phone, tryHere, signedIn });
 
   const mashup = w.songs === 2;
   const ready = songs.every((s) => s && !s.stage && !s.error && Object.keys(s.parts).length > 0);
@@ -171,7 +188,9 @@ export default function ToolWorkbench({ slug, locale }: { slug: string; locale: 
       }
       update({ stage: null, parts, bpm: result.bpm, duration });
     } catch (e) {
-      update({ stage: null, error: e instanceof Error ? e.message : t.failed });
+      // The splitter's own reasons are in English: a Persian page says it in Persian.
+      update({ stage: null, error: e instanceof Error && !fa ? e.message : t.failed });
+      if (fa) console.warn("split failed", e);
     }
   }
 
@@ -191,7 +210,8 @@ export default function ToolWorkbench({ slug, locale }: { slug: string; locale: 
         src.start(l.delay);
       }
       const blob = await encodeWavGently(await ctx.startRendering());
-      const what = mashup ? "Mashup" : [...on].map((p) => PART_TEXT[p].en.split(" (")[0]).join(" + ");
+      const asFirst = !!w.mixName && on.size === w.playing.length && w.playing.every((p) => on.has(p));
+      const what = mashup ? "Mashup" : asFirst ? w.mixName! : [...on].map((p) => PART_TEXT[p].en.split(" (")[0]).join(" + ");
       save(blob, downloadName(songs[0]!.file.name, what, "wav"));
       trackEvent("export", { tool: slug, what: "mix" });
     } finally {
@@ -208,19 +228,25 @@ export default function ToolWorkbench({ slug, locale }: { slug: string; locale: 
 
   return (
     <div className="rounded-3xl border border-border bg-surface/80 p-4 shadow-2xl shadow-black/30 backdrop-blur sm:p-6" dir={fa ? "rtl" : undefined}>
-      <div className={`grid gap-3 ${mashup ? "sm:grid-cols-2" : ""}`}>
-        {songs.map((s, i) => (
-          <SongSlot
-            key={i}
-            label={mashup ? (i === 0 ? t.dropA : t.dropB) : t.drop}
-            song={s}
-            t={t}
-            model={splitterState}
-            onFile={(f) => take(i, f)}
-          />
-        ))}
-      </div>
-      {phone && !ready && <p className="mt-3 text-xs text-muted">{t.phone}</p>}
+      {flow === "here" ? (
+        <>
+          <div className={`grid gap-3 ${mashup ? "sm:grid-cols-2" : ""}`}>
+            {songs.map((s, i) => (
+              <SongSlot
+                key={i}
+                label={mashup ? (i === 0 ? t.dropA : t.dropB) : t.drop}
+                song={s}
+                t={t}
+                model={splitterState}
+                onFile={(f) => take(i, f)}
+              />
+            ))}
+          </div>
+          {phone && !ready && <p className="mt-3 text-xs text-muted">{t.phone}</p>}
+        </>
+      ) : (
+        <PhoneQueue slug={slug} t={t} mashup={mashup} signedIn={signedIn} onTryHere={() => setTryHere(true)} />
+      )}
 
       {ready && (
         <div className="mt-5">
@@ -337,6 +363,107 @@ function fmt(s: number) {
   return `${Math.floor(v / 60)}:${String(v % 60).padStart(2, "0")}`;
 }
 
+/**
+ * A phone's way in: send the song to the split queue (a computer splits it
+ * into the person's own library, private), or sign in for that, or split it
+ * here anyway.
+ */
+function PhoneQueue({
+  slug,
+  t,
+  mashup,
+  signedIn,
+  onTryHere,
+}: {
+  slug: string;
+  t: Record<string, string>;
+  mashup: boolean;
+  signedIn: boolean | null;
+  onTryHere: () => void;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  const path = usePathname();
+  const [sent, setSent] = useState<string[]>([]);
+  const [refused, setRefused] = useState(false);
+  const links = signInLinks(path);
+  function send(files: File[]) {
+    if (!files.length) return;
+    // Private: a tool page never asked whether to publish it (it can be shared from the library later).
+    const result = uploads.addFiles(files, { tags: [], mode: "queue", keepPrivate: true });
+    setRefused(result.added === 0 && result.duplicates.length === 0);
+    const names = files.filter((f) => !result.notAudio.includes(f.name)).map((f) => f.name);
+    if (names.length) {
+      setSent((list) => [...list, ...names]);
+      trackEvent("upload", { tool: slug, queued: true });
+    }
+  }
+  return (
+    <div className="rounded-2xl border border-border p-5">
+      <h3 className="flex items-center gap-2 font-semibold">
+        <Smartphone className="h-5 w-5 text-brand-strong" aria-hidden /> {t.queueTitle}
+      </h3>
+      <p className="mt-2 text-sm text-muted">{t.queueBody}</p>
+      {signedIn === null ? (
+        <Loader2 className="mt-4 h-5 w-5 animate-spin text-muted" aria-hidden />
+      ) : signedIn ? (
+        <div className="mt-4">
+          <input
+            ref={input}
+            type="file"
+            accept="audio/*,.mp3,.m4a,.wav,.flac,.ogg,.aac"
+            multiple={mashup}
+            hidden
+            onChange={(e) => {
+              const files = [...(e.target.files ?? [])];
+              e.target.value = "";
+              send(files);
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => input.current?.click()}
+            className="inline-flex items-center gap-2 rounded-full bg-brand px-5 py-2.5 text-sm font-semibold text-white"
+          >
+            <Send className="h-4 w-4" aria-hidden /> {t.queueChoose}
+          </button>
+          {refused && <p className="mt-2 text-xs text-danger">{t.formats}</p>}
+          {sent.length > 0 && (
+            <div className="mt-4 rounded-xl bg-success/10 p-3 text-sm" role="status">
+              {sent.map((name, i) => (
+                <p key={`${name}-${i}`} className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 shrink-0 text-success" aria-hidden />
+                  <span>
+                    {t.queueSent}: <bdi className="font-semibold">{name}</bdi>
+                  </span>
+                </p>
+              ))}
+              <Link href="/upload" className="mt-2 inline-block font-semibold text-brand-strong hover:underline">
+                {t.queueFollow}
+              </Link>
+              {mashup && <p className="mt-1 text-xs text-muted">{t.queueMashup}</p>}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="mt-4">
+          <p className="text-sm">{t.queueNeedsAccount}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Link href={links.signup} className="rounded-full bg-brand px-5 py-2.5 text-sm font-semibold text-white">
+              {t.signUp}
+            </Link>
+            <Link href={links.login} className="rounded-full border border-border px-5 py-2.5 text-sm font-semibold hover:bg-surface-hover">
+              {t.logIn}
+            </Link>
+          </div>
+        </div>
+      )}
+      <button type="button" onClick={onTryHere} className="mt-4 block text-sm text-muted underline hover:text-foreground">
+        {t.tryHere}
+      </button>
+    </div>
+  );
+}
+
 function SongSlot({
   label,
   song,
@@ -431,7 +558,7 @@ function SongSlot({
           </span>
           <p className="text-sm font-semibold">{label}</p>
           <p className="text-xs text-muted">{t.formats}</p>
-          {song?.error && <p className="text-xs text-danger">{t.failed}: {song.error}</p>}
+          {song?.error && <p className="text-xs text-danger">{song.error === t.failed ? t.failed : `${t.failed}: ${song.error}`}</p>}
         </>
       )}
     </div>

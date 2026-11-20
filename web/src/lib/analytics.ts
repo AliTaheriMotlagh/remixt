@@ -21,7 +21,7 @@ export const KEY_EVENTS = ["signup", "upload", "publish", "radio_tune", "ad_clic
 
 /** Events the pages and the server send (others are refused). */
 export const EVENTS = [
-  "signup", "login", "upload", "publish", "remix_play", "radio_tune", "studio_open", "export", "search", "share", "ad_click", "advertise_start", "follow", "like",
+  "signup", "login", "upload", "publish", "remix_play", "radio_tune", "studio_open", "export", "search", "share", "ad_click", "advertise_start", "follow", "like", "tool_use",
 ] as const;
 export type EventName = (typeof EVENTS)[number];
 
