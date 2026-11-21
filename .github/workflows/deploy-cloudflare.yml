@@ -50,3 +50,28 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 1c36090945aa92ebdf4a0c839f53f6b9
         run: npx wrangler deploy
+      # Workers custom domains normally create their DNS record themselves,
+      # but remixt.app's apex A record disappeared twice while the AAAA stayed,
+      # which leaves IPv4-only visitors unable to resolve the site. Add it back
+      # if it is missing (a proxied dummy A is what a Worker custom domain uses).
+      - name: Ensure remixt.app has a proxied A record
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ZONE_ID: 41d428294eedab59002445012ea34e57
+        run: |
+          api="https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records"
+          body=$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$api?type=A&name=remixt.app")
+          echo "$body" | jq .
+          if [ "$(echo "$body" | jq -r '.success')" != "true" ]; then
+            echo "::error::The token cannot read DNS records. Add the zone permission 'DNS: Edit' for remixt.app to CLOUDFLARE_API_TOKEN."
+            exit 1
+          fi
+          if [ "$(echo "$body" | jq '.result | length')" -gt 0 ]; then
+            echo "Apex A record already present."
+            exit 0
+          fi
+          echo "Creating proxied A 192.0.2.1 for remixt.app…"
+          curl -sS -X POST -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -H 'Content-Type: application/json' \
+            --data '{"type":"A","name":"remixt.app","content":"192.0.2.1","proxied":true,"ttl":1}' \
+            "$api" | jq .
