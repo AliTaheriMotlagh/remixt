@@ -21,3 +21,4 @@ graphify-out/
 # Next.js docs copied from node_modules/next/dist/docs by
 # web/scripts/copy-next-docs.mjs on every npm install.
 web/.next-docs/
+
