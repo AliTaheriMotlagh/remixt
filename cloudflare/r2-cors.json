@@ -1,0 +1,11 @@
+{
+  "rules": [{
+    "allowed": {
+      "origins": ["https://remixt.app", "https://remixt-free.vercel.app", "http://localhost:3000"],
+      "methods": ["GET", "HEAD", "PUT"],
+      "headers": ["Content-Type", "Range"]
+    },
+    "exposeHeaders": ["Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Content-Type"],
+    "maxAgeSeconds": 3600
+  }]
+}

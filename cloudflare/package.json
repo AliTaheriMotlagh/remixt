@@ -1,0 +1,14 @@
+{
+  "name": "remixt-cloudflare",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "logs": "wrangler tail"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.0.28"
+  },
+  "devDependencies": {
+    "wrangler": "^4.40.0"
+  }
+}

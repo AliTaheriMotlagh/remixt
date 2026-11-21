@@ -14,7 +14,7 @@
 # building for a different CPU architecture, backups).
 
 # ---- 1. Build the Next.js app --------------------------------------------------
-FROM node:22-bookworm-slim AS web-build
+FROM public.ecr.aws/docker/library/node:22-bookworm-slim AS web-build
 WORKDIR /build
 
 COPY web/package.json web/package-lock.json ./
@@ -24,12 +24,16 @@ RUN npm ci --no-audit --no-fund
 
 COPY web/ ./
 ENV NEXT_TELEMETRY_DISABLED=1
+# Placeholder for the build only (this stage isn't shipped): some modules build
+# SQL fragments when they load, which needs a connection string but never
+# connects. The real one is given to the running container.
+ENV DATABASE_URL=postgres://build:build@127.0.0.1:5432/build
 RUN npm run build \
     && cp -r public .next/standalone/ \
     && cp -r .next/static .next/standalone/.next/
 
 # ---- 2. Runtime ---------------------------------------------------------------
-FROM node:22-bookworm-slim
+FROM public.ecr.aws/docker/library/node:22-bookworm-slim
 
 # postgresql: the embedded database (skipped at runtime if DATABASE_URL is
 #   set). tini: a proper PID 1, so `docker stop` shuts everything down
@@ -38,7 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql tini ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=caddy:2 /usr/bin/caddy /usr/bin/caddy
+COPY --from=public.ecr.aws/docker/library/caddy:2 /usr/bin/caddy /usr/bin/caddy
 COPY --from=web-build /build/.next/standalone /app/web
 COPY web/scripts/schema.sql /app/schema.sql
 COPY docker/entrypoint.sh /usr/local/bin/remixt-start

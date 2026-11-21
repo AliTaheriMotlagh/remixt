@@ -1,0 +1,32 @@
+# Builds the Docker image on GitHub's servers and deploys Remixt to Cloudflare
+# (remixt.app). App secrets live on the Worker already (set once by
+# cloudflare/deploy.sh or `wrangler secret`), so only a Cloudflare token is needed.
+name: Deploy to Cloudflare
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-cloudflare
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install wrangler
+        working-directory: cloudflare
+        run: npm ci --no-audit --no-fund
+      - name: Deploy
+        working-directory: cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 1c36090945aa92ebdf4a0c839f53f6b9
+        run: npx wrangler deploy
