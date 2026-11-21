@@ -24,6 +24,26 @@ jobs:
       - name: Install wrangler
         working-directory: cloudflare
         run: npm ci --no-audit --no-fund
+      # Wrangler's own message for a token that can't touch Containers is just
+      # "A request to the Cloudflare API (/containers/me) failed." with no
+      # reason, so ask the API directly and name the missing permission.
+      - name: Check Cloudflare token
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is not set. Add it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          code=$(curl -sS -o /tmp/containers-me.json -w '%{http_code}' \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/1c36090945aa92ebdf4a0c839f53f6b9/containers/me")
+          echo "GET /accounts/1c36090945aa92ebdf4a0c839f53f6b9/containers/me -> HTTP $code"
+          cat /tmp/containers-me.json; echo
+          if [ "$code" != "200" ]; then
+            echo "::error::This token cannot use Cloudflare Containers. Create/edit the API token and give it, for the account 1c36090945aa92ebdf4a0c839f53f6b9: Workers Scripts: Edit, Cloudflare Containers: Edit, Workers R2 Storage: Edit, Account Settings: Read; and for the zone remixt.app: Workers Routes: Edit, DNS: Edit, Zone: Read."
+            exit 1
+          fi
       - name: Deploy
         working-directory: cloudflare
         env:
