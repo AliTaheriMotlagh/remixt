@@ -17,6 +17,9 @@
       "class_name": "Remixt",
       "image": "../Dockerfile",
       "image_build_context": "..",
+      // Build-time only: sitemap.xml and robots.txt are prerendered by
+      // `next build`, so they need the real domain then (not at runtime).
+      "image_vars": { "PUBLIC_BASE_URL": "https://remixt.app" },
       "instance_type": "standard-1",
       "max_instances": 1
     }

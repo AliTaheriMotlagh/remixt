@@ -326,13 +326,17 @@ SSH back in (so the group change applies), fetch the code, build, and run:
 
 ```bash
 git clone https://github.com/<you>/remixt.git && cd remixt
-docker build -t remixt .
+docker build --build-arg PUBLIC_BASE_URL=https://myremixt.duckdns.org -t remixt .
 docker run -d --name remixt --restart unless-stopped \
   -p 80:80 -p 443:443 \
   -e DOMAIN=myremixt.duckdns.org \
   -v remixt-data:/data \
   remixt
 ```
+
+`PUBLIC_BASE_URL` is baked into the prerendered `sitemap.xml` and
+`robots.txt`, so pass your real address here; without it those files point
+at `localhost` and search engines can't use them.
 
 (For a private GitHub repo, `git clone` asks for a username and a
 [personal access token](https://github.com/settings/tokens) as the

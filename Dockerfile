@@ -24,6 +24,12 @@ RUN npm ci --no-audit --no-fund
 
 COPY web/ ./
 ENV NEXT_TELEMETRY_DISABLED=1
+# sitemap.xml and robots.txt are prerendered during the build, so the public
+# address has to be known here or they come out as http://localhost:3000.
+# Cloudflare passes it from wrangler.jsonc's `image_vars`; self-hosters can
+# pass `--build-arg PUBLIC_BASE_URL=https://their.domain`.
+ARG PUBLIC_BASE_URL
+ENV PUBLIC_BASE_URL=$PUBLIC_BASE_URL
 # Placeholder for the build only (this stage isn't shipped): some modules build
 # SQL fragments when they load, which needs a connection string but never
 # connects. The real one is given to the running container.
