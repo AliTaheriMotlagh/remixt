@@ -29,6 +29,7 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Remixt"] }],
   "vars": {
+    "BASE_URL": "https://remixt.app",
     "PUBLIC_BASE_URL": "https://remixt.app"
   }
 }
