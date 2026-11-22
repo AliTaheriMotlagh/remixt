@@ -106,7 +106,7 @@ function headers(apiKey: string) {
     Authorization: `Bearer ${apiKey}`,
     "Content-Type": "application/json",
     // OpenRouter's app attribution (optional).
-    "HTTP-Referer": process.env.PUBLIC_BASE_URL || "https://remixt-free.vercel.app",
+    "HTTP-Referer": process.env.PUBLIC_BASE_URL || "https://remixt.app",
     "X-Title": "Remixt Studio",
   };
 }

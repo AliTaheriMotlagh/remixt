@@ -1,8 +1,8 @@
 # Remixt
 
-[![Remixt — split any song into vocals and beat, then remix it your way. Click to watch the video.](remixt-share-1920x1080.png)](https://remixt-free.vercel.app)
+[![Remixt — split any song into vocals and beat, then remix it your way. Click to watch the video.](remixt-share-1920x1080.png)](https://remixt.app)
 
-**[Try it free → remixt-free.vercel.app](https://remixt-free.vercel.app)** · [▶ Watch the 16-second video](https://remixt-free.vercel.app)
+**[Try it free → remixt-free.vercel.app](https://remixt.app)** · [▶ Watch the 16-second video](https://remixt.app)
 
 A browser-based DAW for remixing songs: upload a track, it's automatically
 split into a vocal stem and a beat (instrumental) stem, both land in a

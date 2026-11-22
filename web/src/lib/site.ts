@@ -16,7 +16,7 @@ export const SITE_DESCRIPTION =
  */
 export const SITE_CREATOR = {
   name: "Ali Taheri Motlagh",
-  url: "https://alitaherimotlagh.vercel.app/",
+  url: "https://alitaherimotlagh.remixt.app/",
   sameAs: ["https://www.youtube.com/@Alitaherimotlagh"],
 };
 
