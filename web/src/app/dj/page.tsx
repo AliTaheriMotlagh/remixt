@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import DjApp from "@/components/dj/DjApp";
 import { pageMetadata } from "@/lib/seo";
@@ -13,7 +14,17 @@ export const metadata = pageMetadata({
 export default function DjPage() {
   return (
     <div className="mx-auto w-full max-w-7xl px-3 py-6 sm:px-5 sm:py-10">
-      <DjApp />
+      {/* The decks read the address (?set=, ?live=): drawn in the browser, the heading first. */}
+      <Suspense
+        fallback={
+          <div className="flex flex-col gap-1">
+            <h1 className="text-lg font-bold">DJ decks</h1>
+            <p className="text-sm text-muted">Setting up the decks…</p>
+          </div>
+        }
+      >
+        <DjApp />
+      </Suspense>
       {/* The decks only draw in the browser; this says what the page is to
           anyone (and any search engine) reading it before they do. */}
       <section className="mx-auto mt-14 max-w-3xl border-t border-border pt-10 text-sm text-muted">

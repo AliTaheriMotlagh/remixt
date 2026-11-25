@@ -22,6 +22,8 @@ function loadOnce(id: string, src: string, attrs: Record<string, string> = {}): 
   const existing = document.getElementById(id) as HTMLScriptElement | null;
   if (existing?.dataset.state === "ok") return Promise.resolve();
   if (existing?.dataset.state === "failed") return Promise.reject(new Error("blocked"));
+  // The page's own tag (layout.tsx) has no state mark; AdSense's script sets .loaded when it has run.
+  if (existing && !existing.dataset.state && (window as unknown as { adsbygoogle?: { loaded?: boolean } }).adsbygoogle?.loaded) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const el = existing ?? document.createElement("script");
     el.addEventListener("load", () => resolve(), { once: true });

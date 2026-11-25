@@ -8,6 +8,7 @@ import type { DemoStem } from "@/lib/client/demoSongDefs";
 import { AUTO_MIX_STEPS, AutoMix, BLEND_BEATS, PHRASE_BEATS } from "@/lib/client/dj/autoMix";
 import { pickNext, type BrowserEntry } from "@/lib/client/dj/djLibrary";
 import { DEMO_ENTRIES, libraryEntries } from "@/lib/client/dj/djLibraryTracks";
+import { playableEntries, savedSetAt, SETS_STORE, type SavedCrate } from "@/lib/client/dj/djCrate";
 import { beatIndex } from "@/lib/client/dj/djControls";
 import { derive, type Derived } from "@/lib/client/dj/djDerived";
 import type { DjEngine } from "@/lib/client/dj/djEngine";
@@ -364,14 +365,25 @@ function AutoMixPanel({
       const { A, B } = s.decks;
       const onAir: DeckId | null = A.playing && B.playing ? (onAirGain(A, "A", s.mix) >= onAirGain(B, "B", s.mix) ? "A" : "B") : A.playing ? "A" : B.playing ? "B" : null;
       if (!onAir) {
-        const ready: DeckId | null = A.track ? "A" : B.track ? "B" : null;
+        const first = nextOf(list, null);
+        // Playing a set: only its own next song starts; a deck holding anything else is loaded over.
+        const ready: DeckId | null = order.current
+          ? first && A.track?.id === first.id
+            ? "A"
+            : first && B.track?.id === first.id
+              ? "B"
+              : null
+          : A.track
+            ? "A"
+            : B.track
+              ? "B"
+              : null;
         if (ready) {
           engine.setCrossfader(ready === "A" ? -1 : 1);
           engine.setVolume(ready, 0.8);
           engine.play(ready);
           return;
         }
-        const first = nextOf(list, null);
         if (!first) return;
         loadingNext.current = true;
         void load("A", first.id).finally(() => (loadingNext.current = false));
@@ -382,10 +394,11 @@ function AutoMixPanel({
       played.current.add(now.track.id);
       const next = onAir === "A" ? "B" : "A";
       const waiting = s.decks[next];
-      // The free deck holds nothing new: the next song goes on it.
-      if (!waiting.track || played.current.has(waiting.track.id)) {
+      // The free deck holds nothing new (or, playing a set, not the set's next song): the next song goes on it.
+      const spent = !waiting.track || played.current.has(waiting.track.id);
+      const pick = spent || order.current ? nextOf(list, { id: now.track.id, bpm: now.track.bpm, key: now.track.key }) : null;
+      if (spent || (order.current && waiting.track?.id !== pick?.id)) {
         if (waiting.playing) return;
-        const pick = nextOf(list, { id: now.track.id, bpm: now.track.bpm, key: now.track.key });
         if (!pick) {
           setDjNote(order.current ? "That was the last song of the set: the Auto DJ stops after it." : "Every song has been played: the Auto DJ stops after this one.");
           if (order.current) onSetDone();
@@ -549,11 +562,42 @@ function EasyMixer({ engine, snap }: { engine: DjEngine; snap: DjSnapshot }) {
   );
 }
 
-export default function EasyDecks({ engine }: { engine: DjEngine }) {
+/** The sets saved on this device (the set planner's and Build a set's). */
+function savedSets(): SavedCrate[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(SETS_STORE) ?? "[]");
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
+/** `handoff`: a saved set (its save time) to play from its first song, from the set planner's "Play on the decks". */
+export default function EasyDecks({ engine, handoff = null }: { engine: DjEngine; handoff?: string | null }) {
   const ui = useEngineUi(engine);
   const { library, setLibrary, loadingId, stage, error, pick } = useDeckLoader(engine);
   const [building, setBuilding] = useState(false);
   const [setList, setSetList] = useState<{ name: string; entries: BrowserEntry[]; at: number } | null>(null);
+  const [handoffNote, setHandoffNote] = useState<string | null>(null);
+  useEffect(() => {
+    if (!handoff) return;
+    let cancelled = false;
+    void (async () => {
+      const saved = savedSetAt(savedSets(), handoff);
+      if (!saved) return setHandoffNote("That set isn't saved on this device any more — open it again in the set planner.");
+      const lib = await libraryEntries()
+        .then((r) => r.entries)
+        .catch(() => [] as BrowserEntry[]);
+      if (cancelled) return;
+      const { entries, skipped } = playableEntries(saved, [...lib, ...DEMO_ENTRIES]);
+      if (!entries.length) return setHandoffNote(`None of the songs in “${saved.name}” are on Remixt yet, so there's nothing to play.`);
+      setSetList({ entries, name: saved.name, at: Date.now() });
+      setHandoffNote(skipped ? `${skipped} song${skipped === 1 ? " isn't" : "s aren't"} on Remixt, so the decks skip ${skipped === 1 ? "it" : "them"}.` : null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [handoff]);
   // Live readings (positions, sections, the beat status) ten times a second; the controls follow the engine's own updates.
   const [snap, setSnap] = useState<DjSnapshot>(() => engine.snapshot());
   const [derived, setDerived] = useState<Derived | null>(null);
@@ -595,6 +639,7 @@ export default function EasyDecks({ engine }: { engine: DjEngine }) {
 
       <div className="order-2 flex flex-col gap-2.5 md:order-none">
         <AutoMixPanel engine={engine} snap={live} load={pick} setList={setList} onSetDone={() => setSetList(null)} />
+        {handoffNote && <p className="px-1 text-xs text-drums">{handoffNote}</p>}
         {building ? (
           <SetBuilder playing={!!setList} onPlay={(entries, name) => setSetList({ entries, name, at: Date.now() })} onClose={() => setBuilding(false)} />
         ) : (

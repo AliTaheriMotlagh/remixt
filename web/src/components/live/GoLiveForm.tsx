@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CalendarClock, Play, Radio, SlidersHorizontal } from "lucide-react";
+import { CalendarClock, Disc3, Play, Radio, SlidersHorizontal } from "lucide-react";
 import TagInput from "@/components/TagInput";
 import { DESCRIPTION_MAX, TITLE_MAX } from "@/lib/liveShared";
 
@@ -18,7 +18,7 @@ function localInputValue(date: Date) {
 /** Set up a session: what you'll play, who can chat, and whether it starts now or later. */
 export default function GoLiveForm({ remixes, defaultTitle }: { remixes: RemixChoice[]; defaultTitle: string }) {
   const router = useRouter();
-  const [mode, setMode] = useState<"studio" | "perform">("studio");
+  const [mode, setMode] = useState<"studio" | "perform" | "dj">("studio");
   const [title, setTitle] = useState(defaultTitle);
   const [description, setDescription] = useState("");
   const [tags, setTags] = useState<string[]>([]);
@@ -49,8 +49,8 @@ export default function GoLiveForm({ remixes, defaultTitle }: { remixes: RemixCh
       }),
     }).catch(() => null);
     const data = await res?.json().catch(() => null);
-    // A studio session runs from the Studio; a performance from its console.
-    if (res?.ok) return router.push(mode === "studio" ? `/studio?live=${data.id}` : `/live/${data.id}`);
+    // A studio session runs from the Studio, a DJ set from the decks, a performance from its console.
+    if (res?.ok) return router.push(mode === "studio" ? `/studio?live=${data.id}` : mode === "dj" ? `/dj?live=${data.id}` : `/live/${data.id}`);
     // Already live: take them back to it.
     if (res?.status === 409 && data?.id) return router.push(`/live/${data.id}`);
     setBusy(false);
@@ -66,11 +66,12 @@ export default function GoLiveForm({ remixes, defaultTitle }: { remixes: RemixCh
 
       <fieldset className="flex flex-col gap-2">
         <legend className="mb-1.5 text-sm font-medium">What kind of session?</legend>
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="grid gap-2 sm:grid-cols-3">
           {(
             [
               { id: "studio", icon: SlidersHorizontal, label: "Make a remix live", hint: "Open the Studio on air: the room watches you add stems, cut clips, add effects — and hears every change." },
               { id: "perform", icon: Play, label: "Perform a remix", hint: "Play one of your published remixes and work its stems live: mute, solo, ride the faders." },
+              { id: "dj", icon: Disc3, label: "DJ live", hint: "Open the DJ decks on air: the room hears every song, blend, cut and effect, in step with you." },
             ] as const
           ).map(({ id, icon: Icon, label, hint }) => (
             <label key={id} className={`flex cursor-pointer flex-col gap-1 rounded-xl border p-3 text-sm ${mode === id ? "border-brand bg-brand/10" : "border-border hover:border-brand/50"}`}>

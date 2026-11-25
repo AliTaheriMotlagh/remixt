@@ -15,6 +15,7 @@ import { ReactionLayer, compactNumber, type ReactionLayerHandle } from "./Reacti
 import { formatClock } from "./Stage";
 import PartyStage from "./PartyStage";
 import { useCrowd, useHostParty } from "./useHostParty";
+import type { PartyMusic } from "@/lib/client/party/partyWorld";
 
 async function api(path: string, method: string, body?: unknown) {
   const res = await fetch(path, {
@@ -26,8 +27,26 @@ async function api(path: string, method: string, body?: unknown) {
   return { ok: !!res?.ok, status: res?.status ?? 0, data, error: res?.ok ? null : (data?.error ?? "Couldn't reach the server") };
 }
 
-/** "Go live" in the Studio header: starts a session where the room watches you make this remix. */
-export function GoLiveStudioButton({ signedIn }: { signedIn: boolean }) {
+/** Where a session is run from: the Studio (the room watches you make a remix) or the DJ decks. */
+type Place = "studio" | "dj";
+const PLACE = {
+  studio: {
+    path: "/studio",
+    heading: "Remix live",
+    button: "Make this remix live: everyone watching sees and hears every change you make",
+    intro: "Everyone watching sees your Studio — stems you add, clips you cut and move, effects, tempo — and hears the mix in step with you. They chat and react; you see it all here.",
+  },
+  dj: {
+    path: "/dj",
+    heading: "DJ live",
+    button: "DJ live: everyone watching hears your decks, in step with you",
+    intro: "Everyone watching hears your decks — every song you load, every blend, cut, loop and effect — in step with you, and sees what's on each deck. They chat and react; you see it all here.",
+  },
+} as const;
+
+/** "Go live" in the Studio's (or the decks') header: starts a session where the room watches and hears you. */
+export function GoLiveStudioButton({ signedIn, place = "studio", defaultTitle }: { signedIn: boolean; place?: Place; defaultTitle?: () => string }) {
+  const where = PLACE[place];
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [onScreen, onScreenStyle] = useOnScreen<HTMLFormElement>(open);
@@ -40,11 +59,11 @@ export function GoLiveStudioButton({ signedIn }: { signedIn: boolean }) {
 
   function openDialog() {
     if (!signedIn) {
-      router.push("/login?next=/studio");
+      router.push(`/login?next=${where.path}`);
       return;
     }
     const s = useStudioStore.getState();
-    setTitle((t) => t || (s.sourceRemix ? `Remixing “${s.sourceRemix.title}” live` : "Making a remix live"));
+    setTitle((t) => t || (defaultTitle?.() ?? (s.sourceRemix ? `Remixing “${s.sourceRemix.title}” live` : "Making a remix live")));
     setOpen(true);
   }
 
@@ -52,12 +71,12 @@ export function GoLiveStudioButton({ signedIn }: { signedIn: boolean }) {
     e?.preventDefault();
     setBusy(true);
     setError(null);
-    const result = await api("/api/live", "POST", { mode: "studio", title, chatMode });
+    const result = await api("/api/live", "POST", { mode: place, title, chatMode });
     setBusy(false);
     if (result.ok) {
       setOpen(false);
       setExisting(null);
-      router.replace(`/studio?live=${result.data.id}`);
+      router.replace(`${where.path}?live=${result.data.id}`);
     } else if (result.status === 409 && result.data?.id) {
       setExisting(result.data.id);
     } else setError(result.error);
@@ -78,7 +97,7 @@ export function GoLiveStudioButton({ signedIn }: { signedIn: boolean }) {
       <button
         onClick={openDialog}
         className="rounded-lg border border-danger/60 px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-danger/15"
-        title="Make this remix live: everyone watching sees and hears every change you make"
+        title={where.button}
       >
         <Radio className="text-danger" /> <span className="hidden sm:inline">Go live</span>
         <span className="sm:hidden">Live</span>
@@ -93,15 +112,12 @@ export function GoLiveStudioButton({ signedIn }: { signedIn: boolean }) {
             className="popover-sheet absolute right-0 top-full z-[45] mt-2 flex w-[min(22rem,calc(100vw-2rem))] flex-col gap-3 rounded-xl border border-border bg-surface p-4 text-sm shadow-xl"
           >
             <div className="flex items-center justify-between">
-              <p className="font-semibold">Remix live</p>
+              <p className="font-semibold">{where.heading}</p>
               <button type="button" onClick={() => setOpen(false)} className="-m-2 p-2 text-muted hover:text-foreground" aria-label="Close">
                 <X className="h-5 w-5" />
               </button>
             </div>
-            <p className="text-xs text-muted">
-              Everyone watching sees your Studio — stems you add, clips you cut and move, effects, tempo — and hears the mix
-              in step with you. They chat and react; you see it all here.
-            </p>
+            <p className="text-xs text-muted">{where.intro}</p>
             <label className="flex flex-col gap-1 text-xs text-muted">
               Title
               <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={80} minLength={2} required className="input" />
@@ -143,12 +159,32 @@ export function GoLiveStudioButton({ signedIn }: { signedIn: boolean }) {
 }
 
 /**
- * The bar across the Studio while it's live: time on air, who's watching,
- * reactions floating by, the chat, and ending it. Also what broadcasts the
- * Studio to the room.
+ * The bar across the Studio (or the decks) while it's live: time on air,
+ * who's watching, reactions floating by, the chat, and ending it. Also what
+ * broadcasts the Studio — or, given `broadcast`, whatever that sends — to
+ * the room.
  */
-export default function LiveStudioBar({ streamId, userId }: { streamId: string; userId: string }) {
+export default function LiveStudioBar({
+  streamId,
+  userId,
+  place = "studio",
+  broadcast,
+  music,
+}: {
+  streamId: string;
+  userId: string;
+  place?: Place;
+  /** Starts sending to the room; returns the stop. The Studio's own broadcast when left out. */
+  broadcast?: (streamId: string) => () => void;
+  /** The beat the host's dance floor moves to; the Studio's transport when left out. */
+  music?: () => PartyMusic;
+}) {
   const router = useRouter();
+  const where = PLACE[place];
+  const broadcastRef = useRef(broadcast);
+  useEffect(() => {
+    broadcastRef.current = broadcast;
+  });
   const layer = useRef<ReactionLayerHandle>(null);
   const [info, setInfo] = useState<LiveStream | null>(null);
   const [recap, setRecap] = useState<RecapData | null>(null);
@@ -178,19 +214,19 @@ export default function LiveStudioBar({ streamId, userId }: { streamId: string; 
       const stream = r.data?.stream as LiveStream | undefined;
       if (!stream) return setError("That live session doesn't exist.");
       // Someone else's session: watch it instead.
-      if (stream.host_id !== userId || stream.mode !== "studio") return router.replace(`/live/${streamId}`);
+      if (stream.host_id !== userId || stream.mode !== place) return router.replace(`/live/${streamId}`);
       setInfo(stream);
       if (r.data.recap) setRecap(r.data.recap);
     });
     return () => {
       cancelled = true;
     };
-  }, [streamId, userId, router]);
+  }, [streamId, userId, router, place]);
 
-  // On air: every change in the Studio goes to the room.
+  // On air: every change goes to the room.
   useEffect(() => {
     if (status !== "live" || !info || ending) return;
-    return startStudioBroadcast(streamId);
+    return (broadcastRef.current ?? startStudioBroadcast)(streamId);
   }, [status, info, streamId, ending]);
 
   useEffect(() => {
@@ -255,10 +291,10 @@ export default function LiveStudioBar({ streamId, userId }: { streamId: string; 
       <div className="flex flex-col gap-3">
         <Recap host recap={recap ?? { durationSeconds: 0, peak: conn.stream?.peak ?? 0, unique: 0, messages, reactions: 0, topReaction: null, newFollowers: 0, chatters: 0 }} title={info.title} />
         <div className="flex flex-wrap gap-2">
-          <button onClick={() => router.replace("/studio")} className="h-10 rounded-lg border border-border px-4 text-sm text-muted hover:text-foreground">
-            Keep working (off air)
+          <button onClick={() => router.replace(where.path)} className="h-10 rounded-lg border border-border px-4 text-sm text-muted hover:text-foreground">
+            {place === "dj" ? "Keep mixing (off air)" : "Keep working (off air)"}
           </button>
-          <span className="self-center text-xs text-muted">Your mix is still here — save or publish it from the transport.</span>
+          {place === "studio" && <span className="self-center text-xs text-muted">Your mix is still here — save or publish it from the transport.</span>}
         </div>
       </div>
     );
@@ -327,7 +363,7 @@ export default function LiveStudioBar({ streamId, userId }: { streamId: string; 
             title={info.title}
             crowd={crowd.people}
             guests={crowd.guests}
-            music={partyMusic}
+            music={music ?? partyMusic}
             className="sm:!aspect-[21/9]"
           />
         </div>

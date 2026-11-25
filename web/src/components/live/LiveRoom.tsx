@@ -22,6 +22,9 @@ import type { PartyMusic, PartyPerson } from "@/lib/client/party/partyWorld";
 import { applyLiveMix, type LiveLyrics as LiveWords, type LiveMix } from "@/lib/client/liveStudio";
 import LiveLyrics from "./LiveLyrics";
 import { describeMixChanges } from "@/lib/client/liveStudioDiff";
+import { useDjFollower } from "@/lib/client/dj/djLiveFollow";
+import { djDeckPosition, djOnAir } from "@/lib/liveDj";
+import LiveDjDecks from "./LiveDjDecks";
 
 const VOLUME_KEY = "remixt_live_volume";
 
@@ -81,6 +84,7 @@ export default function LiveRoom({
   const layer = useRef<ReactionLayerHandle>(null);
   const party = useRef<PartyHandle>(null);
   const studio = stream.mode === "studio";
+  const dj = stream.mode === "dj";
   // Studio sessions: the host's mix, applied here as it changes, and what changed in words.
   const [studioReady, setStudioReady] = useState(false);
   const [activity, setActivity] = useState<StudioActivity[]>([]);
@@ -131,8 +135,8 @@ export default function LiveRoom({
     }
   }, []);
 
-  const follower = useLiveFollower({
-    remixId: status === "live" && !studio ? remixId : null,
+  const stemFollower = useLiveFollower({
+    remixId: status === "live" && !studio && !dj ? remixId : null,
     stream: live,
     serverNow: conn.serverNow,
     tuned,
@@ -140,6 +144,10 @@ export default function LiveRoom({
     volume,
     studioReady: studio ? studioReady : undefined,
   });
+  // DJ sessions: this tab's own decks, following the host's.
+  const djFollower = useDjFollower({ stream: dj && status === "live" ? live : null, serverNow: conn.serverNow, tuned, muted, volume });
+  const follower = dj ? djFollower : stemFollower;
+  const djStage = dj ? (live?.state.dj ?? null) : null;
   const lanes = useStudioStore((s) => s.lanes);
   const playing = !!live?.state.playing && status === "live" && !live.hostAway;
 
@@ -164,7 +172,21 @@ export default function LiveRoom({
   useEffect(() => {
     liveRef.current = live;
   });
+  const djLevel = djFollower.level;
   const partyMusic = useCallback((): PartyMusic => {
+    const l0 = liveRef.current;
+    const stage = l0?.state.dj;
+    if (dj) {
+      // The deck the room hears most sets the beat the floor dances to.
+      const id = stage ? djOnAir(stage) : null;
+      const deck = id && stage ? stage.decks[id] : null;
+      const on = !!deck && !!l0 && l0.status === "live" && !l0.hostAway;
+      const bpm = deck?.bpm ? deck.bpm * deck.rate : 120;
+      const position = deck && l0 ? djDeckPosition(deck, Math.max(0, serverNow() - l0.stateAt) / 1000) : 0;
+      const lvl = on && tunedRef.current ? Math.min(1, djLevel() * 1.4) : 0;
+      const levels = lvl > 0 ? { low: lvl, mid: lvl * 0.8, high: lvl * 0.6 } : { low: 0.55, mid: 0.45, high: 0.35 };
+      return { playing: on, beats: (position * bpm) / 60, bpm, ...levels };
+    }
     const s = useStudioStore.getState();
     const bpm = s.projectBpm || 120;
     const l = liveRef.current;
@@ -180,7 +202,7 @@ export default function LiveRoom({
     }
     const levels = on && tunedRef.current ? readBands(audioEngine.getAnalyser(), bands.current) : { low: 0.55, mid: 0.45, high: 0.35 };
     return { playing: on, beats: (position * bpm) / 60, bpm, ...levels };
-  }, [serverNow]);
+  }, [serverNow, dj, djLevel]);
 
   const [recap, setRecap] = useState<RecapData | null>(null);
   useEffect(() => {
@@ -210,7 +232,8 @@ export default function LiveRoom({
 
   async function tuneIn() {
     // Inside the tap, so phones let the sound start later.
-    await audioEngine.prepareAudio().catch(() => {});
+    if (dj) djFollower.unlock();
+    else await audioEngine.prepareAudio().catch(() => {});
     tunedRef.current = true;
     setTuned(true);
   }
@@ -253,7 +276,7 @@ export default function LiveRoom({
   const title = live?.title ?? stream.title;
   const viewers = live?.viewers ?? stream.viewers;
   const away = !!live?.hostAway && status === "live";
-  const hasStage = (studio || !!remixId) && status === "live";
+  const hasStage = (studio || (dj ? !!(djStage?.decks.A.id || djStage?.decks.B.id) : !!remixId)) && status === "live";
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-5 sm:px-6 sm:py-8">
@@ -359,6 +382,9 @@ export default function LiveRoom({
                   </p>
                 </div>
               </PartyStage>
+              {dj ? (
+                djStage && hasStage && live ? <LiveDjDecks stage={djStage} stateAt={live.stateAt} serverNow={conn.serverNow} live={!away} /> : null
+              ) : (
               <div className="relative">
                 <StageHeader
                   title={studio ? "Making a remix live in the Studio" : (stream.remix_title ?? "Live set")}
@@ -383,6 +409,7 @@ export default function LiveRoom({
                   </div>
                 </StageHeader>
               </div>
+              )}
 
               {hasStage ? (
                 <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-surface p-3">
@@ -394,7 +421,7 @@ export default function LiveRoom({
                       className="flex h-11 items-center gap-2 rounded-lg bg-brand px-5 text-sm font-semibold text-white hover:bg-brand-strong disabled:opacity-60"
                     >
                       <Headphones className="h-4 w-4" />
-                      {follower.status === "loading" ? "Loading the stems…" : follower.status === "error" ? "Couldn't load the track" : "Tune in"}
+                      {follower.status === "loading" ? (dj ? "Loading the songs…" : "Loading the stems…") : follower.status === "error" ? "Couldn't load the track" : "Tune in"}
                     </button>
                   ) : (
                     <>
@@ -449,7 +476,7 @@ export default function LiveRoom({
               {hasStage && studio && lyrics && <LiveLyrics lyrics={lyrics} />}
               {hasStage && studio && <ReadOnlyStudio activity={activity} />}
 
-              {hasStage && !studio && lanes.length > 0 && (
+              {hasStage && !studio && !dj && lanes.length > 0 && (
                 <div>
                   <h2 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">Stems — as the host plays them</h2>
                   <StemStrips lanes={lanes} playing={playing} />

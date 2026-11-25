@@ -130,6 +130,10 @@ export default async function RootLayout({
         <NavProgress />
         <IsolationBoundary />
         {settings.network.adsenseClient && <meta name="google-adsense-account" content={settings.network.adsenseClient} />}
+        {/* AdSense's site check looks for its snippet in the page's own HTML. NetworkSlot reuses this tag (same id). */}
+        {/^ca-pub-\d+$/.test(settings.network.adsenseClient) && (
+          <script id="adsbygoogle-js" async src={`https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${settings.network.adsenseClient}`} crossOrigin="anonymous" />
+        )}
         <NavBar user={user} isAdmin={isAdmin(user)} />
         {unconfirmed && <VerifyEmailBanner email={user!.email} />}
         <main id="main" className="flex min-w-0 flex-1 flex-col">

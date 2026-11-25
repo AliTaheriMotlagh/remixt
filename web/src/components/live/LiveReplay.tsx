@@ -18,6 +18,8 @@ import Recap from "./Recap";
 import { ReactionLayer, type ReactionLayerHandle } from "./Reactions";
 import ReadOnlyStudio, { type StudioActivity } from "./ReadOnlyStudio";
 import { StageHeader, StemStrips, formatClock } from "./Stage";
+import { useDjFollower } from "@/lib/client/dj/djLiveFollow";
+import LiveDjDecks from "./LiveDjDecks";
 
 const VOLUME_KEY = "remixt_live_volume";
 const HEAT_BINS = 60;
@@ -65,6 +67,7 @@ export default function LiveReplay({
   recap: RecapData;
 }) {
   const studio = stream.mode === "studio";
+  const dj = stream.mode === "dj";
   const [replay, setReplay] = useState<Replay | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
@@ -125,8 +128,8 @@ export default function LiveReplay({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per mix the replay reaches
   }, [studio, mixId, stream.id]);
 
-  const follower = useLiveFollower({
-    remixId: !studio ? (clock.stream?.remixId ?? null) : null,
+  const stemFollower = useLiveFollower({
+    remixId: !studio && !dj ? (clock.stream?.remixId ?? null) : null,
     stream: clock.stream,
     serverNow: clock.now,
     tuned,
@@ -134,6 +137,9 @@ export default function LiveReplay({
     volume,
     studioReady: studio ? studioReady : undefined,
   });
+  // DJ sessions: the decks as the host played them.
+  const djFollower = useDjFollower({ stream: dj ? clock.stream : null, serverNow: clock.now, tuned, muted, volume });
+  const follower = dj ? djFollower : stemFollower;
   const lanes = useStudioStore((s) => s.lanes);
 
   // Reactions burst on screen as the replay passes them.
@@ -163,7 +169,8 @@ export default function LiveReplay({
     if (clock.playing) return clock.pause();
     if (!tuned) {
       // Inside the tap, so phones let the sound start.
-      await audioEngine.prepareAudio().catch(() => {});
+      if (dj) djFollower.unlock();
+      else await audioEngine.prepareAudio().catch(() => {});
       setTuned(true);
     }
     clock.play();
@@ -235,7 +242,7 @@ export default function LiveReplay({
             <section aria-label="Replay" className="flex flex-col gap-3">
               <div className="relative">
                 <StageHeader
-                  title={studio ? "Making a remix live in the Studio" : (clock.stream?.remixId === stream.remix_id ? (stream.remix_title ?? "Live set") : "Live set")}
+                  title={studio ? "Making a remix live in the Studio" : dj ? "A live DJ set" : (clock.stream?.remixId === stream.remix_id ? (stream.remix_title ?? "Live set") : "Live set")}
                   artist={stream.host_name}
                   cover={cover}
                   state={clock.stream?.state ?? null}
@@ -297,7 +304,9 @@ export default function LiveReplay({
                 {follower.blocked && <span className="text-[11px] text-drums">Tap play — your browser blocked the sound</span>}
               </div>
 
-              {studio ? (
+              {dj ? (
+                clock.stream?.state.dj && <LiveDjDecks stage={clock.stream.state.dj} stateAt={clock.stream.stateAt} serverNow={clock.now} live={clock.playing} />
+              ) : studio ? (
                 <ReadOnlyStudio activity={activity} />
               ) : (
                 lanes.length > 0 && (

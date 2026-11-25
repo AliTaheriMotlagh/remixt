@@ -2,8 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { ArrowLeft, GraduationCap, Sparkles } from "lucide-react";
+import LiveStudioBar, { GoLiveStudioButton } from "@/components/live/LiveStudioBar";
 import { DjEngine } from "@/lib/client/dj/djEngine";
+import { djStageOf, startDjBroadcast } from "@/lib/client/dj/djLive";
+import type { PartyMusic } from "@/lib/client/party/partyWorld";
+import { djOnAir } from "@/lib/liveDj";
 import { openingPair } from "@/lib/client/dj/djLibrary";
 import { libraryEntries, loadAnyTrack, retainTracks } from "@/lib/client/dj/djLibraryTracks";
 import { ALL_SCENARIOS, scenarioById } from "@/lib/client/dj/curriculum";
@@ -19,9 +24,24 @@ type View = "easy" | "pro";
 type Mode = { kind: "free"; view: View } | { kind: "practice" } | { kind: "scenario"; id: string };
 
 /** Free play / practice: easy decks or the full console (with the co-pilot when practising), two songs loaded at once. */
-function OpenDecks({ engine, practice, initialView, gear, onGear }: { engine: DjEngine; practice: boolean; initialView: View; gear: GearProfile; onGear: (id: GearId) => void }) {
+function OpenDecks({
+  engine,
+  practice,
+  initialView,
+  gear,
+  onGear,
+  handoff,
+}: {
+  engine: DjEngine;
+  practice: boolean;
+  initialView: View;
+  gear: GearProfile;
+  onGear: (id: GearId) => void;
+  /** A saved set handed over by the set planner: the Auto DJ plays it, so no two songs are put on first. */
+  handoff: string | null;
+}) {
   const [assist, setAssist] = useState(practice);
-  const [view, setView] = useState<View>(initialView);
+  const [view, setView] = useState<View>(handoff ? "easy" : initialView);
   const [busy, setBusy] = useState(false);
   const [from, setFrom] = useState<"library" | "demo" | null>(null);
   const quickStart = useCallback(async () => {
@@ -57,8 +77,10 @@ function OpenDecks({ engine, practice, initialView, gear, onGear }: { engine: Dj
   useEffect(() => {
     if (started.current || engine.deckTrack("A") || engine.deckTrack("B")) return;
     started.current = true;
-    void quickStart();
-  }, [engine, quickStart]);
+    // A set handed over fills the decks itself (the Auto DJ), so nothing goes on them first.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- loading the external audio engine on arrival
+    if (!handoff) void quickStart();
+  }, [engine, quickStart, handoff]);
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
@@ -105,7 +127,7 @@ function OpenDecks({ engine, practice, initialView, gear, onGear }: { engine: Dj
         )}
       </div>
       {view === "easy" ? (
-        <EasyDecks engine={engine} />
+        <EasyDecks engine={engine} handoff={handoff} />
       ) : (
         <>
           <CopilotPanel engine={engine} enabled={assist} onToggle={setAssist} />
@@ -126,7 +148,38 @@ function OpenDecks({ engine, practice, initialView, gear, onGear }: { engine: Dj
 
 const ORDER = ALL_SCENARIOS;
 
+/** DJing live: the session's bar over the decks, sending them to the room. */
+function DjLive({ engine, streamId, userId }: { engine: DjEngine; streamId: string; userId: string }) {
+  const broadcast = useCallback((id: string) => startDjBroadcast(id, engine), [engine]);
+  // The host's dance floor moves to the deck the room hears most.
+  const music = useCallback((): PartyMusic => {
+    const stage = djStageOf(engine.getUi());
+    const on = djOnAir(stage);
+    const deck = on ? stage.decks[on] : null;
+    const bpm = deck?.bpm ? deck.bpm * deck.rate : 120;
+    const lvl = deck ? Math.min(1, engine.levels().master * 1.4) : 0;
+    return { playing: !!deck, beats: deck ? (engine.deckPosition(on!) * bpm) / 60 : 0, bpm, low: lvl, mid: lvl * 0.8, high: lvl * 0.6 };
+  }, [engine]);
+  return <LiveStudioBar place="dj" streamId={streamId} userId={userId} broadcast={broadcast} music={music} />;
+}
+
 export default function DjApp() {
+  const params = useSearchParams();
+  /** A live session of the decks (?live=), and a set handed over by the set planner (?set=). */
+  const liveId = params.get("live");
+  const handoff = params.get("set");
+  /** Who's signed in (undefined while asking): going live needs it. */
+  const [user, setUser] = useState<{ id: string } | null | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/auth/me")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { user?: { id: string } | null } | null) => !cancelled && setUser(data?.user ?? null))
+      .catch(() => !cancelled && setUser(null));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const progress = useSyncExternalStore(progressStore.subscribe, progressStore.getSnapshot, progressStore.getServerSnapshot);
   const gearId = useSyncExternalStore(gearStore.subscribe, gearStore.getSnapshot, gearStore.getServerSnapshot);
   const gear = gearById(gearId);
@@ -244,9 +297,15 @@ export default function DjApp() {
         {mode.kind === "free" ? (
           <>
             <h1 className="truncate text-lg font-bold">DJ decks</h1>
-            <button type="button" onClick={leave} className="ml-auto flex min-h-10 items-center gap-1.5 rounded-lg border border-border px-3 text-sm font-medium hover:bg-surface-hover">
-              <GraduationCap /> Learn to DJ
-            </button>
+            <span className="ml-auto flex items-center gap-2">
+              {!liveId && user !== undefined && <GoLiveStudioButton place="dj" signedIn={!!user} defaultTitle={() => "DJing live"} />}
+              {/* On air, the decks stay: Learn would stop them. */}
+              {!liveId && (
+                <button type="button" onClick={leave} className="flex min-h-10 items-center gap-1.5 rounded-lg border border-border px-3 text-sm font-medium hover:bg-surface-hover">
+                  <GraduationCap /> Learn to DJ
+                </button>
+              )}
+            </span>
           </>
         ) : (
           <>
@@ -257,6 +316,15 @@ export default function DjApp() {
           </>
         )}
       </div>
+      {mode.kind === "free" && liveId && user && <DjLive engine={engine} streamId={liveId} userId={user.id} />}
+      {mode.kind === "free" && liveId && user === null && (
+        <p className="rounded-xl border border-border bg-surface px-4 py-3 text-sm text-muted">
+          <Link href={`/login?next=${encodeURIComponent(`/dj?live=${liveId}`)}`} className="font-semibold text-brand-strong hover:underline">
+            Sign in
+          </Link>{" "}
+          to DJ this live session.
+        </p>
+      )}
       {mode.kind === "scenario" && scenario ? (
         <MissionSession
           key={scenario.id}
@@ -269,7 +337,14 @@ export default function DjApp() {
           onNext={() => setMode({ kind: "scenario", id: siblings[index + 1].id })}
         />
       ) : (
-        <OpenDecks engine={engine} practice={mode.kind === "practice"} initialView={mode.kind === "free" ? mode.view : "pro"} gear={gear} onGear={(id) => gearStore.set(id)} />
+        <OpenDecks
+          engine={engine}
+          practice={mode.kind === "practice"}
+          initialView={mode.kind === "free" ? mode.view : "pro"}
+          gear={gear}
+          onGear={(id) => gearStore.set(id)}
+          handoff={mode.kind === "free" ? handoff : null}
+        />
       )}
     </div>
   );

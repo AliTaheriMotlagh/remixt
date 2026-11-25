@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
-  buildEventSet, clock, energyOf, playedTempos, EVENTS, eventFit, friendlyKeys, fromSaved, outsideSong, setCsv, suggest, summarize, toSaved, transition,
+  buildEventSet, clock, energyOf, playedTempos, EVENTS, eventFit, friendlyKeys, fromSaved, outsideSong, playableEntries, savedSetAt, setCsv, suggest, summarize, toSaved, transition,
   type CrateSong,
 } from "../src/lib/client/dj/djCrate.ts";
 import { camelotCode, type MusicalKey } from "../src/lib/client/musicKey.ts";
@@ -143,5 +143,31 @@ describe("song facts", () => {
     const list = friendlyKeys(key);
     assert.equal(list[0], camelotCode(key));
     assert.equal(new Set(list).size, 4);
+  });
+});
+
+describe("playing a saved set on the decks", () => {
+  const a = song(120, k(1), { id: "lib:a" });
+  const b = song(122, k(2), { id: "lib:b" });
+  const demo = song(124, k(3), { id: "warehouse-lights", source: "demo" });
+
+  test("keeps the set's order, skips songs not on Remixt and ones gone from the library", () => {
+    const r = playableEntries({ ids: ["lib:b", "out:x", "warehouse-lights", "lib:gone", "lib:a"] }, [a, b, demo]);
+    assert.deepEqual(r.entries.map((e) => e.id), ["lib:b", "warehouse-lights", "lib:a"]);
+    assert.equal(r.skipped, 2);
+  });
+
+  test("a song listed twice plays once", () => {
+    const r = playableEntries({ ids: ["lib:a", "lib:a"] }, [a]);
+    assert.deepEqual(r.entries.map((e) => e.id), ["lib:a"]);
+  });
+
+  test("finds the set by when it was saved (as the address carries it)", () => {
+    const list = [toSaved("One", [a], null, 111), toSaved("Two", [b], null, 222)];
+    assert.equal(savedSetAt(list, "222")?.name, "Two");
+    assert.equal(savedSetAt(list, 111)?.name, "One");
+    assert.equal(savedSetAt(list, "333"), null);
+    assert.equal(savedSetAt(list, "nope"), null);
+    assert.equal(savedSetAt(list, null), null);
   });
 });

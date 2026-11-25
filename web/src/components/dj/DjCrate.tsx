@@ -9,13 +9,15 @@
 // The rules are in lib/client/dj/djCrate.ts.
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
-  ArrowDown, ArrowLeft, ArrowUp, Copy, Download, GripVertical, Info, ListMusic, Loader2, Plus, Save, Search, Shuffle, Sparkles, Trash2, X,
+  ArrowDown, ArrowLeft, ArrowUp, Copy, Download, GripVertical, Info, ListMusic, Loader2, Play, Plus, Save, Search, Shuffle, Sparkles, Trash2, Waves, X,
 } from "lucide-react";
 import SongArt from "@/components/SongArt";
 import { camelotCode, keyLabel, ALL_KEYS, keyId, parseKeyId } from "@/lib/client/musicKey";
-import { DEMO_ENTRIES, libraryEntries } from "@/lib/client/dj/djLibraryTracks";
+import { DEMO_ENTRIES, libraryEntries, measureLibrarySong } from "@/lib/client/dj/djLibraryTracks";
+import { isLibraryId, libraryTrackKey } from "@/lib/client/dj/djLibrary";
 import {
   buildEventSet, clock, energyOf, playedTempos, EVENTS, eventFit, friendlyKeys, fromSaved, keyHue, outsideSong, setCsv, SETS_STORE, suggest, summarize, toSaved, transition,
   type CrateSong, type DjEvent, type SavedCrate, type Transition,
@@ -92,6 +94,16 @@ export default function DjCrate() {
   const [adding, setAdding] = useState(false);
   const [drag, setDrag] = useState<number | null>(null);
   const [demo, setDemo] = useState(false);
+  const router = useRouter();
+  /** Measuring the keys nobody has measured yet: how far along, and whether to stop. */
+  const [measuring, setMeasuring] = useState<{ done: number; total: number; title: string } | null>(null);
+  const stopMeasuring = useRef(false);
+  useEffect(
+    () => () => {
+      stopMeasuring.current = true;
+    },
+    []
+  );
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the device's saved sets, read once on the client
@@ -190,6 +202,30 @@ export default function DjCrate() {
     setDetail((d) => (d && d.id === id ? { ...d, note: text || undefined } : d));
   };
 
+  // ——— measuring keys ———
+  /** Library songs with no key yet: measured here (only the beat is downloaded), one after another. */
+  const unmeasured = useMemo(() => (songs ?? []).filter((s) => !s.key && isLibraryId(s.id)), [songs]);
+  const measureKeys = async (list: CrateSong[] = unmeasured) => {
+    if (measuring || !list.length) return;
+    stopMeasuring.current = false;
+    let found = 0;
+    for (let i = 0; i < list.length && !stopMeasuring.current; i++) {
+      const song = list[i];
+      setMeasuring({ done: i, total: list.length, title: song.title });
+      const m = await measureLibrarySong(libraryTrackKey(song.id)).catch(() => null);
+      if (!m || stopMeasuring.current) continue;
+      found++;
+      const update = (s: CrateSong) => (s.id === song.id ? { ...s, key: m.key, bpm: m.bpm, duration: s.duration ?? m.duration, analyzed: true } : s);
+      setSongs((all) => all && all.map(update));
+      setSet((list) => list.map(update));
+      setDetail((d) => d && update(d));
+    }
+    setMeasuring(null);
+    if (!stopMeasuring.current) {
+      setNote(found === list.length ? `Measured ${found} key${found === 1 ? "" : "s"}.` : `Measured ${found} of ${list.length} — the rest couldn't be downloaded. Try again later.`);
+    }
+  };
+
   // ——— keeping it ———
   const save = () => {
     const entry = toSaved(name, set, event, Date.now());
@@ -197,6 +233,12 @@ export default function DjCrate() {
     setSaved(list);
     writeSaved(list);
     setNote(`Saved on this device as “${entry.name}”. On the decks: Build a set → Saved sets.`);
+    return entry;
+  };
+  /** To the decks, with the Auto DJ playing this set from its first song. */
+  const playOnDecks = () => {
+    const entry = save();
+    router.push(`/dj?set=${entry.at}`);
   };
   const open = (s: SavedCrate) => {
     const lib = songs ?? [];
@@ -341,6 +383,33 @@ export default function DjCrate() {
               </label>
             )}
           </div>
+          {measuring ? (
+            <div className="flex items-center gap-2 rounded-xl bg-brand/10 px-3 py-2 text-xs" role="status">
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin text-brand-strong" />
+              <span className="min-w-0 flex-1 truncate">
+                Measuring keys: {measuring.done + 1} of {measuring.total} · <span dir="auto">{measuring.title}</span>
+              </span>
+              <button type="button" onClick={() => (stopMeasuring.current = true)} className="shrink-0 font-semibold text-muted hover:text-foreground">
+                Stop
+              </button>
+            </div>
+          ) : (
+            unmeasured.length > 0 && (
+              <button
+                type="button"
+                onClick={() => void measureKeys()}
+                className="flex items-center gap-2 rounded-xl border border-dashed border-brand/40 px-3 py-2 text-start text-xs hover:bg-brand/5"
+              >
+                <Waves className="h-4 w-4 shrink-0 text-brand-strong" />
+                <span className="min-w-0 flex-1">
+                  <span className="font-semibold">
+                    {unmeasured.length} song{unmeasured.length === 1 ? " has" : "s have"} no key yet — measure {unmeasured.length === 1 ? "it" : "them"}
+                  </span>
+                  <span className="block text-muted">Listens to each song&apos;s beat in your browser (one download per song). Once measured, everyone sees the key.</span>
+                </span>
+              </button>
+            )
+          )}
           <p className="text-[11px] text-muted">
             {shown.length} song{shown.length === 1 ? "" : "s"}
             {anchor ? ` · the dot says how each would follow “${anchor.title}”` : " · add a song to the set to see how others follow it"}
@@ -520,13 +589,14 @@ export default function DjCrate() {
               <button type="button" onClick={save} className="flex min-h-11 items-center gap-1.5 rounded-xl bg-brand px-4 text-sm font-bold text-white hover:bg-brand-strong">
                 <Save className="h-4 w-4" /> Save
               </button>
-              <Link
-                href="/dj"
-                onClick={save}
-                className="flex min-h-11 items-center gap-1.5 rounded-xl border border-border px-3 text-sm font-semibold hover:bg-surface-hover"
+              <button
+                type="button"
+                onClick={playOnDecks}
+                disabled={set.every((s) => s.outside)}
+                className="flex min-h-11 items-center gap-1.5 rounded-xl border border-border px-3 text-sm font-semibold hover:bg-surface-hover disabled:opacity-40"
               >
-                Play on the decks
-              </Link>
+                <Play className="h-4 w-4" /> Play on the decks
+              </button>
               <button type="button" onClick={copy} className="flex min-h-11 items-center gap-1.5 rounded-xl border border-border px-3 text-sm font-semibold hover:bg-surface-hover">
                 <Copy className="h-4 w-4" /> Copy
               </button>
@@ -588,6 +658,8 @@ export default function DjCrate() {
           onAdd={() => add(detail)}
           onNote={(t) => setNoteFor(detail.id, t)}
           onOpen={(s) => setDetail(s)}
+          onMeasure={!detail.key && isLibraryId(detail.id) && !measuring ? () => void measureKeys([detail]) : undefined}
+          measuring={!!measuring}
         />
       )}
     </div>
@@ -698,16 +770,19 @@ function AddOutside({ onAdd }: { onAdd: (s: CrateSong) => void }) {
 
 /** Everything about one song, and what it mixes well with. */
 function SongSheet({
-  song, songs, inSet, event, onClose, onAdd, onNote, onOpen,
+  song, songs, inSet, event, onClose, onAdd, onNote, onOpen, onMeasure, measuring,
 }: {
   song: CrateSong; songs: CrateSong[]; inSet: boolean; event: DjEvent | null;
   onClose: () => void; onAdd: () => void; onNote: (t: string) => void; onOpen: (s: CrateSong) => void;
+  /** Measure this song's key now (a library song with none yet). */
+  onMeasure?: () => void;
+  measuring: boolean;
 }) {
   const energy = energyOf(song);
   const mates = suggest(songs, [song], 0, "next", { count: 5 });
   const facts: [string, string][] = [
     ["Tempo", song.bpm ? `${Math.round(song.bpm * 10) / 10} BPM${song.analyzed ? "" : " (stored, not measured yet)"}` : "Not known yet"],
-    ["Key", song.key ? `${keyLabel(song.key)} · ${camelotCode(song.key)}` : "Not measured yet"],
+    ["Key", song.key ? `${keyLabel(song.key)} · ${camelotCode(song.key)}` : song.outside ? "Not known — pick it when adding" : "Not measured yet"],
     ["Mixes with keys", song.key ? friendlyKeys(song.key).join(", ") : "–"],
     ["Energy", energy ? `${energy}/10 (a guess from tempo and genre)` : "Not known"],
     ["Length", song.duration ? clock(song.duration) : "Not known"],
@@ -774,6 +849,16 @@ function SongSheet({
             <button type="button" onClick={() => (onAdd(), onClose())} className="flex min-h-11 items-center gap-1.5 rounded-xl bg-brand px-4 text-sm font-bold text-white">
               <Plus className="h-4 w-4" /> Add to the set
             </button>
+          )}
+          {onMeasure && (
+            <button type="button" onClick={onMeasure} className="flex min-h-11 items-center gap-1.5 rounded-xl border border-border px-3 text-sm font-semibold hover:bg-surface-hover">
+              <Waves className="h-4 w-4" /> Measure its key
+            </button>
+          )}
+          {measuring && !song.key && !song.outside && (
+            <span className="flex min-h-11 items-center gap-1.5 text-sm text-muted">
+              <Loader2 className="h-4 w-4 animate-spin" /> Measuring…
+            </span>
           )}
           {song.outside && (
             <Link href="/upload" className="flex min-h-11 items-center rounded-xl border border-border px-3 text-sm font-semibold hover:bg-surface-hover">

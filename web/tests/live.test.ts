@@ -289,6 +289,49 @@ describe("live sessions", () => {
     assert.equal((await stranger.fetch(`/live/${id}`, { redirect: "manual" })).status, 200);
   });
 
+  test("a DJ session carries both decks to listeners, checked, and into the replay", async () => {
+    const { id } = await ok(await json(stranger, "POST", "/api/live", { mode: "dj", title: "Friday decks", remixId }));
+    const info = await ok(await fetch(`${BASE_URL}/api/live/${id}`));
+    assert.equal(info.stream.mode, "dj");
+    assert.equal(info.stream.remix_id, null, "a DJ session doesn't perform a remix");
+
+    const deck = (o: Record<string, unknown>) => ({
+      id: "lib:t1", title: "Song", artist: "A", bpm: 124, camelot: "8A", duration: 200, playing: true, position: 30, rate: 1.02,
+      keyLock: false, volume: 0.8, eq: { low: 0, mid: 0, high: 0 }, kill: { low: false, mid: false, high: false }, filter: 0,
+      stems: { drums: false, bass: false, chords: false, vocal: false }, trim: 0, loop: null, ...o,
+    });
+    const dj = { decks: { A: deck({}), B: deck({ id: "lib:t2", playing: false, position: 0, rate: 99 }) }, crossfader: -0.4, curve: "blend", faderCurve: "smooth", fx: { echo: 0, reverb: 0, horn: 0 } };
+    await ok(await json(fan, "PUT", `/api/live/${id}/state`, { playing: true, position: 30, lanes: [], dj }), 403);
+    await ok(await json(stranger, "PUT", `/api/live/${id}/state`, { playing: true, position: 30, lanes: [], dj: { decks: 5 } }), 400);
+    await ok(await json(stranger, "PUT", `/api/live/${id}/state`, { playing: true, position: 30, lanes: [], dj }));
+
+    const f = await feed(guest("dancer"), id);
+    assert.equal(f.stream.mode, "dj");
+    assert.equal(f.stream.state.dj.decks.A.id, "lib:t1");
+    assert.equal(f.stream.state.dj.decks.A.rate, 1.02);
+    assert.equal(f.stream.state.dj.decks.B.rate, 4, "out-of-range numbers are clamped");
+    assert.equal(f.stream.state.dj.crossfader, -0.4);
+
+    // A crossfader move is kept for the replay; a keyframe that only confirms the decks moved on isn't.
+    await ok(await json(stranger, "PUT", `/api/live/${id}/state`, { playing: true, position: 30, lanes: [], dj: { ...dj, crossfader: 0.5 } }));
+    await ok(await json(stranger, "PUT", `/api/live/${id}/state`, { playing: true, position: 30, lanes: [], dj: { ...dj, crossfader: 0.5 } }));
+
+    // The host's own page sends them to the decks.
+    const page = await stranger.fetch(`/live/${id}`, { redirect: "manual" });
+    assert.equal(page.status, 307);
+    assert.match(page.headers.get("location") ?? "", /\/dj\?live=/);
+
+    // Still live: going live again points back to this session.
+    const studio = await ok(await json(stranger, "POST", "/api/live", { mode: "studio", title: "Studio" }), 409);
+    assert.equal(studio.id, id, "one session at a time");
+
+    await ok(await json(stranger, "PATCH", `/api/live/${id}`, { action: "end" }));
+    const replay = await ok(await fetch(`${BASE_URL}/api/live/${id}/replay`));
+    assert.equal(replay.mode, "dj");
+    assert.equal(replay.states.length, 2);
+    assert.equal(replay.states[1].state.dj.crossfader, 0.5);
+  });
+
   test("anyone can read the directory and pages render", async () => {
     for (const path of ["/live", "/live/new"]) {
       const res = await fetch(`${BASE_URL}${path}`, { redirect: "manual" });

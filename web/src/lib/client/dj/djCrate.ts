@@ -286,6 +286,30 @@ export function toSaved(name: string, set: CrateSong[], event: DjEvent | null, a
   };
 }
 
+/**
+ * What the decks can play of a saved set, in its order: the songs on Remixt
+ * (library or demo) that are still there. Songs planned by hand and songs
+ * gone from the library are left out, and counted.
+ */
+export function playableEntries(saved: Pick<SavedCrate, "ids">, available: BrowserEntry[]): { entries: BrowserEntry[]; skipped: number } {
+  const byId = new Map(available.map((e) => [e.id, e]));
+  const seen = new Set<string>();
+  const entries: BrowserEntry[] = [];
+  for (const id of saved.ids) {
+    const e = byId.get(id);
+    if (!e || seen.has(id)) continue;
+    seen.add(id);
+    entries.push(e);
+  }
+  return { entries, skipped: saved.ids.length - entries.length };
+}
+
+/** A saved set by the time it was saved (what "Play on the decks" hands over in the address). */
+export function savedSetAt(list: SavedCrate[], at: string | number | null | undefined): SavedCrate | null {
+  const n = Number(at);
+  return Number.isFinite(n) ? (list.find((s) => s.at === n) ?? null) : null;
+}
+
 /** A saved set back into songs: library songs by id (gone ones counted), planned ones as they were saved. */
 export function fromSaved(saved: SavedCrate, library: CrateSong[]): { set: CrateSong[]; missing: number } {
   const byId = new Map(library.map((s) => [s.id, s]));

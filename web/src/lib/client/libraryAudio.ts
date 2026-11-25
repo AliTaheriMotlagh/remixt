@@ -131,6 +131,21 @@ export function releaseStem(stemId: string) {
   for (const key of [...decoded.keys()]) if (key.startsWith(`${stemId}@`)) decoded.delete(key);
 }
 
+/**
+ * Tells the server a song's key, measured in this browser, so every
+ * visitor's planner and suggestions know it. Kept only the first time (the
+ * server ignores it once a key is stored); sent once per song per page.
+ */
+export function shareSongKey(song: LibrarySong, key: MusicalKey) {
+  if (song.key) return;
+  song.key = key;
+  void fetch(`/api/tracks/${encodeURIComponent(song.trackId)}/key`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tonic: key.tonic, mode: key.mode }),
+  }).catch(() => {});
+}
+
 export type SongAnalysis = {
   bpm: number;
   key: MusicalKey;

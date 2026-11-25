@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { analyzeStem, beatPhase, findPhrases, refineTempo } from "@/lib/client/analysis";
 import { beatStructure } from "@/lib/client/arrange";
 import { barLinesFromBeats, constantBarLines, type TimeSpan } from "@/lib/client/examplesLibrary";
-import { analyzeSong, listLibrarySongs, loadStem, releaseStem, type LibrarySong } from "@/lib/client/libraryAudio";
+import { analyzeSong, listLibrarySongs, loadStem, releaseStem, shareSongKey, type LibrarySong } from "@/lib/client/libraryAudio";
 import { camelotCode, isMusicalKey, type MusicalKey } from "@/lib/client/musicKey";
 import type { StemKind } from "@/lib/stemKinds";
 
@@ -184,10 +184,7 @@ async function load(song: LibrarySong, need: TrackNeed): Promise<LoadedTrack> {
   const mainBar = structure ? Math.min(barLines.length - 1, Math.floor(structure.downbeat / 4) + structure.introBars) : 0;
   saveSummary(id, { bpm, key });
   // Shared once, so everyone's suggestions know this song's key (kept only if none is stored yet).
-  if (!song.key) {
-    song.key = key;
-    void fetch(`/api/tracks/${encodeURIComponent(id)}/key`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tonic: key.tonic, mode: key.mode }) }).catch(() => {});
-  }
+  shareSongKey(song, key);
   return { song, beat, vocals, bpm, key, camelot: camelotCode(key), barSec, duration, barLines, mainBar, phrases };
 }
 

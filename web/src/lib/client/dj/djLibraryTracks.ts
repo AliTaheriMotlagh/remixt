@@ -8,8 +8,8 @@
 // keys and the mission picker can use them. Decoded audio is let go when no
 // deck holds the song any more.
 
-import { analyzeSong, hasParts, listLibrarySongs, loadStem, releaseStem, type LibrarySong } from "../libraryAudio";
-import { trackBeats } from "../analysis";
+import { analyzeSong, hasParts, listLibrarySongs, loadStem, releaseStem, shareSongKey, type LibrarySong } from "../libraryAudio";
+import { analyzeStem, beatPhase, refineTempo, trackBeats } from "../analysis";
 import { camelotCode, isMusicalKey, type MusicalKey } from "../musicKey";
 import { peaksOf } from "../demoSongs";
 import { DJ_TRACKS } from "./djTrackInfo";
@@ -67,7 +67,8 @@ export function libraryEntry(song: LibrarySong): BrowserEntry {
     coverStemId: song.stems.vocals?.id ?? Object.values(song.stems)[0]?.id,
     genre: song.tags[0] ?? "Your library",
     bpm: s?.bpm ?? song.bpm,
-    key: s?.key ?? null,
+    // Measured here this session, else as some browser measured and shared it.
+    key: s?.key ?? song.key,
     duration: s?.duration ?? song.duration,
     layout: hasParts(song) ? "four" : "two",
     analyzed: !!s,
@@ -85,6 +86,44 @@ export async function libraryEntries(fresh = false) {
 export async function librarySong(trackId: string) {
   const songs = await listLibrarySongs();
   return songs.find((s) => s.trackId === trackId) ?? null;
+}
+
+let measureCtx: OfflineAudioContext | null = null;
+
+/**
+ * A library song's tempo and key without putting it on a deck: only its beat
+ * stem is decoded, analysed (the analysis is kept, so loading it on a deck
+ * later is quicker), and let go of again. The key is shared with the server
+ * so nobody has to measure this song again.
+ */
+export async function measureLibrarySong(trackId: string): Promise<AnalysisSummary | null> {
+  const known = analysisSummary(trackId);
+  const song = await librarySong(trackId);
+  if (known) {
+    // Measured on the decks earlier (maybe before keys were shared): share it now.
+    if (song) shareSongKey(song, known.key);
+    return known;
+  }
+  if (!song?.stems.beat) return null;
+  measureCtx ??= new OfflineAudioContext(1, 1, 44100);
+  const beatId = song.stems.beat.id;
+  try {
+    const beat = await loadStem(measureCtx, beatId);
+    const a = await analyzeStem(beatId, beat);
+    let bpm = refineTempo(a, song.bpm ?? a.bpmEstimate ?? 120);
+    while (bpm < 70) bpm *= 2;
+    while (bpm > 180) bpm /= 2;
+    bpm = Math.round(bpm * 100) / 100;
+    const period = 60 / bpm;
+    const firstBeat = ((beatPhase(a, period) % period) + period) % period;
+    const summary: AnalysisSummary = { bpm, key: a.key, firstBeat, duration: beat.duration };
+    saveSummary(trackId, summary);
+    shareSongKey(song, a.key);
+    return summary;
+  } finally {
+    // Unless a deck holds it, the decoded beat (~85 MB) goes.
+    if (!ready.has(libraryTrackId(trackId))) releaseStem(beatId);
+  }
 }
 
 /** drums + bass + melody as one quiet mono buffer at 22 kHz: the beat, for analysis, without decoding it again. */
@@ -154,6 +193,7 @@ async function buildLibraryTrack(song: LibrarySong, ctx: BaseAudioContext, onSta
     barEnergy[b] = to > from ? Math.sqrt(sum / (to - from)) : 0;
   }
   saveSummary(song.trackId, { bpm, key: a.key, firstBeat, duration });
+  shareSongKey(song, a.key);
 
   onStage?.({ stage: "waveform", text: "Drawing the waveform…", progress: 0.85 });
   const bins = Math.ceil(duration * PEAK_RATE);

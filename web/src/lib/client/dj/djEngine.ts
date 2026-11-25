@@ -968,6 +968,20 @@ export class DjEngine {
     else this.emit();
   }
 
+  /** A loop set exactly (a live listener mirroring the host's), or none. */
+  setLoop(id: DeckId, range: { start: number; end: number } | null) {
+    const d = this.decks[id];
+    if (!d.track) return;
+    if (!range) return this.loopExit(id);
+    const start = clamp(range.start, 0, d.track.info.duration);
+    const end = clamp(range.end, start + 0.05, d.track.info.duration);
+    if (d.loop.active && Math.abs(d.loop.start - start) < 0.001 && Math.abs(d.loop.end - end) < 0.001) return;
+    d.reanchor();
+    d.loop = { active: true, start, end, beats: null };
+    this.applyLoopToVoices(d);
+    this.emit();
+  }
+
   /** Loop ½× / 2×: shortens or lengthens the loop from its start. */
   resizeLoop(id: DeckId, factor: 0.5 | 2) {
     const d = this.decks[id];

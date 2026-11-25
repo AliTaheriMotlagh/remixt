@@ -5,6 +5,7 @@ import { ensureSocialSchema } from "./social";
 import { ensureRemixStats } from "./models";
 import { normaliseTags } from "./tags";
 import { stateChanged, type Replay, type ReplayChat } from "./liveReplay";
+import { cleanDjStage, type DjLiveStage } from "./liveDj";
 
 // Live sessions: an artist goes live with one of their published remixes,
 // performs it (play, pause, mute and solo stems, move the faders) and
@@ -30,8 +31,8 @@ const ABANDONED_MINUTES = 15;
 
 export type LiveStatus = "scheduled" | "live" | "ended";
 export type ChatMode = "open" | "followers" | "off";
-/** "perform": playing a published remix. "studio": making one live in the Studio. */
-export type LiveMode = "perform" | "studio";
+/** "perform": playing a published remix. "studio": making one live in the Studio. "dj": DJing on the decks. */
+export type LiveMode = "perform" | "studio" | "dj";
 
 /** A studio session's mix is capped at this many bytes of JSON. */
 export const MIX_MAX_BYTES = 768 * 1024;
@@ -46,6 +47,8 @@ export type LiveStageState = {
   note?: string;
   /** Studio sessions: the lanes the host has selected (shown highlighted to listeners). */
   selected?: string[];
+  /** DJ sessions: both decks and the mixer (see lib/liveDj.ts). */
+  dj?: DjLiveStage;
 };
 
 export const IDLE_STATE: LiveStageState = { playing: false, position: 0, lanes: [] };
@@ -483,6 +486,7 @@ function parseState(raw: string): LiveStageState {
       lanes: Array.isArray(value.lanes) ? value.lanes : [],
       ...(typeof value.note === "string" && value.note ? { note: value.note } : {}),
       ...(Array.isArray(value.selected) ? { selected: value.selected.filter((v) => typeof v === "string").slice(0, 32) } : {}),
+      ...(value.dj ? { dj: cleanDjStage(value.dj) ?? undefined } : {}),
     };
   } catch {
     return { ...IDLE_STATE };

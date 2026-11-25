@@ -39,6 +39,8 @@ export default async function LiveSessionPage({ params }: { params: Promise<{ id
 
   // A studio session is run from the Studio itself.
   if (user?.id === stream.host_id && stream.mode === "studio") redirect(`/studio?live=${id}`);
+  // A DJ session, from the decks.
+  if (user?.id === stream.host_id && stream.mode === "dj") redirect(`/dj?live=${id}`);
 
   if (user?.id === stream.host_id && stream.mode === "perform") {
     const remixes = await performableRemixes(user.id);

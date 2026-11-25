@@ -6,7 +6,8 @@
 // seek, a stem muted…), the studio mix as it changed, and the chat. Played
 // back through the same follower listeners use live, it sounds the same.
 
-import type { LiveStageState } from "./live";
+import type { LiveMode, LiveStageState } from "./live";
+import { djStageChanged } from "./liveDj";
 
 /** A stage state kept in the timeline, `t` seconds after the session started. */
 export type ReplayState = { t: number; state: LiveStageState; remixId: string | null };
@@ -18,7 +19,7 @@ export type ReplayReaction = { t: number; emoji: string; count: number };
 export type Replay = {
   /** Seconds from the session's start to its end. */
   duration: number;
-  mode: "perform" | "studio";
+  mode: LiveMode;
   states: ReplayState[];
   mixes: ReplayMix[];
   chat: ReplayChat[];
@@ -38,6 +39,7 @@ export function stateChanged(prev: LiveStageState | null, next: LiveStageState, 
   if (prev.playing !== next.playing || (prev.note ?? "") !== (next.note ?? "")) return true;
   if (JSON.stringify(prev.lanes) !== JSON.stringify(next.lanes)) return true;
   if (JSON.stringify(prev.selected ?? []) !== JSON.stringify(next.selected ?? [])) return true;
+  if ((prev.dj || next.dj) && djStageChanged(prev.dj, next.dj, secondsSincePrev)) return true;
   const expected = prev.position + (prev.playing ? Math.max(0, secondsSincePrev) : 0);
   return Math.abs(next.position - expected) > SEEK_SECONDS;
 }
