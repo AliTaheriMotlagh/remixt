@@ -565,6 +565,65 @@ export const TOOL_PAGES: ToolPage[] = [
     cta: "Find a song's BPM and key",
     points: ["Free", "Runs in your browser", "Nothing uploaded", "Works on phones"],
   },
+  {
+    slug: "key-tempo-changer",
+    name: "Key & tempo changer",
+    title: "Change the key or tempo of a song, online",
+    description:
+      "Change a song's key without changing its speed, or slow it down without changing the pitch. Free pitch shifter and tempo changer in your browser.",
+    h1: "Change a song's key or tempo",
+    lead:
+      "Drop a song, move it up or down in semitones, slow it down or speed it up — each without touching the other — hear it, and download it. It's worked out on your device: nothing is uploaded, and it works on phones too.",
+    steps: [
+      {
+        name: "Drop a song",
+        text: "Choose an MP3, WAV, M4A, FLAC or OGG file. It's read on your device and its tempo and key are shown.",
+      },
+      {
+        name: "Set the key and the speed",
+        text: "Move the key in semitones (−12 to +12) and the speed from 50% to 150%. The new key and BPM are shown as you go.",
+      },
+      {
+        name: "Listen and download",
+        text: "Make it, play it, and save it as an MP3 or WAV. Change the settings and make it again as often as you like.",
+      },
+    ],
+    sections: [
+      {
+        heading: "Pitch and speed, each on its own",
+        paragraphs: [
+          "Playing a record faster raises its pitch too. Here the two are separate: a time-stretch engine keeps the pitch while the speed changes, and a pitch shifter moves every note by the same interval while the length stays the same.",
+        ],
+      },
+      {
+        heading: "For singers and players",
+        paragraphs: [
+          "Move a song into a key that suits your voice or instrument — a semitone or two is usually enough. Slow a fast solo to 70% to learn it note by note, then bring it back up step by step.",
+        ],
+      },
+      {
+        heading: "For DJs and remixers",
+        paragraphs: [
+          "Match a song to another one's key for a mashup, or nudge its tempo by a few percent so two songs blend. The BPM and key finder tells you exactly how far to move it.",
+        ],
+      },
+    ],
+    faq: [
+      {
+        q: "Does it sound natural?",
+        a: "Within a few semitones and 80–125% speed it sounds clean on most songs. Big moves (an octave, half speed) work, but voices start to sound processed — that's true of every pitch shifter.",
+      },
+      {
+        q: "Can I change only the vocal's key?",
+        a: "Yes, in the Studio: split the song, then change the pitch of the Vocals lane alone. This tool changes the whole song at once.",
+      },
+      SHARED_FAQ[0],
+      SHARED_FAQ[2],
+    ],
+    related: ["bpm-key-finder", "karaoke-maker", "mashup-maker"],
+    cta: "Change a song's key or tempo",
+    points: ["Free", "Runs in your browser", "Nothing uploaded", "Works on phones"],
+  },
 ];
 
 /** The languages the tool pages are written in. English lives at /tools, the rest under /<locale>/tools. */

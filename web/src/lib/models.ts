@@ -47,6 +47,13 @@ export type StemWithTrack = StemRow & {
   track_private?: boolean;
   /** The viewer's own. */
   track_mine?: boolean;
+  /** The song's details, as its uploader gave them (Upload → Details). */
+  track_song_artist?: string | null;
+  track_album?: string | null;
+  track_year?: number | null;
+  track_genre?: string | null;
+  /** "9:minor": measured by a browser and shared (app/api/tracks/[id]/key). */
+  track_key?: string | null;
   /** The song has a cover picture (served by /api/stems/<id>/cover). */
   track_has_cover?: boolean;
 };
@@ -111,6 +118,7 @@ export async function getLibraryStems(viewerId: string | null): Promise<StemWith
     SELECT stems.*, tracks.title as track_title, tracks.tags as track_tags, tracks.duration as track_duration,
            tracks.bpm as track_bpm, users.artist_name, users.id as artist_id, tracks.cover_key IS NOT NULL AS track_has_cover,
            tracks.featured_example AS track_featured, tracks.example_credit AS track_credit,
+           tracks.music_key AS track_key, tracks.song_artist AS track_song_artist, tracks.album AS track_album, tracks.release_year AS track_year, tracks.genre AS track_genre,
            (tracks.visibility <> 'public' OR stems.held_back) AS track_private, tracks.owner_id = ${viewerId ?? ""} AS track_mine
     FROM stems
     JOIN tracks ON tracks.id = stems.track_id

@@ -183,6 +183,11 @@ async function load(song: LibrarySong, need: TrackNeed): Promise<LoadedTrack> {
   const barLines = structure ? barLinesFromBeats(structure.grid.times, structure.downbeat) : constantBarLines(firstBeat, barSec, duration);
   const mainBar = structure ? Math.min(barLines.length - 1, Math.floor(structure.downbeat / 4) + structure.introBars) : 0;
   saveSummary(id, { bpm, key });
+  // Shared once, so everyone's suggestions know this song's key (kept only if none is stored yet).
+  if (!song.key) {
+    song.key = key;
+    void fetch(`/api/tracks/${encodeURIComponent(id)}/key`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tonic: key.tonic, mode: key.mode }) }).catch(() => {});
+  }
   return { song, beat, vocals, bpm, key, camelot: camelotCode(key), barSec, duration, barLines, mainBar, phrases };
 }
 

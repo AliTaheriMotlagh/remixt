@@ -1,5 +1,6 @@
 "use client";
 
+import PlusText from "@/components/PlusText";
 import SongDetails from "@/components/upload/SongDetails";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
@@ -325,7 +326,7 @@ export default function UploadManager({ youtubeImport }: { youtubeImport: boolea
           ? " YouTube works too."
           : " For YouTube, Spotify, Apple Music and other streaming links, the same song is looked up on SoundCloud — check it's the right one."}
       </p>
-      {uploadError && <p className="mt-3 text-sm text-danger">{uploadError}</p>}
+      {uploadError && <p className="mt-3 text-sm text-danger"><PlusText text={uploadError} /></p>}
 
       <UploadList />
 

@@ -44,7 +44,12 @@ const STATIC = /^\/(?:_next\/static\/|ads\/|icons?\/|fonts?\/)|\.(?:js|css|woff2
 async function fromEdgeCache(request: Request, ctx: ExecutionContext, origin: () => Promise<Response>): Promise<Response> {
   const cache = caches.default;
   const hit = await cache.match(request);
-  if (hit) return hit;
+  if (hit) {
+    // Said in a header, so a check (the deploy's smoke test, curl -I) can see the edge cache works.
+    const served = new Response(hit.body, hit);
+    served.headers.set("x-edge-cache", "HIT");
+    return served;
+  }
   const res = await origin();
   const cc = res.headers.get("cache-control") ?? "";
   if (res.status === 200 && /\bpublic\b|\bimmutable\b/.test(cc) && !/no-store|private/.test(cc) && !res.headers.has("set-cookie")) {

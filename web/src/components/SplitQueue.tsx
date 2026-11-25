@@ -1,5 +1,6 @@
 "use client";
 
+import PlusText from "@/components/PlusText";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { ArrowRight, Check, Circle, Flame, Laptop, Pickaxe, Smartphone } from "lucide-react";
@@ -219,7 +220,7 @@ function QueuedSongRow({ job, now, rigs, onChanged }: { job: QueuedJob; now: num
       </div>
       <StepTracker job={job} />
       <p className={`mt-2 text-xs ${failed ? "text-danger" : "text-muted"}`}>{jobDetail(job, rigs)}</p>
-      {error && <p className="mt-1 text-xs text-danger">{error}</p>}
+      {error && <p className="mt-1 text-xs text-danger"><PlusText text={error} /></p>}
     </li>
   );
 }

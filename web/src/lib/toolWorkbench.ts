@@ -31,6 +31,8 @@ export type Workbench = {
   mixName?: string;
   /** Measures the song instead of splitting it (the BPM and key finder): no splitter, works on phones. */
   analyze?: true;
+  /** Changes the whole song's key and tempo (no splitter): KeyTempoChanger. */
+  transform?: true;
 };
 
 export const WORKBENCH: Record<string, Workbench> = {
@@ -45,6 +47,7 @@ export const WORKBENCH: Record<string, Workbench> = {
   "remix-maker": { songs: 1, parts: ["vocals", "drums", "bass", "other", "beat"], playing: ["vocals", "drums", "bass", "other"] },
   // Its parts are unused (nothing is split); `playing` keeps the shape every workbench has.
   "bpm-key-finder": { songs: 2, parts: ["beat"], playing: ["beat"], analyze: true },
+  "key-tempo-changer": { songs: 1, parts: ["beat"], playing: ["beat"], transform: true },
 };
 
 export function workbenchFor(slug: string): Workbench {

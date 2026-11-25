@@ -27,7 +27,16 @@ export type LibrarySong = {
   featured: boolean;
   /** Who made it and under what terms, shown with a featured song. */
   credit: string | null;
+  /** Its key, when a browser has measured it and shared it (null until then). */
+  key: MusicalKey | null;
 };
+
+/** "9:minor" → a key; null for anything else. */
+export function parseStoredKey(raw: string | null | undefined): MusicalKey | null {
+  const m = /^(\d{1,2}):(major|minor)$/.exec(raw ?? "");
+  if (!m || Number(m[1]) > 11) return null;
+  return { tonic: Number(m[1]), mode: m[2] as MusicalKey["mode"] };
+}
 
 type StemRow = {
   id: string;
@@ -42,6 +51,7 @@ type StemRow = {
   artist_id: string;
   track_featured?: boolean | null;
   track_credit?: string | null;
+  track_key?: string | null;
 };
 
 let listing: Promise<LibrarySong[]> | null = null;
@@ -71,6 +81,7 @@ export function listLibrarySongs(fresh = false): Promise<LibrarySong[]> {
           stems: {},
           featured: !!row.track_featured,
           credit: row.track_credit ?? null,
+          key: parseStoredKey(row.track_key),
         };
         songs.set(row.track_id, song);
       }

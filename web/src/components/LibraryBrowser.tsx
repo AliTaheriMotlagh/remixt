@@ -27,6 +27,8 @@ type StemWithTrack = {
   track_has_cover?: boolean;
   track_private?: boolean;
   track_mine?: boolean;
+  /** "Hichkas · Jangale Asfalt (2006) · Rap" — the details its uploader gave. */
+  track_details?: string | null;
 };
 
 function formatDuration(seconds: number | null) {
@@ -186,6 +188,11 @@ export default function LibraryBrowser({
                       >
                         {stem.artist_name}
                       </Link>
+                      {stem.track_details && (
+                        <p dir="auto" className="truncate text-[11px] text-muted">
+                          {stem.track_details}
+                        </p>
+                      )}
                     </div>
                   </div>
                   <span className="shrink-0 text-xs text-muted">

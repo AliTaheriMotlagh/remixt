@@ -1,5 +1,6 @@
 "use client";
 
+import PlusText from "@/components/PlusText";
 import { memo, useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -84,7 +85,7 @@ const UploadRow = memo(function UploadRow({ item }: { item: UploadItem }) {
             ? `${label}…${left ? ` · ${left}` : ""}`
             : item.status === "done"
               ? (item.note ?? doneText(item))
-              : item.error}
+              : <PlusText text={item.error} />}
       </p>
       {item.note && item.status !== "done" && <p className="mt-1 text-[11px] text-muted">{item.note}</p>}
     </li>

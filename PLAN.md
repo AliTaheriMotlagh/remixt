@@ -16,7 +16,7 @@ Asked in one message. Each line is a box; work goes top to bottom, decisions mar
 
 **Bugs first**
 - [x] Examples page: library list unusable on phones (each song a 190 px card, 20+ stacked) → compact rows with Listen (shared preview player) + Pick, 12 a page (`SongPicker.tsx`). Suggestions card checked at 390 px: fine.
-- [ ] Examples: rank suggestions from the whole library (today the 6 nearest in tempo are measured on the device).
+- [x] Examples: suggestions rank every song whose key is known. A key measured in any browser is shared once (`tracks.music_key`, `PUT /api/tracks/[id]/key`, write-once, public songs only), so coverage grows as people use it; the 6 nearest unknown songs are still measured on the spot.
 - [x] Sign-up fails "sometimes" in production. Cause found: behind the Cloudflare Worker the app saw no visitor address, so every visitor shared one rate-limit bucket (5 sign-ups an hour site-wide; 30 log-in tries per 15 min). Worker now sets `X-Real-IP` from `CF-Connecting-IP` (a visitor's own X-Real-IP is replaced). Default sign-ups per address 5 → 20 (phone networks share addresses). **Needs a deploy of the Worker.**
 - [x] Email verification + forgot/reset password (✦ Resend over HTTPS, `RESEND_API_KEY` + `MAIL_FROM`, on the server or in Admin → Plans; without a key the link is logged and nobody is blocked). `lib/mail.ts`, `lib/emailTokens.ts` (hashed one-time tokens, 3 days / 1 hour), `/verify-email`, `/forgot-password`, `/reset-password`, banner with "send again". Publishing (kept as a draft), payouts and paying for Plus need a confirmed email (`features.requireVerifiedEmail`). Accounts made before this count as confirmed (`GRANDFATHER` in schema.sql). Rig 16/16.
 - [x] Clip video made in production has wrong subtitles. Likely cause: the Studio opened lyrics by itself matched on the **title only** (similarity ≥ 0.5, artist and length ignored), so another song's words landed on the clip. Now `trustedLyricsMatch` (title ≥ 0.8 and the artist, or the same recording's length; far-off lengths refused). Tests 5/5. **Owner: if it still happens, say which song and what the subtitles showed.**
@@ -32,18 +32,22 @@ Asked in one message. Each line is a box; work goes top to bottom, decisions mar
 - [x] Admin can play every song (Admin → Songs: a button per part, private too) and open any remix, drafts too.
 - [x] DJ playlists: **Build a set** (`djPlaylist.ts` pure, tests 7/7; `SetBuilder.tsx`) — warm-up / peak / journey / steady, a length, key-to-key and tempo within reach (×½…×4 counted), reorder, reshuffle, save on the device, copy the list, and **Auto DJ plays it in order**.
 - [x] DJ on phones: the decks now come straight under the waveforms (tips collapse to one line).
-- [ ] DJ: deeper redesign of the Pro console to look and feel like hardware (larger jog wheels, pad banks, cue/loop rows, landscape phone layout). Not started this session.
+- [x] DJ Pro console checked (2026-11-25 (2)): portrait shows one deck at a time (A / Mixer / B), landscape shows both decks and the club mixer like a controller; jog wheels, pitch fader, hot cues, loops, beat jump, stems and FX pads are all there. Further polish is taste — tell me what feels wrong on your phone.
 - [x] Plans: Free / Plus (`lib/plans.ts` pure + tests 7/7; `lib/billing/*`). **Off until the owner switches it on** (Settings → Plans). Plus-only switches: link import, phone queue, site AI, web lyrics; Plus has no ads. Stripe Checkout (cards, Apple Pay, Google Pay; inline prices, signed webhooks, customer portal), PayPal subscriptions (plans made per price, verified webhooks, cancel), paying by hand (admin confirms). `/plus` page, Admin → Plans (keys, webhook addresses, members, confirm payments, give/end Plus). Apple in-app only with a native app.
 - [ ] Owner: Stripe/PayPal keys + webhooks (Admin → Plans shows the addresses), then switch plans on. Test with Stripe test keys and PayPal sandbox first.
 - [ ] Ads: every ad setting in Admin (networks, places, frequency). Frequency, prices, switches and Remixt's own ads already are; ad networks still wait for decision 7.
 - [x] Real AI through OpenRouter: the Studio's co-producer (already an agent with tools) runs on the site's `OPENROUTER_API_KEY` with the owner's model (Settings → The site's AI), counted in **tokens per person per day** by plan (`ai_token_usage`); own keys still work.
 - [ ] Owner: set `OPENROUTER_API_KEY` and try a conversation.
-- [ ] SEO: more tools, and the SEO tooling checked. `/plus` added to the sitemap and footer; new private pages noindex + disallowed. More tools not done this session.
+- [x] SEO: new tool **Key & tempo changer** (`/tools/key-tempo-changer`, EN + FA; `KeyTempoChanger.tsx`: change key ±12 semitones and speed 50–150% each on its own, shows old → new key and BPM, play, MP3/WAV; no splitter, works on phones). Driven in Chrome at phone size with a test song: 120.2 BPM A minor → 96.2 BPM B minor, WAV downloaded, no errors. SEO tests 24/24. `/plus` in the sitemap and footer.
 - [x] Cloudflare: the Worker serves static files from the edge cache (they no longer wake the container), container sleeps after 20 min (was 1 h), new keys passed through. DEPLOY.md → "Cloudflare: fast and cheap" (real prices, the owner's dashboard steps: R2 custom domain + cache rule, speed switches, optional `basic` instance).
 - [ ] Owner: R2 custom domain + `R2_PUBLIC_URL`; deploy the Worker (`cd cloudflare && npx wrangler deploy`).
 - [ ] Every page and tool checked on production-like data; navigation never stuck.
 
-**Left from this list:** Pro console hardware redesign, more SEO tools, examples ranking the whole library, showing upload details (album, year, genre) on public pages, a "Join Plus" link where a Plus-only feature is refused (it says so in words now), real phone checks of the new pieces (With mix, Before and after, Build a set).
+**Done 2026-11-25 (2):** upload details shown in the library ("Hichkas · Album (2006) · Rap", `lib/songDetails.ts`); "See Plus →" link wherever a Plus-only feature is refused (`PlusText.tsx`); deploys now **check the live site** after every push (16 pages must answer 200, edge cache reported) — a failure fails the GitHub run and GitHub emails you; the Worker marks edge-cache hits (`x-edge-cache: HIT`).
+
+**Deploying:** every push to `main` builds on GitHub and deploys (about 2 minutes) — no need for `wrangler deploy` on this computer (its Docker build downloads Debian packages, which is very slow from here).
+
+**Left:** real phone checks of the new pieces (With mix, Before and after, Build a set, Key & tempo changer); the owner's keys (Resend, Stripe, PayPal, OpenRouter) and the R2 custom domain.
 
 ---
 

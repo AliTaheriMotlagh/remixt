@@ -9,6 +9,7 @@ import { TOOL_LOCALES, toolLanguages, toolPage, toolPath, toolsHubPath, type Too
 import AdCard from "@/components/ads/AdCard";
 import ToolWorkbench from "./ToolWorkbench";
 import KeyBpmFinder from "./KeyBpmFinder";
+import KeyTempoChanger from "./KeyTempoChanger";
 import GuideCards from "@/components/guides/GuideCards";
 import { guidesForTool } from "@/lib/guides";
 import { workbenchFor } from "@/lib/toolWorkbench";
@@ -133,7 +134,13 @@ export default async function ToolPageView({ tool, locale }: { tool: ToolPage; l
           <p className="mt-5 max-w-2xl text-base text-muted sm:text-lg">{tool.lead}</p>
           {/* The tool itself, working right here: drop a song, get what this page is for (lib/toolWorkbench.ts). */}
           <div className="mt-7" id="try">
-            {workbenchFor(tool.slug).analyze ? <KeyBpmFinder locale={locale} /> : <ToolWorkbench slug={tool.slug} locale={locale} />}
+            {workbenchFor(tool.slug).analyze ? (
+              <KeyBpmFinder locale={locale} />
+            ) : workbenchFor(tool.slug).transform ? (
+              <KeyTempoChanger locale={locale} />
+            ) : (
+              <ToolWorkbench slug={tool.slug} locale={locale} />
+            )}
           </div>
           <p className="mt-3 text-sm text-muted">
             <Link href="/examples" className="font-medium text-brand-strong hover:underline">

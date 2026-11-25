@@ -218,6 +218,8 @@ ALTER TABLE tracks ADD COLUMN IF NOT EXISTS song_artist TEXT;
 ALTER TABLE tracks ADD COLUMN IF NOT EXISTS album TEXT;
 ALTER TABLE tracks ADD COLUMN IF NOT EXISTS release_year INTEGER;
 ALTER TABLE tracks ADD COLUMN IF NOT EXISTS genre TEXT;
+-- The song's key as the first browser to measure it found it ("9:minor").
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS music_key TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by TEXT REFERENCES users(id) ON DELETE SET NULL;
 
 -- Live sessions: an artist performs a published remix and listeners (guests

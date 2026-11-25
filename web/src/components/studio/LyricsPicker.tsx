@@ -1,5 +1,6 @@
 "use client";
 
+import PlusText from "@/components/PlusText";
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { ArrowLeft, Check, ChevronDown, ClipboardPaste, Clock, Download, ExternalLink, FileText, Globe, Link2, Loader2, Music2, PenLine, Search, Sparkles, Trash2 } from "lucide-react";
 import { useLyrics, type LyricSheet } from "@/lib/client/lyricsStore";
@@ -568,7 +569,7 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
           <span className="h-2 w-2 animate-pulse rounded-full bg-vocals" /> {importing}
         </p>
       )}
-      {error && !searching && !results && <p className="text-xs text-danger" role="alert">{error}</p>}
+      {error && !searching && !results && <p className="text-xs text-danger" role="alert"><PlusText text={error} /></p>}
       {manual && (
         <div className="flex flex-col gap-2 rounded-xl border border-beat/40 bg-beat/10 p-3 text-xs" role="status">
           <p>
@@ -625,7 +626,7 @@ export default function LyricsPicker({ onPicked, onWrite, onAi, onBack }: { onPi
               ))}
             </div>
           )}
-          {!searching && error && <p className="text-xs text-danger">{error}</p>}
+          {!searching && error && <p className="text-xs text-danger"><PlusText text={error} /></p>}
           {!searching && sitesFirst && sitesBlock}
           {!searching && results && results.length > 0 && (
             <ul className="flex flex-col gap-1.5">

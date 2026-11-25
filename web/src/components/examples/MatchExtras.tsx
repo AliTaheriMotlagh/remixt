@@ -64,7 +64,7 @@ export default function MatchExtras({
       vocal.bpm,
       candidates.map((song) => ({ song, bpm: tempoOf(song) })),
       CHECK_AT_MOST
-    ).filter((c) => !summaries.has(c.song.trackId));
+    ).filter((c) => !summaries.has(c.song.trackId) && !c.song.key);
     let checked = 0;
     const measured = new Map(summaries);
     for (const [i, { song }] of nearest.entries()) {
@@ -82,7 +82,8 @@ export default function MatchExtras({
     }
     const known: KnownSong[] = [];
     for (const song of candidates) {
-      const s = measured.get(song.trackId);
+      // Measured on this device, or measured by anyone and shared with the library.
+      const s = measured.get(song.trackId) ?? (song.key && song.bpm ? { bpm: song.bpm, key: song.key } : null);
       if (s) known.push({ id: libraryId(song.trackId), title: song.title, bpm: s.bpm, key: s.key });
     }
     const ranked = rankBeats(vocal, known, 3);
@@ -169,9 +170,9 @@ export default function MatchExtras({
                 </ol>
               )}
               <p className="text-[11px] text-muted">
-                From {shown.known} measured library song{shown.known === 1 ? "" : "s"}
-                {shown.checked ? ` (${shown.checked} measured just now, the nearest in tempo)` : ""}. Songs never picked or measured on this device
-                aren&apos;t ranked yet: their key isn&apos;t known until their beat is analysed.
+                Ranked from {shown.known} of the library&apos;s {candidates.length} songs — every one whose key is known
+                {shown.checked ? ` (${shown.checked} measured just now, the nearest in tempo)` : ""}. Each song measured anywhere is shared, so the
+                ranking covers more of the library as people use it.
               </p>
             </div>
           )}

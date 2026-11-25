@@ -4,6 +4,7 @@ import LibraryBrowser from "@/components/LibraryBrowser";
 import PromotedSong from "@/components/ads/PromotedSong";
 import { pageMetadata } from "@/lib/seo";
 import { packPeaksJson } from "@/lib/peaksCodec";
+import { songDetailsLine } from "@/lib/songDetails";
 
 export const metadata = pageMetadata({
   title: "Free vocal & beat stems library",
@@ -34,6 +35,7 @@ export default async function LibraryPage({
     track_has_cover: s.track_has_cover,
     track_private: s.track_private,
     track_mine: s.track_mine,
+    track_details: songDetailsLine(s),
   }));
 
   return (
