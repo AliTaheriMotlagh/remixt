@@ -53,26 +53,50 @@ jobs:
       # The deploy is only done when the site answers. The container may be
       # waking up or rolling to the new image, so each page gets a few tries.
       # A page that keeps failing fails the run (GitHub emails the owner).
+      #
+      # Cloudflare's bot protection can answer 403 to GitHub's datacenter IPs
+      # while the site is fine for everyone else. The check sends the secret
+      # SITE_CHECK_TOKEN in an X-Site-Check header, and a WAF custom rule on
+      # remixt.app skips the bot checks for requests that carry it:
+      #   Security → WAF → Custom rules → Create rule
+      #   Expression: (any(http.request.headers["x-site-check"][*] eq "<token>"))
+      #   Action: Skip — all remaining custom rules, Rate limiting rules,
+      #           Managed rules, Super Bot Fight Mode rules
+      # The plain (free-plan) Bot Fight Mode can't be skipped by a rule; if that
+      # is what blocks the check, it has to be turned off under Security → Bots.
       - name: Check the live site
+        env:
+          SITE_CHECK_TOKEN: ${{ secrets.SITE_CHECK_TOKEN }}
         run: |
           set -u
           base=https://remixt.app
+          if [ -z "$SITE_CHECK_TOKEN" ]; then
+            echo "::warning::SITE_CHECK_TOKEN is not set, so Cloudflare may block this check with 403. Add it under Settings → Secrets and variables → Actions."
+          fi
+          check_header="X-Site-Check: ${SITE_CHECK_TOKEN:-none}"
           sleep 20
           failed=0
+          blocked=0
           for path in / /plus /library /remixes /radio /dj /studio /examples /tools /login /signup /forgot-password /api/billing /api/version /sitemap.xml /robots.txt; do
             ok=0
             for try in 1 2 3 4 5 6; do
-              code=$(curl -s -o /dev/null -w '%{http_code}' -m 60 "$base$path" || echo 000)
+              code=$(curl -s -o /dev/null -w '%{http_code}' -m 60 -H "$check_header" "$base$path" || echo 000)
               if [ "$code" = "200" ]; then ok=1; break; fi
+              # A 403 is Cloudflare refusing this runner, not the app waking up;
+              # retrying won't change it.
+              if [ "$code" = "403" ]; then blocked=1; break; fi
               sleep 10
             done
             if [ $ok = 1 ]; then echo "ok   $path"; else echo "::error::$path answered $code"; failed=1; fi
           done
+          if [ $blocked = 1 ]; then
+            echo "::error::Cloudflare answered 403 to this GitHub runner. The deploy itself succeeded. Check Security → Events on remixt.app, and that the WAF rule skipping requests with the X-Site-Check header matches the SITE_CHECK_TOKEN secret."
+          fi
           # Static files come from Cloudflare's edge cache (cloudflare/src/index.ts).
-          asset=$(curl -s -m 60 "$base/" | grep -o '/_next/static/[^"]*\.js' | head -1)
+          asset=$(curl -s -m 60 -H "$check_header" "$base/" | grep -o '/_next/static/[^"]*\.js' | head -1)
           if [ -n "$asset" ]; then
-            curl -s -o /dev/null -m 60 "$base$asset"
-            hit=$(curl -sI -m 60 "$base$asset" | tr -d '\r' | awk -F': ' 'tolower($1)=="x-edge-cache"{print $2}')
+            curl -s -o /dev/null -m 60 -H "$check_header" "$base$asset"
+            hit=$(curl -sI -m 60 -H "$check_header" "$base$asset" | tr -d '\r' | awk -F': ' 'tolower($1)=="x-edge-cache"{print $2}')
             echo "edge cache for $asset: ${hit:-MISS}"
           fi
           exit $failed
