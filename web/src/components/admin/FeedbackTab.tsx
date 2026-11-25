@@ -5,7 +5,7 @@
 // errors, rage clicks, stuck pages, server failures, slow pages — grouped,
 // ranked by how many people, with who and where for each.
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { FEEDBACK_TEXT, PROBLEM_KINDS, PROBLEM_TEXT, type FeedbackKind, type ProblemKind } from "@/lib/feedback";
 import type { feedbackReport, problemHits } from "@/lib/feedbackStore";
 
@@ -22,6 +22,66 @@ const KIND_COLOR: Record<ProblemKind, string> = {
   slow: "bg-beat/15 text-beat",
 };
 
+type Problem = Report["problems"][number];
+type Feedback = Report["feedback"][number];
+type SortKey = "kind" | "message" | "path" | "people" | "week" | "count" | "last";
+
+const COLUMNS: { key: SortKey; label: string; num?: boolean; value: (p: Problem) => string | number }[] = [
+  { key: "kind", label: "Kind", value: (p) => p.kind },
+  { key: "message", label: "Problem", value: (p) => p.message },
+  { key: "path", label: "Page", value: (p) => p.path },
+  { key: "people", label: "People (members)", num: true, value: (p) => p.people },
+  { key: "week", label: "This week", num: true, value: (p) => p.week },
+  { key: "count", label: "Ever", num: true, value: (p) => p.count },
+  { key: "last", label: "Last seen", num: true, value: (p) => new Date(p.last_seen).getTime() },
+];
+
+const today = () => new Date().toISOString().slice(0, 10);
+
+function download(name: string, text: string, type: string) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = Object.assign(document.createElement("a"), { href: url, download: name });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/**
+ * The problems as a brief a coding agent can act on: what each is, where,
+ * how many people, and the stack the browser sent. No names or emails —
+ * the agent needs the bug, not who hit it.
+ */
+function problemsForAgent(problems: Problem[], scope: string, feedback: Feedback[] = []): string {
+  const lines = [
+    `# Remixt production problems (${scope})`,
+    "",
+    `Exported ${new Date().toISOString()} from Admin → Feedback & problems. Reported automatically by visitors' browsers (lib/client/problems.ts); paths are grouped (<id>).`,
+    "",
+    "Please find the cause of each problem in the codebase (web/), fix it, and say which ones you couldn't reproduce or explain. Most people first.",
+    "",
+  ];
+  problems.forEach((p, i) => {
+    lines.push(
+      `## ${i + 1}. [${PROBLEM_TEXT[p.kind]}] ${p.message}`,
+      "",
+      `- Page: \`${p.path}\``,
+      `- People: ${p.people} (${p.members} signed in) · ${p.week} times this week · ${p.count} ever`,
+      `- First seen ${p.first_seen} · last seen ${p.last_seen}${p.fixed_at ? ` · marked fixed ${p.fixed_at}` : ""}`
+    );
+    if (p.sample) lines.push("", "```", p.sample, "```");
+    lines.push("");
+  });
+  const said = feedback.filter((f) => f.kind === "problem" || f.kind === "confusing" || f.recent?.length);
+  if (said.length) {
+    lines.push("# What people told us (bug reports)", "");
+    for (const f of said) {
+      lines.push(`- ${f.at} · \`${f.path ?? "?"}\` · ${f.device ?? ""}: ${f.message.replace(/\s+/g, " ")}`);
+      for (const r of f.recent ?? []) lines.push(`  - just before: [${r.kind}] ${r.message} · ${r.path}`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
 async function post(body: unknown) {
   const res = await fetch("/api/admin/feedback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? "Failed");
@@ -37,6 +97,18 @@ export default function FeedbackTab({ onOpenUser }: { onOpenUser?: (id: string) 
   const [hits, setHits] = useState<Hit[] | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [fbFilter, setFbFilter] = useState<"open" | "all">("open");
+  const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "people", desc: true });
+  const [copied, setCopied] = useState<string | null>(null);
+
+  const copy = async (text: string, id: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(id);
+      setTimeout(() => setCopied((c) => (c === id ? null : c)), 2500);
+    } catch {
+      download(`remixt-problems-${today()}.md`, text, "text/markdown");
+    }
+  };
 
   const load = useCallback(() => {
     fetch(`/api/admin/feedback?days=${days}`, { cache: "no-store" })
@@ -72,6 +144,14 @@ export default function FeedbackTab({ onOpenUser }: { onOpenUser?: (id: string) 
     hits: data.daily.filter((d) => d.kind === k).reduce((s, d) => s + d.hits, 0),
   }));
   const feedback = data.feedback.filter((f) => fbFilter === "all" || f.status !== "done");
+  const sorted = [...problems].sort((a, b) => {
+    const col = COLUMNS.find((c) => c.key === sort.key)!;
+    const x = col.value(a);
+    const y = col.value(b);
+    const d = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y));
+    return sort.desc ? -d : d;
+  });
+  const scope = `last ${days === 1 ? "24 h" : `${days} days`}, ${kind === "all" ? "all kinds" : PROBLEM_TEXT[kind]}${showFixed ? ", fixed included" : ", open only"}`;
 
   return (
     <div className="flex flex-col gap-6">
@@ -218,53 +298,112 @@ export default function FeedbackTab({ onOpenUser }: { onOpenUser?: (id: string) 
           </div>
         </div>
         <p className="mt-1 text-xs text-muted">
-          Sent by visitors&apos; browsers on their own. Ranked by how many people. &quot;Fixed&quot; hides one until it happens again (then it comes back).
+          Sent by visitors&apos; browsers on their own. Ranked by how many people. &quot;Fixed&quot; hides one until it happens again (then it comes back). Click a row for the
+          stack and who; click a column to sort.
         </p>
-        <ul className="mt-3 flex flex-col gap-2">
-          {problems.map((p) => (
-            <li key={p.key} className={`rounded-xl border border-border bg-surface p-3 text-sm ${p.fixed_at ? "opacity-60" : ""}`}>
-              <button type="button" onClick={() => {
-                  setHits(null);
-                  setOpen(open === p.key ? null : p.key);
-                }} className="flex w-full flex-wrap items-center gap-2 text-start">
-                <span className={`rounded px-1.5 py-0.5 text-[11px] ${KIND_COLOR[p.kind]}`}>{PROBLEM_TEXT[p.kind]}</span>
-                <span className="min-w-0 flex-1 break-words font-medium">{p.message}</span>
-                <span className="font-mono text-xs text-muted">{p.path}</span>
-                <span className="text-xs tabular-nums text-muted">
-                  {p.people} people ({p.members} members) · {p.week} this week · {p.count} ever · last {when(p.last_seen)}
-                </span>
-              </button>
-              {open === p.key && (
-                <div className="mt-2 border-t border-border pt-2 text-xs">
-                  {p.sample && <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-background p-2 font-mono">{p.sample}</pre>}
-                  <p className="mt-2 text-muted">First seen {when(p.first_seen)}. Who, lately:</p>
-                  <ul className="mt-1 space-y-0.5">
-                    {(hits ?? []).map((h, i) => (
-                      <li key={i} className="flex flex-wrap justify-between gap-2">
-                        <span>
-                          {h.user_id ? (
-                            <button type="button" onClick={() => onOpenUser?.(h.user_id!)} className="text-brand-strong hover:underline">
-                              {h.artist_name ?? "member"}
-                            </button>
-                          ) : (
-                            <span className="text-muted">guest {h.visitor.slice(0, 6)}</span>
-                          )}{" "}
-                          · <span className="font-mono">{h.path}</span> · {h.device}
-                        </span>
-                        <span className="text-muted">{when(h.at)}</span>
-                      </li>
-                    ))}
-                    {hits === null && <li className="text-muted">Loading…</li>}
-                  </ul>
-                  <button type="button" onClick={() => act({ action: "fixed", key: p.key, fixed: !p.fixed_at })} className="mt-2 rounded-lg border border-border px-2.5 py-1 hover:bg-surface-hover">
-                    {p.fixed_at ? "Not fixed after all" : "Mark fixed"}
-                  </button>
-                </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-muted">Export what&apos;s shown ({sorted.length}):</span>
+          <button type="button" onClick={() => void copy(problemsForAgent(sorted, scope, feedback), "all")} className="rounded-lg bg-brand px-2.5 py-1 font-semibold text-white">
+            {copied === "all" ? "Copied — paste it to the agent" : "Copy for AI agent"}
+          </button>
+          <button type="button" onClick={() => download(`remixt-problems-${today()}.md`, problemsForAgent(sorted, scope, feedback), "text/markdown")} className="rounded-lg border border-border px-2.5 py-1 hover:bg-surface-hover">
+            Download .md
+          </button>
+          <button type="button" onClick={() => download(`remixt-problems-${today()}.json`, JSON.stringify({ exported: new Date().toISOString(), scope, problems: sorted, feedback }, null, 2), "application/json")} className="rounded-lg border border-border px-2.5 py-1 hover:bg-surface-hover">
+            Download .json
+          </button>
+        </div>
+        <div className="mt-3 overflow-x-auto rounded-xl border border-border">
+          <table className="w-full min-w-[760px] text-sm">
+            <thead className="bg-surface-raised text-start text-xs text-muted">
+              <tr>
+                {COLUMNS.map((c) => (
+                  <th key={c.key} className={`px-3 py-2 font-medium ${c.num ? "text-end" : "text-start"}`}>
+                    <button type="button" onClick={() => setSort((s) => ({ key: c.key, desc: s.key === c.key ? !s.desc : true }))} className="hover:text-foreground">
+                      {c.label}
+                      {sort.key === c.key ? (sort.desc ? " ↓" : " ↑") : ""}
+                    </button>
+                  </th>
+                ))}
+                <th className="px-3 py-2" />
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((p) => (
+                <Fragment key={p.key}>
+                  <tr
+                    onClick={() => {
+                      setHits(null);
+                      setOpen(open === p.key ? null : p.key);
+                    }}
+                    className={`cursor-pointer border-t border-border align-top hover:bg-surface-hover ${p.fixed_at ? "opacity-60" : ""} ${open === p.key ? "bg-surface-hover" : ""}`}
+                  >
+                    <td className="px-3 py-2">
+                      <span className={`whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] ${KIND_COLOR[p.kind]}`}>{PROBLEM_TEXT[p.kind]}</span>
+                    </td>
+                    <td className="max-w-[28rem] break-words px-3 py-2 font-medium">{p.message}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{p.path}</td>
+                    <td className="px-3 py-2 text-end tabular-nums">
+                      {p.people} <span className="text-xs text-muted">({p.members})</span>
+                    </td>
+                    <td className="px-3 py-2 text-end tabular-nums">{p.week}</td>
+                    <td className="px-3 py-2 text-end tabular-nums">{p.count}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-end text-xs text-muted">{when(p.last_seen)}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-end">
+                      <button
+                        type="button"
+                        title="Copy this problem for an AI agent"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void copy(problemsForAgent([p], `${PROBLEM_TEXT[p.kind]} on ${p.path}`), p.key);
+                        }}
+                        className="rounded-lg border border-border px-2 py-0.5 text-xs hover:bg-surface-raised"
+                      >
+                        {copied === p.key ? "Copied" : "Copy"}
+                      </button>
+                    </td>
+                  </tr>
+                  {open === p.key && (
+                    <tr className="border-t border-border bg-background/40">
+                      <td colSpan={COLUMNS.length + 1} className="px-3 py-2 text-xs">
+                        {p.sample && <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-background p-2 font-mono">{p.sample}</pre>}
+                        <p className="mt-2 text-muted">First seen {when(p.first_seen)}. Who, lately:</p>
+                        <ul className="mt-1 space-y-0.5">
+                          {(hits ?? []).map((h, i) => (
+                            <li key={i} className="flex flex-wrap justify-between gap-2">
+                              <span>
+                                {h.user_id ? (
+                                  <button type="button" onClick={() => onOpenUser?.(h.user_id!)} className="text-brand-strong hover:underline">
+                                    {h.artist_name ?? "member"}
+                                  </button>
+                                ) : (
+                                  <span className="text-muted">guest {h.visitor.slice(0, 6)}</span>
+                                )}{" "}
+                                · <span className="font-mono">{h.path}</span> · {h.device}
+                              </span>
+                              <span className="text-muted">{when(h.at)}</span>
+                            </li>
+                          ))}
+                          {hits === null && <li className="text-muted">Loading…</li>}
+                        </ul>
+                        <button type="button" onClick={() => act({ action: "fixed", key: p.key, fixed: !p.fixed_at })} className="mt-2 rounded-lg border border-border px-2.5 py-1 hover:bg-surface-hover">
+                          {p.fixed_at ? "Not fixed after all" : "Mark fixed"}
+                        </button>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+              {sorted.length === 0 && (
+                <tr>
+                  <td colSpan={COLUMNS.length + 1} className="px-3 py-3 text-muted">
+                    No problems reported in this period. 🎉
+                  </td>
+                </tr>
               )}
-            </li>
-          ))}
-          {problems.length === 0 && <li className="rounded-xl border border-border bg-surface p-3 text-sm text-muted">No problems reported in this period. 🎉</li>}
-        </ul>
+            </tbody>
+          </table>
+        </div>
       </section>
     </div>
   );

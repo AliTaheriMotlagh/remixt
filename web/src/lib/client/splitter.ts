@@ -84,6 +84,12 @@ type Job = {
  */
 const SILENT_FOR_MS = 4 * 60_000;
 
+/**
+ * From "starting" (model downloaded) to "ready" takes seconds, a minute on
+ * a slow phone; this long and the threaded start is taken to be stuck.
+ */
+const START_LIMIT_MS = 120_000;
+
 /** Someone waiting for the splitter; your own songs go before songs split for others. */
 type Turn = { own: boolean; start: () => void };
 
@@ -124,68 +130,99 @@ class Splitter {
     this.set({ status: "downloading", error: null });
 
     this.ready = new Promise<void>((resolve, reject) => {
-      const worker = new Worker(new URL("./splitter.worker.ts", import.meta.url), {
-        type: "module",
-      });
-      this.worker = worker;
+      let started = false;
+      const spawn = (singleThread: boolean) => {
+        const worker = new Worker(new URL("./splitter.worker.ts", import.meta.url), {
+          type: "module",
+        });
+        this.worker = worker;
+        let stuck: ReturnType<typeof setTimeout> | undefined;
 
-      worker.onmessage = (event: MessageEvent<SplitterResponse>) => {
-        const message = event.data;
-        switch (message.type) {
-          case "download":
-            this.set({
-              status: "downloading",
-              loaded: message.loaded,
-              total: message.total,
-              fromCache: message.fromCache,
-            });
-            break;
-          case "starting":
-            this.set({ status: "starting" });
-            break;
-          case "ready":
-            this.set({ status: "ready", backend: message.backend, threads: message.threads });
-            resolve();
-            break;
-          case "init-error":
-            this.fail(message.message);
-            reject(new Error(message.message));
-            break;
-          case "progress":
-            this.lastHeard = Date.now();
-            this.jobs.get(message.jobId)?.onProgress(message.stage, message.value);
-            break;
-          case "result": {
-            const job = this.jobs.get(message.jobId);
-            this.jobs.delete(message.jobId);
-            job?.resolve(message);
-            break;
+        worker.onmessage = (event: MessageEvent<SplitterResponse>) => {
+          const message = event.data;
+          switch (message.type) {
+            case "download":
+              this.set({
+                status: "downloading",
+                loaded: message.loaded,
+                total: message.total,
+                fromCache: message.fromCache,
+              });
+              break;
+            case "starting":
+              this.set({ status: "starting" });
+              // A thread worker the browser refuses can also just never
+              // answer (no error at all): give up on threads after a while.
+              if (!singleThread) {
+                stuck = setTimeout(() => {
+                  if (started || this.worker !== worker) return;
+                  worker.terminate();
+                  reportSplitterCrash(new ErrorEvent("error", { message: "no answer while starting" }), "retrying on one core");
+                  spawn(true);
+                }, START_LIMIT_MS);
+              }
+              break;
+            case "ready":
+              clearTimeout(stuck);
+              started = true;
+              this.set({ status: "ready", backend: message.backend, threads: message.threads });
+              resolve();
+              break;
+            case "init-error":
+              this.fail(message.message);
+              reject(new Error(message.message));
+              break;
+            case "progress":
+              this.lastHeard = Date.now();
+              this.jobs.get(message.jobId)?.onProgress(message.stage, message.value);
+              break;
+            case "result": {
+              const job = this.jobs.get(message.jobId);
+              this.jobs.delete(message.jobId);
+              job?.resolve(message);
+              break;
+            }
+            case "split-error": {
+              const job = this.jobs.get(message.jobId);
+              this.jobs.delete(message.jobId);
+              job?.reject(new Error(message.message));
+              break;
+            }
           }
-          case "split-error": {
-            const job = this.jobs.get(message.jobId);
-            this.jobs.delete(message.jobId);
-            job?.reject(new Error(message.message));
-            break;
+        };
+        worker.onerror = (event) => {
+          // Shown and reported here; don't let it surface again as a page error.
+          event.preventDefault();
+          clearTimeout(stuck);
+          // Something the worker couldn't load while starting — most often
+          // one of ONNX Runtime's thread workers. One core is slower but
+          // needs none of them, and the model is in Cache Storage by now.
+          if (!started && !singleThread) {
+            worker.terminate();
+            reportSplitterCrash(event, "retrying on one core");
+            spawn(true);
+            return;
           }
-        }
-      };
-      worker.onerror = (event) => {
-        const message = event.message || "The splitter crashed — the browser may be out of memory";
-        reject(new Error(message));
-        this.fail(message);
-      };
+          const message = crashMessage(event);
+          reportSplitterCrash(event, started ? "while splitting" : "on one core");
+          reject(new Error(message));
+          this.fail(message);
+        };
 
-      // Absolute, because the worker resolves relative URLs against its
-      // own script's location, not the page.
-      const ortBase = new URL(ORT_BASE, window.location.href).href;
-      worker.postMessage({
-        type: "init",
-        modelUrl: MODEL_URL,
-        wasmUrl: `${ortBase}ort-wasm-simd-threaded.jsep.wasm`,
-        ortUrl: `${ortBase}ort.min.mjs`,
-        ortBase,
-        expectedBytes: EXPECTED_BYTES,
-      } satisfies SplitterRequest);
+        // Absolute, because the worker resolves relative URLs against its
+        // own script's location, not the page.
+        const ortBase = new URL(ORT_BASE, window.location.href).href;
+        worker.postMessage({
+          type: "init",
+          modelUrl: MODEL_URL,
+          wasmUrl: `${ortBase}ort-wasm-simd-threaded.jsep.wasm`,
+          ortUrl: `${ortBase}ort.min.mjs`,
+          ortBase,
+          expectedBytes: EXPECTED_BYTES,
+          singleThread,
+        } satisfies SplitterRequest);
+      };
+      spawn(false);
     });
     this.ready.catch(() => {});
     return this.ready;
@@ -296,6 +333,39 @@ class Splitter {
       );
     }).finally(() => signal?.removeEventListener("abort", cancel));
   }
+}
+
+/**
+ * What a worker's crash says. A worker that threw something other than an
+ * Error (a failed load's Event) only says "Uncaught [object Event]", which
+ * tells nobody anything.
+ */
+function crashMessage(event: ErrorEvent): string {
+  const raw = event.message || "";
+  if (!raw) return "The splitter crashed — the browser may be out of memory";
+  if (/\[object \w*Event\]/.test(raw)) {
+    return "Part of the splitter couldn't load — reload the page and try again";
+  }
+  return raw;
+}
+
+/** Tells Admin → Feedback & problems, with what the browser said, so it can be fixed. */
+function reportSplitterCrash(event: ErrorEvent, when: string) {
+  void import("./problems")
+    .then(({ reportProblem }) =>
+      reportProblem({
+        kind: "error",
+        message: `Splitter worker: ${event.message || "crashed"} (${when})`,
+        path: location.pathname,
+        detail: [
+          event.filename && `${event.filename}:${event.lineno}:${event.colno}`,
+          `isolated=${self.crossOriginIsolated} cores=${navigator.hardwareConcurrency} ${navigator.userAgent}`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      })
+    )
+    .catch(() => {});
 }
 
 export const splitter = new Splitter();

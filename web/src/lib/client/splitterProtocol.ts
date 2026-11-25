@@ -13,6 +13,8 @@ export type SplitterRequest =
       ortUrl: string;
       ortBase: string;
       expectedBytes: number;
+      /** Run on one core: the retry after the threaded start failed. */
+      singleThread?: boolean;
     }
   | {
       type: "split";

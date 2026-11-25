@@ -60,7 +60,7 @@ async function init(request: Extract<SplitterRequest, { type: "init" }>) {
   // desktops have 10–16), which is left for the page, so the rest of the
   // site stays smooth while a song splits.
   const cores = navigator.hardwareConcurrency || 4;
-  const threads = self.crossOriginIsolated ? Math.max(1, Math.min(16, cores - 1)) : 1;
+  const threads = self.crossOriginIsolated && !request.singleThread ? Math.max(1, Math.min(16, cores - 1)) : 1;
   ort.env.wasm.numThreads = threads;
 
   const gpu = (navigator as Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }).gpu;

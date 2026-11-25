@@ -66,6 +66,10 @@ const nextConfig = (phase: string): NextConfig => ({
       { source: `/:root(${isolated})`, headers: isolation },
       { source: `/:root(${isolated})/:rest*`, headers: isolation },
       { source: "/_next/static/:path*", headers: [{ key: "Cross-Origin-Embedder-Policy", value: "credentialless" }] },
+      // ONNX Runtime's own thread workers (pthreads) start from /ort/*.mjs
+      // inside the isolated splitter worker; without the header the browser
+      // refuses them and the splitter dies with "Uncaught [object Event]".
+      { source: "/ort/:path*", headers: [{ key: "Cross-Origin-Embedder-Policy", value: "credentialless" }] },
     ];
   },
   // yt-dlp for link import (downloaded into bin/ by scripts/fetch-ytdlp.mjs)
