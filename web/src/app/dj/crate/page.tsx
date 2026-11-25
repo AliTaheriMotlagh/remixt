@@ -2,7 +2,7 @@ import DjCrate from "@/components/dj/DjCrate";
 import { JsonLd, breadcrumbJsonLd, faqJsonLd, pageMetadata } from "@/lib/seo";
 
 export const metadata = pageMetadata({
-  title: "DJ set planner: build a playlist for your event by key and BPM",
+  title: "DJ set planner: build a set by key and BPM",
   description:
     "Plan a DJ set for a wedding, party or club night: every song's BPM, Camelot key and energy, a set that flows key to key, and ideas for what to play next.",
   path: "/dj/crate",

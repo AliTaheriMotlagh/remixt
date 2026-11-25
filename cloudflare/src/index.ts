@@ -14,15 +14,15 @@ const KEYS = [
   "RESEND_API_KEY", "MAIL_FROM", "OPENROUTER_API_KEY",
 ] as const;
 
-type Env = { REMIXT: DurableObjectNamespace<Remixt> } & Partial<Record<(typeof KEYS)[number], string>>;
+type Env = { REMIXT: DurableObjectNamespace<Remixt>; CF_VERSION_METADATA?: { id: string } } & Partial<Record<(typeof KEYS)[number], string>>;
 
 export class Remixt extends Container<Env> {
   defaultPort = 3000;
-  // A container is billed while it's awake. It sleeps after 20 minutes
+  // A container is billed while it's awake. It sleeps after 5 minutes
   // with no request that reaches it (static files are served from the edge
   // cache below and don't count); the next visit wakes it in a few seconds.
   // A radio listener or a live room polls, so those keep it awake as needed.
-  sleepAfter = "20m";
+  sleepAfter = "5m";
 
   constructor(ctx: DurableObjectState<Env>, env: Env) {
     super(ctx, env);
@@ -58,6 +58,43 @@ async function fromEdgeCache(request: Request, ctx: ExecutionContext, origin: ()
   return res;
 }
 
+/**
+ * Public pages as a signed-out visitor (or a search engine's crawler) sees
+ * them. Without the session cookie the HTML is the same for everyone, so it
+ * is kept at Cloudflare's edge for a few minutes: Googlebot, Bingbot and
+ * logged-out visitors get a fast answer (good for Core Web Vitals) and don't
+ * wake — or keep awake, or bill — the container. Signed-in visitors always
+ * reach the app.
+ *
+ * Kept per deploy (the Worker's version is in the key): a page cached by the
+ * last deploy names its hashed /_next/static files, which the new container
+ * no longer has, so serving it after a deploy would load unstyled and dead.
+ */
+const PUBLIC_PAGE = /^\/(?:$|remixes(?:\/|$)|artist\/|tools(?:\/|$)|fa(?:\/|$)|guides(?:\/|$)|examples$|challenges$|leaderboard$|plus$|earnings$|advertise$|dj(?:\/crate)?$|library$|privacy$|terms$|takedown$|sitemap\.xml$|robots\.txt$|llms\.txt$)/;
+const PAGE_TTL = 600; // seconds a page stays at the edge
+
+async function pageFromEdgeCache(request: Request, ctx: ExecutionContext, version: string, origin: () => Promise<Response>): Promise<Response> {
+  const cache = caches.default;
+  const keyUrl = new URL(request.url);
+  keyUrl.searchParams.set("__deploy", version);
+  const key = new Request(keyUrl.toString(), { method: "GET" });
+  const hit = await cache.match(key);
+  if (hit) {
+    const served = new Response(request.method === "HEAD" ? null : hit.body, hit);
+    served.headers.set("x-edge-cache", "HIT");
+    served.headers.set("cache-control", "public, max-age=0, must-revalidate");
+    return served;
+  }
+  const res = await origin();
+  const type = res.headers.get("content-type") ?? "";
+  if (request.method === "GET" && res.status === 200 && !res.headers.has("set-cookie") && /text\/html|xml|text\/plain/.test(type)) {
+    const copy = new Response(res.clone().body, res);
+    copy.headers.set("cache-control", `public, s-maxage=${PAGE_TTL}, max-age=${PAGE_TTL}`);
+    ctx.waitUntil(cache.put(key, copy));
+  }
+  return res;
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -79,6 +116,10 @@ export default {
     const origin = () => getContainer(env.REMIXT, "main").fetch(new Request(request, { headers }));
     if (request.method === "GET" && !url.search && STATIC.test(url.pathname) && !url.pathname.startsWith("/api/")) {
       return fromEdgeCache(request, ctx, origin);
+    }
+    const signedIn = /(?:^|;\s*)remix_session=/.test(request.headers.get("cookie") ?? "");
+    if ((request.method === "GET" || request.method === "HEAD") && !signedIn && !request.headers.has("rsc") && !url.search && PUBLIC_PAGE.test(url.pathname)) {
+      return pageFromEdgeCache(request, ctx, env.CF_VERSION_METADATA?.id ?? "dev", origin);
     }
     return origin();
   },

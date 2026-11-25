@@ -23,7 +23,7 @@ const local = (url) => {
   const u = new URL(url);
   return BASE + u.pathname + u.search;
 };
-const get = (url) => fetch(url, { redirect: "manual", headers: { "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1; seo-audit)" } });
+const get = (url) => fetch(url, { redirect: "manual", signal: AbortSignal.timeout(30_000), headers: { "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1; seo-audit)" } });
 
 async function checkText(path, mustContain) {
   const res = await get(BASE + path);
@@ -88,7 +88,12 @@ if (robots && /Disallow: \/tools/.test(robots)) fail("/robots.txt", "blocks /too
 
 const urls = [...new Set([...(sitemap ?? "").matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => decode(m[1])))].slice(0, LIMIT);
 console.log(`Checking ${urls.length} sitemap pages on ${BASE}…`);
-for (const url of urls) await checkPage(url);
+for (const url of urls) {
+  const started = Date.now();
+  // A page that hangs or drops the connection is a failure, not the end of the audit.
+  await checkPage(url).catch((e) => fail(new URL(url).pathname, `no answer (${e.cause?.code ?? e.name})`));
+  if (Date.now() - started > 3000) warn(new URL(url).pathname, `took ${((Date.now() - started) / 1000).toFixed(1)} s`);
+}
 
 const missing = await get(`${BASE}/tools/no-such-tool`);
 if (missing.status !== 404) fail("/tools/no-such-tool", `status ${missing.status}, wanted 404`);

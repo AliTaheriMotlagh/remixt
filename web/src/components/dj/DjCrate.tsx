@@ -264,10 +264,30 @@ export default function DjCrate() {
     void navigator.clipboard?.writeText(text).then(() => setNote("Copied the track list."));
   };
 
+  // In the server HTML too (before the songs load), so search engines see the page's heading.
+  const heading = (
+    <>
+      <Link href="/dj" className="flex w-fit items-center gap-1 text-sm text-muted hover:text-foreground">
+        <ArrowLeft className="h-4 w-4" /> DJ decks
+      </Link>
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Plan a set</h1>
+        <p className="mt-1 max-w-3xl text-sm text-muted">
+          Every song with its tempo, key and energy. Pick the event, get a starting set that flows key to key, then shape it: see how each blend will
+          sound, ask what goes next, and add songs that aren&apos;t on Remixt yet.
+        </p>
+        {demo && <p className="mt-2 text-xs text-drums">Your library is empty, so these are the demo songs. Split songs to plan with your own.</p>}
+      </div>
+    </>
+  );
+
   if (!songs) {
     return (
-      <div className="flex h-64 items-center justify-center gap-2 text-muted">
-        <Loader2 className="h-5 w-5 animate-spin" /> Loading every song…
+      <div className="flex flex-col gap-4">
+        <header className="flex flex-col gap-3">{heading}</header>
+        <div className="flex h-64 items-center justify-center gap-2 text-muted">
+          <Loader2 className="h-5 w-5 animate-spin" /> Loading every song…
+        </div>
       </div>
     );
   }
@@ -275,17 +295,7 @@ export default function DjCrate() {
   return (
     <div className="flex flex-col gap-4">
       <header className="flex flex-col gap-3">
-        <Link href="/dj" className="flex w-fit items-center gap-1 text-sm text-muted hover:text-foreground">
-          <ArrowLeft className="h-4 w-4" /> DJ decks
-        </Link>
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Plan a set</h1>
-          <p className="mt-1 max-w-3xl text-sm text-muted">
-            Every song with its tempo, key and energy. Pick the event, get a starting set that flows key to key, then shape it: see how each blend will
-            sound, ask what goes next, and add songs that aren&apos;t on Remixt yet.
-          </p>
-          {demo && <p className="mt-2 text-xs text-drums">Your library is empty, so these are the demo songs. Split songs to plan with your own.</p>}
-        </div>
+        {heading}
         {/* The event: a starting set in its shape. */}
         <div className="-mx-3 flex gap-2 overflow-x-auto px-3 pb-1" role="radiogroup" aria-label="The event">
           {EVENTS.map((e) => (

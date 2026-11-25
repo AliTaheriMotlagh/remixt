@@ -13,7 +13,11 @@ export const metadata = pageMetadata({
 // lib/auth, the ad networks in lib/monetize/network). Change it when they change.
 export default async function PrivacyPage() {
   const { network, features } = await getSettings();
-  const networks = [network.adsense && "Google AdSense", network.other && (network.otherName || "an advertising network")].filter(Boolean) as string[];
+  // AdSense counts as soon as its script is on the page — layout.tsx loads it
+  // whenever a publisher id is set (needed for the site review), before ad
+  // spots are switched on — and Google's policy requires saying so here.
+  const adsenseOnPage = network.adsense || /^ca-pub-\d+$/.test(network.adsenseClient);
+  const networks = [adsenseOnPage && "Google AdSense", network.other && (network.otherName || "an advertising network")].filter(Boolean) as string[];
   return (
     <article className="prose-legal mx-auto w-full max-w-3xl px-4 py-10 text-sm leading-relaxed sm:px-6 [&_h2]:mt-8 [&_h2]:text-lg [&_h2]:font-semibold [&_li]:mt-1 [&_p]:mt-3 [&_ul]:mt-2 [&_ul]:list-disc [&_ul]:ps-5">
       <h1 className="text-2xl font-bold">Privacy policy</h1>
