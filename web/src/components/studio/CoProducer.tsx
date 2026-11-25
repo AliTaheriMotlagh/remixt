@@ -32,7 +32,7 @@ type KeyState = {
   saved: Partial<Record<Provider, { hint: string; model: string }>>;
   models: Model[];
   /** The site's free AI, when it offers one: questions a day, and how many are left today (null when not signed in). */
-  shared?: { limit: number; left: number | null } | null;
+  shared?: { limit: number; left: number | null; unit?: "questions" | "tokens"; model?: string } | null;
   /** The saved keys couldn't be read just now (they're still there). */
   error?: string;
 };
@@ -330,7 +330,11 @@ export default function CoProducer({ ctx, question }: { ctx: CoproducerContext; 
   const own: "browser" | "account" | null = keys[provider] ? "browser" : keyState?.saved[provider] ? "account" : null;
   const shared = keyState?.shared ?? null;
   // No key of their own: the site's free questions, while there are some left today (Claude only).
-  const canShare = !own && !ownKey && provider === "anthropic" && !!keyState?.signedIn && (shared?.left ?? 0) > 0;
+  // The site's AI on OpenRouter takes any provider choice (the site picks the model); the older shared Claude key only Anthropic's.
+  const tokens = shared?.unit === "tokens";
+  const canShare = !own && !ownKey && (tokens || provider === "anthropic") && !!keyState?.signedIn && (shared?.left ?? 0) > 0;
+  const unit = tokens ? "AI tokens" : "free questions";
+  const count = (n: number | null | undefined) => (n ?? 0).toLocaleString("en-US");
   const mode: "browser" | "account" | "shared" | null = own ?? (canShare ? "shared" : null);
   const model = models[provider];
 
@@ -425,10 +429,12 @@ export default function CoProducer({ ctx, question }: { ctx: CoproducerContext; 
   if (!mode) {
     const freeNote = shared
       ? keyState.signedIn
-        ? shared.left === 0
-          ? ` — today's ${shared.limit} free questions are used up (they come back tomorrow)`
-          : ""
-        : ` — sign in for ${shared.limit} free questions a day`
+        ? shared.limit === 0
+          ? " — the site's AI is part of Plus (remixt.app/plus), or use your own key"
+          : shared.left === 0
+            ? ` — today's ${count(shared.limit)} ${unit} are used up (they come back tomorrow; Plus has more)`
+            : ""
+        : ` — sign in for ${count(shared.limit)} ${unit} a day`
       : "";
     return (
       <div className="flex flex-col gap-3">
@@ -443,7 +449,7 @@ export default function CoProducer({ ctx, question }: { ctx: CoproducerContext; 
           <div className="flex flex-col gap-2 px-3 pb-3">
             {ownKey && shared && (shared.left ?? 0) > 0 && (
               <button onClick={() => setOwnKey(false)} className="self-start text-[11px] font-semibold text-brand-strong hover:underline">
-                ← Back to the free questions ({shared.left} left today)
+                ← Back to the site&apos;s AI ({count(shared.left)} {unit} left today)
               </button>
             )}
             <ProviderSwitch value={provider} onChange={chooseProvider} disabled={busy} />
@@ -471,7 +477,7 @@ export default function CoProducer({ ctx, question }: { ctx: CoproducerContext; 
       <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted">
         {mode === "shared" ? (
           <span className="min-w-0 flex-1 truncate">
-            <span className="font-semibold text-success">Free AI</span> · {shared?.left ?? 0} of {shared?.limit} questions left today ·{" "}
+            <span className="font-semibold text-success">{tokens ? "Remixt AI" : "Free AI"}</span> · {count(shared?.left)} of {count(shared?.limit)} {tokens ? "tokens" : "questions"} left today ·{" "}
             <button onClick={() => setOwnKey(true)} disabled={busy} className="font-semibold text-brand-strong hover:underline">
               use my own key
             </button>

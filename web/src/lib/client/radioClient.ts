@@ -8,6 +8,7 @@ import { visitorId } from "./presence";
 import { pollEvery } from "@/lib/radioPace";
 import { mixEnvelope } from "./lyricsSources";
 import { playPayload, RadioDeck } from "./radioDeck";
+import { onReconnect } from "./connection";
 import { within } from "./stemFetch";
 import { radioBreakDue } from "@/lib/monetize/adRules";
 import { useSettings } from "@/components/SettingsProvider";
@@ -265,10 +266,16 @@ export function useRadio(
     void poll();
     next();
     document.addEventListener("visibilitychange", onVisible);
+    // The line back (or switched — Wi-Fi to mobile, a VPN reconnecting): catch up with the station now, not at the next poll.
+    const stopReconnect = onReconnect(() => {
+      void poll();
+      next();
+    });
     return () => {
       stopped = true;
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisible);
+      stopReconnect();
     };
   }, [poll]);
   const endsAt = feed?.now?.endsAt ?? null;

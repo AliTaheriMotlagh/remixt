@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { blockedMessage, blockedSongsInRemix } from "@/lib/monetize/adStore";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
+import { isAdmin } from "@/lib/admin";
+import { needsVerifiedEmail } from "@/lib/needsVerified";
 import sql from "@/lib/db";
 import { notifyRemixCreated } from "@/lib/notifications";
 import { ensureSchema } from "@/lib/schema";
@@ -18,7 +20,8 @@ export async function GET(
   const user = await getCurrentUser();
   // A private remix is only its owner's to open (or anyone's, once published) —
   // and the owner of a private song in it who was asked to agree to publishing it (to listen first).
-  const asked = await wasAsked(id, user?.id ?? null).catch(() => false);
+  // An admin may open any remix (moderation, and playing it to check it).
+  const asked = isAdmin(user) || (await wasAsked(id, user?.id ?? null).catch(() => false));
   const remixRows = await sql`
     SELECT remixes.*, users.artist_name, users.id as artist_id
     FROM remixes JOIN users ON users.id = remixes.owner_id
@@ -76,6 +79,8 @@ export async function PATCH(
 
   const { title, published, askAgain } = parsed.data;
   if (published && !remix.published) {
+    const unconfirmed = await needsVerifiedEmail(user.id);
+    if (unconfirmed) return unconfirmed;
     const blocked = await blockedSongsInRemix(id);
     if (blocked.length) return NextResponse.json({ error: blockedMessage(blocked), blocked }, { status: 409 });
     // Someone else's private song in it: its owner agrees first (lib/publishConsent.ts).

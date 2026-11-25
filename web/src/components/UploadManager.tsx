@@ -1,5 +1,6 @@
 "use client";
 
+import SongDetails from "@/components/upload/SongDetails";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { Globe, LoaderCircle, Lock, Music, Pause, Play } from "lucide-react";
@@ -366,6 +367,8 @@ function TrackRow({
   onChanged: () => void;
 }) {
   const [editingTags, setEditingTags] = useState<string[] | null>(null);
+  const [details, setDetails] = useState(false);
+  const [shownTitle, setShownTitle] = useState<string | null>(null);
   const [savingTags, setSavingTags] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -419,7 +422,7 @@ function TrackRow({
     <div className="rounded-xl border border-border bg-surface p-4">
       <div className="flex items-center justify-between gap-3">
         <h3 className="min-w-0 break-words font-medium">
-          {track.title}
+          {shownTitle ?? track.title}
           {track.bpm && (
             <span className="ml-2 text-xs font-normal text-muted">{track.bpm} BPM</span>
           )}
@@ -435,6 +438,17 @@ function TrackRow({
             />
           )}
           <StatusBadge status={track.status} />
+          {track.status === "ready" && !isTake && (
+            <button
+              type="button"
+              onClick={() => setDetails((v) => !v)}
+              aria-expanded={details}
+              className="rounded-md px-1.5 py-1 text-xs font-semibold text-brand-strong hover:underline"
+              title="Artist, album, year, genre, artwork and lyrics"
+            >
+              Details
+            </button>
+          )}
           <button
             onClick={deleteTrack}
             disabled={deleting}
@@ -457,6 +471,7 @@ function TrackRow({
         </p>
       )}
       {deleteError && <p className="mt-2 text-xs text-danger">{deleteError}</p>}
+      {details && <SongDetails trackId={track.id} stemId={stems[0]?.id} onClose={() => setDetails(false)} onSaved={setShownTitle} />}
 
       {track.status === "ready" &&
         (editingTags ? (

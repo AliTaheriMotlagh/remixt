@@ -62,18 +62,18 @@ export default function HouseMotion({
       target={external ? "_blank" : undefined}
       rel={external ? "noopener" : undefined}
       aria-label={`${title}. ${body}`}
-      className={`house-motion @container group relative flex items-center gap-4 overflow-hidden bg-[radial-gradient(120%_140%_at_0%_0%,rgba(236,72,153,0.22),transparent_55%),radial-gradient(120%_140%_at_100%_100%,rgba(6,182,212,0.2),transparent_55%)] p-4 ${
+      className={`house-motion @container group relative flex items-center gap-3 overflow-hidden sm:gap-4 bg-[radial-gradient(120%_140%_at_0%_0%,rgba(236,72,153,0.22),transparent_55%),radial-gradient(120%_140%_at_100%_100%,rgba(6,182,212,0.2),transparent_55%)] p-3 sm:p-4 ${
         compact ? "h-14 py-2" : "h-[8.5rem]"
       } ${playing ? "" : "paused"}`}
     >
       {/* The story, one line at a time. Screen readers get the title and body above instead. */}
-      <span aria-hidden className={`relative min-w-0 flex-1 ${compact ? "h-6" : "h-16"}`}>
+      <span aria-hidden className={`relative min-w-0 flex-1 ${compact ? "flex h-full items-center" : "h-[6.5rem]"}`}>
         <span className="text-[11px] font-medium uppercase tracking-wide text-muted">{fa ? "از ریمیکست" : "From Remixt"}</span>
         {!compact &&
           lines.map((line, i) => (
             <span
               key={i}
-              className={`hm-line ${i === 3 ? "hm-last" : ""} absolute inset-x-0 top-5 block truncate text-lg font-bold sm:text-xl`}
+              className={`hm-line ${i === 3 ? "hm-last" : ""} absolute inset-x-0 top-5 line-clamp-2 block break-words text-base font-bold leading-tight sm:text-xl`}
               style={{ animationDelay: `${i * 2}s` }}
             >
               {i === 3 ? (
@@ -87,8 +87,8 @@ export default function HouseMotion({
               )}
             </span>
           ))}
-        {!compact && <span className="absolute inset-x-0 bottom-0 block truncate text-xs text-muted">{body}</span>}
-        {compact && <span className="ms-2 truncate text-sm font-semibold">{title}</span>}
+        {!compact && <span className="absolute inset-x-0 bottom-0 line-clamp-2 block break-words text-xs leading-snug text-muted">{body}</span>}
+        {compact && <span className="ms-2 line-clamp-2 text-sm font-semibold leading-tight">{title}</span>}
       </span>
 
       {/* The waveform that splits into vocals and beat, then becomes a mix. */}
@@ -106,7 +106,7 @@ export default function HouseMotion({
         </span>
       </span>
 
-      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-brand px-3.5 py-2 text-sm font-semibold text-white shadow-[0_0_20px_-6px_var(--brand)] transition-transform group-hover:scale-[1.04]">
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-brand px-3 py-1.5 text-xs font-semibold sm:px-3.5 sm:py-2 sm:text-sm text-white shadow-[0_0_20px_-6px_var(--brand)] transition-transform group-hover:scale-[1.04]">
         {cta} <ArrowUpRight className="h-4 w-4 rtl:-scale-x-100" />
       </span>
     </Link>

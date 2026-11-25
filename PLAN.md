@@ -10,6 +10,43 @@ Written 2026-11-17. Last commit at that time: `0fee2ca` (all earlier work commit
 
 ---
 
+## Owner's list 2026-11-25 — production polish, Plus plan, payments, real AI, DJ, resilience
+
+Asked in one message. Each line is a box; work goes top to bottom, decisions marked ✦ were taken as written next to them (change them here).
+
+**Bugs first**
+- [x] Examples page: library list unusable on phones (each song a 190 px card, 20+ stacked) → compact rows with Listen (shared preview player) + Pick, 12 a page (`SongPicker.tsx`). Suggestions card checked at 390 px: fine.
+- [ ] Examples: rank suggestions from the whole library (today the 6 nearest in tempo are measured on the device).
+- [x] Sign-up fails "sometimes" in production. Cause found: behind the Cloudflare Worker the app saw no visitor address, so every visitor shared one rate-limit bucket (5 sign-ups an hour site-wide; 30 log-in tries per 15 min). Worker now sets `X-Real-IP` from `CF-Connecting-IP` (a visitor's own X-Real-IP is replaced). Default sign-ups per address 5 → 20 (phone networks share addresses). **Needs a deploy of the Worker.**
+- [x] Email verification + forgot/reset password (✦ Resend over HTTPS, `RESEND_API_KEY` + `MAIL_FROM`, on the server or in Admin → Plans; without a key the link is logged and nobody is blocked). `lib/mail.ts`, `lib/emailTokens.ts` (hashed one-time tokens, 3 days / 1 hour), `/verify-email`, `/forgot-password`, `/reset-password`, banner with "send again". Publishing (kept as a draft), payouts and paying for Plus need a confirmed email (`features.requireVerifiedEmail`). Accounts made before this count as confirmed (`GRANDFATHER` in schema.sql). Rig 16/16.
+- [x] Clip video made in production has wrong subtitles. Likely cause: the Studio opened lyrics by itself matched on the **title only** (similarity ≥ 0.5, artist and length ignored), so another song's words landed on the clip. Now `trustedLyricsMatch` (title ≥ 0.8 and the artist, or the same recording's length; far-off lengths refused). Tests 5/5. **Owner: if it still happens, say which song and what the subtitles showed.**
+- [x] Ads on small screens cut their text: titles/bodies wrap (2–3 lines), cards grow, the button becomes a line under the words on phones (AdCard, HouseMotion, PrerollGate).
+- [x] Ask before closing the tab while uploading / splitting / mining (uploads already asked; mining now does too).
+
+**Features**
+- [x] Studio: "With mix" on every song/stem in the library panel puts it in the mix and plays, with Keep / Not this one (`StudioLibraryPanel.tsx`). Not yet clicked through with real lanes in a browser.
+- [x] Every remix page: "Before and after" — 5 s of the original vocal (its loudest part), 5 s of the original beat, a riser + high-pass sweep, then the remix from the top (`OriginalsIntro.tsx`; originals streamed through `<audio>`, not decoded whole). Checked in Chrome, no errors.
+- [x] Connection drops: `lib/client/connection.ts` wakes every wait the moment the line is back or changes (Wi-Fi ↔ mobile, VPN) — stem downloads' back-off, the radio's feed; uploads already did. Site-wide "You're offline / Back online" notice.
+- [x] Radio: a song that isn't there → "Not here? Upload it" (with the way back to the station on /upload). Upload and mining already carry on while browsing the site.
+- [x] Upload: each song has **Details** — name, artist, album, year, genre, artwork, lyrics (plain or LRC; saved as the song's words for everyone). New columns `song_artist`, `album`, `release_year`, `genre`. Not yet shown on public pages.
+- [x] Admin can play every song (Admin → Songs: a button per part, private too) and open any remix, drafts too.
+- [x] DJ playlists: **Build a set** (`djPlaylist.ts` pure, tests 7/7; `SetBuilder.tsx`) — warm-up / peak / journey / steady, a length, key-to-key and tempo within reach (×½…×4 counted), reorder, reshuffle, save on the device, copy the list, and **Auto DJ plays it in order**.
+- [x] DJ on phones: the decks now come straight under the waveforms (tips collapse to one line).
+- [ ] DJ: deeper redesign of the Pro console to look and feel like hardware (larger jog wheels, pad banks, cue/loop rows, landscape phone layout). Not started this session.
+- [x] Plans: Free / Plus (`lib/plans.ts` pure + tests 7/7; `lib/billing/*`). **Off until the owner switches it on** (Settings → Plans). Plus-only switches: link import, phone queue, site AI, web lyrics; Plus has no ads. Stripe Checkout (cards, Apple Pay, Google Pay; inline prices, signed webhooks, customer portal), PayPal subscriptions (plans made per price, verified webhooks, cancel), paying by hand (admin confirms). `/plus` page, Admin → Plans (keys, webhook addresses, members, confirm payments, give/end Plus). Apple in-app only with a native app.
+- [ ] Owner: Stripe/PayPal keys + webhooks (Admin → Plans shows the addresses), then switch plans on. Test with Stripe test keys and PayPal sandbox first.
+- [ ] Ads: every ad setting in Admin (networks, places, frequency). Frequency, prices, switches and Remixt's own ads already are; ad networks still wait for decision 7.
+- [x] Real AI through OpenRouter: the Studio's co-producer (already an agent with tools) runs on the site's `OPENROUTER_API_KEY` with the owner's model (Settings → The site's AI), counted in **tokens per person per day** by plan (`ai_token_usage`); own keys still work.
+- [ ] Owner: set `OPENROUTER_API_KEY` and try a conversation.
+- [ ] SEO: more tools, and the SEO tooling checked. `/plus` added to the sitemap and footer; new private pages noindex + disallowed. More tools not done this session.
+- [x] Cloudflare: the Worker serves static files from the edge cache (they no longer wake the container), container sleeps after 20 min (was 1 h), new keys passed through. DEPLOY.md → "Cloudflare: fast and cheap" (real prices, the owner's dashboard steps: R2 custom domain + cache rule, speed switches, optional `basic` instance).
+- [ ] Owner: R2 custom domain + `R2_PUBLIC_URL`; deploy the Worker (`cd cloudflare && npx wrangler deploy`).
+- [ ] Every page and tool checked on production-like data; navigation never stuck.
+
+**Left from this list:** Pro console hardware redesign, more SEO tools, examples ranking the whole library, showing upload details (album, year, genre) on public pages, a "Join Plus" link where a Plus-only feature is refused (it says so in words now), real phone checks of the new pieces (With mix, Before and after, Build a set).
+
+---
+
 ## Session 2026-11-20 (2) — Next docs, tools & guides from the SEO content map, radio page, first-change fix
 
 Last session's work was already committed (`82a48f1`). This session is uncommitted.

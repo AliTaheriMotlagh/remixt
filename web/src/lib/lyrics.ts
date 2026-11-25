@@ -878,3 +878,28 @@ export function snapToPhrases(lines: LyricLine[], env: Envelope, max = 0.3): Lyr
     return { ...l, time };
   });
 }
+
+/**
+ * The lyrics-library result that is surely the song, for lyrics opened
+ * without anyone choosing them (and then drawn on clip videos). A title
+ * alone isn't enough — "Moft" or "Baran" is a dozen songs — so it needs
+ * the title nearly the same and the artist too; with no artist known, the
+ * recording's length must agree (within 3 s). A result whose length is far
+ * from the song's (15 s or more) is another recording or another song.
+ * Null when nothing is that sure: better no lyrics than someone else's.
+ */
+export function trustedLyricsMatch(results: LyricsResult[], song: { title: string; artist: string; length: number | null }): LyricsResult | null {
+  const sameRecording = (r: LyricsResult) => !!r.duration && !!song.length && Math.abs(r.duration - song.length) <= 3;
+  const artistMatches = (r: LyricsResult) => {
+    const a = normalizeLine(r.artist);
+    const b = normalizeLine(song.artist);
+    return !!a && !!b && (a.includes(b) || b.includes(a) || lineSimilarity(r.artist, song.artist) >= 0.6);
+  };
+  const fits = results.filter((r) => {
+    if (r.instrumental || !(r.synced || r.plain)) return false;
+    if (lineSimilarity(r.title, song.title) < 0.8) return false;
+    if (r.duration && song.length && Math.abs(r.duration - song.length) >= 15) return false;
+    return song.artist.trim() ? artistMatches(r) : sameRecording(r);
+  });
+  return fits.find((r) => r.synced && sameRecording(r)) ?? fits.find((r) => r.synced) ?? fits[0] ?? null;
+}

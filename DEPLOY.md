@@ -491,3 +491,26 @@ docker run --rm -v remixt-data:/data -v "$PWD":/backup alpine \
   yet.
 - **Vercel's free plan is non-commercial.** Move to Pro, or to the Docker
   setup, before charging money.
+
+## Cloudflare: fast and cheap (checked against Cloudflare's pricing, Nov 2026)
+
+What costs money, and what the repo already does about it:
+
+| Piece | Free / included | Paid beyond | What keeps it low |
+|---|---|---|---|
+| Workers Paid plan | — | $5/month (needed for Containers) | — |
+| Container memory | 25 GiB-hours/month | $0.0000025 per GiB-second | **Billed every second it's awake.** `standard-1` (4 GiB) awake all month ≈ $26 extra. The Worker now serves hashed build files, fonts, pictures and sounds from Cloudflare's edge cache, so they don't wake the container, and it sleeps after **20 min** with no request (`sleepAfter` in `cloudflare/src/index.ts`). |
+| Container CPU | 375 vCPU-minutes/month | $0.00002 per vCPU-second, *used* CPU only | Splitting happens in visitors' browsers, not here. |
+| R2 storage | 10 GB-month | $0.015/GB-month | Stems are VBR MP3 (`mp3Xing.ts`); Admin → Storage → Start fresh / Clean up removes what nothing uses. |
+| R2 reads (Class B) | 10 M/month | $0.36/million | Serve stems through a **custom domain** (below): cache hits never reach the bucket. |
+| R2 egress | Free | Free | — |
+
+Steps for the owner (dashboard, once):
+1. **R2 custom domain** — R2 → the bucket → Settings → Custom domains → `cdn.remixt.app`. Then set `R2_PUBLIC_URL=https://cdn.remixt.app` (`wrangler secret put R2_PUBLIC_URL`). Stems then come from the edge near each listener (faster over VPNs) and repeat plays cost nothing.
+2. **Cache rule for the CDN** — Caching → Cache Rules → "hostname equals cdn.remixt.app" → Eligible for cache, Edge TTL 1 month, Browser TTL 1 year (stem files never change at their address).
+3. **R2 CORS** — `cloudflare/r2-cors.json` lists the site's origins; `deploy.sh` applies it. Add any new domain there.
+4. **Speed** — Speed → Optimization: turn on HTTP/3, 0-RTT, Early Hints and Brotli (all free). Leave Rocket Loader **off** (it breaks the app's scripts).
+5. **Smaller container (optional, saves most)** — `instance_type: "basic"` (1 GiB) would cut memory cost by ¾. Try it on a quiet day: link imports (yt-dlp + ffmpeg) are the hungriest part; if the container restarts under load, go back to `standard-1`.
+6. **Neon** — use the direct host in `DATABASE_URL` (see `deploy.sh`), and keep Neon's own scale-to-zero on for a small bill.
+
+Keys for the new features (each can also be entered in Admin → Plans instead): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_WEBHOOK_ID`, `PAYPAL_MODE`, `RESEND_API_KEY`, `MAIL_FROM`, `OPENROUTER_API_KEY`.

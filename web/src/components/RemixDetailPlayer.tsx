@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowRight, ChevronDown, ChevronRight } from "lucide-react";
 import StudioTransport from "./StudioTransport";
 import MixWaveform from "./MixWaveform";
+import OriginalsIntro from "./OriginalsIntro";
 import StudioShortcuts from "./studio/StudioShortcuts";
 import Arrangement from "./studio/Arrangement";
 import LaneInspector from "./studio/LaneInspector";
@@ -89,6 +90,7 @@ export default function RemixDetailPlayer({
 
   return (
     <div className="touch-targets mt-6 flex flex-col gap-4">
+      <OriginalsIntro />
       <StudioTransport user={user} remixId={remixId} defaultTitle={title} viewing artistName={artistName} cover={cover} />
       <StudioShortcuts mode="remix" className="-my-2 self-end" />
       <div className="rounded-xl border border-border bg-surface p-3">

@@ -17,6 +17,7 @@ import {
   applyFit,
   snapToPhrases,
   splitSongTitle,
+  trustedLyricsMatch,
   type Envelope,
   type LyricLine,
   type LyricsPage,
@@ -397,9 +398,8 @@ export async function autoFindLyrics(song: { song: string; artist: string; lane:
   if (length) params.set("duration", String(Math.round(length)));
   onStep?.("Searching the lyrics library…");
   const { results } = await searchLyrics(params).catch(() => ({ results: [] as LyricsResult[] }));
-  const fits = results.filter((r) => !r.instrumental && (r.synced || r.plain) && lineSimilarity(r.title, song.song) >= 0.5);
-  const sameRecording = (r: LyricsResult) => !!r.duration && !!length && Math.abs(r.duration - length) <= 3;
-  const pick = fits.find((r) => r.synced && sameRecording(r)) ?? fits.find((r) => r.synced) ?? fits[0];
+  // Opened without being asked, and drawn on clip videos: only a result that is surely this song.
+  const pick = trustedLyricsMatch(results, { title: song.song, artist: song.artist, length: length ?? null });
   if (!pick) return null;
   const named = { title: pick.title, artist: pick.artist };
 

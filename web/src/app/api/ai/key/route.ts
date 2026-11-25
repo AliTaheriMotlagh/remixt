@@ -3,6 +3,10 @@ import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import { AI_MODELS, aiKeyStatuses, checkAiKey, deleteAiKey, isModelFor, isProvider, looksLikeKey, saveAiKey, setAiModel, type AiProvider } from "@/lib/aiKeys";
 import { sharedAi, sharedQuestionsLeft } from "@/lib/aiShared";
+import { secret } from "@/lib/billing/secrets";
+import { aiAllowance } from "@/lib/billing/store";
+import { aiTokensPerDay } from "@/lib/plans";
+import { getSettings } from "@/lib/settings/server";
 
 // The person's own API keys for the AI co-producer — Anthropic and/or
 // OpenRouter — saved on their account (encrypted, see lib/aiKeys.ts). GET
@@ -17,6 +21,15 @@ import { sharedAi, sharedQuestionsLeft } from "@/lib/aiShared";
 
 export async function GET() {
   const user = await getCurrentUser();
+  // The site's own AI on OpenRouter, counted in tokens a day by plan (lib/billing/store.ts).
+  if (await secret("OPENROUTER_API_KEY")) {
+    const settings = await getSettings();
+    const tokens = user ? await aiAllowance(user.id).catch(() => null) : null;
+    const shared = { limit: tokens?.limit ?? aiTokensPerDay("free", settings), left: tokens ? tokens.left : null, unit: "tokens" as const, model: settings.ai.model };
+    if (!user) return NextResponse.json({ signedIn: false, saved: {}, models: AI_MODELS, shared });
+    const saved = await aiKeyStatuses(user.id).catch(() => null);
+    return NextResponse.json({ signedIn: true, saved: saved ?? {}, models: AI_MODELS, shared });
+  }
   // The site's free AI, when it offers one: how many questions a day, and how many are left today.
   const shared = sharedAi();
   if (!user) return NextResponse.json({ signedIn: false, saved: {}, models: AI_MODELS, shared: shared ? { limit: shared.dailyQuestions, left: null } : null });

@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { after, NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
+import { mayUse } from "@/lib/billing/store";
 import { ImportError, importSong } from "@/lib/linkImport";
 import { putObject, storageProblem, sweepOld } from "@/lib/storage";
 
@@ -20,6 +21,8 @@ export async function POST(req: NextRequest) {
 
   const problem = storageProblem();
   if (problem) return NextResponse.json({ error: problem }, { status: 503 });
+  const gate = await mayUse(user, "linkImport");
+  if (!gate.ok) return NextResponse.json(gate, { status: 402 });
 
   const parsed = bodySchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Paste a link first" }, { status: 400 });

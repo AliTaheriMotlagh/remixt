@@ -87,6 +87,9 @@ export default function LoginPage() {
               enterKeyHint="go"
             />
           </Field>
+          <Link href="/forgot-password" className="-mt-2 self-end text-xs font-medium text-brand-strong hover:underline">
+            Forgot your password?
+          </Link>
 
           {error && <p className="text-sm text-danger">{error}</p>}
 

@@ -6,6 +6,7 @@
 // and stitch them together. With any other storage the first request
 // usually returns the whole file (a 200) and this is a single fetch.
 
+import { pause } from "./connection";
 import { cacheGet, cachePut } from "./localCache";
 
 const SLICE = 4 * 1024 * 1024;
@@ -63,9 +64,14 @@ export function within(ms: number): AbortSignal {
   return controller.signal;
 }
 
-/** Waits before asking again: 1 s, 2 s, 4 s… (a line that's down often comes back within seconds). */
+/**
+ * Waits before asking again: 1 s, 2 s, 4 s… (a line that's down often comes
+ * back within seconds) — and no longer than that: the moment the device is
+ * back online or its network changes (Wi-Fi ↔ mobile, a VPN reconnecting),
+ * it asks again at once.
+ */
 function backoff(attempt: number) {
-  return new Promise((resolve) => setTimeout(resolve, Math.min(8000, 1000 * 2 ** (attempt - 1))));
+  return pause(Math.min(8000, 1000 * 2 ** (attempt - 1)));
 }
 
 async function fetchRange(url: string, start: number, end: number, answerWithin?: number) {

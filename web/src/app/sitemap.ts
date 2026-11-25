@@ -22,6 +22,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: absoluteUrl("/remixes"), lastModified: now, changeFrequency: "hourly", priority: 0.9 },
     { url: absoluteUrl("/library"), lastModified: now, changeFrequency: "daily", priority: 0.8 },
     { url: absoluteUrl("/studio"), lastModified: now, changeFrequency: "monthly", priority: 0.8 },
+    { url: absoluteUrl("/plus"), lastModified: now, changeFrequency: "monthly", priority: 0.6 },
     // The tool pages answer the searches people make most ("vocal remover"…),
     // in every language they're written in, each listing its twins (hreflang).
     ...TOOL_LOCALES.map((locale) => ({

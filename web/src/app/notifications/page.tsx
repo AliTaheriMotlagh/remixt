@@ -63,6 +63,16 @@ function describe(n: Notification) {
         </>
       );
     }
+    case "plan": {
+      const [state, when, ...note] = (n.body ?? "").split("|");
+      const said = note.join("|");
+      return (
+        <>
+          {state === "on" ? <>Remixt Plus is on until {when} — thank you!</> : <>Your Plus payment couldn&apos;t be confirmed</>}
+          {said && <span className="mt-1 block text-muted">“{said}”</span>}
+        </>
+      );
+    }
     case "blocked":
       return (
         <>
@@ -114,6 +124,7 @@ function hrefFor(n: Notification) {
   if (n.type === "split") return "/upload";
   if (n.type === "share") return "/studio";
   if (n.type === "payout") return "/earnings";
+  if (n.type === "plan") return "/plus";
   if (n.type === "ad") return "/advertise";
   if (n.type === "consent" && n.body === "asked") return "/approvals";
   if (n.type === "blocked" && n.remix_id) return `/remixes/${n.remix_id}`;

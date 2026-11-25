@@ -21,6 +21,11 @@ export type TrackRow = {
   visibility?: "public" | "private";
   /** The song's cover picture, if it has one (see app/api/tracks/[id]/cover). */
   cover_key?: string | null;
+  /** The song's details, as its uploader gave them (Upload → Details). */
+  song_artist?: string | null;
+  album?: string | null;
+  release_year?: number | null;
+  genre?: string | null;
 };
 
 export type StemRow = {

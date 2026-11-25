@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { mayUse } from "@/lib/billing/store";
+import { getCurrentUser } from "@/lib/auth";
 import { ImportError, checkHost, checkLink } from "@/lib/linkImport";
 import { geniusEmbedHtml, geniusSongId, lyricsFromFile, lyricsFromGeniusEmbed, lyricsFromHtml, lyricsLinkFrom, type ImportedLyrics } from "@/lib/lyricsImport";
 
@@ -89,6 +91,8 @@ function hint(value: unknown) {
 }
 
 export async function POST(req: NextRequest) {
+  const gate = await mayUse(await getCurrentUser().catch(() => null), "lyricsWeb");
+  if (!gate.ok) return NextResponse.json(gate, { status: 402 });
   const body = (await req.json().catch(() => null)) as { link?: unknown; geniusId?: unknown; title?: unknown; artist?: unknown } | null;
   const pasted = typeof body?.link === "string" ? body.link.slice(0, 8000) : "";
   const found = lyricsLinkFrom(pasted);

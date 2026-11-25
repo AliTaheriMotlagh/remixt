@@ -1,3 +1,4 @@
+import { needsVerifiedEmail } from "@/lib/needsVerified";
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { blockedMessage, blockedSongs } from "@/lib/monetize/adStore";
@@ -203,7 +204,9 @@ export async function POST(req: NextRequest) {
   }
   // Someone else's private song in it: saved private, and its owner is asked (lib/publishConsent.ts).
   const waiting = published ? waitingFor(await songsOfStems(heard), user.id, new Map()) : [];
-  const publishNow = published && waiting.length === 0;
+  // Not confirmed their email yet: kept as a draft, published once they have (from the remix's page).
+  const unconfirmed = published ? await needsVerifiedEmail(user.id) : null;
+  const publishNow = published && waiting.length === 0 && !unconfirmed;
 
   const remixId = randomUUID();
   await sql.begin(async (tx) => {
@@ -233,6 +236,9 @@ export async function POST(req: NextRequest) {
   if (publishNow) {
     trackServer("publish", user.id, { what: "remix" });
     await notifyRemixCreated(remixId, user.id).catch(() => {});
+  }
+  if (unconfirmed) {
+    return NextResponse.json({ id: remixId, published: false, verifyEmail: true, message: "Saved as a draft — confirm your email (we sent you a link), then publish it from its page" });
   }
   return NextResponse.json({ id: remixId, published: publishNow });
 }

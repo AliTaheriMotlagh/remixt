@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSettings } from "@/lib/settings/server";
 import { getCurrentUser } from "@/lib/auth";
+import { adsFor } from "@/lib/billing/store";
 import { adAudioUrl, adImageUrl, isOwnViewer, namesFor, parseTarget, pickCampaign, sharesFor, viewToken } from "@/lib/monetize/store";
 import { adsAllowed, pickPromoted } from "@/lib/monetize/adStore";
 import { pickHouseAd } from "@/lib/monetize/houseStore";
@@ -35,6 +36,8 @@ export async function GET(req: NextRequest) {
   const none = { ad: null, house: null, token: null, supports: [] };
   try {
     const { features } = await getSettings();
+    // Plus members see and hear no ads (Admin → Settings → Plans).
+    if (!(await adsFor(await getCurrentUser().catch(() => null)))) return NextResponse.json({ ...none, off: true }, NO_STORE);
     if (format === "promote") {
       if (!features.ads || !features.promotions) return NextResponse.json(none, NO_STORE);
       const kind = params.get("kind") === "track" ? "track" : "remix";

@@ -78,7 +78,8 @@ function encryptionKey(): Buffer {
   return key;
 }
 
-function encrypt(plain: string, userId: string): string {
+/** AES-256-GCM, bound to `userId` (or any other label: site secrets use "site:<name>"). */
+export function encrypt(plain: string, userId: string): string {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", encryptionKey(), iv);
   cipher.setAAD(Buffer.from(userId));
@@ -86,7 +87,7 @@ function encrypt(plain: string, userId: string): string {
   return ["v1", iv.toString("base64"), cipher.getAuthTag().toString("base64"), body.toString("base64")].join(":");
 }
 
-function decrypt(stored: string, userId: string): string {
+export function decrypt(stored: string, userId: string): string {
   const [version, iv, tag, body] = stored.split(":");
   if (version !== "v1" || !iv || !tag || !body) throw new Error("Unknown key format");
   const decipher = crypto.createDecipheriv("aes-256-gcm", encryptionKey(), Buffer.from(iv, "base64"));

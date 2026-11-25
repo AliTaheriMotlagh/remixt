@@ -1,3 +1,4 @@
+import { isAdmin } from "@/lib/admin";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import sql from "@/lib/db";
@@ -78,7 +79,8 @@ export default async function RemixDetailPage({
   const isOwner = user?.id === remix.owner_id;
   // A private remix opens for its owner, and for the owner of a private song in it who was asked to agree to publishing it.
   const asked = !remix.published && !isOwner && (await wasAsked(remix.id, user?.id ?? null).catch(() => false));
-  if (!remix.published && !isOwner && !asked) notFound();
+  // An admin can open and play any remix, drafts too (they moderate them).
+  if (!remix.published && !isOwner && !asked && !isAdmin(user)) notFound();
   const consent = isOwner && !remix.published ? await consentsForMaker(remix.id, remix.owner_id).catch(() => null) : null;
   const waitingText = consent?.requested && consent.waiting.length ? waitingMessage(consent.waiting.map((w) => ({ ...w, status: w.status === "declined" ? "declined" as const : "asked" as const }))) : null;
   const [stats, comments, artistProgress, credits, ads, parties] = await Promise.all([

@@ -5,6 +5,9 @@ import { DEFAULT_AI_MODEL, isAiModel, isModelFor, isProvider, looksLikeKey, save
 import { returnSharedTurn, sharedAi, takeSharedTurn } from "@/lib/aiShared";
 import { COPRODUCER_SYSTEM, COPRODUCER_TOOLS } from "@/lib/coproducer";
 import { OpenRouterError, openRouterTurn } from "@/lib/openrouter";
+import { secret } from "@/lib/billing/secrets";
+import { aiAllowance, mayUse, spendAiTokens } from "@/lib/billing/store";
+import { getSettings } from "@/lib/settings/server";
 
 // One turn of the AI co-producer: the conversation so far goes to the model
 // with the Studio's tools, on the person's own key — Claude through
@@ -50,6 +53,41 @@ export async function POST(req: NextRequest) {
   const saved = user ? await savedAiKey(user.id, provider) : null;
   const own = fromBrowser && looksLikeKey(provider, fromBrowser) ? fromBrowser : saved?.apiKey;
   const who = provider === "anthropic" ? "Anthropic" : "OpenRouter";
+
+  // No key of their own, signed in, and the site has its OpenRouter key: the
+  // site's AI, on the model the owner picked, counted in tokens a day by plan.
+  const siteKey = !own && user ? await secret("OPENROUTER_API_KEY") : null;
+  if (siteKey && user) {
+    const gate = await mayUse(user, "ai");
+    if (!gate.ok) return NextResponse.json({ ...gate, needsKey: true }, { status: 402 });
+    const before = await aiAllowance(user.id);
+    if (before.left <= 0) {
+      return NextResponse.json(
+        {
+          error: before.limit
+            ? `That's today's ${before.limit.toLocaleString("en-US")} AI tokens — they come back tomorrow. Plus gives more, or add your own key.`
+            : "The site's AI is part of Remixt Plus — or add your own key",
+          quota: true,
+          tokens: before,
+        },
+        { status: 429 }
+      );
+    }
+    const { ai } = await getSettings();
+    try {
+      const reply = await openRouterTurn(siteKey, ai.model, COPRODUCER_SYSTEM, COPRODUCER_TOOLS, messages as Anthropic.Beta.BetaMessageParam[]);
+      const usage = reply.usage as { total_tokens?: number; prompt_tokens?: number; completion_tokens?: number } | null;
+      const spent = usage?.total_tokens ?? (usage?.prompt_tokens ?? 0) + (usage?.completion_tokens ?? 0);
+      await spendAiTokens(user.id, spent);
+      return NextResponse.json({ ...reply, tokens: { used: before.used + spent, limit: before.limit, left: Math.max(0, before.left - spent) } });
+    } catch (error) {
+      console.error("site AI failed", error);
+      const status = error instanceof OpenRouterError ? error.status : 502;
+      if (status === 402) return NextResponse.json({ error: "The site's AI is out of credit right now — add your own key to keep going" }, { status: 503 });
+      if (status === 429) return NextResponse.json({ error: "The AI is busy — wait a moment and try again" }, { status: 429 });
+      return NextResponse.json({ error: "The AI had a problem — try again" }, { status: 502 });
+    }
+  }
   // No key of their own: the site's shared one, for someone signed in, while today's questions last.
   const shared = !own && provider === "anthropic" && user ? sharedAi() : null;
   // A new question, rather than the next round of one (tool results going back).

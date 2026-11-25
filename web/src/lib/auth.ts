@@ -30,6 +30,8 @@ export type User = {
   bio: string;
   avatar_color: string;
   created_at: Date;
+  /** When they confirmed their email (lib/emailTokens.ts); null until then. */
+  email_verified_at?: Date | null;
 };
 
 export async function hashPassword(password: string) {
@@ -75,10 +77,16 @@ export async function getCurrentUser(): Promise<User | null> {
   try {
     const { payload } = await jwtVerify(token, sessionKey());
     const userId = payload.userId as string;
-    const rows = await sql<User[]>`
-      SELECT id, email, artist_name, bio, avatar_color, created_at
+    const read = () => sql<User[]>`
+      SELECT id, email, artist_name, bio, avatar_color, created_at, email_verified_at
       FROM users WHERE id = ${userId}
     `;
+    const rows = await read().catch(async (err: { code?: string }) => {
+      // A database from before confirmed emails: add the column, then read again.
+      if (err?.code !== "42703") throw err;
+      await (await import("./emailTokens")).ensureEmailSchema();
+      return read();
+    });
     return rows[0] ?? null;
   } catch {
     return null;

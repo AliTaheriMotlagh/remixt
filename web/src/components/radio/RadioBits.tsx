@@ -1,7 +1,8 @@
 "use client";
 
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Clock3, Disc3, Hand, ListMusic, Loader2, Music2, Radio, Search, Sparkles, ThumbsUp, Users, Vote, X } from "lucide-react";
+import Link from "next/link";
+import { Check, Clock3, Disc3, Hand, ListMusic, Loader2, Music2, Radio, Search, Sparkles, ThumbsUp, Upload, Users, Vote, X } from "lucide-react";
 import { audioEngine } from "@/lib/client/audioEngine";
 import { clock, searchStation, type RadioFeed } from "@/lib/client/radioClient";
 import type { QueueRow } from "@/lib/radio";
@@ -466,7 +467,10 @@ export function RequestPanel({
                 <Loader2 className="size-4 animate-spin" /> Searching…
               </li>
             ) : items.length === 0 ? (
-              <li className="p-3 text-sm text-muted">Nothing found{q ? ` for “${q}”` : ""}.</li>
+              <li className="flex flex-col items-start gap-2 p-3 text-sm text-muted">
+                <span>Nothing found{q ? ` for “${q}”` : ""}.</span>
+                {q.trim() && <UploadInstead slug={slug} q={q} />}
+              </li>
             ) : (
               items.map((item) => {
                 const key = `${item.kind}:${item.id}`;
@@ -490,6 +494,11 @@ export function RequestPanel({
               })
             )}
           </ul>
+          {q.trim() && !!items?.length && (
+            <p className="flex flex-wrap items-center gap-2 text-xs text-muted">
+              Not the one you meant? <UploadInstead slug={slug} q={q} />
+            </p>
+          )}
         </>
       )}
       {feed.requests.length > 0 && (
@@ -543,3 +552,17 @@ export function History({ rows, now }: { rows: QueueRow[]; now: number }) {
 }
 
 export const Icons = { Radio, Music2, Clock3, Users };
+
+/**
+ * For a song the station doesn't have: upload it. The upload goes on in
+ * the background (the page can be left), it joins the library once it's
+ * split, and the link brings the listener back here to ask for it.
+ */
+export function UploadInstead({ slug, q }: { slug: string; q: string }) {
+  const href = `/upload?title=${encodeURIComponent(q.trim().slice(0, 120))}&next=${encodeURIComponent(`/radio/${slug}`)}`;
+  return (
+    <Link href={href} className="inline-flex min-h-10 items-center gap-1.5 rounded-lg bg-brand px-3 text-sm font-semibold text-white hover:bg-brand-strong">
+      <Upload className="size-4" /> Not here? Upload it
+    </Link>
+  );
+}

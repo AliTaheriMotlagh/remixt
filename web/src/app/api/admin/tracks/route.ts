@@ -10,7 +10,9 @@ export async function GET(req: NextRequest) {
   const status = req.nextUrl.searchParams.get("status");
   const tracks = await sql`
     SELECT tracks.id, tracks.title, tracks.status, tracks.error, tracks.duration, tracks.bpm,
-           tracks.created_at, tracks.featured_example, tracks.example_credit, users.id AS owner_id, users.artist_name, users.email,
+           tracks.created_at, tracks.featured_example, tracks.example_credit, tracks.visibility, users.id AS owner_id, users.artist_name, users.email,
+           -- Every part, private or held back too: an admin can play any song (canHearStem lets them).
+           COALESCE((SELECT json_agg(json_build_object('id', s.id, 'kind', s.kind) ORDER BY s.kind) FROM stems s WHERE s.track_id = tracks.id), '[]'::json) AS stems,
            (SELECT COUNT(DISTINCT remix_lanes.remix_id) FROM remix_lanes
               JOIN stems ON stems.id = remix_lanes.stem_id
              WHERE stems.track_id = tracks.id)::int AS used_in_remixes

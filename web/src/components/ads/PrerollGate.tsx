@@ -192,7 +192,7 @@ export default function PrerollGate({ remixId, lang = "en" }: { remixId: string;
             {ad.own ? (fa ? "از ریمیکست" : "From Remixt") : fa ? "تبلیغ" : "Ad"} · {Math.max(0, Math.ceil(total - at))}s
             {!ad.own && ad.advertiser ? ` · ${ad.advertiser}` : ""}
           </p>
-          <p className="truncate font-semibold">{ad.title}</p>
+          <p className="line-clamp-2 break-words font-semibold leading-snug">{ad.title}</p>
           <a
             href={ad.own ? (ad.href ?? "/") : `/api/ads/click?t=${encodeURIComponent(playing.token ?? "")}`}
             onClick={() => {
@@ -212,7 +212,7 @@ export default function PrerollGate({ remixId, lang = "en" }: { remixId: string;
           type="button"
           disabled={left > 0}
           onClick={() => finish.current?.()}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border bg-surface px-3.5 py-2 text-sm font-semibold disabled:text-muted"
+          className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-surface px-3 py-2 text-xs font-semibold disabled:text-muted sm:px-3.5 sm:text-sm"
         >
           {left > 0 ? (fa ? `رد کردن در ${left}` : `Skip in ${left}`) : fa ? "رد کردن" : "Skip ad"}
           {left === 0 && <SkipForward className="h-4 w-4 rtl:-scale-x-100" />}
@@ -221,7 +221,7 @@ export default function PrerollGate({ remixId, lang = "en" }: { remixId: string;
       {people.length > 0 && (
         <p className="flex items-center gap-1.5 border-t border-border/70 px-3 py-2 text-xs text-muted">
           <HeartHandshake className="h-3.5 w-3.5 shrink-0 text-vocals" />
-          <span className="truncate">
+          <span className="line-clamp-2">
             {fa ? "این تبلیغ حامیِ " : "This ad pays "}
             <span className="text-foreground">{people.slice(0, 3).map((p) => p.name).join(fa ? "، " : ", ")}</span>
           </span>

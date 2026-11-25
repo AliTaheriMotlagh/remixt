@@ -9,14 +9,20 @@ const KEYS = [
   "AI_SHARED_DAILY_QUESTIONS", "GENIUS_ACCESS_TOKEN", "YTDLP_PROXY", "YTDLP_COOKIES",
   "MUSIC_SITES", "GOOGLE_SITE_VERIFICATION", "BING_SITE_VERIFICATION", "YANDEX_VERIFICATION",
   "STORAGE_LIMIT_GB",
+  // Plans and payments, email, the site's AI (each can also be entered in Admin → Plans).
+  "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "PAYPAL_CLIENT_ID", "PAYPAL_CLIENT_SECRET", "PAYPAL_WEBHOOK_ID", "PAYPAL_MODE",
+  "RESEND_API_KEY", "MAIL_FROM", "OPENROUTER_API_KEY",
 ] as const;
 
 type Env = { REMIXT: DurableObjectNamespace<Remixt> } & Partial<Record<(typeof KEYS)[number], string>>;
 
 export class Remixt extends Container<Env> {
   defaultPort = 3000;
-  // Sleep after an hour without visitors; the next visit wakes it (a few seconds).
-  sleepAfter = "1h";
+  // A container is billed while it's awake. It sleeps after 20 minutes
+  // with no request that reaches it (static files are served from the edge
+  // cache below and don't count); the next visit wakes it in a few seconds.
+  // A radio listener or a live room polls, so those keep it awake as needed.
+  sleepAfter = "20m";
 
   constructor(ctx: DurableObjectState<Env>, env: Env) {
     super(ctx, env);
@@ -26,14 +32,49 @@ export class Remixt extends Container<Env> {
   }
 }
 
+/**
+ * Files that never change at their address: Next's hashed build files,
+ * fonts and the public folder's pictures, sounds and icons. Served from
+ * Cloudflare's cache at the visitor's edge once fetched, so they don't wake
+ * (or keep awake, or bill) the container, and arrive faster — over a VPN
+ * especially. Only answers the app itself marked public are kept.
+ */
+const STATIC = /^\/(?:_next\/static\/|ads\/|icons?\/|fonts?\/)|\.(?:js|css|woff2?|png|jpe?g|webp|avif|svg|ico|mp3|mp4|webmanifest)$/i;
+
+async function fromEdgeCache(request: Request, ctx: ExecutionContext, origin: () => Promise<Response>): Promise<Response> {
+  const cache = caches.default;
+  const hit = await cache.match(request);
+  if (hit) return hit;
+  const res = await origin();
+  const cc = res.headers.get("cache-control") ?? "";
+  if (res.status === 200 && /\bpublic\b|\bimmutable\b/.test(cc) && !/no-store|private/.test(cc) && !res.headers.has("set-cookie")) {
+    ctx.waitUntil(cache.put(request, res.clone()));
+  }
+  return res;
+}
+
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.hostname === "www.remixt.app") {
       url.hostname = "remixt.app";
       return Response.redirect(url.toString(), 301);
     }
+    // The visitor's address for the app's rate limits (sign-up, log-in, ads).
+    // Without it every visitor looked like the same "unknown" address, so
+    // five sign-ups an hour from anyone closed sign-up for everyone.
+    // Cloudflare sets CF-Connecting-IP itself; a visitor can't forge it, so
+    // whatever X-Real-IP they sent is replaced.
+    const headers = new Headers(request.headers);
+    const ip = request.headers.get("cf-connecting-ip");
+    if (ip) headers.set("x-real-ip", ip);
+    else headers.delete("x-real-ip");
+    headers.set("x-forwarded-proto", "https");
     // One shared instance: the app keeps live rooms (radio, DJ) in memory.
-    return getContainer(env.REMIXT, "main").fetch(request);
+    const origin = () => getContainer(env.REMIXT, "main").fetch(new Request(request, { headers }));
+    if (request.method === "GET" && !url.search && STATIC.test(url.pathname) && !url.pathname.startsWith("/api/")) {
+      return fromEdgeCache(request, ctx, origin);
+    }
+    return origin();
   },
 };

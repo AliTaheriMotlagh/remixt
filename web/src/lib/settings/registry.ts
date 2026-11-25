@@ -67,6 +67,8 @@ export type AppSettings = {
     housePreroll: boolean;
     /** First-party analytics (Admin → Analytics): page views, sessions, sources. */
     analytics: boolean;
+    /** Publishing, payouts and paying for Plus need a confirmed email (sign-up sends the link). */
+    requireVerifiedEmail: boolean;
   };
   mining: {
     base: number;
@@ -92,6 +94,36 @@ export type AppSettings = {
     captchaWork: number;
   };
   payTo: { en: string; fa: string };
+  /** Free (ads, no server features) and Plus (everything, no ads) — see lib/plans.ts. */
+  plans: {
+    /** Off: there's one plan and everyone has everything (as before plans existed). */
+    enabled: boolean;
+    monthlyMicros: number;
+    yearlyMicros: number;
+    /** Toman a month when paying by hand (card to card); 0 = the dollar price at the Toman rate. */
+    tomanMonthly: number;
+    /** What only Plus can use (each of these runs on Remixt's servers or costs it money). */
+    plusOnlyLinkImport: boolean;
+    plusOnlyQueue: boolean;
+    plusOnlyAi: boolean;
+    plusOnlyLyricsWeb: boolean;
+    /** Plus members see and hear no ads. */
+    plusNoAds: boolean;
+    /** Ways to pay offered on /plus (each also needs its keys; Admin → Plans says which are connected). */
+    stripe: boolean;
+    paypal: boolean;
+    manual: boolean;
+    /** How to pay by hand (card number, Sheba, USDT…) on the English and Persian pages. */
+    manualHowEn: string;
+    manualHowFa: string;
+  };
+  /** The site's own AI (the Studio's co-producer) on Remixt's OpenRouter key, metered in tokens. */
+  ai: {
+    /** The OpenRouter model id, e.g. "anthropic/claude-sonnet-5.5". */
+    model: string;
+    freeTokensPerDay: number;
+    plusTokensPerDay: number;
+  };
 };
 
 const M = 1_000_000;
@@ -121,10 +153,12 @@ export const DEFAULTS: AppSettings = {
     houseRadio: true,
     housePreroll: false,
     analytics: true,
+    requireVerifiedEmail: true,
   },
   mining: { base: 10, longSong: 5, firstToday: 5, rushMultiplier: 2, longSongMinutes: 5, rushAfterMinutes: 15 },
   limits: {
-    signupsPerHour: 5,
+    // Phone networks put many people behind one address (CGNAT, common in Iran): 5 an hour turned real people away.
+    signupsPerHour: 20,
     wrongPasswordsPerAccount: 8,
     loginsPerAddress: 30,
     takedownsPerHour: 10,
@@ -136,6 +170,23 @@ export const DEFAULTS: AppSettings = {
   },
   security: { captchaWork: 50_000 },
   payTo: { en: "", fa: "" },
+  plans: {
+    enabled: false,
+    monthlyMicros: 4_990_000,
+    yearlyMicros: 49_990_000,
+    tomanMonthly: 0,
+    plusOnlyLinkImport: true,
+    plusOnlyQueue: true,
+    plusOnlyAi: false,
+    plusOnlyLyricsWeb: false,
+    plusNoAds: true,
+    stripe: true,
+    paypal: true,
+    manual: true,
+    manualHowEn: "",
+    manualHowFa: "",
+  },
+  ai: { model: "anthropic/claude-sonnet-5.5", freeTokensPerDay: 20_000, plusTokensPerDay: 400_000 },
 };
 
 // ——— the fields ———
@@ -146,7 +197,7 @@ export const DEFAULTS: AppSettings = {
  */
 export type Unit = "percent" | "usd" | "count" | "times" | "seconds" | "ms" | "minutes" | "days" | "years" | "toman" | "switch" | "text";
 
-export type Group = "shares" | "payouts" | "ads" | "audio" | "features" | "mining" | "limits" | "security" | "payTo";
+export type Group = "shares" | "payouts" | "ads" | "audio" | "features" | "mining" | "limits" | "security" | "payTo" | "plans" | "ai";
 
 export type Field = {
   path: string;
@@ -174,6 +225,8 @@ export const GROUPS: { id: Group; en: string; fa: string; help: string }[] = [
   { id: "limits", en: "Limits against abuse", fa: "محدودیت‌ها", help: "How often one person or address may do something." },
   { id: "security", en: "Security", fa: "امنیت", help: "The captcha's difficulty." },
   { id: "payTo", en: "How advertisers pay you", fa: "روش پرداخت تبلیغ‌دهنده", help: "Shown on the advertiser page: card number, IBAN, USDT address…" },
+  { id: "plans", en: "Plans: Free and Plus", fa: "اشتراک: رایگان و پلاس", help: "Prices, what only Plus can use, and the ways to pay. Gateway keys are in Admin → Plans." },
+  { id: "ai", en: "The site's AI", fa: "هوش مصنوعیِ سایت", help: "The co-producer on Remixt's own OpenRouter key (OPENROUTER_API_KEY), counted in tokens per person per day." },
 ];
 
 const pct = (path: string, group: Group, en: string, fa: string, help: string, max = 10_000): Field => ({ path, group, unit: "percent", en, fa, help, min: 0, max, int: true, public: true });
@@ -247,6 +300,27 @@ export const FIELDS: Field[] = [
 
   { path: "payTo.en", group: "payTo", unit: "text", en: "On the English page", fa: "در صفحهٔ انگلیسی", max: 2_000, public: true },
   { path: "payTo.fa", group: "payTo", unit: "text", en: "On the Persian page", fa: "در صفحهٔ فارسی", max: 2_000, public: true },
+
+  { path: "features.requireVerifiedEmail", group: "features", unit: "switch", en: "A confirmed email for publishing, payouts and Plus", fa: "ایمیل تأییدشده برای انتشار، برداشت و پلاس", help: "Sign-up sends a link (needs RESEND_API_KEY). Off: nobody is asked.", public: true },
+
+  { path: "plans.enabled", group: "plans", unit: "switch", en: "Plans on (Free and Plus)", fa: "اشتراک فعال است", help: "Off: one plan, everyone has everything. On: Free has ads and no server features; Plus has everything and no ads.", public: true },
+  { path: "plans.monthlyMicros", group: "plans", unit: "usd", en: "Plus — a month", fa: "پلاس — ماهانه", min: 500_000, max: 1_000_000_000, int: true, public: true },
+  { path: "plans.yearlyMicros", group: "plans", unit: "usd", en: "Plus — a year", fa: "پلاس — سالانه", min: 500_000, max: 10_000_000_000, int: true, public: true },
+  { path: "plans.tomanMonthly", group: "plans", unit: "toman", en: "Plus — a month, paying by hand (Toman)", fa: "پلاس — ماهانه، پرداخت دستی (تومان)", help: "0 = the monthly dollar price at the Toman rate.", min: 0, max: 1_000_000_000, int: true, public: true },
+  { path: "plans.plusOnlyLinkImport", group: "plans", unit: "switch", en: "Only Plus: add a song from a link", fa: "فقط پلاس: افزودن آهنگ از لینک", help: "The server downloads it (yt-dlp).", public: true },
+  { path: "plans.plusOnlyQueue", group: "plans", unit: "switch", en: "Only Plus: split from a phone (the queue)", fa: "فقط پلاس: جداسازی از گوشی", help: "The song is stored on the server until a helper's computer splits it.", public: true },
+  { path: "plans.plusOnlyAi", group: "plans", unit: "switch", en: "Only Plus: the site's AI", fa: "فقط پلاس: هوش مصنوعیِ سایت", help: "Off: Free gets the free tokens below. Anyone can still use their own key.", public: true },
+  { path: "plans.plusOnlyLyricsWeb", group: "plans", unit: "switch", en: "Only Plus: lyrics from web pages", fa: "فقط پلاس: متن آهنگ از صفحه‌های وب", help: "The server fetches the page.", public: true },
+  { path: "plans.plusNoAds", group: "plans", unit: "switch", en: "Plus has no ads", fa: "پلاس بدون تبلیغ", public: true },
+  { path: "plans.stripe", group: "plans", unit: "switch", en: "Offer Stripe (cards, Apple Pay, Google Pay)", fa: "استرایپ", public: true },
+  { path: "plans.paypal", group: "plans", unit: "switch", en: "Offer PayPal", fa: "پی‌پل", public: true },
+  { path: "plans.manual", group: "plans", unit: "switch", en: "Offer paying by hand (you confirm it)", fa: "پرداخت دستی (شما تأیید می‌کنید)", help: "Card to card, bank, USDT — for places the gateways don't serve.", public: true },
+  { path: "plans.manualHowEn", group: "plans", unit: "text", en: "Paying by hand — how (English)", fa: "پرداخت دستی — روش (انگلیسی)", max: 2_000, public: true },
+  { path: "plans.manualHowFa", group: "plans", unit: "text", en: "Paying by hand — how (Persian)", fa: "پرداخت دستی — روش (فارسی)", max: 2_000, public: true },
+
+  { path: "ai.model", group: "ai", unit: "text", en: "Model (OpenRouter id)", fa: "مدل", help: "Any tool-using model on openrouter.ai/models, e.g. anthropic/claude-sonnet-5.5 or openai/gpt-5.", max: 120, public: true },
+  { path: "ai.freeTokensPerDay", group: "ai", unit: "count", en: "Tokens a day — Free", fa: "توکن روزانه — رایگان", help: "0 = none on Free.", min: 0, max: 100_000_000, int: true, public: true },
+  { path: "ai.plusTokensPerDay", group: "ai", unit: "count", en: "Tokens a day — Plus", fa: "توکن روزانه — پلاس", min: 0, max: 100_000_000, int: true, public: true },
 ];
 
 // ——— reading and checking ———

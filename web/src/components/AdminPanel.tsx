@@ -1,11 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { Heart, Play } from "lucide-react";
+import { Heart, Pause, Play } from "lucide-react";
+import { previewPlayer, usePreviewState } from "@/lib/client/previewPlayer";
+import type { StemKind } from "@/lib/stemKinds";
 import { useCallback, useEffect, useState } from "react";
 import type { StorageReport } from "@/lib/storageReport";
 import SongFixTab from "./admin/SongFixTab";
 import SettingsTab from "./admin/SettingsTab";
+import PlansTab from "./admin/PlansTab";
 import MonetizeTab from "@/components/admin/MonetizeTab";
 import HouseAdsTab from "@/components/admin/HouseAdsTab";
 import AnalyticsTab from "@/components/admin/AnalyticsTab";
@@ -56,6 +59,8 @@ type AdminTrack = {
   used_in_remixes: number;
   featured_example: boolean;
   example_credit: string | null;
+  visibility: "public" | "private";
+  stems: { id: string; kind: StemKind }[];
 };
 
 type AdminRemix = {
@@ -98,7 +103,7 @@ type AdminResult = {
   sender_email: string | null;
 };
 
-type Tab = "analytics" | "reports" | "users" | "songs" | "fix" | "remixes" | "challenges" | "results" | "storage" | "cleanup" | "money" | "house" | "settings";
+type Tab = "analytics" | "reports" | "users" | "songs" | "fix" | "remixes" | "challenges" | "results" | "storage" | "cleanup" | "money" | "house" | "settings" | "plans";
 
 function formatDate(value: string) {
   return new Date(value).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
@@ -160,6 +165,7 @@ export default function AdminPanel({ adminId }: { adminId: string }) {
     { id: "cleanup", label: "Clean up" },
     { id: "money", label: "Ads & earnings" },
     { id: "house", label: "Remixt ads" },
+    { id: "plans", label: "Plans" },
     { id: "settings", label: "Settings" },
   ];
 
@@ -223,6 +229,7 @@ export default function AdminPanel({ adminId }: { adminId: string }) {
         {tab === "cleanup" && <CleanupTab onChange={refreshOverview} />}
         {tab === "money" && <MonetizeTab onOpenSettings={() => setTab("settings")} />}
         {tab === "settings" && <SettingsTab />}
+        {tab === "plans" && <PlansTab onOpenSettings={() => setTab("settings")} />}
         {tab === "house" && <HouseAdsTab />}
         {tab === "analytics" && <AnalyticsTab />}
         {tab === "fix" && <SongFixTab />}
@@ -405,12 +412,14 @@ function SongsTab({ onChange }: { onChange: () => void }) {
                 >
                   {track.status === "processing" ? "uploading" : track.status}
                 </span>
+                {track.visibility === "private" && <span className="ml-1 rounded-full bg-surface-raised px-2 py-0.5 text-[10px] font-medium text-muted">private</span>}
               </p>
               <p className="truncate text-xs text-muted">
                 {track.artist_name} ({track.email}) · {formatDate(track.created_at)}
                 {track.used_in_remixes > 0 && ` · in ${track.used_in_remixes} remixes`}
               </p>
               {track.error && <p className="truncate text-xs text-danger">{track.error}</p>}
+              {track.stems?.length > 0 && <StemPlayButtons track={track} />}
             </div>
             {track.status === "ready" && (
               <button
@@ -428,6 +437,30 @@ function SongsTab({ onChange }: { onChange: () => void }) {
           </Row>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** One button per part of the song — public, private or held back alike. */
+function StemPlayButtons({ track }: { track: AdminTrack }) {
+  const preview = usePreviewState();
+  const queue = track.stems.map((st) => ({ stemId: st.id, title: track.title, artist: track.artist_name, kind: st.kind }));
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-1">
+      {queue.map((t) => {
+        const on = preview.current?.stemId === t.stemId && preview.playing;
+        return (
+          <button
+            key={t.stemId}
+            type="button"
+            onClick={() => void previewPlayer.toggle(t, queue)}
+            aria-label={`${on ? "Pause" : "Play"} ${track.title} · ${t.kind}`}
+            className={`inline-flex min-h-8 items-center gap-1 rounded-full border px-2.5 text-[11px] font-semibold capitalize ${on ? "border-brand bg-brand/15 text-brand-strong" : "border-border text-muted hover:text-foreground"}`}
+          >
+            {on ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />} {t.kind}
+          </button>
+        );
+      })}
     </div>
   );
 }

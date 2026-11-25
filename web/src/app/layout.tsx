@@ -11,6 +11,10 @@ import SplitterStatus from "@/components/SplitterStatus";
 import PresenceHeartbeat from "@/components/PresenceHeartbeat";
 import InstallPrompt from "@/components/InstallPrompt";
 import UpdatePrompt from "@/components/UpdatePrompt";
+import ConnectionNotice from "@/components/ConnectionNotice";
+import VerifyEmailBanner from "@/components/VerifyEmailBanner";
+import { mailReady } from "@/lib/mail";
+import { planFor } from "@/lib/billing/store";
 import { BackgroundActivity } from "@/components/UploadActivity";
 import FooterGate from "@/components/FooterGate";
 import SiteFooter from "@/components/SiteFooter";
@@ -103,7 +107,10 @@ export default async function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const [user, settings] = await Promise.all([getCurrentUser(), getSettings()]);
+  const [user, settings, canMail] = await Promise.all([getCurrentUser(), getSettings(), mailReady().catch(() => false)]);
+  const plan = await planFor(user).catch(() => "free" as const);
+  // Signed in with an address not yet confirmed (and the site can send the link).
+  const unconfirmed = !!user && !user.email_verified_at && canMail && settings.features.requireVerifiedEmail;
 
   return (
     <html
@@ -111,7 +118,7 @@ export default async function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} ${vazirmatn.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-background text-foreground">
-        <SettingsProvider value={publicSettings(settings)}>
+        <SettingsProvider value={publicSettings(settings)} plan={plan}>
         <a
           href="#main"
           className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[80] focus:rounded-lg focus:bg-brand focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-white"
@@ -120,6 +127,7 @@ export default async function RootLayout({
         </a>
         <NavProgress />
         <NavBar user={user} isAdmin={isAdmin(user)} />
+        {unconfirmed && <VerifyEmailBanner email={user!.email} />}
         <main id="main" className="flex min-w-0 flex-1 flex-col">
           {children}
         </main>
@@ -131,6 +139,7 @@ export default async function RootLayout({
         <AnalyticsBeacon />
         <InstallPrompt />
         <UpdatePrompt />
+        <ConnectionNotice />
         <SplitterStatus signedIn={!!user} />
         <BackgroundActivity signedIn={!!user} userId={user?.id ?? null} />
         <MobileTabBar user={user} isAdmin={isAdmin(user)} />

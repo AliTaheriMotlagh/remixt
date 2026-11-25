@@ -19,7 +19,7 @@ import { ArrowUpRight, HeartHandshake, Info, Volume2, VolumeX, X } from "lucide-
 import type { AdSpot, AdStyle } from "@/lib/monetize/adRules";
 import type { HouseKind, HouseTone } from "@/lib/monetize/houseAds";
 import { ROLE_TEXT, type Placement, type Role } from "@/lib/monetize/policy";
-import { useSettings } from "@/components/SettingsProvider";
+import { useSettings, useShowsAds } from "@/components/SettingsProvider";
 import { visitorId } from "@/lib/client/presence";
 import HouseMotion from "./HouseMotion";
 
@@ -82,6 +82,7 @@ export default function AdCard({
   const [why, setWhy] = useState(false);
   const fa = lang === "fa";
   const { ads: adRules } = useSettings();
+  const showsAds = useShowsAds();
   const viewable = { fraction: adRules.viewShare / 10_000, ms: adRules.viewMs };
 
   // Asked for only once the spot comes near the screen (an ad below the fold costs nothing until then).
@@ -145,8 +146,8 @@ export default function AdCard({
   const supporters = (served?.supports ?? []).filter((s) => s.bp > 0);
   const people = supporters.filter((s) => s.role !== "platform");
 
-  // Off by the page's maker, or nothing at all to show (ours turned off): the spot closes.
-  if (served && (served.off || (!ad && !house))) return null;
+  // Off by the page's maker, or nothing at all to show (ours turned off), or a Plus member: the spot closes.
+  if (!showsAds || (served && (served.off || (!ad && !house)))) return null;
   const height = compact ? "min-h-14" : "min-h-[8.5rem]";
   return (
     <aside
@@ -164,13 +165,13 @@ export default function AdCard({
             href={`/api/ads/click?t=${encodeURIComponent(served.token ?? "")}`}
             target="_blank"
             rel="sponsored noopener"
-            className={`group flex flex-1 items-center transition-colors hover:bg-surface-hover ${compact ? "gap-3 px-3 py-2" : "gap-4 p-4"}`}
+            className={`group flex flex-1 items-center transition-colors hover:bg-surface-hover ${compact ? "gap-3 px-3 py-2" : "gap-3 p-3 sm:gap-4 sm:p-4"}`}
           >
             {ad.image ? (
               // eslint-disable-next-line @next/next/no-img-element -- an advertiser's picture on their own host
-              <img src={ad.image} alt="" loading="lazy" className={`shrink-0 rounded-xl object-cover ${compact ? "h-10 w-10 rounded-lg" : "h-20 w-20 sm:h-24 sm:w-24"}`} />
+              <img src={ad.image} alt="" loading="lazy" className={`shrink-0 rounded-xl object-cover ${compact ? "h-10 w-10 rounded-lg" : "h-16 w-16 sm:h-24 sm:w-24"}`} />
             ) : (
-              <span className={`flex shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand/40 to-vocals/30 font-bold ${compact ? "h-10 w-10 rounded-lg" : "h-20 w-20 text-2xl sm:h-24 sm:w-24"}`}>
+              <span className={`flex shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand/40 to-vocals/30 font-bold ${compact ? "h-10 w-10 rounded-lg" : "h-16 w-16 text-2xl sm:h-24 sm:w-24"}`}>
                 {(ad.advertiser || ad.title).slice(0, 1)}
               </span>
             )}
@@ -179,8 +180,14 @@ export default function AdCard({
                 <span className="rounded bg-surface-raised px-1.5 py-0.5 text-foreground/80">{fa ? "تبلیغ" : "Sponsored"}</span>
                 {ad.advertiser && <span className="truncate normal-case tracking-normal">{ad.advertiser}</span>}
               </span>
-              <span className={`block truncate font-semibold ${compact ? "text-sm" : "mt-1"}`}>{ad.title}</span>
-              {ad.body && !compact && <span className="mt-0.5 line-clamp-2 text-sm text-muted">{ad.body}</span>}
+              <span className={`block break-words font-semibold leading-snug ${compact ? "line-clamp-2 text-sm" : "mt-1 line-clamp-3 sm:line-clamp-2"}`}>{ad.title}</span>
+              {ad.body && !compact && <span className="mt-0.5 line-clamp-3 break-words text-sm text-muted sm:line-clamp-2">{ad.body}</span>}
+              {/* On a phone the button would squeeze the words: the action is a line under them instead (the whole card is the link). */}
+              {!compact && (
+                <span className="mt-1.5 inline-flex items-center gap-1 text-sm font-semibold text-brand-strong sm:hidden">
+                  {ad.cta} <ArrowUpRight className="h-4 w-4 rtl:-scale-x-100" />
+                </span>
+              )}
             </span>
             <span className={`shrink-0 items-center gap-1 rounded-full bg-brand font-semibold text-white transition-transform group-hover:scale-[1.03] ${compact ? "inline-flex px-3 py-1.5 text-xs" : "hidden px-3.5 py-2 text-sm sm:inline-flex"}`}>
               {ad.cta} <ArrowUpRight className="h-4 w-4 rtl:-scale-x-100" />
@@ -251,18 +258,19 @@ export function HouseSpot({ house, lang, compact, onOpen }: { house: House; lang
       onClick={onOpen}
       target={external ? "_blank" : undefined}
       rel={external ? "noopener" : undefined}
-      className={`group flex items-center bg-gradient-to-br ${TONE[house.tone]} to-transparent transition-colors ${compact ? "h-14 gap-3 px-3" : "h-[8.5rem] gap-4 p-4"}`}
+      className={`group flex items-center bg-gradient-to-br ${TONE[house.tone]} to-transparent transition-colors ${compact ? "min-h-14 gap-3 px-3 py-2" : "min-h-[8.5rem] gap-3 p-3 sm:gap-4 sm:p-4"}`}
     >
       {house.media && house.kind === "card" ? (
         // eslint-disable-next-line @next/next/no-img-element -- our own upload, served by /api/ads/house
-        <img src={house.media} alt="" loading="lazy" className={`shrink-0 object-cover ${compact ? "h-10 w-10 rounded-lg" : "h-20 w-20 rounded-xl sm:h-24 sm:w-24"}`} />
+        <img src={house.media} alt="" loading="lazy" className={`shrink-0 object-cover ${compact ? "h-10 w-10 rounded-lg" : "h-16 w-16 rounded-xl sm:h-24 sm:w-24"}`} />
       ) : null}
       <span className="min-w-0 flex-1">
         <span className="text-[11px] font-medium uppercase tracking-wide text-muted">{fa ? "از ریمیکست" : "From Remixt"}</span>
-        <span className={`block truncate font-semibold ${compact ? "text-sm" : "mt-1 text-base"}`}>{house.title}</span>
-        {!compact && <span className="mt-0.5 line-clamp-2 text-sm text-muted">{house.body}</span>}
+        <span className={`block break-words font-semibold leading-snug ${compact ? "line-clamp-2 text-sm" : "mt-1 line-clamp-2 text-base"}`}>{house.title}</span>
+        {!compact && <span className="mt-0.5 line-clamp-3 break-words text-sm text-muted sm:line-clamp-2">{house.body}</span>}
+        {!compact && <span className="mt-1.5 inline-flex text-sm font-semibold text-brand-strong sm:hidden">{house.cta} →</span>}
       </span>
-      <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-surface/80 font-semibold backdrop-blur transition-transform group-hover:scale-[1.03] ${compact ? "px-3 py-1.5 text-xs" : "px-3.5 py-2 text-sm"}`}>
+      <span className={`${compact ? "inline-flex" : "hidden sm:inline-flex"} shrink-0 items-center gap-1 rounded-full border border-border bg-surface/80 font-semibold backdrop-blur transition-transform group-hover:scale-[1.03] ${compact ? "px-3 py-1.5 text-xs" : "px-3.5 py-2 text-sm"}`}>
         {house.cta}
       </span>
     </Link>
@@ -285,8 +293,8 @@ function HouseVideo({ house, fa, href, onOpen }: { house: House; fa: boolean; hr
   }, []);
   const external = /^https?:/.test(href);
   return (
-    <div className="flex h-[8.5rem] items-center gap-4 bg-gradient-to-br from-brand/20 to-transparent p-3">
-      <div className="relative h-full shrink-0 overflow-hidden rounded-xl bg-black" style={{ aspectRatio: "16 / 9" }}>
+    <div className="flex min-h-[8.5rem] items-center gap-3 bg-gradient-to-br from-brand/20 to-transparent p-3 sm:gap-4">
+      <div className="relative h-full shrink-0 overflow-hidden rounded-xl bg-black" style={{ aspectRatio: "16 / 9", height: "7rem", maxWidth: "45%" }}>
         <video ref={video} src={house.media ?? undefined} muted={muted} playsInline loop preload="metadata" className="h-full w-full object-cover" aria-label={house.title} />
         <button
           type="button"
@@ -299,8 +307,8 @@ function HouseVideo({ house, fa, href, onOpen }: { house: House; fa: boolean; hr
       </div>
       <Link href={href} onClick={onOpen} target={external ? "_blank" : undefined} rel={external ? "noopener" : undefined} className="group min-w-0 flex-1">
         <span className="text-[11px] font-medium uppercase tracking-wide text-muted">{fa ? "از ریمیکست" : "From Remixt"}</span>
-        <span className="mt-1 block truncate font-semibold">{house.title}</span>
-        <span className="mt-0.5 line-clamp-1 text-sm text-muted">{house.body}</span>
+        <span className="mt-1 line-clamp-2 block break-words font-semibold leading-snug">{house.title}</span>
+        <span className="mt-0.5 line-clamp-2 break-words text-sm text-muted">{house.body}</span>
         <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-brand px-3 py-1.5 text-xs font-semibold text-white">
           {house.cta} <ArrowUpRight className="h-3.5 w-3.5 rtl:-scale-x-100" />
         </span>

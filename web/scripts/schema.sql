@@ -213,6 +213,11 @@ ALTER TABLE remixes ADD COLUMN IF NOT EXISTS cover_key TEXT;
 ALTER TABLE tracks ADD COLUMN IF NOT EXISTS cover_key TEXT;
 -- When a cover was last looked for online and none was found (app/api/stems/[id]/cover): not asked again for a month.
 ALTER TABLE tracks ADD COLUMN IF NOT EXISTS cover_searched_at TIMESTAMPTZ;
+-- The song's details, as its uploader gives them (Upload → Details).
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS song_artist TEXT;
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS album TEXT;
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS release_year INTEGER;
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS genre TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by TEXT REFERENCES users(id) ON DELETE SET NULL;
 
 -- Live sessions: an artist performs a published remix and listeners (guests
@@ -365,3 +370,12 @@ CREATE TABLE IF NOT EXISTS site_visits (
   last_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (day, visitor)
 );
+
+-- Confirmed email addresses (lib/emailTokens.ts). Accounts made before
+-- confirming existed count as confirmed.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'email_verified_at') THEN
+    ALTER TABLE users ADD COLUMN email_verified_at TIMESTAMPTZ;
+    UPDATE users SET email_verified_at = created_at;
+  END IF;
+END $$;

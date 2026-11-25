@@ -6,6 +6,7 @@ import { previewPlayer } from "./previewPlayer";
 import { encodeMp3Bytes } from "./mp3";
 import { fetchInSlices } from "./stemFetch";
 import { useStudioStore } from "./studioStore";
+import { guardLeaving } from "./leaveGuard";
 import { keepScreenOn } from "./wakeLock";
 import { FinalUploadError, NetworkError, untilVisible, upload, type RelayResume, type UploadTarget } from "./directUpload";
 import { isConstrainedDevice, splitSong, splitter, splitTrackPayload, uploadStems, type UploadStage } from "./splitter";
@@ -387,6 +388,9 @@ class SplitHelper {
     this.state = { ...this.state, ...patch };
     // Only while a song is actually being split — waiting for one doesn't need the screen.
     keepScreenOn("split-helper", this.state.status === "working");
+    // Closing the tab mid-split throws the song's progress away (the queue
+    // hands it to someone else, but this computer's work and reward are lost).
+    guardLeaving("split-helper", this.state.status === "working");
     for (const listener of this.listeners) listener();
   }
 

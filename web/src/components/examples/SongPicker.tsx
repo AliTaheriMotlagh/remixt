@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { AudioLines, BadgeCheck, Check, Library, Loader2, Play, RotateCw, Search, Sparkles, Square, Upload } from "lucide-react";
+import { AudioLines, BadgeCheck, Check, Library, Loader2, Pause, Play, RotateCw, Search, Sparkles, Square, Upload } from "lucide-react";
+import { previewPlayer, usePreviewState } from "@/lib/client/previewPlayer";
 import { DEMO_SONGS, demoSongMeta, renderDemoSong, type DemoSongMeta } from "@/lib/client/demoSongs";
 import { bpmLabel, durationLabel, isLibraryId, libraryId, trackIdOf } from "@/lib/client/examplesLibrary";
 import { hasParts, type LibrarySong } from "@/lib/client/libraryAudio";
@@ -56,7 +57,7 @@ export function LibraryBadges({ song }: { song: LibrarySong }) {
   );
 }
 
-const PAGE = 24;
+const PAGE = 12;
 
 /** Said when no song is featured: why there are no famous songs here, and what to do instead. */
 function NoFeaturedNote() {
@@ -74,28 +75,45 @@ function NoFeaturedNote() {
 }
 
 function LibraryCards({ songs, songId, onPick }: { songs: LibrarySong[]; songId: string; onPick: (id: string) => void }) {
+  const preview = usePreviewState();
   return (
-    <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+    <ul className="grid grid-cols-1 gap-2 lg:grid-cols-2">
       {songs.map((song) => {
         const id = libraryId(song.trackId);
         const selected = id === songId;
+        // The full mix isn't a stem; the vocal is what tells songs apart fastest, then the beat.
+        const stem = song.stems.vocals ?? song.stems.beat;
+        const track = stem ? { stemId: stem.id, title: song.title, artist: song.artist, kind: song.stems.vocals ? ("vocals" as const) : ("beat" as const) } : null;
+        const mine = track && preview.current?.stemId === track.stemId;
+        const parts = hasParts(song) ? 5 : 2;
         return (
           <li
             key={song.trackId}
-            className={`flex min-w-0 flex-col gap-2 rounded-2xl border p-4 transition-colors ${selected ? "border-brand bg-brand/10" : "border-border bg-surface"}`}
+            className={`flex min-w-0 items-center gap-2 rounded-xl border p-2 pl-2.5 transition-colors sm:gap-3 sm:p-3 ${selected ? "border-brand bg-brand/10" : "border-border bg-surface"}`}
           >
-            <div className="min-w-0">
-              <h3 className="truncate text-base font-bold leading-tight" title={song.title}>
+            <button
+              type="button"
+              disabled={!track}
+              onClick={() => track && void previewPlayer.toggle(track)}
+              aria-label={`${mine && preview.playing ? "Pause" : "Listen to"} ${song.title}`}
+              className="flex size-10 shrink-0 items-center justify-center rounded-full bg-surface-raised hover:bg-surface-hover disabled:opacity-40"
+            >
+              {mine && preview.loading ? <Loader2 className="animate-spin" /> : mine && preview.playing ? <Pause /> : <Play />}
+            </button>
+            <div className="min-w-0 flex-1">
+              <h3 className="truncate text-sm font-bold leading-tight" title={song.title}>
+                {song.featured ? <BadgeCheck className="mr-1 inline text-brand-strong" aria-label="Featured" /> : null}
                 {song.title}
               </h3>
               <p className="truncate text-xs text-muted">
                 {song.artist}
-                {song.duration ? ` · ${durationLabel(song.duration)}` : ""}
+                {song.duration ? ` · ${durationLabel(song.duration)}` : ""} · {parts} stems
               </p>
+              <div className="mt-1">
+                <LibraryBadges song={song} />
+              </div>
               {song.featured && song.credit ? <p className="mt-1 break-words text-[11px] text-muted">{song.credit}</p> : null}
             </div>
-            <LibraryBadges song={song} />
-            <StemChips song={song} />
             <button
               type="button"
               onClick={() => {
@@ -104,7 +122,8 @@ function LibraryCards({ songs, songId, onPick }: { songs: LibrarySong[]; songId:
                 void loadTrack(song, "full").catch(() => {});
               }}
               aria-pressed={selected}
-              className={`mt-auto flex min-h-11 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold ${
+              aria-label={`${selected ? "Picked" : "Pick"} ${song.title}`}
+              className={`flex min-h-10 shrink-0 items-center justify-center gap-1 rounded-lg px-3 text-sm font-semibold ${
                 selected ? "bg-brand text-white" : "bg-surface-raised hover:bg-surface-hover"
               }`}
             >

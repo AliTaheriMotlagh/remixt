@@ -2,7 +2,8 @@
 
 import SongArt from "@/components/SongArt";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { CheckCircle2, Circle, Disc3, Drum, FolderOpen, Guitar, Loader2, Mic, Pause, Piano, Play, RotateCcw, Sparkles, TriangleAlert, Wand2, X, Zap } from "lucide-react";
+import { CheckCircle2, Circle, Disc3, Drum, FolderOpen, Guitar, ListMusic, Loader2, Mic, Pause, Piano, Play, RotateCcw, Sparkles, TriangleAlert, Wand2, X, Zap } from "lucide-react";
+import SetBuilder from "./SetBuilder";
 import type { DemoStem } from "@/lib/client/demoSongDefs";
 import { AUTO_MIX_STEPS, AutoMix, BLEND_BEATS, PHRASE_BEATS } from "@/lib/client/dj/autoMix";
 import { pickNext, type BrowserEntry } from "@/lib/client/dj/djLibrary";
@@ -284,7 +285,20 @@ const viewOf = (m: AutoMix): MixView => ({ from: m.from, to: m.to, phase: m.phas
 const AUTO_DJ_LEAD_BEATS = PHRASE_BEATS + BLEND_BEATS + 16;
 
 /** Auto-mix: the button, then each step lit as it happens. With the Auto DJ on, it keeps going: the next song from the library, mixed in before this one ends. */
-function AutoMixPanel({ engine, snap, load }: { engine: DjEngine; snap: DjSnapshot; load: (deck: DeckId, id: string) => Promise<boolean> }) {
+function AutoMixPanel({
+  engine,
+  snap,
+  load,
+  setList,
+  onSetDone,
+}: {
+  engine: DjEngine;
+  snap: DjSnapshot;
+  load: (deck: DeckId, id: string) => Promise<boolean>;
+  /** A set to play in order (SetBuilder), instead of picking each next song. */
+  setList: { name: string; entries: BrowserEntry[]; at: number } | null;
+  onSetDone: () => void;
+}) {
   const mix = useRef<AutoMix | null>(null);
   const [m, setM] = useState<MixView | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -294,6 +308,23 @@ function AutoMixPanel({ engine, snap, load }: { engine: DjEngine; snap: DjSnapsh
   const entries = useRef<BrowserEntry[] | null>(null);
   const played = useRef(new Set<string>());
   const loadingNext = useRef(false);
+  // A set handed over: the Auto DJ plays it from the top, in its order.
+  const order = useRef<BrowserEntry[] | null>(null);
+  useEffect(() => {
+    if (!setList) {
+      order.current = null;
+      return;
+    }
+    order.current = setList.entries;
+    entries.current = setList.entries;
+    played.current = new Set();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- following the set just handed over
+    setAutoDj(true);
+    setDjNote(`Playing the set “${setList.name}” — ${setList.entries.length} songs, in order.`);
+  }, [setList]);
+  /** The next song: the set's next unplayed one, else the best fit by tempo and key. */
+  const nextOf = (list: BrowserEntry[], now: { id?: string; bpm: number | null; key: BrowserEntry["key"] } | null) =>
+    order.current ? (order.current.find((e) => e.id !== now?.id && !played.current.has(e.id)) ?? null) : pickNext(list, now, played.current);
 
   const { A, B } = snap.decks;
   // Out of the deck the room hears most; the other comes in.
@@ -340,7 +371,7 @@ function AutoMixPanel({ engine, snap, load }: { engine: DjEngine; snap: DjSnapsh
           engine.play(ready);
           return;
         }
-        const first = pickNext(list, null, played.current);
+        const first = nextOf(list, null);
         if (!first) return;
         loadingNext.current = true;
         void load("A", first.id).finally(() => (loadingNext.current = false));
@@ -354,9 +385,10 @@ function AutoMixPanel({ engine, snap, load }: { engine: DjEngine; snap: DjSnapsh
       // The free deck holds nothing new: the next song goes on it.
       if (!waiting.track || played.current.has(waiting.track.id)) {
         if (waiting.playing) return;
-        const pick = pickNext(list, { id: now.track.id, bpm: now.track.bpm, key: now.track.key }, played.current);
+        const pick = nextOf(list, { id: now.track.id, bpm: now.track.bpm, key: now.track.key });
         if (!pick) {
-          setDjNote("Every song has been played: the Auto DJ stops after this one.");
+          setDjNote(order.current ? "That was the last song of the set: the Auto DJ stops after it." : "Every song has been played: the Auto DJ stops after this one.");
+          if (order.current) onSetDone();
           setAutoDj(false);
           return;
         }
@@ -423,7 +455,7 @@ function AutoMixPanel({ engine, snap, load }: { engine: DjEngine; snap: DjSnapsh
           type="button"
           role="switch"
           aria-checked={autoDj}
-          onClick={() => (autoDj ? (setAutoDj(false), setDjNote(null)) : void startDj())}
+          onClick={() => (autoDj ? (setAutoDj(false), setDjNote(null), order.current && onSetDone()) : void startDj())}
           className={`flex min-h-10 items-center gap-1.5 rounded-xl border px-3 text-sm font-semibold ${autoDj ? "border-brand bg-brand/20" : "border-border hover:bg-surface-hover"}`}
         >
           <Disc3 className={autoDj ? "animate-spin [animation-duration:3s]" : ""} /> Auto DJ {autoDj ? "on" : "off"}
@@ -520,6 +552,8 @@ function EasyMixer({ engine, snap }: { engine: DjEngine; snap: DjSnapshot }) {
 export default function EasyDecks({ engine }: { engine: DjEngine }) {
   const ui = useEngineUi(engine);
   const { library, setLibrary, loadingId, stage, error, pick } = useDeckLoader(engine);
+  const [building, setBuilding] = useState(false);
+  const [setList, setSetList] = useState<{ name: string; entries: BrowserEntry[]; at: number } | null>(null);
   // Live readings (positions, sections, the beat status) ten times a second; the controls follow the engine's own updates.
   const [snap, setSnap] = useState<DjSnapshot>(() => engine.snapshot());
   const [derived, setDerived] = useState<Derived | null>(null);
@@ -541,8 +575,8 @@ export default function EasyDecks({ engine }: { engine: DjEngine }) {
 
   return (
     <div className="touch-targets flex min-w-0 flex-col gap-2.5" onPointerDownCapture={() => engine.unlock()}>
-      <section aria-label="Waveforms" className="flex flex-col gap-1.5 rounded-2xl border border-border bg-surface p-2">
-        <p className="px-1 text-[11px] text-muted">
+      <section aria-label="Waveforms" className="order-first flex flex-col gap-1.5 rounded-2xl border border-border bg-surface p-2 md:order-none">
+        <p className="hidden px-1 text-[11px] text-muted sm:block">
           The songs scroll past the white line. Each colour is a part: <span style={{ color: "var(--vocals)" }}>vocals</span>, <span style={{ color: "var(--drums)" }}>drums</span>,{" "}
           <span style={{ color: "var(--bass)" }}>bass</span>, <span style={{ color: "var(--other)" }}>melody</span>. In step, the red bar lines of both songs pass the line together.
         </p>
@@ -550,16 +584,28 @@ export default function EasyDecks({ engine }: { engine: DjEngine }) {
         <DeckWave engine={engine} id="B" track={engine.deckTrack("B")} height={60} span={8} mode="stems" accent={ACCENT.B} />
       </section>
 
-      <div className="grid gap-2 md:grid-cols-3">
+      {/* Phones: the decks come first (straight under the waveforms); the tips, auto-mix and sets follow. */}
+      <div className="order-1 grid gap-2 md:order-none md:grid-cols-3">
         <Pill tone={status.tone}>{status.text}</Pill>
-        {fit ? <Pill tone={fit.tone}>{fit.text} ({derived?.key?.camelotA} · {derived?.key?.camelotB})</Pill> : <Pill tone="info">Keys show up once both decks hold a song.</Pill>}
-        <Pill tone={master.tone}>{master.text}</Pill>
+        <span className="hidden md:contents">
+          {fit ? <Pill tone={fit.tone}>{fit.text} ({derived?.key?.camelotA} · {derived?.key?.camelotB})</Pill> : <Pill tone="info">Keys show up once both decks hold a song.</Pill>}
+          <Pill tone={master.tone}>{master.text}</Pill>
+        </span>
       </div>
 
-      <AutoMixPanel engine={engine} snap={live} load={pick} />
+      <div className="order-2 flex flex-col gap-2.5 md:order-none">
+        <AutoMixPanel engine={engine} snap={live} load={pick} setList={setList} onSetDone={() => setSetList(null)} />
+        {building ? (
+          <SetBuilder playing={!!setList} onPlay={(entries, name) => setSetList({ entries, name, at: Date.now() })} onClose={() => setBuilding(false)} />
+        ) : (
+          <button type="button" onClick={() => setBuilding(true)} className="flex min-h-11 items-center justify-center gap-1.5 rounded-2xl border border-dashed border-border text-sm font-semibold text-muted hover:border-brand hover:text-foreground">
+            <ListMusic className="h-4 w-4" /> {setList ? `Set: ${setList.name}` : "Build a set — a playlist that mixes"}
+          </button>
+        )}
+      </div>
 
       {/* Phones: deck A, the mixer, deck B, top to bottom. */}
-      <div className="grid min-w-0 gap-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,1fr)]">
+      <div className="order-first grid min-w-0 gap-2.5 md:order-none md:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,1fr)]">
         <div className="min-w-0 md:order-1">
           <EasyDeck engine={engine} id="A" deck={live.decks.A} loading={stage.A} onLoad={() => setLibrary("A")} />
         </div>

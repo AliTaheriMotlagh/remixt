@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { mayUse } from "@/lib/billing/store";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import sql from "@/lib/db";
@@ -67,6 +68,9 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid input" }, { status: 400 });
   }
+  // Splitting from a phone keeps the song on Remixt's storage; a link is fetched by its server: Plus, when the owner says so.
+  const gate = await mayUse(user, "link" in parsed.data ? "linkImport" : "queue");
+  if (!gate.ok) return NextResponse.json(gate, { status: 402 });
   const body = parsed.data;
 
   if ("link" in body) {

@@ -9,6 +9,7 @@ import { ensureRemixStats } from "@/lib/models";
 import { REF_COOKIE } from "@/lib/referral";
 import { CAPTCHA_FAILED, verifyCaptcha } from "@/lib/captcha";
 import { allow, clientKey, TOO_MANY } from "@/lib/rateLimit";
+import { sendVerification } from "@/lib/emailTokens";
 
 const schema = z.object({
   email: z.string().email(),
@@ -60,8 +61,10 @@ export async function POST(req: NextRequest) {
 
   await createSessionCookie(id);
   trackServer("signup", id);
+  // The confirm-your-email link; sign-up doesn't wait for it (or fail with it).
+  const verify = await sendVerification({ id, email: email.toLowerCase(), artist_name: artistName }).catch(() => ({ sent: false as const }));
 
-  const res = NextResponse.json({ id, email, artistName });
+  const res = NextResponse.json({ id, email, artistName, verifySent: verify.sent });
   res.cookies.delete(REF_COOKIE);
   return res;
 }

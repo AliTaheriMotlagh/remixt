@@ -2,7 +2,8 @@
 
 import SongArt from "@/components/SongArt";
 import { useEffect, useMemo, useState } from "react";
-import { CheckIcon, Drum, Guitar, Layers, Mic, Pause, Piano, Play, Plus, type LucideIcon } from "lucide-react";
+import { CheckIcon, Drum, Guitar, Headphones, Layers, Mic, Pause, Piano, Play, Plus, type LucideIcon } from "lucide-react";
+import { audioEngine } from "@/lib/client/audioEngine";
 import Waveform from "./Waveform";
 import { previewPlayer, usePreviewState } from "@/lib/client/previewPlayer";
 import { useStudioStore, type LoadableStem } from "@/lib/client/studioStore";
@@ -66,6 +67,84 @@ function takeOut(stemIds: string[], title: string) {
   const { lanes, removeLane } = useStudioStore.getState();
   for (const lane of lanes) if (stemIds.includes(lane.stemId)) removeLane(lane.laneId);
   useStudioView.getState().notify(`Removed “${title}” — ⌘Z to undo`);
+}
+
+// "Hear it with the mix": the stems go into the mix as lanes and the mix
+// plays, so they're heard with everything already in it (not on their own,
+// as the preview button plays them). Keep leaves them; Not this one takes
+// them out again (a plain undo when nothing else happened since).
+type Audition = { stemIds: string[]; title: string };
+let audition: Audition | null = null;
+const auditionListeners = new Set<() => void>();
+const setAudition = (next: Audition | null) => {
+  audition = next;
+  for (const l of auditionListeners) l();
+};
+function useAudition() {
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const l = () => bump((n) => n + 1);
+    auditionListeners.add(l);
+    return () => void auditionListeners.delete(l);
+  }, []);
+  return audition;
+}
+
+async function hearWithMix(stems: LoadableStem[], title: string) {
+  if (audition) takeOut(audition.stemIds, audition.title);
+  previewPlayer.stop();
+  const fresh = stems.filter((s) => !useStudioStore.getState().lanes.some((l) => l.stemId === s.id));
+  if (!fresh.length) return;
+  add(fresh);
+  setAudition({ stemIds: fresh.map((s) => s.id), title });
+  if (!useStudioStore.getState().isPlaying) {
+    try {
+      await audioEngine.play();
+    } catch (error) {
+      useStudioView.getState().notify(error instanceof Error ? error.message : "Couldn't play the mix", "error");
+    }
+  }
+}
+
+/** The bar under a stem being heard with the mix. */
+function AuditionBar() {
+  const a = useAudition();
+  if (!a) return null;
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-1.5 rounded-md bg-brand/10 px-2 py-1.5 text-[11px]">
+      <span className="min-w-0 flex-1 font-semibold text-brand-strong">Playing with your mix</span>
+      <button type="button" onClick={() => setAudition(null)} className="rounded-md bg-brand px-2.5 py-1 font-semibold text-white pointer-coarse:py-2">
+        Keep
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          takeOut(a.stemIds, a.title);
+          setAudition(null);
+        }}
+        className="rounded-md border border-border px-2.5 py-1 font-semibold text-muted hover:text-foreground pointer-coarse:py-2"
+      >
+        Not this one
+      </button>
+    </div>
+  );
+}
+
+/** The button that puts a stem in the mix for a listen. */
+function WithMixButton({ stems, title, disabled }: { stems: LoadableStem[]; title: string; disabled: boolean }) {
+  const hasMix = useStudioStore((s) => s.lanes.length > 0);
+  if (!hasMix || disabled) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => void hearWithMix(stems, title)}
+      className="flex shrink-0 items-center gap-1 rounded-md border border-brand/50 px-1.5 py-0.5 text-[10.5px] font-semibold text-brand-strong hover:bg-brand/10 pointer-coarse:px-2.5 pointer-coarse:py-2"
+      title="Hear it together with the lines already in your mix — then keep it or not"
+      aria-label={`Hear ${title} with your mix`}
+    >
+      <Headphones className="h-3 w-3" /> With mix
+    </button>
+  );
 }
 
 const TAB_LABEL: Record<LibraryTab, string> = {
@@ -137,6 +216,7 @@ function SongRow({ song, inMix, previewing, playing, progress }: { song: Song & 
             {song.bpm ? ` · ${song.bpm.toFixed(0)} BPM` : ""}
           </p>
         </div>
+        <WithMixButton stems={lines.filter((s) => !inMix.has(s.id))} title={song.title} disabled={someIn} />
         <button
           onClick={() => (allIn ? takeOut(lines.map((s) => s.id), song.title) : add(lines.filter((s) => !inMix.has(s.id))))}
           className={`group flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold transition-colors pointer-coarse:px-3 pointer-coarse:py-2 ${
@@ -184,6 +264,7 @@ function SongRow({ song, inMix, previewing, playing, progress }: { song: Song & 
           );
         })}
       </div>
+      {lines.some((l) => audition?.stemIds.includes(l.id)) && <AuditionBar />}
       <Waveform peaks={song.peaks} color={previewing ? "var(--brand)99" : "var(--brand)"} progressColor="var(--brand)" progress={previewing ? progress : 0} height={18} className="mt-1.5" />
     </div>
   );
@@ -200,6 +281,11 @@ export default function StudioLibraryPanel() {
   const [takeFilter, setTakeFilter] = useState<TakeFilter>("all");
   const lanes = useStudioStore((s) => s.lanes);
   const preview = usePreviewState();
+  useAudition();
+  // Taken out some other way (undo, the lane's own delete): nothing left to keep or drop.
+  useEffect(() => {
+    if (audition && !lanes.some((l) => audition!.stemIds.includes(l.stemId))) setAudition(null);
+  }, [lanes]);
 
   // Asked for a tab from elsewhere ("+ Add a vocal" in the Easy studio): show it.
   const asked = useStudioView((s) => s.libraryTab);
@@ -369,6 +455,7 @@ export default function StudioLibraryPanel() {
                     {stem.track_title}
                   </span>
                   {isTake(stem.track_tags) && <TakeBadge mine={!!stem.track_mine} />}
+                  <WithMixButton stems={[stem]} title={stem.track_title} disabled={added} />
                   <button
                     onClick={() => (added ? takeOut([stem.id], stem.track_title) : add([stem]))}
                     title={added ? "Take it back out of the mix" : undefined}
@@ -389,6 +476,7 @@ export default function StudioLibraryPanel() {
                     )}
                   </button>
                 </div>
+                {audition?.stemIds.includes(stem.id) && <AuditionBar />}
                 <p className="mt-0.5 truncate pl-8 text-[11px] text-muted pointer-coarse:pl-11">
                   {stem.artist_name}
                   {stem.track_bpm ? ` · ${stem.track_bpm.toFixed(0)} BPM` : ""}

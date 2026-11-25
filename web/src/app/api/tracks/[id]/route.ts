@@ -29,12 +29,18 @@ export async function GET(
   return NextResponse.json({ track, stems });
 }
 
+const text = (max: number) => z.string().trim().max(max).transform((v) => v || null).nullable().optional();
 const patchSchema = z.object({
   title: z.string().trim().min(1).max(200).optional(),
   tags: z.array(z.string().max(40)).max(20).optional(),
+  // The song's details (Upload → Details): an empty field clears it.
+  songArtist: text(120),
+  album: text(120),
+  genre: text(60),
+  year: z.number().int().min(1900).max(2100).nullable().optional(),
 });
 
-/** The uploader can rename a song and change its tags. */
+/** The uploader can rename a song, change its tags and fill in its details. */
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const user = await getCurrentUser();
@@ -46,10 +52,18 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (!parsed.success) return NextResponse.json({ error: "Invalid input" }, { status: 400 });
   await ensureSchema();
   const tags = parsed.data.tags ? normaliseTags(parsed.data.tags) : null;
+  const d = parsed.data;
+  // Each detail changes only when it was sent; sent empty (null), it's cleared.
   const [row] = await sql<{ title: string; tags: string[] }[]>`
-    UPDATE tracks SET title = COALESCE(${parsed.data.title ?? null}, title), tags = COALESCE(${tags}, tags)
+    UPDATE tracks SET
+      title = COALESCE(${d.title ?? null}, title),
+      tags = COALESCE(${tags}, tags),
+      song_artist = CASE WHEN ${d.songArtist !== undefined} THEN ${d.songArtist ?? null} ELSE song_artist END,
+      album = CASE WHEN ${d.album !== undefined} THEN ${d.album ?? null} ELSE album END,
+      genre = CASE WHEN ${d.genre !== undefined} THEN ${d.genre ?? null} ELSE genre END,
+      release_year = CASE WHEN ${d.year !== undefined} THEN ${d.year ?? null}::int ELSE release_year END
     WHERE id = ${id}
-    RETURNING title, tags
+    RETURNING title, tags, song_artist, album, genre, release_year
   `;
   return NextResponse.json(row);
 }
