@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import sql from "@/lib/db";
+import { redirectTo } from "@/lib/redirect";
 
 // Short links: /r/<first 8 characters of a remix id> → the remix page.
 // Short enough to read out or put in a bio; ids are random, so eight hex
@@ -12,5 +13,5 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ code
   `;
   if (!remix) return new NextResponse("Not found", { status: 404 });
   // Temporary, so browsers don't remember it if the remix is later deleted.
-  return NextResponse.redirect(new URL(`/remixes/${remix.id}`, req.url), 307);
+  return redirectTo(`/remixes/${remix.id}`, 307);
 }

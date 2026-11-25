@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { recordClick } from "@/lib/monetize/store";
+import { redirectTo } from "@/lib/redirect";
 
 // A click on an ad: counted for its report, then on to where it goes.
 // Clicks pay nobody (pay is per view), so there's nothing to gain by
@@ -10,7 +11,7 @@ import { recordClick } from "@/lib/monetize/store";
 // page on the site itself, as a quick in-app navigation.
 export async function GET(req: NextRequest) {
   const link = await recordClick(req.nextUrl.searchParams.get("t") ?? "").catch(() => null);
-  return NextResponse.redirect(new URL(link ?? "/", req.url), 302);
+  return redirectTo(link ?? "/", 302);
 }
 
 export async function POST(req: NextRequest) {

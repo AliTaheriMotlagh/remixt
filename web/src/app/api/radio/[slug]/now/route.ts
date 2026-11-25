@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getStation, readFeed } from "@/lib/radio";
+import { siteUrl } from "@/lib/site";
 
 // For other apps and games: what's on the station now, open to any site
 // (CORS). Poll it every few seconds; `position` and `endsAt` say where the
@@ -15,7 +16,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ slug
   if (!(await getStation(slug))) return NextResponse.json({ error: "No station at this address" }, { status: 404, headers: cors });
   const feed = await readFeed(slug, { sessionId: "public-api", user: null, heartbeat: false });
   if (!feed) return NextResponse.json({ error: "No station at this address" }, { status: 404, headers: cors });
-  const origin = req.nextUrl.origin;
+  // The public address: behind the proxy the request's own origin is the server's inner one.
+  const origin = siteUrl().origin;
   const abs = (url: string | null) => (url ? new URL(url, origin).href : null);
   const now = feed.now;
   return NextResponse.json(
