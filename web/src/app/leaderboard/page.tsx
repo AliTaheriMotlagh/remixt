@@ -6,6 +6,7 @@ import { coverUrl } from "@/lib/models";
 import { rankedRemixes, topArtists, type RankedRemix } from "@/lib/social";
 import { pageMetadata } from "@/lib/seo";
 import { topMiners } from "@/lib/splitQueue";
+import AdCard from "@/components/ads/AdCard";
 
 export const metadata: Metadata = pageMetadata({
   title: "Top remix artists & trending remixes",
@@ -191,6 +192,7 @@ export default async function LeaderboardPage() {
           </section>
         </div>
       </div>
+      <AdCard placement="site" className="mt-10" />
     </div>
   );
 }

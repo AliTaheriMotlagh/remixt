@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { StorageReport } from "@/lib/storageReport";
 import SongFixTab from "./admin/SongFixTab";
 import SettingsTab from "./admin/SettingsTab";
+import type { Group } from "@/lib/settings/registry";
 import PlansTab from "./admin/PlansTab";
 import MonetizeTab from "@/components/admin/MonetizeTab";
 import HouseAdsTab from "@/components/admin/HouseAdsTab";
@@ -138,6 +139,13 @@ function useList<T>(url: string, key: string, q: string) {
 
 export default function AdminPanel({ adminId }: { adminId: string }) {
   const [tab, setTab] = useState<Tab>("analytics");
+  /** The Settings group to open on (a step of the ad setup guide links straight to its setting). */
+  const [settingsGroup, setSettingsGroup] = useState<Group | undefined>(undefined);
+  const openSettings = useCallback((g?: Group) => {
+    setSettingsGroup(g);
+    setTab("settings");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
   // A member opened from Feedback & problems.
   const [member, setMember] = useState<string | null>(null);
   const [overview, setOverview] = useState<Overview | null>(null);
@@ -231,9 +239,9 @@ export default function AdminPanel({ adminId }: { adminId: string }) {
         {tab === "results" && <ResultsTab />}
         {tab === "storage" && <StorageTab onChange={refreshOverview} />}
         {tab === "cleanup" && <CleanupTab onChange={refreshOverview} />}
-        {tab === "money" && <MonetizeTab onOpenSettings={() => setTab("settings")} />}
-        {tab === "settings" && <SettingsTab />}
-        {tab === "plans" && <PlansTab onOpenSettings={() => setTab("settings")} />}
+        {tab === "money" && <MonetizeTab onOpenSettings={openSettings} onOpenTab={(t) => setTab(t)} />}
+        {tab === "settings" && <SettingsTab key={settingsGroup ?? "-"} initialGroup={settingsGroup} />}
+        {tab === "plans" && <PlansTab onOpenSettings={() => openSettings()} />}
         {tab === "house" && <HouseAdsTab />}
         {tab === "analytics" && <AnalyticsTab />}
         {tab === "feedback" && <FeedbackTab onOpenUser={setMember} />}

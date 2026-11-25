@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth";
 import EarningsDashboard from "./EarningsDashboard";
-import HowEarningWorks from "./HowEarningWorks";
+import HowEarningWorks, { earningFaq } from "./HowEarningWorks";
+import { JsonLd, breadcrumbJsonLd, faqJsonLd } from "@/lib/seo";
 import type { Lang } from "@/lib/monetize/moneyText";
 import { getSettings } from "@/lib/settings/server";
 import { publicSettings } from "@/lib/settings/registry";
@@ -14,6 +15,7 @@ export default async function EarningsPage({ lang }: { lang: Lang }) {
   const next = fa ? "/fa/earnings" : "/earnings";
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 sm:py-12">
+      <JsonLd data={[faqJsonLd(earningFaq(lang, publicSettings(settings))), breadcrumbJsonLd([{ name: fa ? "درآمد" : "Earnings", path: next }])]} />
       <p className="mb-4 text-end text-sm">
         <Link href={fa ? "/earnings" : "/fa/earnings"} hrefLang={fa ? "en" : "fa"} className="text-brand-strong hover:underline">
           {fa ? "English" : "فارسی"}

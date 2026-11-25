@@ -5,6 +5,7 @@ import GuideCards from "@/components/guides/GuideCards";
 import { JsonLd, breadcrumbJsonLd, pageMetadata } from "@/lib/seo";
 import { absoluteUrl } from "@/lib/site";
 import { GUIDES, GUIDES_PATH, guidePath } from "@/lib/guides";
+import AdCard from "@/components/ads/AdCard";
 
 // Every guide (lib/guides.ts), newest questions people ask first.
 
@@ -49,6 +50,7 @@ export default function GuidesPage() {
       <section className="mx-auto w-full max-w-6xl px-4 py-10 sm:px-6 sm:py-14">
         <GuideCards guides={GUIDES} headingLevel="h2" />
       </section>
+      <AdCard placement="site" className="mx-auto mt-10 max-w-5xl" />
     </div>
   );
 }

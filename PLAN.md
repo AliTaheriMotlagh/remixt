@@ -33,7 +33,9 @@ Everything below is switched on from **Admin** once the account/key exists. Noth
 
 ### Direct ads and promotions (already working)
 
-- [ ] Admin → Settings → "How advertisers pay you" (card / Sheba / USDT text), the Toman rate. Then advertisers can self-serve at `/advertise`; you approve each ad and press "Payment received".
+- [ ] **Admin → Ads & earnings: follow "Set up ads, step by step" at the top** — it ticks itself from the live settings and opens the right place for each step. The one it will flag first on production: "Tell advertisers how to pay you" (Settings → How advertisers pay you).
+- [ ] **The test ads you added in production:** each campaign there now says why it isn't showing. An approved ad shows only once it has money: press "Payment received" on its payment (that's what fills the budget). On 2026-11-25 the live site served one paid audio ad (radio) and no paid picture ad — the radio/site picture spots were showing Remixt's own ads.
+- [ ] Then advertisers self-serve at `/advertise` (a 3-step form; each ad shows made → checked → paid → showing with the next step as a button).
 
 ### Other keys
 
@@ -51,7 +53,8 @@ Everything below is switched on from **Admin** once the account/key exists. Noth
 ## 2. Checks that need a real device, an account or ears
 
 - [ ] **Phones** (iPhone installed app + Safari tab, Android Chrome): lock the screen, switch app, go home, take a call — Studio, remix page, radio (a song change with the screen locked; unplug headphones). Remix tune-in time with nothing kept. Swipe-away is expected to stop (decision 1).
-- [ ] New pieces on a real phone: Studio "With mix", remix "Before and after", DJ "Build a set", Key & tempo changer, the Feedback box.
+- [ ] New pieces on a real phone: Studio "With mix", remix "Before and after", DJ "Build a set", Key & tempo changer, the Feedback box (More → Send feedback — it never opened on phones before 2026-11-25), the DJ set planner `/dj/crate` (drag to reorder is desktop; phones use the arrows), the advertiser's 3-step form.
+- [ ] Ears: the radio's first ad break now comes after ~3 min of listening (Admin → Settings → Audio ads → "Radio: the first break"), then every 20 min.
 - [ ] **Ad spots with AdSense on** (after approval): a remix page, a tool page, the radio — the ad fills, nothing is cut off, an ad blocker shows Remixt's own ad instead, Studio/library/upload show no network ads. Also check a page reached by a link from the Studio loads fully (that's how the network can show).
 - [ ] Signed in with real data in production: every page; a tagged MP3 upload shows its cover after splitting.
 - [ ] Ears: each radio transition across a real song change (AutoMix's glide; iPhone's one-player handover), DJ loop points for clicks, the four clip visualizers in an exported video, a pre-roll and a radio break.

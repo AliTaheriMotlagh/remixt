@@ -54,6 +54,7 @@ for (const step of JSON.parse(stepsRaw)) {
   if (step.shot) await page.screenshot({ path: step.shot, fullPage: !!step.full });
 }
 await page.screenshot({ path: out, fullPage: true });
-const overflowX = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+// Against the set viewport: a too-wide page on a phone zooms out, and innerWidth grows with it.
+const overflowX = await page.evaluate((vw) => document.documentElement.scrollWidth - vw, page.viewportSize()?.width ?? 0);
 console.log(JSON.stringify({ out, overflowX, errors: [...new Set(errors)].slice(0, 10) }));
 await browser.close();

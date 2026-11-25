@@ -3,6 +3,7 @@ import { AudioLines, BadgeCheck, Image as ImageIcon, Megaphone, Radio, ShieldChe
 import { getSettings } from "@/lib/settings/server";
 import { formatMoney } from "@/lib/monetize/policy";
 import { NEVER, NEVER_FA } from "@/lib/monetize/adRules";
+import { JsonLd, faqJsonLd } from "@/lib/seo";
 
 // What /advertise says to someone not signed in (and to search engines): what
 // can be bought, where it shows, how it's paid for — the owner's real numbers.
@@ -11,6 +12,22 @@ export default async function AdvertiseIntro({ lang }: { lang: "en" | "fa" }) {
   const fa = lang === "fa";
   const { ads, audio } = await getSettings();
   const price = (m: number) => formatMoney(m);
+  // The questions an advertiser has before paying — also given to search engines as FAQ data.
+  const faq = fa
+    ? [
+        { q: "هزینهٔ تبلیغ چقدر است؟", a: `قیمت هر ۱٬۰۰۰ بازدید را خودتان تعیین می‌کنید: از ${price(ads.floors.card)} برای تبلیغ تصویری و ${price(ads.floors.audio)} برای صوتی. قیمت بالاتر بیشتر نمایش داده می‌شود. هر مبلغی بخواهید اعتبار می‌گذارید و تا تمام شدنش نمایش داده می‌شود.` },
+        { q: "چه چیزی بازدید حساب می‌شود؟", a: `وقتی دست‌کم ${ads.viewShare / 100}٪ از تبلیغ ${ads.viewMs / 1000} ثانیه در یک صفحهٔ باز دیده شود، یا ${audio.paidAfter} ثانیه از تبلیغ صوتی شنیده شود. ربات‌ها و بازدیدهای تکراری حساب نمی‌شوند و کلیک رایگان است.` },
+        { q: "تبلیغم کی نمایش داده می‌شود؟", a: "پس از سه گام: تبلیغ را می‌سازید و برای بررسی می‌فرستید، ریمیکست آن را بررسی می‌کند (معمولاً تا یک روز)، و پرداخت شما تأیید می‌شود. بلافاصله پس از آن نمایش شروع می‌شود و وضعیت هر گام را در صفحهٔ تبلیغ‌هایتان می‌بینید." },
+        { q: "چطور پرداخت کنم؟", a: "کارت به کارت، انتقال بانکی یا تتر — جزئیات در صفحهٔ «افزودن اعتبار» است. شمارهٔ پیگیری را می‌فرستید و ما رسیدنش را تأیید می‌کنیم." },
+        { q: "تبلیغ کجا نمایش داده می‌شود؟", a: "تصویری: فهرست‌ها، صفحهٔ ابزارها و راهنماها، زیر پخش‌کنندهٔ ریمیکس‌ها و در رادیو. صوتی: پیش از ریمیکس‌ها و در وقفه‌های رادیو. معرفی ویژه: بالای فهرست ریمیکس‌ها یا کتابخانه." },
+      ]
+    : [
+        { q: "How much does advertising cost?", a: `You set your price per 1,000 views: from ${price(ads.floors.card)} for picture ads and ${price(ads.floors.audio)} for audio. A higher price shows more often. Add any budget you like; the ad runs until it's spent.` },
+        { q: "What counts as a view?", a: `At least ${ads.viewShare / 100}% of the ad on screen for ${ads.viewMs / 1000} second${ads.viewMs === 1000 ? "" : "s"} in a visible tab, or ${audio.paidAfter} seconds of an audio ad heard. Robots and repeat views don't count, and clicks are free.` },
+        { q: "When does my ad start showing?", a: "After three steps: you make it and send it for review, Remixt checks it (usually within a day), and your payment is confirmed. It starts the moment all three are done, and your ads page shows which step each ad is on." },
+        { q: "How do I pay?", a: "By card, bank transfer or USDT — the details are under “Add money”. You send the reference and we confirm it arrived." },
+        { q: "Where do the ads appear?", a: "Picture ads: lists, tool pages and guides, under remix players and on the radio. Audio ads: before remixes and in radio breaks. Promotions: first in the remixes list or the library." },
+      ];
   const kinds = [
     {
       icon: ImageIcon,
@@ -101,6 +118,24 @@ export default async function AdvertiseIntro({ lang }: { lang: "en" | "fa" }) {
             <Radio className="h-4 w-4" aria-hidden />
             {fa ? "سازندهٔ هر ریمیکس انتخاب می‌کند چه نوع تبلیغی و کجای صفحه‌اش باشد." : "Each remix's maker chooses which kinds of ad show on their page, and where."}
           </p>
+        </div>
+      </section>
+
+      <section aria-labelledby="ad-faq">
+        <JsonLd data={faqJsonLd(faq)} />
+        <h2 id="ad-faq" className="text-xl font-bold">{fa ? "پرسش‌های تبلیغ‌دهنده‌ها" : "Questions advertisers ask"}</h2>
+        <div className="mt-4 flex flex-col gap-2 text-sm">
+          {faq.map((f) => (
+            <details key={f.q} className="group rounded-2xl border border-border bg-surface/60 px-4 py-3 open:bg-surface">
+              <summary className="flex min-h-8 cursor-pointer list-none items-center justify-between gap-3 font-semibold">
+                {f.q}
+                <span className="text-lg text-muted transition-transform group-open:rotate-45" aria-hidden>
+                  +
+                </span>
+              </summary>
+              <p className="mt-2 text-muted">{f.a}</p>
+            </details>
+          ))}
         </div>
       </section>
     </div>

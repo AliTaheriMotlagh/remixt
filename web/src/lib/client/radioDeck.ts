@@ -434,12 +434,19 @@ export class RadioDeck {
   /** Listening since the last break (ms of a song actually sounding). */
   private listenedMs = 0;
   private lastListenAt = 0;
+  /** Breaks heard since tuning in (the first comes sooner: adRules.radioBreakAfterMs). */
+  private breaksHeard = 0;
   /** The break playing now: the songs wait; the station's clock goes on, and they rejoin it after. */
   private adBreak: { p: Player; end: () => void } | null = null;
 
   /** How long this listener has listened since their last break. */
   get listenedSinceBreak(): number {
     return this.listenedMs;
+  }
+
+  /** No break yet since this listener tuned in. */
+  get firstBreak(): boolean {
+    return this.breaksHeard === 0;
   }
 
   get inBreak(): boolean {
@@ -470,6 +477,7 @@ export class RadioDeck {
         el.removeEventListener("pause", onPause);
         this.adBreak = null;
         this.listenedMs = 0;
+        if (started) this.breaksHeard++;
         // One player: straight to silence (never a pause, which could lose the phone's sound session); the next tick puts the song on.
         if (this.players.length === 1) this.playSilence(p);
         else this.free(p);

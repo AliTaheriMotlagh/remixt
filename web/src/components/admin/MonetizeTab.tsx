@@ -9,6 +9,10 @@ import { TOPICS } from "@/lib/monetize/adRules";
 import { useSettings } from "@/components/SettingsProvider";
 import type { Campaign, monetizeOverview, MonetizeSettings, NetworkMonth } from "@/lib/monetize/store";
 import type { adReviewQueue } from "@/lib/monetize/adStore";
+import { deliveryStatus } from "@/lib/monetize/adStatus";
+import { DeliveryChip } from "@/components/ads/DeliveryTracker";
+import AdSetupGuide from "./AdSetupGuide";
+import type { Group } from "@/lib/settings/registry";
 
 type Overview = Awaited<ReturnType<typeof monetizeOverview>> & { queue: Awaited<ReturnType<typeof adReviewQueue>>; settings: MonetizeSettings; networks: NetworkMonth[] };
 
@@ -43,11 +47,13 @@ const EMPTY = {
   placements: ["site", "remix", "radio"], cpm: 2, budget: 100, endsAt: "", format: "card" as "card" | "audio", topic: "other",
 };
 
-export default function MonetizeTab({ onOpenSettings }: { onOpenSettings?: () => void } = {}) {
+export default function MonetizeTab({ onOpenSettings, onOpenTab }: { onOpenSettings?: (g?: Group) => void; onOpenTab?: (t: "house") => void } = {}) {
   const settings = useSettings();
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<typeof EMPTY | null>(null);
+  /** When the list was loaded: an ad whose end date has passed shows as ended. */
+  const [loadedAt] = useState(() => Date.now());
   const load = useCallback(() => {
     fetch("/api/admin/monetize", { cache: "no-store" })
       .then((r) => r.json())
@@ -82,11 +88,25 @@ export default function MonetizeTab({ onOpenSettings }: { onOpenSettings?: () =>
     }
   };
   const pendingClaims = data.claims.filter((c) => c.status === "pending");
+  const statuses = data.campaigns.map((c) =>
+    deliveryStatus(c, { now: loadedAt, paymentPending: data.queue.payments.some((p) => p.campaign_id === c.id), switches: settings.features })
+  );
   const pendingPayouts = data.payouts.filter((p) => p.status === "requested");
 
   return (
     <div className="flex flex-col gap-6">
       {error && <p className="text-sm text-danger">{error}</p>}
+      <AdSetupGuide
+        settings={settings}
+        facts={{
+          running: statuses.filter((d) => d.state === "running").length,
+          pendingCampaigns: data.queue.campaigns.length,
+          pendingPayments: data.queue.payments.length,
+          unpaidApproved: statuses.filter((d) => d.state === "needsMoney").length,
+        }}
+        onOpenSettings={onOpenSettings}
+        onOpenTab={onOpenTab}
+      />
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Box
           label="Remixt's share, all time"
@@ -107,7 +127,7 @@ export default function MonetizeTab({ onOpenSettings }: { onOpenSettings?: () =>
       <ReviewQueue queue={data.queue} act={act} />
       <p className="rounded-xl border border-border bg-surface p-3 text-sm text-muted">
         Shares, prices, the Toman rate, how advertisers pay you, audio-ad rules and every other number are in{" "}
-        <button type="button" onClick={onOpenSettings} className="font-semibold text-brand-strong hover:underline">
+        <button type="button" onClick={() => onOpenSettings?.()} className="font-semibold text-brand-strong hover:underline">
           Settings
         </button>
         .
@@ -128,12 +148,14 @@ export default function MonetizeTab({ onOpenSettings }: { onOpenSettings?: () =>
         </p>
         {form && <CampaignForm initial={form} onCancel={() => setForm(null)} onSave={saveCampaign} />}
         <ul className="mt-3 flex flex-col gap-2">
-          {data.campaigns.map((c) => (
+          {data.campaigns.length === 0 && <li className="text-sm text-muted">No campaigns yet. Advertisers make theirs at /advertise; yours start with “New campaign”.</li>}
+          {data.campaigns.map((c, ci) => {
+            const d = statuses[ci];
+            return (
             <li key={c.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-surface p-3 text-sm">
-              <span className={`h-2 w-2 rounded-full ${c.active ? "bg-success" : "bg-muted"}`} />
               <span className="min-w-0 flex-1">
+                <DeliveryChip d={d} />{" "}
                 <span className="me-1 rounded bg-surface-raised px-1.5 py-0.5 text-[11px]">{c.format}</span>
-                {c.review !== "approved" && <span className="me-1 rounded bg-drums/15 px-1.5 py-0.5 text-[11px] text-drums">{c.review}</span>}
                 {c.owner_id && <span className="me-1 rounded bg-brand/15 px-1.5 py-0.5 text-[11px] text-brand-strong">self-serve</span>}
                 <span className="font-medium">{c.name}</span>{" "}
                 <span className="text-muted">
@@ -151,8 +173,18 @@ export default function MonetizeTab({ onOpenSettings }: { onOpenSettings?: () =>
               <button type="button" onClick={() => act({ action: "campaign-active", id: c.id, active: !c.active })} className="text-xs hover:underline">
                 {c.active ? "Pause" : "Resume"}
               </button>
+              {d.state !== "running" && (
+                <p className="w-full text-xs text-muted">
+                  <span className="font-semibold text-foreground">Not showing: </span>
+                  {d.en.why}
+                  {d.state === "checkingPayment" && " → Check it in “Advertiser payments” above."}
+                  {d.state === "review" && " → Approve or turn it down in “Ads to approve” above."}
+                  {d.state === "needsMoney" && !c.owner_id && " → Edit it and set a budget."}
+                </p>
+              )}
             </li>
-          ))}
+            );
+          })}
         </ul>
       </section>
 
@@ -248,7 +280,7 @@ function NetworkMonths({ months, act, onOpenSettings }: { months: NetworkMonth[]
         A network fills a picture spot no campaign takes, on pages that aren&apos;t the Studio, upload, library or DJ. It pays Remixt once a month (AdSense
         around the 21st, for the month before). When it has paid, enter the amount here: it&apos;s split between the pages by their network views, then each
         page&apos;s part by the usual shares, and members see it on /earnings after the hold.{" "}
-        <button type="button" onClick={onOpenSettings} className="font-semibold text-brand-strong hover:underline">
+        <button type="button" onClick={() => onOpenSettings?.()} className="font-semibold text-brand-strong hover:underline">
           Network settings
         </button>
       </p>
@@ -409,7 +441,7 @@ type Queue = Overview["queue"];
 function ReviewQueue({ queue, act }: { queue: Queue; act: (body: unknown) => Promise<void> }) {
   if (!queue.campaigns.length && !queue.payments.length) return null;
   return (
-    <section className="rounded-2xl border border-drums/40 bg-drums/5 p-4">
+    <section id="ad-review-queue" className="scroll-mt-20 rounded-2xl border border-drums/40 bg-drums/5 p-4">
       <h3 className="font-semibold">Waiting for you</h3>
       {queue.campaigns.length > 0 && (
         <>

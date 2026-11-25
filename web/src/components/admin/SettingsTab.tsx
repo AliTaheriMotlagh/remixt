@@ -46,12 +46,12 @@ function shown(field: Field | undefined, v: unknown): string {
   return s.length > 40 ? `${s.slice(0, 40)}…` : s || "(empty)";
 }
 
-export default function SettingsTab() {
+export default function SettingsTab({ initialGroup }: { initialGroup?: Group } = {}) {
   const router = useRouter();
   const [data, setData] = useState<Loaded | null>(null);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   const [texts, setTexts] = useState<Record<string, string>>({});
-  const [group, setGroup] = useState<Group | "all">("shares");
+  const [group, setGroup] = useState<Group | "all">(initialGroup ?? "shares");
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);

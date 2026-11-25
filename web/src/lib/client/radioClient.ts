@@ -10,7 +10,7 @@ import { mixEnvelope } from "./lyricsSources";
 import { playPayload, RadioDeck } from "./radioDeck";
 import { onReconnect } from "./connection";
 import { within } from "./stemFetch";
-import { radioBreakDue } from "@/lib/monetize/adRules";
+import { radioBreakAfterMs, radioBreakDue } from "@/lib/monetize/adRules";
 import { useSettings } from "@/components/SettingsProvider";
 import { laneFromApi } from "./remixLanes";
 import { delayed, frequencyBars, loudnessWindow, type Curve } from "@/lib/visualBars";
@@ -367,9 +367,9 @@ export function useRadio(
     if (!d || tune === "off") return;
     const handlers = { play: () => void tuneIn(), pause: tuneOut };
     const show = (row: RadioFeed["now"]) => {
-      // A break is due (≈20 min listened) and its ad is ready: it plays before this song goes on.
+      // A break is due (the first after a few minutes, then ≈20 min listened) and its ad is ready: it plays before this song goes on.
       const ready = adReady.current;
-      if (ads && row && ready?.rowId === row.rowId && radioBreakDue(d.listenedSinceBreak, audio.current) && !d.inBreak) {
+      if (ads && row && ready?.rowId === row.rowId && radioBreakDue(d.listenedSinceBreak, audio.current, d.firstBreak) && !d.inBreak) {
         adReady.current = null;
         setAdBreak(ready.ad);
         lockScreen({ ...row, title: ready.ad.title, artist: `Ad · ${ready.ad.advertiser || "Sponsored"}` } as typeof row, feedRef.current?.station.name ?? "Remixt Radio", handlers);
@@ -405,7 +405,7 @@ export function useRadio(
   useEffect(() => {
     const d = deck.current;
     if (!ads || !d || tune !== "on" || !upcomingRow) return;
-    if (d.listenedSinceBreak < audio.current.radioEveryMinutes * 60_000 - 2 * 60_000 || adAsked.current.has(upcomingRow.rowId)) return;
+    if (d.listenedSinceBreak < radioBreakAfterMs(audio.current, d.firstBreak) - 2 * 60_000 || adAsked.current.has(upcomingRow.rowId)) return;
     adAsked.current.add(upcomingRow.rowId);
     const q = new URLSearchParams({ placement: "radio", format: "audio", target: `${upcomingRow.kind}:${upcomingRow.id}`, lang: document.documentElement.lang === "fa" ? "fa" : "en" });
     (async () => {

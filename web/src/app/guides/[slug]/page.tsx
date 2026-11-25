@@ -8,6 +8,7 @@ import { JsonLd, breadcrumbJsonLd, faqJsonLd, pageMetadata } from "@/lib/seo";
 import { SITE_CREATOR, SITE_NAME, absoluteUrl } from "@/lib/site";
 import { GUIDES, GUIDES_PATH, guide, guidePath } from "@/lib/guides";
 import { toolPage, toolPath } from "@/lib/tools";
+import AdCard from "@/components/ads/AdCard";
 
 // One guide (lib/guides.ts). Every slug is known at build time; any other is a 404.
 export const dynamicParams = false;
@@ -155,6 +156,7 @@ export default async function GuidePage({ params }: { params: Promise<{ slug: st
               ))}
             </div>
           </section>
+          <AdCard placement="site" className="mt-10" />
         </article>
 
         <aside className="order-first lg:order-none">

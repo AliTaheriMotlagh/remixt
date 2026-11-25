@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
   adHeard, cleanSettings, DEFAULT_REMIX_ADS, effectiveAds, formatToman, kindsOf, microsOfToman, persianNumber,
-  prerollDue, radioBreakDue, tomanOf, type ListenerAds,
+  prerollDue, radioBreakAfterMs, radioBreakDue, tomanOf, type ListenerAds,
 } from "../src/lib/monetize/adRules.ts";
 import { MICROS } from "../src/lib/monetize/policy.ts";
 import { DEFAULTS } from "../src/lib/settings/registry.ts";
@@ -162,5 +162,14 @@ describe("the owner's audio rules", () => {
   test("the radio's break comes when the owner says", () => {
     assert.equal(radioBreakDue(10 * min, rules), true);
     assert.equal(radioBreakDue(9 * min, rules), false);
+  });
+
+  test("the radio's first break comes sooner, so a listener who stays a few songs hears one", () => {
+    const r = { ...rules, radioFirstMinutes: 3 };
+    assert.equal(radioBreakDue(3 * min, r, true), true);
+    assert.equal(radioBreakDue(3 * min, r, false), false);
+    assert.equal(radioBreakAfterMs(r, true), 3 * min);
+    // A "first" longer than the usual gap never delays it.
+    assert.equal(radioBreakAfterMs({ ...rules, radioFirstMinutes: 60 }, true), 10 * min);
   });
 });

@@ -3,6 +3,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { listStations } from "@/lib/radio";
 import { RADIO_FAQ } from "@/lib/radioPage";
 import { JsonLd, breadcrumbJsonLd, faqJsonLd, pageMetadata } from "@/lib/seo";
+import AdCard from "@/components/ads/AdCard";
 
 export const metadata = pageMetadata({
   title: "Live radio stations, mixed like a DJ",
@@ -19,6 +20,7 @@ export default async function RadioPage() {
     <div className="mx-auto w-full max-w-7xl px-3 py-4 sm:px-5 sm:py-8">
       <JsonLd data={[faqJsonLd(RADIO_FAQ), breadcrumbJsonLd([{ name: "Radio", path: "/radio" }])]} />
       <RadioHome signedIn={!!user} initial={stations} />
+      <AdCard placement="site" className="mt-10" />
     </div>
   );
 }

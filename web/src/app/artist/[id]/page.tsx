@@ -13,6 +13,7 @@ import { getArtistProgress, getFollowState } from "@/lib/social";
 import type { Metadata } from "next";
 import { JsonLd, breadcrumbJsonLd, pageMetadata } from "@/lib/seo";
 import { absoluteUrl } from "@/lib/site";
+import AdCard from "@/components/ads/AdCard";
 
 type ArtistRow = {
   id: string;
@@ -208,6 +209,7 @@ export default async function ArtistPage({
           </div>
         )}
       </section>
+      <AdCard placement="site" className="mt-10" />
     </div>
   );
 }

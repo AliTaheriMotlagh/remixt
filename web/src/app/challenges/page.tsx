@@ -4,6 +4,7 @@ import { PlaceMedal } from "@/components/Icon";
 import ChallengeStemCard from "@/components/ChallengeStemCard";
 import { challengeEntries, getChallenge, listChallenges, type Challenge } from "@/lib/challenges";
 import { pageMetadata } from "@/lib/seo";
+import AdCard from "@/components/ads/AdCard";
 
 export const metadata = pageMetadata({
   title: "Remix challenges",
@@ -136,6 +137,7 @@ export default async function ChallengesPage({ searchParams }: { searchParams: P
           </ul>
         </section>
       )}
+      <AdCard placement="site" className="mt-10" />
     </div>
   );
 }

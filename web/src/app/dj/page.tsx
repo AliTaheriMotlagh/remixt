@@ -24,6 +24,13 @@ export default function DjPage() {
           deck to the other on the beat, and the Auto DJ picks the next song by tempo and key and keeps the set going.
         </p>
         <p className="mt-3">
+          Planning for an event?{" "}
+          <Link href="/dj/crate" className="font-medium text-brand-strong hover:underline">
+            The set planner
+          </Link>{" "}
+          lists every song with its key, tempo and energy, builds a set for a wedding, party or club night, and suggests what to play next.
+        </p>
+        <p className="mt-3">
           Record a set and save it as an MP3 with its track list and cover. New to DJing? Learn to DJ has lessons, drills
           and gigs, step by step.
         </p>

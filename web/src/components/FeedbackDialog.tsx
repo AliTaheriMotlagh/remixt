@@ -42,7 +42,20 @@ export default function FeedbackDialog({ signedIn }: { signedIn: boolean }) {
     };
     check();
     addEventListener("hashchange", check);
-    return () => removeEventListener("hashchange", check);
+    // A Next <Link href="#feedback"> (the phone's More sheet, the footer) changes the address with
+    // pushState, which fires no hashchange: the box never opened on phones. Any such link opens it here.
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey) return;
+      if (!(e.target instanceof Element) || !e.target.closest('a[href="#feedback"]')) return;
+      e.preventDefault();
+      setState("idle");
+      setOpen(true);
+    };
+    document.addEventListener("click", onClick, true);
+    return () => {
+      removeEventListener("hashchange", check);
+      document.removeEventListener("click", onClick, true);
+    };
   }, []);
 
   useEffect(() => {

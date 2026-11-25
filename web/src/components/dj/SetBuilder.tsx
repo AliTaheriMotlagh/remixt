@@ -97,7 +97,14 @@ export default function SetBuilder({ playing, onPlay, onClose }: { playing: bool
           <X className="h-4 w-4" />
         </button>
       </div>
-      <p className="text-xs text-muted">Songs that mix into each other — keys next to each other on the Camelot wheel, tempos within reach — in the shape you choose.</p>
+      <p className="text-xs text-muted">
+        Songs that mix into each other — keys next to each other on the Camelot wheel, tempos within reach — in the shape you choose. Planning for an
+        event, or with songs not on Remixt?{" "}
+        <a href="/dj/crate" className="font-semibold text-brand-strong hover:underline">
+          Open the set planner
+        </a>
+        .
+      </p>
       <div role="radiogroup" aria-label="The set's shape" className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
         {SET_SHAPES.map((s) => (
           <button

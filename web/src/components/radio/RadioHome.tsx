@@ -210,9 +210,10 @@ export default function RadioHome({ signedIn, initial }: { signedIn: boolean; in
             <Loader2 className="size-6 animate-spin" />
           </div>
         ) : (
-          <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          /* grid-cols-1, not the implicit column: a long "now playing" line must truncate, not widen the page past a phone's screen. */
+          <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {[...(house ? [house] : []), ...rest].map((s) => (
-              <li key={s.slug}>
+              <li key={s.slug} className="min-w-0">
                 <Link href={`/radio/${s.slug}`} className="group relative isolate flex h-full items-center gap-3 overflow-hidden rounded-2xl border border-border bg-surface p-3 transition hover:-translate-y-0.5 hover:border-brand/60 hover:shadow-[0_12px_40px_-16px_var(--brand)]">
                   <div className="absolute inset-0 -z-10 opacity-0 transition group-hover:opacity-30" aria-hidden>
                     <RadioArt item={s.now ?? { title: s.name, artist: s.owner ?? "", cover: null }} className="size-full scale-150 blur-2xl" />

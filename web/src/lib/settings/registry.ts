@@ -51,6 +51,8 @@ export type AppSettings = {
     prerollFreeFirst: boolean;
     visitGapMinutes: number;
     radioEveryMinutes: number;
+    /** The first radio break comes after this much listening (then one per radioEveryMinutes). */
+    radioFirstMinutes: number;
   };
   features: {
     ads: boolean;
@@ -165,7 +167,7 @@ export const DEFAULTS: AppSettings = {
   },
   payouts: { holdDays: 30, minMicros: 10 * M, unclaimedYears: 3, tomanRate: 0 },
   ads: { viewShare: 5_000, viewMs: 1_000, paidViewsPerAddress: 60, floors: { card: M / 2, audio: 2 * M, promote: M / 2 } },
-  audio: { maxSeconds: 15, skipAfter: 5, paidAfter: 5, prerollEveryMinutes: 30, prerollFreeFirst: true, visitGapMinutes: 30, radioEveryMinutes: 20 },
+  audio: { maxSeconds: 15, skipAfter: 5, paidAfter: 5, prerollEveryMinutes: 30, prerollFreeFirst: true, visitGapMinutes: 30, radioEveryMinutes: 20, radioFirstMinutes: 3 },
   features: {
     ads: true,
     audioAds: true,
@@ -299,6 +301,7 @@ export const FIELDS: Field[] = [
   { path: "audio.prerollFreeFirst", group: "audio", unit: "switch", en: "Never on the first remix of a visit", fa: "هرگز روی اولین ریمیکسِ هر بازدید", public: true },
   { path: "audio.visitGapMinutes", group: "audio", unit: "minutes", en: "A visit ends after this long without playing", fa: "بازدید پس از این مدت بی‌پخش تمام می‌شود", min: 1, max: 1_440, int: true, public: true },
   { path: "audio.radioEveryMinutes", group: "audio", unit: "minutes", en: "Radio: one break per this much listening", fa: "رادیو: یک وقفه برای هر این مقدار شنیدن", min: 1, max: 1_440, int: true, public: true },
+  { path: "audio.radioFirstMinutes", group: "audio", unit: "minutes", en: "Radio: the first break after this much listening", fa: "رادیو: اولین وقفه پس از این مقدار شنیدن", help: "Most listeners stay a few songs: with only the 20-minute rule most never hear an ad.", min: 1, max: 1_440, int: true, public: true },
 
   { path: "features.ads", group: "features", unit: "switch", en: "Paying ads", fa: "تبلیغ پولی", help: "Off: only Remixt's own ads show, and nobody is paid.", public: true },
   { path: "features.audioAds", group: "features", unit: "switch", en: "Audio ads (before remixes and on the radio)", fa: "تبلیغ صوتی", public: true },

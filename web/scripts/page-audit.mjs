@@ -43,17 +43,18 @@ for (const [size, options] of Object.entries(sizes)) {
       errors.push(`load: ${String(e).slice(0, 120)}`);
     }
     const found = await page
-      .evaluate(() => {
+      // Against the set viewport, not innerWidth: a too-wide page on a phone zooms out, which widens innerWidth with it (and hides the overflow).
+      .evaluate((vw) => {
         const text = document.body?.innerText ?? "";
         const bad = [...new Set(text.match(/\b(NaN|undefined|Infinity|\[object Object\])\b/g) ?? [])];
-        const wide = document.documentElement.scrollWidth - window.innerWidth;
+        const wide = document.documentElement.scrollWidth - vw;
         const brokenImages = [...document.images].filter((i) => i.complete && i.naturalWidth === 0 && i.src && !i.src.startsWith("data:")).map((i) => i.src.slice(-60));
         const unnamed = [...document.querySelectorAll("button, a[href]")].filter((b) => {
           const r = b.getBoundingClientRect();
           return r.width > 0 && r.height > 0 && !(b.getAttribute("aria-label") || b.textContent?.trim() || b.getAttribute("title") || b.querySelector("img[alt]:not([alt=''])"));
         }).length;
         return { bad, wide, brokenImages, unnamed, title: document.title };
-      })
+      }, page.viewportSize()?.width ?? 0)
       .catch(() => ({ bad: [], wide: 0, brokenImages: [], unnamed: 0, title: "?" }));
     const file = `${out}/${size}${path.replace(/[^a-z0-9]+/gi, "_")}.png`;
     await page.screenshot({ path: file }).catch(() => {});

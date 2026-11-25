@@ -43,8 +43,8 @@ export function adKindText(a: AudioRules = DEFAULTS.audio): Record<AdKind, { en:
     radio: {
       en: "Audio ads on the radio",
       fa: "تبلیغ صوتی در رادیو",
-      enHelp: `A short break before it on the radio, about once every ${a.radioEveryMinutes} minutes of listening.`,
-      faHelp: `یک وقفهٔ کوتاه پیش از آن در رادیو، تقریباً هر ${persianNumber(a.radioEveryMinutes)} دقیقه شنیدن یک بار.`,
+      enHelp: `A short break before it on the radio: the first after about ${a.radioFirstMinutes ?? a.radioEveryMinutes} minutes of listening, then about once every ${a.radioEveryMinutes} minutes.`,
+      faHelp: `یک وقفهٔ کوتاه پیش از آن در رادیو: اولی پس از حدود ${persianNumber(a.radioFirstMinutes ?? a.radioEveryMinutes)} دقیقه شنیدن، سپس تقریباً هر ${persianNumber(a.radioEveryMinutes)} دقیقه یک بار.`,
     },
   };
 }
@@ -226,9 +226,15 @@ export function adHeard(state: ListenerAds, now: number): ListenerAds {
   return { ...state, lastAdAt: now };
 }
 
-/** On the radio: a break is due once this much has been listened to since the last one. */
-export function radioBreakDue(listenedMs: number, a: AudioRules = DEFAULTS.audio): boolean {
-  return listenedMs >= a.radioEveryMinutes * 60_000;
+/** How much listening a radio break waits for: the first one of a visit sooner (most people stay a few songs), then the usual gap. */
+export function radioBreakAfterMs(a: AudioRules = DEFAULTS.audio, first = false): number {
+  const every = a.radioEveryMinutes * 60_000;
+  return first ? Math.min(every, (a.radioFirstMinutes ?? a.radioEveryMinutes) * 60_000) : every;
+}
+
+/** On the radio: a break is due once this much has been listened to since the last one (or since tuning in, for the first). */
+export function radioBreakDue(listenedMs: number, a: AudioRules = DEFAULTS.audio, first = false): boolean {
+  return listenedMs >= radioBreakAfterMs(a, first);
 }
 
 // ——— Toman ———

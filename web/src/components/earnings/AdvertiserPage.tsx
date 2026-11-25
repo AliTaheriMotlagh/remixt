@@ -8,13 +8,15 @@
 
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BarChart3, Check, CircleAlert, Image as ImageIcon, Loader2, Megaphone, Music, Pause, Pencil, Play, Plus, Send, Wallet, X } from "lucide-react";
+import { BarChart3, Check, CircleAlert, Image as ImageIcon, LayoutGrid, Loader2, Megaphone, Music, Pause, Pencil, Play, Plus, Radio as RadioIcon, Send, Wallet, X } from "lucide-react";
 import { NEVER, NEVER_FA, TOPICS, microsOfToman, tomanOf, type AudioRules, type Format } from "@/lib/monetize/adRules";
 import { useSettings } from "@/components/SettingsProvider";
 import { MICROS, type Placement } from "@/lib/monetize/policy";
 import { moneyIn, numIn, dateIn, type Lang } from "@/lib/monetize/moneyText";
 import type { AdvertiserCampaign } from "@/lib/monetize/adStore";
 import type { MonetizeSettings } from "@/lib/monetize/store";
+import { deliveryStatus } from "@/lib/monetize/adStatus";
+import DeliveryTracker, { DeliveryChip } from "@/components/ads/DeliveryTracker";
 
 type Promotable = { target: string; title: string; kind: "remix" | "track" };
 type Data = { campaigns: AdvertiserCampaign[]; promotable: Promotable[]; settings: MonetizeSettings };
@@ -56,11 +58,6 @@ const makeT = (AUDIO: AudioRules) => ({
     preview: "Preview",
     sponsored: "Sponsored",
     never: "Never on Remixt",
-    status: { draft: "Draft", pending: "Being checked", approved: "Approved", rejected: "Turned down" } as Record<string, string>,
-    paused: "Paused",
-    running: "Running",
-    noBudget: "Add money to run",
-    ended: "Ended",
     stats: (v: string, c: string, ctr: string) => `${v} paid views · ${c} clicks · ${ctr} opened`,
     spent: (s: string, b: string) => `${s} spent of ${b}`,
     edit: "Edit",
@@ -125,11 +122,6 @@ const makeT = (AUDIO: AudioRules) => ({
     preview: "پیش‌نمایش",
     sponsored: "تبلیغ",
     never: "هرگز در ریمیکست",
-    status: { draft: "پیش‌نویس", pending: "در حال بررسی", approved: "تأییدشده", rejected: "رد شد" } as Record<string, string>,
-    paused: "متوقف",
-    running: "در حال اجرا",
-    noBudget: "برای اجرا پول اضافه کنید",
-    ended: "پایان‌یافته",
     stats: (v: string, c: string, ctr: string) => `${v} بازدید پولی · ${c} کلیک · ${ctr} باز شده`,
     spent: (s: string, b: string) => `${s} خرج شده از ${b}`,
     edit: "ویرایش",
@@ -300,21 +292,21 @@ export default function AdvertiserPage({ lang = "en" }: { lang?: Lang }) {
         ) : (
           <ul className="mt-3 flex flex-col gap-4">
             {data.campaigns.map((c) => {
-              const ended = !!c.ends_at && new Date(c.ends_at).getTime() < openedAt;
-              const broke = c.budget_micros - c.spent_micros < Math.max(1, c.cpm_micros / 1000);
-              const state =
-                c.review !== "approved" ? t.status[c.review] : !c.active ? t.paused : ended ? t.ended : broke ? t.noBudget : t.running;
-              const good = c.review === "approved" && c.active && !ended && !broke;
+              const d = deliveryStatus(c, { now: openedAt, paymentPending: c.payments.some((p) => p.status === "pending"), switches: features });
+              const edit = () =>
+                setForm({
+                  id: c.id, format: c.format, advertiser: c.advertiser, title: c.title, body: c.body, cta: c.cta, link: c.link, topic: c.topic,
+                  lang: c.lang as Form["lang"], placements: c.placements as Placement[], price: priceText(c.cpm_micros, lang, rate),
+                  endsAt: c.ends_at ? c.ends_at.slice(0, 10) : "", promoteTarget: c.promote_target ?? "",
+                });
               const maxDay = Math.max(1, ...c.days.map((d) => d.views));
               return (
                 <li key={c.id} className="rounded-3xl border border-border bg-surface p-5">
                   <div className="flex flex-wrap items-start gap-3">
-                    <div className="min-w-0 flex-1">
+                    <div className="min-w-0 basis-full sm:basis-0 sm:flex-1">
                       <p className="flex flex-wrap items-center gap-2">
                         <span className="rounded-full bg-surface-raised px-2 py-0.5 text-xs">{t.formats[c.format][0]}</span>
-                        <span className={`rounded-full px-2 py-0.5 text-xs ${good ? "bg-success/15 text-success" : c.review === "rejected" ? "bg-danger/15 text-danger" : "bg-drums/15 text-drums"}`}>
-                          {state}
-                        </span>
+                        <DeliveryChip d={d} lang={lang} />
                       </p>
                       <p className="mt-1 truncate text-lg font-semibold">{c.format === "promote" ? (c.promoteTitle ?? c.name) : c.title || c.name}</p>
                       <p className="text-sm text-muted">
@@ -329,13 +321,7 @@ export default function AdvertiserPage({ lang = "en" }: { lang?: Lang }) {
                     <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
-                        onClick={() =>
-                          setForm({
-                            id: c.id, format: c.format, advertiser: c.advertiser, title: c.title, body: c.body, cta: c.cta, link: c.link, topic: c.topic,
-                            lang: c.lang as Form["lang"], placements: c.placements as Placement[], price: priceText(c.cpm_micros, lang, rate),
-                            endsAt: c.ends_at ? c.ends_at.slice(0, 10) : "", promoteTarget: c.promote_target ?? "",
-                          })
-                        }
+                        onClick={edit}
                         className="inline-flex items-center gap-1 rounded-full border border-border px-3 py-1.5 text-xs font-semibold hover:bg-surface-hover"
                       >
                         <Pencil className="h-3.5 w-3.5" /> {t.edit}
@@ -361,6 +347,11 @@ export default function AdvertiserPage({ lang = "en" }: { lang?: Lang }) {
                       </button>
                     </div>
                   </div>
+                  <DeliveryTracker
+                    d={d}
+                    lang={lang}
+                    onAction={(a) => (a === "pay" ? setPaying(c.id) : a === "submit" ? act(c.id, "submit") : a === "resume" ? act(c.id, "resume") : edit())}
+                  />
                   {c.days.length > 0 && (
                     <div className="mt-3">
                       <p className="flex items-center gap-1 text-xs text-muted">
@@ -467,7 +458,7 @@ function AdForm({ lang, form, setForm, data, onDone }: { lang: Lang; form: Form;
     setBusy(true);
     setNote(null);
     try {
-      const cpmMicros = priceMicros(form.price, lang, rate);
+      const cpmMicros = priceMicros(form.price.trim() || priceText(floor, lang, rate), lang, rate);
       const draft = {
         name: form.title || form.advertiser, advertiser: form.advertiser, title: form.title, body: form.body, cta: form.cta, link: form.link,
         format: form.format, topic: form.topic, lang: form.lang, placements: form.format === "promote" ? ["promote"] : form.placements,
@@ -495,57 +486,152 @@ function AdForm({ lang, form, setForm, data, onDone }: { lang: Lang; form: Form;
   }
 
   const field = "input w-full";
+  const W = fa ? WIZARD.fa : WIZARD.en;
+  const [step, setStep] = useState(0);
+  // Left empty: the lowest price (the one the box shows greyed).
+  const cpm = priceMicros(form.price.trim() || priceText(floor, lang, rate), lang, rate);
+  /** What's missing on a step, or null (checked before moving on; the server checks again). */
+  const problem = (i: number): string | null => {
+    if (i === 0) {
+      if (form.format === "promote") return form.promoteTarget ? null : W.needTarget;
+      if (!form.title.trim()) return W.needTitle;
+      if (!/^https?:\/\/[^\s]+\.[^\s]+/.test(form.link)) return W.needLink;
+      if (form.format === "audio" && !sound && !form.id) return W.needSound;
+    }
+    if (i === 1 && form.format !== "promote" && !form.placements.some((x) => can.includes(x))) return W.needPlace;
+    if (i === 2 && (!Number.isFinite(cpm) || cpm < floor)) return t.priceHelp(money(floor));
+    return null;
+  };
+  const next = () => {
+    const p = problem(step);
+    setNote(p);
+    if (!p) setStep((x) => Math.min(2, x + 1));
+  };
+  const steps = form.format === "promote" ? [W.s1Promote, W.s2, W.s3] : [W.s1, W.s2, W.s3];
+  const PLACE_ICON: Record<string, typeof ImageIcon> = { site: LayoutGrid, remix: Music, radio: RadioIcon };
+
   return (
-    <section className="rounded-3xl border border-brand/40 bg-surface p-5">
+    <section className="rounded-3xl border border-brand/40 bg-surface p-4 sm:p-5">
       <div className="flex items-center gap-2">
         <h2 className="flex-1 text-xl font-bold">{t.formats[form.format][0]}</h2>
-        <button type="button" onClick={() => setForm(null)} aria-label={t.cancel} className="text-muted hover:text-foreground">
+        <button type="button" onClick={() => setForm(null)} aria-label={t.cancel} className="rounded-full p-2 text-muted hover:bg-surface-hover hover:text-foreground">
           <X className="h-5 w-5" />
         </button>
       </div>
-      <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
-        <div className="grid gap-3">
-          {form.format === "promote" ? (
-            <label className="grid gap-1 text-sm">
-              <span className="font-medium">{t.whatToPromote}</span>
-              {data.promotable.length ? (
-                <select className={field} value={form.promoteTarget} onChange={(e) => set({ promoteTarget: e.target.value })}>
-                  <option value="">—</option>
-                  {data.promotable.map((p) => (
-                    <option key={p.target} value={p.target}>
-                      {p.kind === "remix" ? "♫ " : "♪ "}
-                      {p.title}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <span className="text-muted">{t.nothingToPromote}</span>
-              )}
-            </label>
-          ) : (
-            <>
-              <label className="grid gap-1 text-sm">
-                <span className="font-medium">{t.advertiser}</span>
-                <input className={field} value={form.advertiser} maxLength={60} onChange={(e) => set({ advertiser: e.target.value })} dir="auto" />
-              </label>
-              <label className="grid gap-1 text-sm">
-                <span className="font-medium">{t.adTitle}</span>
-                <input className={field} value={form.title} maxLength={80} onChange={(e) => set({ title: e.target.value })} dir="auto" />
-              </label>
-              <label className="grid gap-1 text-sm">
-                <span className="font-medium">{t.body}</span>
-                <textarea className={field} rows={2} value={form.body} maxLength={200} onChange={(e) => set({ body: e.target.value })} dir="auto" />
-              </label>
-              <div className="grid gap-3 sm:grid-cols-[10rem_minmax(0,1fr)]">
-                <label className="grid gap-1 text-sm">
-                  <span className="font-medium">{t.cta}</span>
-                  <input className={field} value={form.cta} maxLength={24} onChange={(e) => set({ cta: e.target.value })} dir="auto" />
-                </label>
-                <label className="grid gap-1 text-sm">
-                  <span className="font-medium">{t.link}</span>
-                  <input className={field} value={form.link} maxLength={500} onChange={(e) => set({ link: e.target.value })} dir="ltr" inputMode="url" />
-                </label>
+      {/* The steps, YouTube-Studio style: where you are, what's done, and you can go back to any done step. */}
+      <ol className="mt-3 grid grid-cols-3 gap-2" aria-label={W.stepsLabel}>
+        {steps.map((name, i) => (
+          <li key={name}>
+            <button
+              type="button"
+              disabled={i > step}
+              onClick={() => setStep(i)}
+              aria-current={i === step ? "step" : undefined}
+              className={`flex w-full flex-col items-start gap-1 rounded-xl border-b-4 px-2 py-2 text-start transition ${
+                i === step ? "border-brand bg-brand/10" : i < step ? "border-success hover:bg-surface-hover" : "border-border opacity-60"
+              }`}
+            >
+              <span className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold ${i < step ? "bg-success text-white" : i === step ? "bg-brand text-white" : "bg-surface-raised text-muted"}`}>
+                {i < step ? <Check className="h-3.5 w-3.5" /> : i + 1}
+              </span>
+              <span className="text-xs font-semibold leading-tight sm:text-sm">{name}</span>
+            </button>
+          </li>
+        ))}
+      </ol>
+
+      <div className="mt-4 grid gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
+        <div className="grid content-start gap-3">
+          {step === 0 &&
+            (form.format === "promote" ? (
+              <div className="grid gap-2 text-sm">
+                <span className="font-medium">{t.whatToPromote}</span>
+                {data.promotable.length ? (
+                  <ul className="grid gap-2 sm:grid-cols-2">
+                    {data.promotable.map((p) => (
+                      <li key={p.target}>
+                        <button
+                          type="button"
+                          onClick={() => set({ promoteTarget: p.target })}
+                          aria-pressed={form.promoteTarget === p.target}
+                          className={`flex w-full items-center gap-2 rounded-xl border p-3 text-start ${form.promoteTarget === p.target ? "border-brand bg-brand/10" : "border-border hover:bg-surface-hover"}`}
+                        >
+                          <Music className="h-4 w-4 shrink-0 text-brand-strong" />
+                          <span className="min-w-0 flex-1 truncate font-semibold" dir="auto">{p.title}</span>
+                          <span className="text-xs text-muted">{p.kind === "remix" ? W.remix : W.song}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <span className="text-muted">{t.nothingToPromote}</span>
+                )}
               </div>
+            ) : (
+              <>
+                <label className="grid gap-1 text-sm">
+                  <span className="font-medium">{t.adTitle} *</span>
+                  <input className={field} value={form.title} maxLength={80} onChange={(e) => set({ title: e.target.value })} dir="auto" placeholder={W.titleHint} />
+                  <span className="text-end text-[11px] text-muted">{form.title.length}/80</span>
+                </label>
+                <label className="grid gap-1 text-sm">
+                  <span className="font-medium">{t.body}</span>
+                  <textarea className={field} rows={2} value={form.body} maxLength={200} onChange={(e) => set({ body: e.target.value })} dir="auto" />
+                  <span className="text-end text-[11px] text-muted">{form.body.length}/200</span>
+                </label>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="grid gap-1 text-sm">
+                    <span className="font-medium">{t.advertiser}</span>
+                    <input className={field} value={form.advertiser} maxLength={60} onChange={(e) => set({ advertiser: e.target.value })} dir="auto" />
+                  </label>
+                  <label className="grid gap-1 text-sm">
+                    <span className="font-medium">{t.cta}</span>
+                    <input className={field} value={form.cta} maxLength={24} onChange={(e) => set({ cta: e.target.value })} dir="auto" />
+                  </label>
+                </div>
+                <label className="grid gap-1 text-sm">
+                  <span className="font-medium">{t.link} *</span>
+                  <input className={field} value={form.link} maxLength={500} onChange={(e) => set({ link: e.target.value })} dir="ltr" inputMode="url" placeholder="https://" />
+                </label>
+                <FilePick label={t.picture} accept="image/jpeg,image/png" icon={ImageIcon} chosen={picture?.name ?? null} onPick={(f) => setPicture(f)} hint={W.pictureHint} />
+                {form.format === "audio" && (
+                  <div className="grid gap-1">
+                    <FilePick label={`${t.sound} *`} accept="audio/*" icon={Music} chosen={sound?.file.name ?? null} onPick={(f) => void pickSound(f)} hint={W.soundHint} />
+                    {sound && <audio controls src={URL.createObjectURL(sound.file)} className="mt-1 w-full" />}
+                  </div>
+                )}
+              </>
+            ))}
+
+          {step === 1 && (
+            <>
+              {form.format !== "promote" && (
+                <fieldset className="grid gap-2 text-sm">
+                  <legend className="mb-1 font-medium">{t.where}</legend>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    {can.map((p) => {
+                      const on = form.placements.includes(p);
+                      const Icon = PLACE_ICON[p] ?? LayoutGrid;
+                      return (
+                        <button
+                          key={p}
+                          type="button"
+                          aria-pressed={on}
+                          onClick={() => set({ placements: on ? form.placements.filter((x) => x !== p) : [...form.placements, p] })}
+                          className={`relative flex flex-col items-start gap-1 rounded-2xl border p-3 text-start transition ${on ? "border-brand bg-brand/10" : "border-border hover:bg-surface-hover"}`}
+                        >
+                          <span className={`absolute end-2 top-2 flex h-5 w-5 items-center justify-center rounded-full border ${on ? "border-brand bg-brand text-white" : "border-border"}`}>
+                            {on && <Check className="h-3 w-3" />}
+                          </span>
+                          <Icon className="h-5 w-5 text-brand-strong" />
+                          <span className="font-semibold">{t.places[p]}</span>
+                          <span className="text-xs text-muted">{W.placeHelp[p as "site" | "remix" | "radio"]}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </fieldset>
+              )}
               <label className="grid gap-1 text-sm">
                 <span className="font-medium">{t.topic}</span>
                 <select className={field} value={form.topic} onChange={(e) => set({ topic: e.target.value })}>
@@ -557,70 +643,105 @@ function AdForm({ lang, form, setForm, data, onDone }: { lang: Lang; form: Form;
                 </select>
                 <span className="text-xs text-muted">{t.topicHelp}</span>
               </label>
-              <fieldset className="text-sm">
-                <legend className="font-medium">{t.where}</legend>
-                <div className="mt-1 flex flex-wrap gap-3">
-                  {can.map((p) => (
-                    <label key={p} className="inline-flex items-center gap-1.5">
-                      <input
-                        type="checkbox"
-                        className="accent-[var(--brand)]"
-                        checked={form.placements.includes(p)}
-                        onChange={() => set({ placements: form.placements.includes(p) ? form.placements.filter((x) => x !== p) : [...form.placements, p] })}
-                      />
-                      {t.places[p]}
-                    </label>
+              <fieldset className="grid gap-1 text-sm">
+                <legend className="mb-1 font-medium">{t.lang}</legend>
+                <div className="flex flex-wrap gap-2">
+                  {(["any", "en", "fa"] as const).map((l) => (
+                    <button
+                      key={l}
+                      type="button"
+                      aria-pressed={form.lang === l}
+                      onClick={() => set({ lang: l })}
+                      className={`rounded-full border px-3.5 py-1.5 text-sm font-semibold ${form.lang === l ? "border-brand bg-brand/15" : "border-border hover:bg-surface-hover"}`}
+                    >
+                      {t.langs[l]}
+                    </button>
                   ))}
                 </div>
               </fieldset>
-              <label className="grid gap-1 text-sm">
-                <span className="font-medium">{t.picture}</span>
-                <input type="file" accept="image/jpeg,image/png" onChange={(e) => setPicture(e.target.files?.[0] ?? null)} />
-              </label>
-              {form.format === "audio" && (
-                <label className="grid gap-1 text-sm">
-                  <span className="font-medium">{t.sound}</span>
-                  <input type="file" accept="audio/*" onChange={(e) => void pickSound(e.target.files?.[0] ?? null)} />
-                  {sound && <audio controls src={URL.createObjectURL(sound.file)} className="mt-1 w-full" />}
-                </label>
-              )}
             </>
           )}
-          <div className="grid gap-3 sm:grid-cols-3">
-            <label className="grid gap-1 text-sm">
-              <span className="font-medium">{t.lang}</span>
-              <select className={field} value={form.lang} onChange={(e) => set({ lang: e.target.value as Form["lang"] })}>
-                {(["any", "en", "fa"] as const).map((l) => (
-                  <option key={l} value={l}>
-                    {t.langs[l]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="grid gap-1 text-sm">
-              <span className="font-medium">
-                {t.price} ({fa && rate ? t.toman : t.usd})
-              </span>
-              <input className={field} value={form.price} onChange={(e) => set({ price: e.target.value })} inputMode="decimal" dir="ltr" placeholder={priceText(floor, lang, rate)} />
-              <span className="text-xs text-muted">{t.priceHelp(money(floor))}</span>
-            </label>
-            <label className="grid gap-1 text-sm">
-              <span className="font-medium">{t.ends}</span>
-              <input className={field} type="date" value={form.endsAt} onChange={(e) => set({ endsAt: e.target.value })} />
-            </label>
-          </div>
-          {note && <p className="text-sm text-danger">{note}</p>}
-          <div className="flex flex-wrap gap-2">
-            <button type="button" disabled={busy} onClick={() => save(true)} className="inline-flex items-center gap-2 rounded-full bg-brand px-5 py-2 text-sm font-semibold text-white disabled:opacity-50">
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} {t.saveSubmit}
-            </button>
-            <button type="button" disabled={busy} onClick={() => save(false)} className="rounded-full border border-border px-5 py-2 text-sm font-semibold hover:bg-surface-hover disabled:opacity-50">
-              {t.save}
+
+          {step === 2 && (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="grid gap-1 text-sm">
+                  <span className="font-medium">
+                    {t.price} ({fa && rate ? t.toman : t.usd})
+                  </span>
+                  <input className={field} value={form.price} onChange={(e) => set({ price: e.target.value })} inputMode="decimal" dir="ltr" placeholder={priceText(floor, lang, rate)} />
+                  <span className="text-xs text-muted">{t.priceHelp(money(floor))}</span>
+                </label>
+                <label className="grid gap-1 text-sm">
+                  <span className="font-medium">{t.ends}</span>
+                  <input className={field} type="date" value={form.endsAt} onChange={(e) => set({ endsAt: e.target.value })} />
+                </label>
+              </div>
+              {Number.isFinite(cpm) && cpm >= floor && (
+                <div className="rounded-2xl border border-border bg-background/40 p-3 text-sm">
+                  <p className="font-semibold">{W.estimate}</p>
+                  <ul className="mt-2 grid grid-cols-3 gap-2 text-center">
+                    {[5, 20, 50].map((usd) => (
+                      <li key={usd} className="rounded-xl bg-surface-raised p-2">
+                        <span className="block text-xs text-muted">{money(usd * MICROS)}</span>
+                        <span className="block text-lg font-bold tabular-nums">≈ {Math.floor((usd * MICROS) / (cpm / 1000)).toLocaleString(fa ? "fa-IR" : "en-US")}</span>
+                        <span className="block text-[11px] text-muted">{W.views}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <div className="rounded-2xl border border-brand/30 bg-brand/5 p-3 text-sm">
+                <p className="font-semibold">{W.afterTitle}</p>
+                <ol className="mt-2 grid gap-1.5">
+                  {W.after.map((line, i) => (
+                    <li key={line} className="flex gap-2">
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand text-[11px] font-bold text-white">{i + 1}</span>
+                      <span className="text-muted">{line}</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            </>
+          )}
+
+          <div className="sticky bottom-16 z-10 -mx-1 flex flex-wrap items-center gap-2 rounded-2xl bg-surface/95 p-1 backdrop-blur sm:static sm:bottom-auto">
+            {/* What's missing sits with the buttons, so it's seen where Next was pressed (on a phone they float at the bottom). */}
+            {note && (
+              <p role="alert" className="flex basis-full items-center gap-2 rounded-xl border border-danger/40 bg-danger/10 p-2.5 text-sm">
+                <CircleAlert className="h-4 w-4 shrink-0 text-danger" /> {note}
+              </p>
+            )}
+            {step > 0 && (
+              <button type="button" onClick={() => (setNote(null), setStep(step - 1))} className="rounded-full border border-border px-4 py-2 text-sm font-semibold hover:bg-surface-hover">
+                {W.back}
+              </button>
+            )}
+            {step < 2 ? (
+              <button type="button" onClick={next} className="inline-flex flex-1 items-center justify-center gap-2 rounded-full bg-brand px-5 py-2 text-sm font-semibold text-white hover:bg-brand-strong sm:flex-none">
+                {W.next}
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  const p = [0, 1, 2].map(problem).find(Boolean) ?? null;
+                  setNote(p);
+                  if (!p) void save(true);
+                }}
+                className="inline-flex flex-1 items-center justify-center gap-2 rounded-full bg-brand px-5 py-2 text-sm font-semibold text-white disabled:opacity-50 sm:flex-none"
+              >
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} {t.saveSubmit}
+              </button>
+            )}
+            <button type="button" disabled={busy} onClick={() => save(false)} className="rounded-full px-4 py-2 text-sm font-semibold text-muted hover:bg-surface-hover hover:text-foreground disabled:opacity-50">
+              {W.saveDraft}
             </button>
           </div>
         </div>
         {form.format !== "promote" && (
-          <div>
+          <div className="lg:sticky lg:top-20 lg:self-start">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted">{t.preview}</p>
             <div className="mt-2 flex items-center gap-3 rounded-2xl border border-border bg-surface-raised p-3" dir={form.lang === "fa" || (form.lang === "any" && fa) ? "rtl" : "ltr"}>
               {pictureUrl ? (
@@ -636,16 +757,88 @@ function AdForm({ lang, form, setForm, data, onDone }: { lang: Lang; form: Form;
                   {t.sponsored}
                   {form.advertiser && ` · ${form.advertiser}`}
                 </span>
-                <span className="block truncate font-semibold">{form.title || "…"}</span>
+                <span className="block break-words font-semibold leading-snug">{form.title || W.titleHint}</span>
                 {form.body && <span className="line-clamp-2 block text-sm text-muted">{form.body}</span>}
+                <span className="mt-1 inline-flex rounded-full bg-brand px-3 py-1 text-xs font-semibold text-white">{form.cta || "…"}</span>
               </span>
             </div>
+            <p className="mt-2 text-xs text-muted">{W.previewNote}</p>
           </div>
         )}
       </div>
     </section>
   );
 }
+
+/** A file picker that looks like a button and says what was chosen (the browser's own is tiny on a phone). */
+function FilePick({ label, accept, icon: Icon, chosen, onPick, hint }: { label: string; accept: string; icon: typeof ImageIcon; chosen: string | null; onPick: (f: File | null) => void; hint: string }) {
+  return (
+    <label className="grid gap-1 text-sm">
+      <span className="font-medium">{label}</span>
+      <span className="flex min-h-12 cursor-pointer items-center gap-3 rounded-xl border border-dashed border-border px-3 py-2 hover:border-brand hover:bg-surface-hover">
+        <Icon className="h-5 w-5 shrink-0 text-brand-strong" />
+        <span className="min-w-0 flex-1 truncate">{chosen ?? hint}</span>
+        {chosen && <Check className="h-4 w-4 shrink-0 text-success" />}
+        <input type="file" accept={accept} className="sr-only" onChange={(e) => onPick(e.target.files?.[0] ?? null)} />
+      </span>
+    </label>
+  );
+}
+
+const WIZARD = {
+  en: {
+    stepsLabel: "Making your ad",
+    s1: "What it says",
+    s1Promote: "What to promote",
+    s2: "Who sees it",
+    s3: "Price & send",
+    next: "Next",
+    back: "Back",
+    saveDraft: "Save draft",
+    needTitle: "Give the ad a headline.",
+    needLink: "Add the address the ad opens (https://…).",
+    needSound: "Add the ad's sound.",
+    needPlace: "Choose at least one place.",
+    needTarget: "Choose what to promote.",
+    titleHint: "Your headline",
+    pictureHint: "Choose a picture (square looks best)",
+    soundHint: "Choose the sound file",
+    remix: "Remix",
+    song: "Song",
+    placeHelp: { site: "Lists, tool pages and guides — most people.", remix: "Under the player while a remix plays.", radio: "On the radio while songs play." },
+    estimate: "About how many paid views your money buys",
+    views: "views",
+    afterTitle: "What happens next",
+    after: ["Remixt checks the ad (usually within a day).", "You add money — card, bank or USDT — and send the reference.", "It shows until the money is spent. You see views and clicks every day."],
+    previewNote: "How it looks on the page. A view counts only when half of it is on screen for a second.",
+  },
+  fa: {
+    stepsLabel: "ساخت تبلیغ",
+    s1: "متن تبلیغ",
+    s1Promote: "چه چیزی معرفی شود",
+    s2: "چه کسانی ببینند",
+    s3: "قیمت و ارسال",
+    next: "بعدی",
+    back: "قبلی",
+    saveDraft: "ذخیرهٔ پیش‌نویس",
+    needTitle: "برای تبلیغ یک عنوان بنویسید.",
+    needLink: "آدرسی که تبلیغ باز می‌کند را بنویسید (https://…).",
+    needSound: "صدای تبلیغ را اضافه کنید.",
+    needPlace: "دست‌کم یک جا را انتخاب کنید.",
+    needTarget: "انتخاب کنید چه چیزی معرفی شود.",
+    titleHint: "عنوان شما",
+    pictureHint: "یک تصویر انتخاب کنید (مربعی بهتر است)",
+    soundHint: "فایل صدا را انتخاب کنید",
+    remix: "ریمیکس",
+    song: "آهنگ",
+    placeHelp: { site: "فهرست‌ها، صفحهٔ ابزارها و راهنماها — بیشترین بیننده.", remix: "زیر پخش‌کننده هنگام پخش ریمیکس.", radio: "در رادیو هنگام پخش آهنگ‌ها." },
+    estimate: "تقریباً چند بازدید پولی با این مبلغ",
+    views: "بازدید",
+    afterTitle: "بعد چه می‌شود",
+    after: ["ریمیکست تبلیغ را بررسی می‌کند (معمولاً تا یک روز).", "اعتبار اضافه می‌کنید — کارت، بانک یا تتر — و شمارهٔ پیگیری را می‌فرستید.", "تا تمام شدن اعتبار نمایش داده می‌شود. بازدید و کلیک را هر روز می‌بینید."],
+    previewNote: "شکل تبلیغ در صفحه. بازدید فقط وقتی حساب می‌شود که نیمی از آن یک ثانیه روی صفحه باشد.",
+  },
+};
 
 function PaymentForm({ lang, campaignId, settings, onDone }: { lang: Lang; campaignId: string; settings: MonetizeSettings; onDone: () => void }) {
   const t = useT(lang);
