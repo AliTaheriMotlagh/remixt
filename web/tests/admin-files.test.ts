@@ -21,16 +21,18 @@ if (!DATABASE_URL || !STORAGE_DIR) throw new Error("Set DATABASE_URL and STORAGE
 const sql = postgres(DATABASE_URL, { onnotice: () => {} });
 
 async function signUp(name: string) {
-  const res = await fetch(`${BASE_URL}/api/auth/signup`, await authInit(BASE_URL, { email: `${name}-${randomUUID()}@test.local`, password: "password123", artistName: name }));
+  const res = await fetch(`${BASE_URL}/api/auth/signup`, await authInit(BASE_URL, { email: `${name}-${randomUUID()}@test.local`, password: "remix-test-Pass-2026", artistName: name }));
   assert.equal(res.status, 200, `signup failed: ${await res.clone().text()}`);
   const { id } = await res.json();
   return { id: id as string, cookie: res.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ") };
 }
 
 async function signInAdmin() {
-  const account = { email: "test-admin@test.local", password: "password123", artistName: "testAdmin" };
+  const account = { email: "test-admin@test.local", password: "remix-test-Pass-2026", artistName: "testAdmin" };
   let res = await fetch(`${BASE_URL}/api/auth/signup`, await authInit(BASE_URL, account));
   if (!res.ok) res = await fetch(`${BASE_URL}/api/auth/login`, await authInit(BASE_URL, account));
+  // An admin account made before passwords had to be strong.
+  if (!res.ok) res = await fetch(`${BASE_URL}/api/auth/login`, await authInit(BASE_URL, { ...account, password: "password123" }));
   assert.equal(res.status, 200, `admin sign-in failed: ${await res.clone().text()}`);
   return res.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
 }

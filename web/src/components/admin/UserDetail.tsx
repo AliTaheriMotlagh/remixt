@@ -21,6 +21,10 @@ type Detail = {
     events: { at: string; name: string; path: string | null }[];
     firstSource: { channel: string; referrer_host: string; utm_campaign: string | null } | null;
   } | null;
+  trouble: {
+    hits: { at: string; kind: string; message: string; path: string }[];
+    feedback: { at: string; kind: string; message: string; status: string }[];
+  } | null;
 };
 
 const MADE: [string, string][] = [
@@ -167,6 +171,36 @@ export default function UserDetail({ userId, onClose }: { userId: string; onClos
                   </li>
                 ))}
                 {!d.activity?.events.length && <li className="text-muted">Nothing recorded yet</li>}
+              </ul>
+            </section>
+
+            <section>
+              <h3 className="font-semibold">Where they had trouble</h3>
+              <p className="text-xs text-muted">Errors, rage clicks, stuck pages and server failures their browser reported (30 days).</p>
+              <ul className="mt-2 space-y-0.5 text-xs">
+                {(d.trouble?.hits ?? []).map((h, i) => (
+                  <li key={i} className="flex justify-between gap-2">
+                    <span className="min-w-0 truncate">
+                      <span className="me-1 rounded bg-danger/10 px-1 text-danger">{h.kind}</span>
+                      {h.message} <span className="text-muted">· {h.path}</span>
+                    </span>
+                    <span className="shrink-0 text-muted">{new Date(h.at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+                  </li>
+                ))}
+                {!d.trouble?.hits.length && <li className="text-muted">None reported</li>}
+              </ul>
+            </section>
+
+            <section>
+              <h3 className="font-semibold">Their feedback</h3>
+              <ul className="mt-2 space-y-1 text-sm">
+                {(d.trouble?.feedback ?? []).map((f, i) => (
+                  <li key={i} className="rounded-lg border border-border p-2">
+                    <span className="text-xs text-muted">{f.kind} · {f.status} · {when(f.at)}</span>
+                    <p className="whitespace-pre-wrap break-words">{f.message}</p>
+                  </li>
+                ))}
+                {!d.trouble?.feedback.length && <li className="text-muted">None sent</li>}
               </ul>
             </section>
           </div>

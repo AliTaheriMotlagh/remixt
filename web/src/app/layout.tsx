@@ -4,6 +4,8 @@ import localFont from "next/font/local";
 import "./globals.css";
 import NavBar from "@/components/NavBar";
 import NavProgress from "@/components/NavProgress";
+import IsolationBoundary from "@/components/IsolationBoundary";
+import FeedbackDialog from "@/components/FeedbackDialog";
 import AnalyticsBeacon from "@/components/AnalyticsBeacon";
 import MobileTabBar from "@/components/MobileTabBar";
 import PreviewBar from "@/components/PreviewBar";
@@ -126,6 +128,8 @@ export default async function RootLayout({
           Skip to content
         </a>
         <NavProgress />
+        <IsolationBoundary />
+        {settings.network.adsenseClient && <meta name="google-adsense-account" content={settings.network.adsenseClient} />}
         <NavBar user={user} isAdmin={isAdmin(user)} />
         {unconfirmed && <VerifyEmailBanner email={user!.email} />}
         <main id="main" className="flex min-w-0 flex-1 flex-col">
@@ -142,6 +146,7 @@ export default async function RootLayout({
         <ConnectionNotice />
         <SplitterStatus signedIn={!!user} />
         <BackgroundActivity signedIn={!!user} userId={user?.id ?? null} />
+        <FeedbackDialog signedIn={!!user} />
         <MobileTabBar user={user} isAdmin={isAdmin(user)} />
         </SettingsProvider>
       </body>

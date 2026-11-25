@@ -11,6 +11,7 @@ import {
   Library,
   LogOut,
   Menu,
+  MessageSquareHeart,
   Radio,
   RadioTower,
   Shield,
@@ -39,6 +40,7 @@ export type NavIconName =
   | "profile"
   | "storage"
   | "earnings"
+  | "feedback"
   | "logout";
 
 export type NavLink = {
@@ -80,6 +82,7 @@ export const MORE_LINKS: NavLink[] = [
   { href: "/leaderboard", label: "Top artists & remixes", icon: "top" },
   { href: "/earnings", label: "Earnings", icon: "earnings" },
   { href: "/storage", label: "Saved on this device", icon: "storage" },
+  { href: "#feedback", label: "Send feedback", icon: "feedback" },
 ];
 
 export function isActive(pathname: string | null, href: string) {
@@ -106,6 +109,7 @@ const ICONS: Record<NavIconName, LucideIcon> = {
   storage: HardDrive,
   earnings: Wallet,
   logout: LogOut,
+  feedback: MessageSquareHeart,
 };
 
 export function NavIcon({ name, className = "h-5 w-5" }: { name: NavIconName; className?: string }) {

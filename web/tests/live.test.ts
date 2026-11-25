@@ -29,7 +29,7 @@ function client(id: string, name: string, cookie: string): Client {
 }
 
 async function signUp(name: string): Promise<Client> {
-  const res = await fetch(`${BASE_URL}/api/auth/signup`, await authInit(BASE_URL, { email: `${name}-${randomUUID()}@test.local`, password: "password123", artistName: name }));
+  const res = await fetch(`${BASE_URL}/api/auth/signup`, await authInit(BASE_URL, { email: `${name}-${randomUUID()}@test.local`, password: "remix-test-Pass-2026", artistName: name }));
   assert.equal(res.status, 200, `signup failed: ${await res.clone().text()}`);
   const { id } = await res.json();
   return client(id, name, res.headers.getSetCookie().map((c) => c.split(";")[0]).join("; "));

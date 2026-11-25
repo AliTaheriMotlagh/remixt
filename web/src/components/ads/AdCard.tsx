@@ -22,6 +22,8 @@ import { ROLE_TEXT, type Placement, type Role } from "@/lib/monetize/policy";
 import { useSettings, useShowsAds } from "@/components/SettingsProvider";
 import { visitorId } from "@/lib/client/presence";
 import HouseMotion from "./HouseMotion";
+import NetworkSlot from "./NetworkSlot";
+import type { NetworkAd } from "@/lib/monetize/network";
 
 type Supporter = { name: string; role: Role; bp: number; held: boolean };
 export type House = { id: string; kind: HouseKind; title: string; body: string; cta: string; tone: HouseTone; media: string | null; href?: string };
@@ -31,6 +33,9 @@ type Served = {
   ad: { id: string; advertiser: string; title: string; body: string; cta: string; image: string | null } | null;
   /** One of Remixt's own, when no paying ad fits. */
   house?: House | null;
+  /** An ad network's ad (AdSense, Yektanet…): `token` is its view, `house`/`houseToken` the fallback if it has nothing. */
+  network?: NetworkAd | null;
+  houseToken?: string | null;
   token: string | null;
   supports: Supporter[];
   style?: AdStyle;
@@ -80,6 +85,8 @@ export default function AdCard({
   const box = useRef<HTMLElement>(null);
   const [served, setServed] = useState<Served | null>(null);
   const [why, setWhy] = useState(false);
+  // A network's spot: trying until it says whether it filled it.
+  const [net, setNet] = useState<"trying" | "filled" | "empty">("trying");
   const fa = lang === "fa";
   const { ads: adRules } = useSettings();
   const showsAds = useShowsAds();
@@ -97,7 +104,12 @@ export default function AdCard({
         const q = new URLSearchParams({ placement, lang, ...(target ? { target } : {}), ...(spot ? { spot } : {}) });
         fetch(`/api/ads?${q}`, { cache: "no-store" })
           .then((r) => r.json() as Promise<Served>)
-          .then((s) => !cancelled && setServed(s))
+          .then((s) => {
+            if (cancelled) return;
+            // An isolated page (Studio, library… lib/isolation.ts) can't show a network's iframes: ours instead.
+            if (s.network && window.crossOriginIsolated) setNet("empty");
+            setServed(s);
+          })
           .catch(() => !cancelled && setServed({ ad: null, house: null, token: null, supports: [] }));
       },
       { rootMargin: "400px 0px" }
@@ -109,10 +121,15 @@ export default function AdCard({
     };
   }, [placement, target, lang, spot]);
 
+  const network = served?.network && net !== "empty" ? served.network : null;
+  // Which view to count: the network's once it filled the spot; ours when it stands in.
+  const viewToken = served?.network ? (network ? (net === "filled" ? served.token : null) : (served.houseToken ?? null)) : (served?.token ?? null);
+  const houseToken = served?.network ? (served.houseToken ?? null) : (served?.token ?? null);
+
   // The view: half on screen for a second, page visible. Once.
   useEffect(() => {
     const el = box.current;
-    const token = served?.token;
+    const token = viewToken;
     if (!el || !token) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let done = false;
@@ -138,7 +155,7 @@ export default function AdCard({
       seen.disconnect();
       document.removeEventListener("visibilitychange", onHidden);
     };
-  }, [served?.token, viewable.fraction, viewable.ms]);
+  }, [viewToken, viewable.fraction, viewable.ms]);
 
   const ad = served?.ad;
   const house = served?.house ?? null;
@@ -147,7 +164,7 @@ export default function AdCard({
   const people = supporters.filter((s) => s.role !== "platform");
 
   // Off by the page's maker, or nothing at all to show (ours turned off), or a Plus member: the spot closes.
-  if (!showsAds || (served && (served.off || (!ad && !house)))) return null;
+  if (!showsAds || (served && (served.off || (!ad && !house && !network)))) return null;
   const height = compact ? "min-h-14" : "min-h-[8.5rem]";
   return (
     <aside
@@ -155,10 +172,26 @@ export default function AdCard({
       aria-label={fa ? "تبلیغ" : "Advertisement"}
       dir={fa ? "rtl" : undefined}
       // The size is fixed before anything arrives, so nothing moves when it does.
-      className={`relative ${height} overflow-hidden rounded-2xl border border-border bg-surface ${className}`}
+      // A network's ad may be taller than our card and must never be cut off: that spot grows instead.
+      className={`relative ${network ? "min-h-[8.5rem]" : `${height} overflow-hidden`} rounded-2xl border border-border bg-surface ${className}`}
     >
       {!served ? (
         <div className="skeleton h-[8.5rem]" />
+      ) : network ? (
+        <div className="flex flex-col">
+          <span className="px-3 pt-2 text-[10px] font-medium uppercase tracking-wide text-muted">{fa ? "تبلیغ" : "Advertisement"}</span>
+          <NetworkSlot ad={network} onResult={(filled) => setNet(filled ? "filled" : "empty")} />
+          {people.length > 0 && net === "filled" && (
+            <p className="flex items-center gap-2 border-t border-border/70 px-4 py-2 text-xs text-muted">
+              <HeartHandshake className="h-3.5 w-3.5 shrink-0 text-vocals" />
+              <span className="min-w-0 flex-1 truncate">
+                {fa ? "این تبلیغ حامیِ " : "This ad supports "}
+                <span className="text-foreground">{people.slice(0, 2).map((p) => p.name).join(fa ? " و " : " & ")}</span>
+                {people.length > 2 && (fa ? ` و ${people.length - 2} نفر دیگر` : ` + ${people.length - 2} more`)}
+              </span>
+            </p>
+          )}
+        </div>
       ) : ad ? (
         <div className="flex h-full flex-col">
           <a
@@ -235,7 +268,7 @@ export default function AdCard({
           )}
         </div>
       ) : house ? (
-        <HouseSpot house={house} lang={lang} compact={compact} onOpen={() => sendClick(served.token)} />
+        <HouseSpot house={house} lang={lang} compact={compact} onOpen={() => sendClick(houseToken)} />
       ) : null}
     </aside>
   );

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { currentAdmin } from "@/lib/admin";
 import { MICROS } from "@/lib/monetize/policy";
-import { decideClaim, decidePayout, monetizeOverview, monetizeSettings, saveCampaign, setCampaignActive } from "@/lib/monetize/store";
+import { closeNetworkMonth, decideClaim, decidePayout, monetizeOverview, monetizeSettings, networkMonths, saveCampaign, setCampaignActive } from "@/lib/monetize/store";
 import { adReviewQueue, decideAdPayment, reviewCampaign } from "@/lib/monetize/adStore";
 import { TOPIC_IDS } from "@/lib/monetize/adRules";
 
@@ -11,8 +11,8 @@ import { TOPIC_IDS } from "@/lib/monetize/adRules";
 // payments to check. The money settings it shows are Admin → Settings' (lib/settings).
 export async function GET() {
   if (!(await currentAdmin())) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  const [overview, queue, settings] = await Promise.all([monetizeOverview(), adReviewQueue(), monetizeSettings()]);
-  return NextResponse.json({ ...overview, queue, settings }, { headers: { "Cache-Control": "no-store" } });
+  const [overview, queue, settings, networks] = await Promise.all([monetizeOverview(), adReviewQueue(), monetizeSettings(), networkMonths()]);
+  return NextResponse.json({ ...overview, queue, settings, networks }, { headers: { "Cache-Control": "no-store" } });
 }
 
 const campaign = z.object({
@@ -42,11 +42,20 @@ const action = z.discriminatedUnion("action", [
   z.object({ action: z.literal("claim"), id: z.string().max(64), verify: z.boolean(), note: z.string().max(500).nullable().optional() }),
   z.object({ action: z.literal("payout"), id: z.string().max(64), paid: z.boolean(), note: z.string().max(500).nullable().optional() }),
   z.object({ action: z.literal("review"), id: z.string().max(64), approve: z.boolean(), note: z.string().max(500).nullable().optional() }),
+  z.object({
+    action: z.literal("network-close"),
+    network: z.enum(["adsense", "other"]),
+    month: z.string().regex(/^\d{4}-\d{2}$/),
+    /** Dollars the network paid for that month. */
+    amount: z.number().positive().max(10_000_000),
+    note: z.string().max(500).nullable().optional(),
+  }),
   z.object({ action: z.literal("ad-payment"), id: z.string().max(64), received: z.boolean(), note: z.string().max(500).nullable().optional() }),
 ]);
 
 export async function POST(req: NextRequest) {
-  if (!(await currentAdmin())) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const admin = await currentAdmin();
+  if (!admin) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const parsed = action.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid input" }, { status: 400 });
   const a = parsed.data;
@@ -57,6 +66,11 @@ export async function POST(req: NextRequest) {
       budget_micros: Math.round(a.budget * MICROS), ends_at: a.endsAt ?? null, format: a.format, topic: a.topic,
     });
     return NextResponse.json({ ok: true, id });
+  }
+  if (a.action === "network-close") {
+    const result = await closeNetworkMonth({ network: a.network, month: a.month, micros: Math.round(a.amount * MICROS), note: a.note ?? null, adminId: admin.id });
+    if ("error" in result) return NextResponse.json(result, { status: 400 });
+    return NextResponse.json({ ok: true, ...result });
   }
   if (a.action === "campaign-active") await setCampaignActive(a.id, a.active);
   if (a.action === "claim") await decideClaim(a.id, a.verify, a.note ?? null);

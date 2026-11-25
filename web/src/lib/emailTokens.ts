@@ -28,6 +28,9 @@ let ready: Promise<void> | null = null;
 export function ensureEmailSchema(): Promise<void> {
   ready ??= (async () => {
     await sql.unsafe(GRANDFATHER);
+    // Sessions signed before this are refused (a password change signs every other device out),
+    // and whether the password last used to sign in is a weak one (Admin asks its owner to change it).
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS sessions_valid_from TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS password_weak BOOLEAN NOT NULL DEFAULT false`;
     await sql`
       CREATE TABLE IF NOT EXISTS email_tokens (
         token_hash TEXT PRIMARY KEY,
@@ -129,6 +132,11 @@ export async function sendReset(email: string): Promise<void> {
 export async function resetPassword(token: string, password: string): Promise<string | null> {
   const userId = await spend(token, "reset");
   if (!userId) return null;
-  await sql`UPDATE users SET password_hash = ${await hashPassword(password)}, email_verified_at = COALESCE(email_verified_at, now()) WHERE id = ${userId}`;
+  // Every other device is signed out (a reset is often because someone else got in).
+  await sql`
+    UPDATE users SET password_hash = ${await hashPassword(password)}, email_verified_at = COALESCE(email_verified_at, now()),
+                     sessions_valid_from = now(), password_weak = false
+    WHERE id = ${userId}
+  `;
   return userId;
 }

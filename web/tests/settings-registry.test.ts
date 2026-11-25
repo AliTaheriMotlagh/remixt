@@ -40,7 +40,30 @@ describe("the registry", () => {
     const pub = publicSettings(DEFAULTS) as Record<string, unknown>;
     assert.equal(pub.limits, undefined);
     assert.equal(pub.security, undefined);
-    assert.ok(FIELDS.filter((f) => !f.public).every((f) => ["limits", "security", "ads"].includes(f.group)));
+    assert.equal((pub.network as Record<string, unknown>).adsTxt, undefined);
+    assert.ok(FIELDS.filter((f) => !f.public).every((f) => ["limits", "security", "ads", "network"].includes(f.group)));
+  });
+});
+
+describe("ad networks", () => {
+  const on = (patch: Record<string, unknown>) => applyChange(DEFAULTS, patch);
+  test("AdSense can't be switched on without its ids", () => {
+    const r = on({ "network.adsense": true });
+    assert.ok("errors" in r && r.errors["network.adsense"]);
+  });
+  test("ids are checked", () => {
+    const r = on({ "network.adsenseClient": "pub-123", "network.adsenseSlot": "12a" });
+    assert.ok("errors" in r && r.errors["network.adsenseClient"] && r.errors["network.adsenseSlot"]);
+  });
+  test("a complete AdSense setup is accepted", () => {
+    const r = on({ "network.adsense": true, "network.adsenseClient": "ca-pub-1234567890123456", "network.adsenseSlot": "9876543210" });
+    assert.ok("settings" in r && r.settings.network.adsense);
+  });
+  test("another network needs an https script and a plain element id", () => {
+    const r = on({ "network.other": true, "network.otherScript": "http://x.example/a.js", "network.otherElementId": "#pos" });
+    assert.ok("errors" in r && r.errors["network.otherScript"] && r.errors["network.otherElementId"]);
+    const ok = on({ "network.other": true, "network.otherScript": "https://cdn.example/a.js", "network.otherElementId": "pos-article-display-1" });
+    assert.ok("settings" in ok);
   });
 });
 

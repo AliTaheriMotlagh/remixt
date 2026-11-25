@@ -117,6 +117,30 @@ export type AppSettings = {
     manualHowEn: string;
     manualHowFa: string;
   };
+  /**
+   * Ad networks (Google AdSense, or another network such as Yektanet or
+   * Mediaad) fill a picture spot no paying campaign takes. They pay Remixt
+   * once a month; the owner enters what came in (Admin → Ads & earnings →
+   * Ad networks) and it's shared by the same rules, by each page's views.
+   */
+  network: {
+    adsense: boolean;
+    /** "ca-pub-1234567890123456" (AdSense → Account → Account information). */
+    adsenseClient: string;
+    /** A display ad unit's id (AdSense → Ads → By ad unit), digits only. */
+    adsenseSlot: string;
+    other: boolean;
+    /** What it's called in Admin. */
+    otherName: string;
+    /** The network's script (https), loaded once on pages with a spot. */
+    otherScript: string;
+    /** The id of the element the network fills (its panel gives one per position). */
+    otherElementId: string;
+    /** Which network a Persian page gets when both are on. */
+    persianOther: boolean;
+    /** Extra lines for /ads.txt (the networks' sellers lines; AdSense's own line is written for you). */
+    adsTxt: string;
+  };
   /** The site's own AI (the Studio's co-producer) on Remixt's OpenRouter key, metered in tokens. */
   ai: {
     /** The OpenRouter model id, e.g. "anthropic/claude-sonnet-5.5". */
@@ -186,6 +210,17 @@ export const DEFAULTS: AppSettings = {
     manualHowEn: "",
     manualHowFa: "",
   },
+  network: {
+    adsense: false,
+    adsenseClient: "",
+    adsenseSlot: "",
+    other: false,
+    otherName: "",
+    otherScript: "",
+    otherElementId: "",
+    persianOther: true,
+    adsTxt: "",
+  },
   ai: { model: "anthropic/claude-sonnet-5.5", freeTokensPerDay: 20_000, plusTokensPerDay: 400_000 },
 };
 
@@ -197,7 +232,7 @@ export const DEFAULTS: AppSettings = {
  */
 export type Unit = "percent" | "usd" | "count" | "times" | "seconds" | "ms" | "minutes" | "days" | "years" | "toman" | "switch" | "text";
 
-export type Group = "shares" | "payouts" | "ads" | "audio" | "features" | "mining" | "limits" | "security" | "payTo" | "plans" | "ai";
+export type Group = "shares" | "payouts" | "ads" | "audio" | "features" | "mining" | "limits" | "security" | "payTo" | "plans" | "network" | "ai";
 
 export type Field = {
   path: string;
@@ -226,6 +261,7 @@ export const GROUPS: { id: Group; en: string; fa: string; help: string }[] = [
   { id: "security", en: "Security", fa: "امنیت", help: "The captcha's difficulty." },
   { id: "payTo", en: "How advertisers pay you", fa: "روش پرداخت تبلیغ‌دهنده", help: "Shown on the advertiser page: card number, IBAN, USDT address…" },
   { id: "plans", en: "Plans: Free and Plus", fa: "اشتراک: رایگان و پلاس", help: "Prices, what only Plus can use, and the ways to pay. Gateway keys are in Admin → Plans." },
+  { id: "network", en: "Ad networks", fa: "شبکه‌های تبلیغاتی", help: "Google AdSense or another network fills a picture spot no paying campaign takes. Each month, enter what the network paid in Admin → Ads & earnings → Ad networks: it's shared with artists, remixers, uploaders and miners by views, like any ad." },
   { id: "ai", en: "The site's AI", fa: "هوش مصنوعیِ سایت", help: "The co-producer on Remixt's own OpenRouter key (OPENROUTER_API_KEY), counted in tokens per person per day." },
 ];
 
@@ -318,6 +354,16 @@ export const FIELDS: Field[] = [
   { path: "plans.manualHowEn", group: "plans", unit: "text", en: "Paying by hand — how (English)", fa: "پرداخت دستی — روش (انگلیسی)", max: 2_000, public: true },
   { path: "plans.manualHowFa", group: "plans", unit: "text", en: "Paying by hand — how (Persian)", fa: "پرداخت دستی — روش (فارسی)", max: 2_000, public: true },
 
+  { path: "network.adsense", group: "network", unit: "switch", en: "Google AdSense in empty spots", fa: "گوگل ادسنس در جای خالی", help: "Needs an approved AdSense account, the publisher id and an ad unit below. AdSense doesn't serve or pay for visitors in Iran.", public: true },
+  { path: "network.adsenseClient", group: "network", unit: "text", en: "AdSense publisher id", fa: "شناسهٔ ناشر ادسنس", help: "ca-pub- and 16 digits (AdSense → Account → Account information). Also writes the site's ads.txt line and the meta tag AdSense checks.", max: 40, public: true },
+  { path: "network.adsenseSlot", group: "network", unit: "text", en: "AdSense ad unit id", fa: "شناسهٔ واحد تبلیغ ادسنس", help: "A responsive display ad unit (AdSense → Ads → By ad unit → Display ads), digits only.", max: 20, public: true },
+  { path: "network.other", group: "network", unit: "switch", en: "Another network in empty spots", fa: "شبکهٔ دیگر در جای خالی", help: "Yektanet, Mediaad or any network that gives a script and an element to fill.", public: true },
+  { path: "network.otherName", group: "network", unit: "text", en: "Its name", fa: "نام شبکه", max: 40, public: true },
+  { path: "network.otherScript", group: "network", unit: "text", en: "Its script address (https)", fa: "آدرس اسکریپت", help: "The src of the <script> the network's panel gives you.", max: 500, public: true },
+  { path: "network.otherElementId", group: "network", unit: "text", en: "The element id it fills", fa: "شناسهٔ جایگاه", help: "The id of the <div> in the network's code for one position, e.g. pos-article-display-12345.", max: 120, public: true },
+  { path: "network.persianOther", group: "network", unit: "switch", en: "Persian pages get the other network", fa: "صفحه‌های فارسی شبکهٔ دیگر را بگیرند", help: "When both are on: Persian pages show the other network, English pages AdSense. Either falls back to the other when it's off.", public: true },
+  { path: "network.adsTxt", group: "network", unit: "text", en: "More ads.txt lines", fa: "خط‌های بیشتر ads.txt", help: "The sellers lines your other networks ask for, one per line. Served at /ads.txt.", max: 5_000, public: false },
+
   { path: "ai.model", group: "ai", unit: "text", en: "Model (OpenRouter id)", fa: "مدل", help: "Any tool-using model on openrouter.ai/models, e.g. anthropic/claude-sonnet-5.5 or openai/gpt-5.", max: 120, public: true },
   { path: "ai.freeTokensPerDay", group: "ai", unit: "count", en: "Tokens a day — Free", fa: "توکن روزانه — رایگان", help: "0 = none on Free.", min: 0, max: 100_000_000, int: true, public: true },
   { path: "ai.plusTokensPerDay", group: "ai", unit: "count", en: "Tokens a day — Plus", fa: "توکن روزانه — پلاس", min: 0, max: 100_000_000, int: true, public: true },
@@ -375,6 +421,13 @@ export function crossCheck(s: AppSettings): Record<string, string> {
   else if (helpers >= s.shares.song.platform) errors["shares.uploader"] = "Uploader + miner come out of Remixt's part of a song, so they must be less than it";
   if (s.audio.skipAfter > s.audio.maxSeconds) errors["audio.skipAfter"] = "Can't be longer than the ad";
   if (s.audio.paidAfter > s.audio.maxSeconds) errors["audio.paidAfter"] = "Can't be longer than the ad";
+  const n = s.network;
+  if (n.adsenseClient && !/^ca-pub-\d{10,20}$/.test(n.adsenseClient)) errors["network.adsenseClient"] = "ca-pub- and the digits, e.g. ca-pub-1234567890123456";
+  if (n.adsenseSlot && !/^\d{5,20}$/.test(n.adsenseSlot)) errors["network.adsenseSlot"] = "The ad unit's id: digits only";
+  if (n.adsense && (!n.adsenseClient || !n.adsenseSlot)) errors["network.adsense"] = "Fill in the publisher id and the ad unit first";
+  if (n.otherScript && !/^https:\/\/[^\s"'<>]+$/.test(n.otherScript)) errors["network.otherScript"] = "An https:// address";
+  if (n.otherElementId && !/^[A-Za-z][\w:.-]{0,119}$/.test(n.otherElementId)) errors["network.otherElementId"] = "Letters, digits, - and _ (no # in front)";
+  if (n.other && (!n.otherScript || !n.otherElementId)) errors["network.other"] = "Fill in its script and element id first";
   return errors;
 }
 
@@ -419,11 +472,13 @@ export function applyChange(current: AppSettings, patch: Record<string, unknown>
   return Object.keys(errors).length ? { errors } : { settings: next, changed };
 }
 
-/** What every browser gets: all but the limits and security. */
-export type PublicSettings = Omit<AppSettings, "limits" | "security">;
+/** What every browser gets: all but the limits, security and the ads.txt lines. */
+export type PublicSettings = Omit<AppSettings, "limits" | "security" | "network"> & { network: Omit<AppSettings["network"], "adsTxt"> };
 export function publicSettings(s: AppSettings): PublicSettings {
-  const { limits: _limits, security: _security, ...rest } = s;
+  const { limits: _limits, security: _security, network, ...rest } = s;
   void _limits;
   void _security;
-  return rest;
+  const { adsTxt: _adsTxt, ...publicNetwork } = network;
+  void _adsTxt;
+  return { ...rest, network: publicNetwork };
 }

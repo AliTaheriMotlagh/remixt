@@ -16,6 +16,7 @@ import { notify } from "../notifications";
 import { FORMATS, tomanOf, type Format } from "./adRules";
 import { getSettings } from "../settings/server";
 import { countHouseClick, countHouseView } from "./houseStore";
+import { isClosedMonth, shareNetworkMonth, type NetworkId } from "./network";
 import {
   formatMoney, isTomanMethod, isOwnView, monthSpan, payOut, remixShares, siteShares, songShares,
   PLACEMENTS, unclaimedCutoff, type Placement, type RemixParties, type Role, type Share, type SourceSong, type StatementLine, type StatementState,
@@ -187,6 +188,24 @@ export function ensureMonetizeSchema(): Promise<void> {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )
     `;
+    // Ad networks (network.ts): a network ad's view (paid later, when the month's money is shared out),
+    // what each network paid for a month, and the earnings rows that came from it.
+    await sql`ALTER TABLE ad_views ADD COLUMN IF NOT EXISTS network TEXT`;
+    await sql`CREATE INDEX IF NOT EXISTS ad_views_network_month ON ad_views (network, at) WHERE network IS NOT NULL AND why_not IS NULL`;
+    await sql`
+      CREATE TABLE IF NOT EXISTS network_revenue (
+        network TEXT NOT NULL,
+        month TEXT NOT NULL,
+        micros BIGINT NOT NULL,
+        views BIGINT NOT NULL,
+        pages INTEGER NOT NULL,
+        note TEXT,
+        closed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+        closed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (network, month)
+      )
+    `;
+    await sql`ALTER TABLE earnings ADD COLUMN IF NOT EXISTS network_month TEXT`;
     // A payout in Toman: the amount fixed when it's asked for, at the rate then.
     await sql`ALTER TABLE payouts ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'USD', ADD COLUMN IF NOT EXISTS toman BIGINT`;
   })().catch((err) => {
@@ -355,7 +374,10 @@ export function numbers(c: Campaign): Campaign {
 }
 
 function tokenKey() {
-  return `ads:${process.env.CAPTCHA_SECRET || process.env.SESSION_SECRET || "dev-only-insecure-secret-change-me"}`;
+  const secret = process.env.CAPTCHA_SECRET || process.env.SESSION_SECRET;
+  // With the public fallback anyone could sign views (and so pay themselves): never in production.
+  if (!secret && process.env.NODE_ENV === "production") throw new Error("SESSION_SECRET is not set — ad views can't be signed");
+  return `ads:${secret || "dev-only-insecure-secret-change-me"}`;
 }
 
 /**
@@ -370,9 +392,11 @@ export function viewToken(
   now = Date.now(),
   format: Format = "card",
   /** One of Remixt's own ads (houseStore.ts) shown in the spot: counted for the owner's report, never paid. */
-  houseId: string | null = null
+  houseId: string | null = null,
+  /** An ad network's ad (network.ts): booked as a network view, paid when the month's network money is shared. */
+  network: NetworkId | null = null
 ): string {
-  const body = [placement, target ? `${target.kind}:${target.id}` : "", campaignId ?? "", Math.floor(now / 1000) + 30 * 60, format, houseId ?? ""].join("|");
+  const body = [placement, target ? `${target.kind}:${target.id}` : "", campaignId ?? "", Math.floor(now / 1000) + 30 * 60, format, houseId ?? "", network ?? ""].join("|");
   const mac = createHmac("sha256", tokenKey()).update(body).digest("base64url").slice(0, 32);
   return `${Buffer.from(body).toString("base64url")}.${mac}`;
 }
@@ -385,12 +409,12 @@ export function promoteToken(target: NonNullable<Target>, campaignId: string): s
 export function readToken(
   token: string,
   now = Date.now()
-): { placement: Placement; target: Target; campaignId: string | null; format: Format; houseId: string | null } | null {
+): { placement: Placement; target: Target; campaignId: string | null; format: Format; houseId: string | null; network: NetworkId | null } | null {
   const [body64, mac] = String(token).split(".");
   if (!body64 || !mac) return null;
   const body = Buffer.from(body64, "base64url").toString("utf8");
   if (createHmac("sha256", tokenKey()).update(body).digest("base64url").slice(0, 32) !== mac) return null;
-  const [placement, target, campaignId, expires, format = "card", houseId = ""] = body.split("|");
+  const [placement, target, campaignId, expires, format = "card", houseId = "", network = ""] = body.split("|");
   if (!PLACEMENTS.includes(placement as Placement) || Number(expires) * 1000 < now || !FORMATS.includes(format as Format)) return null;
   return {
     placement: placement as Placement,
@@ -399,6 +423,7 @@ export function readToken(
     campaignId: campaignId || null,
     format: format as Format,
     houseId: campaignId ? null : houseId || null,
+    network: !campaignId && (network === "adsense" || network === "other") ? network : null,
   };
 }
 
@@ -422,13 +447,13 @@ export async function recordView(input: { token: string; visitor: string; addres
   const target = t.target ? `${t.target.kind}:${t.target.id}` : "";
 
   let whyNot: string | null = null;
-  if (!t.campaignId) whyNot = "house ad";
+  if (!t.campaignId && !t.network) whyNot = "house ad";
   else if (BOTS.test(input.userAgent)) whyNot = "robot";
   else if (isOwnView(input.viewerId, shares)) whyNot = "own work";
 
   return sql.begin(async (tx) => {
     if (!whyNot) {
-      const [n] = await tx<{ n: number }[]>`SELECT count(*)::int AS n FROM ad_views WHERE address = ${input.address} AND day = CURRENT_DATE AND paid`;
+      const [n] = await tx<{ n: number }[]>`SELECT count(*)::int AS n FROM ad_views WHERE address = ${input.address} AND day = CURRENT_DATE AND (paid OR (network IS NOT NULL AND why_not IS NULL))`;
       if ((n?.n ?? 0) >= settings.ads.paidViewsPerAddress) whyNot = "address cap";
     }
     let micros = 0;
@@ -444,8 +469,8 @@ export async function recordView(input: { token: string; visitor: string; addres
       else whyNot = "budget spent";
     }
     const [view] = await tx<{ id: string }[]>`
-      INSERT INTO ad_views (placement, target, campaign_id, visitor, address, viewer_id, paid, micros, why_not, format)
-      VALUES (${t.placement}, ${target}, ${t.campaignId}, ${input.visitor}, ${input.address}, ${input.viewerId}, ${micros > 0}, ${micros}, ${whyNot}, ${t.format})
+      INSERT INTO ad_views (placement, target, campaign_id, visitor, address, viewer_id, paid, micros, why_not, format, network)
+      VALUES (${t.placement}, ${target}, ${t.campaignId}, ${input.visitor}, ${input.address}, ${input.viewerId}, ${micros > 0}, ${micros}, ${whyNot}, ${t.format}, ${t.network})
       ON CONFLICT (visitor, placement, target, day, format) DO NOTHING
       RETURNING id
     `;
@@ -492,6 +517,83 @@ export async function recordClick(token: string): Promise<string | null> {
     return song ? `/library?q=${encodeURIComponent(song.title)}` : null;
   }
   return /^https?:\/\//.test(c.link) ? c.link : null;
+}
+
+// ——— ad networks: each month's money, shared by views ———
+
+export type NetworkMonth = { network: NetworkId; month: string; views: number; pages: number; closed: { micros: number; at: string; note: string | null } | null };
+
+/** The last 13 months of network views per network, and which months have been shared out. */
+export async function networkMonths(): Promise<NetworkMonth[]> {
+  await ensureMonetizeSchema();
+  const [views, closed] = await Promise.all([
+    sql<{ network: NetworkId; month: string; views: string; pages: string }[]>`
+      SELECT network, to_char(at AT TIME ZONE 'UTC', 'YYYY-MM') AS month, COUNT(*) AS views, COUNT(DISTINCT (placement, target)) AS pages
+      FROM ad_views WHERE network IS NOT NULL AND why_not IS NULL AND at > now() - interval '13 months'
+      GROUP BY 1, 2
+    `,
+    sql<{ network: NetworkId; month: string; micros: string; views: string; pages: number; closed_at: string; note: string | null }[]>`
+      SELECT network, month, micros, views, pages, closed_at, note FROM network_revenue ORDER BY month DESC LIMIT 60
+    `,
+  ]);
+  const byKey = new Map<string, NetworkMonth>();
+  for (const v of views) byKey.set(`${v.network}|${v.month}`, { network: v.network, month: v.month, views: n(v.views), pages: n(v.pages), closed: null });
+  for (const c of closed) {
+    const key = `${c.network}|${c.month}`;
+    const row = byKey.get(key) ?? { network: c.network, month: c.month, views: n(c.views), pages: c.pages, closed: null };
+    row.closed = { micros: n(c.micros), at: c.closed_at, note: c.note };
+    byKey.set(key, row);
+  }
+  return [...byKey.values()].sort((a, b) => b.month.localeCompare(a.month) || a.network.localeCompare(b.network));
+}
+
+/**
+ * Shares what a network paid for a month that's over: between the pages by
+ * their network views, then each page's part by its shares (as a paid view
+ * would be). Once per network and month. Waits the usual hold before it can
+ * be withdrawn.
+ */
+export async function closeNetworkMonth(input: { network: NetworkId; month: string; micros: number; note: string | null; adminId: string }): Promise<{ error: string } | { pages: number; views: number }> {
+  if (!isClosedMonth(input.month)) return { error: "Only a month that's over can be shared (the network's money for it is known then)" };
+  if (!(input.micros > 0)) return { error: "Enter what the network paid" };
+  await ensureMonetizeSchema();
+  const span = monthSpan(input.month)!;
+  const pages = await sql<{ placement: Placement; target: string; views: string }[]>`
+    SELECT placement, target, COUNT(*) AS views FROM ad_views
+    WHERE network = ${input.network} AND why_not IS NULL AND at >= ${span.from} AND at < ${span.to}
+    GROUP BY 1, 2
+  `;
+  const counted = pages.map((p) => ({ placement: p.placement, target: p.target, views: n(p.views) }));
+  const total = counted.reduce((s, p) => s + p.views, 0);
+  // Who each page pays, worked out before the transaction (the shares read other tables).
+  const shared = shareNetworkMonth(input.micros, counted.length ? counted : [{ placement: "site" as Placement, target: "", views: 1 }]);
+  const payees = await Promise.all(shared.map(async (p) => ({ ...p, shares: await sharesFor(p.placement as Placement, parseTarget(p.target)) })));
+  const settings = await getSettings();
+  const availableAt = new Date(Date.now() + settings.payouts.holdDays * 86_400_000);
+  const tag = `${input.network}:${input.month}`;
+  try {
+    await sql.begin(async (tx) => {
+      await tx`
+        INSERT INTO network_revenue (network, month, micros, views, pages, note, closed_by)
+        VALUES (${input.network}, ${input.month}, ${Math.floor(input.micros)}, ${total}, ${counted.length}, ${input.note}, ${input.adminId})
+      `;
+      for (const page of payees) {
+        const target = parseTarget(page.target);
+        for (const p of payOut(page.micros, page.shares)) {
+          await tx`
+            INSERT INTO earnings (view_id, platform, user_id, held_track_id, role, remix_id, track_id, micros, available_at, network_month)
+            VALUES (NULL, ${p.to.kind === "platform"}, ${p.to.kind === "user" ? p.to.userId : null},
+                    ${p.to.kind === "held" ? p.to.trackId : null}, ${p.role}, ${p.remixId ?? (target?.kind === "remix" ? target.id : null)},
+                    ${p.trackId ?? null}, ${p.micros}, ${availableAt}, ${tag})
+          `;
+        }
+      }
+    });
+  } catch (err) {
+    if (String((err as { code?: string }).code) === "23505") return { error: "That month is already shared out" };
+    throw err;
+  }
+  return { pages: counted.length, views: total };
 }
 
 // ——— money nobody claimed ———

@@ -63,6 +63,13 @@ function describe(n: Notification) {
         </>
       );
     }
+    case "feedback":
+      return (
+        <>
+          Remixt answered your feedback
+          {n.body && <span className="mt-1 block text-muted">“{n.body}”</span>}
+        </>
+      );
     case "plan": {
       const [state, when, ...note] = (n.body ?? "").split("|");
       const said = note.join("|");

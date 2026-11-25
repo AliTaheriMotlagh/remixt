@@ -6,6 +6,7 @@ import { trackServer } from "@/lib/analyticsStore";
 import { createSessionCookie, verifyPassword } from "@/lib/auth";
 import { CAPTCHA_FAILED, verifyCaptcha } from "@/lib/captcha";
 import { allow, clientKey, hit, hitsIn, TOO_MANY } from "@/lib/rateLimit";
+import { passwordProblem } from "@/lib/passwordRules";
 
 const schema = z.object({
   email: z.string().email(),
@@ -41,5 +42,8 @@ export async function POST(req: NextRequest) {
 
   await createSessionCookie(user.id);
   trackServer("login", user.id);
+  // Remembered so Admin can ask its owner to change a weak password (the password itself is never kept).
+  const weak = !!passwordProblem(password, email);
+  void sql`UPDATE users SET password_weak = ${weak} WHERE id = ${user.id}`.catch(() => {});
   return NextResponse.json({ id: user.id, artistName: user.artist_name });
 }

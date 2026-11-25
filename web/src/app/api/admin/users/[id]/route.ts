@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { currentAdmin, deleteTracks, isAdmin } from "@/lib/admin";
 import sql from "@/lib/db";
 import { memberActivity } from "@/lib/analyticsStore";
+import { problemsOfUser } from "@/lib/feedbackStore";
 import { formatMoney } from "@/lib/monetize/policy";
 
 // GET: everything about one member, for Admin → Users (admin only): who they
@@ -42,7 +43,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     (SELECT 'remix', id, title, created_at, CASE WHEN published THEN 'published' ELSE 'private' END FROM remixes WHERE owner_id = ${id} ORDER BY created_at DESC LIMIT 10)
     ORDER BY created_at DESC LIMIT 15
   `;
-  const activity = await memberActivity(id).catch(() => null);
+  const [activity, trouble] = await Promise.all([memberActivity(id).catch(() => null), problemsOfUser(id).catch(() => null)]);
   return NextResponse.json(
     {
       user: { ...user, admin: isAdmin(user) },
@@ -50,6 +51,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       money: { earned: formatMoney(Number(money.earned)), paid: formatMoney(Number(money.paid)), waiting: formatMoney(Number(money.waiting)) },
       recentWork,
       activity,
+      trouble,
     },
     { headers: { "Cache-Control": "no-store" } }
   );

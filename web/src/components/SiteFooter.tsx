@@ -43,10 +43,13 @@ const COLUMNS: { heading: string; links: FooterLink[] }[] = [
     heading: SITE_NAME,
     links: [
       { href: "/signup", label: "Create a free account" },
+      { href: "#feedback", label: "Send feedback" },
       { href: "/plus", label: "Remixt Plus" },
       { href: "/earnings", label: "Earn from your remixes" },
       { href: "/advertise", label: "Advertise" },
       { href: "/takedown", label: "Copyright & takedowns" },
+      { href: "/privacy", label: "Privacy" },
+      { href: "/terms", label: "Terms" },
     ],
   },
 ];

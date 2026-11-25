@@ -46,8 +46,8 @@ export default function ResetForm({ token }: { token: string }) {
     <div className="flex flex-1 items-center justify-center px-4 py-10 sm:py-16">
       <form onSubmit={submit} className="flex w-full max-w-sm flex-col gap-4">
         <h1 className="text-2xl font-bold">Choose a new password</h1>
-        <input type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} className="input" placeholder="New password (6 characters or more)" autoComplete="new-password" aria-label="New password" />
-        <input type="password" required minLength={6} value={again} onChange={(e) => setAgain(e.target.value)} className="input" placeholder="The same again" autoComplete="new-password" aria-label="New password again" />
+        <input type="password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} className="input" placeholder="New password (8 characters or more)" autoComplete="new-password" aria-label="New password" />
+        <input type="password" required minLength={8} value={again} onChange={(e) => setAgain(e.target.value)} className="input" placeholder="The same again" autoComplete="new-password" aria-label="New password again" />
         {error && (
           <p className="text-sm text-danger">
             {error}{" "}

@@ -13,6 +13,7 @@ import MonetizeTab from "@/components/admin/MonetizeTab";
 import HouseAdsTab from "@/components/admin/HouseAdsTab";
 import AnalyticsTab from "@/components/admin/AnalyticsTab";
 import UserDetail from "@/components/admin/UserDetail";
+import FeedbackTab from "@/components/admin/FeedbackTab";
 
 type Overview = {
   users: number;
@@ -103,7 +104,7 @@ type AdminResult = {
   sender_email: string | null;
 };
 
-type Tab = "analytics" | "reports" | "users" | "songs" | "fix" | "remixes" | "challenges" | "results" | "storage" | "cleanup" | "money" | "house" | "settings" | "plans";
+type Tab = "analytics" | "feedback" | "reports" | "users" | "songs" | "fix" | "remixes" | "challenges" | "results" | "storage" | "cleanup" | "money" | "house" | "settings" | "plans";
 
 function formatDate(value: string) {
   return new Date(value).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
@@ -137,6 +138,8 @@ function useList<T>(url: string, key: string, q: string) {
 
 export default function AdminPanel({ adminId }: { adminId: string }) {
   const [tab, setTab] = useState<Tab>("analytics");
+  // A member opened from Feedback & problems.
+  const [member, setMember] = useState<string | null>(null);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [overviewVersion, setOverviewVersion] = useState(0);
   const refreshOverview = useCallback(() => setOverviewVersion((v) => v + 1), []);
@@ -154,6 +157,7 @@ export default function AdminPanel({ adminId }: { adminId: string }) {
 
   const tabs: { id: Tab; label: string }[] = [
     { id: "analytics", label: "Analytics" },
+    { id: "feedback", label: "Feedback & problems" },
     { id: "reports", label: "Reports" },
     { id: "users", label: "Users" },
     { id: "songs", label: "Songs" },
@@ -232,6 +236,8 @@ export default function AdminPanel({ adminId }: { adminId: string }) {
         {tab === "plans" && <PlansTab onOpenSettings={() => setTab("settings")} />}
         {tab === "house" && <HouseAdsTab />}
         {tab === "analytics" && <AnalyticsTab />}
+        {tab === "feedback" && <FeedbackTab onOpenUser={setMember} />}
+        {member && <UserDetail userId={member} onClose={() => setMember(null)} />}
         {tab === "fix" && <SongFixTab />}
       </div>
     </div>

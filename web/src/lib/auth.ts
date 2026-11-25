@@ -77,8 +77,8 @@ export async function getCurrentUser(): Promise<User | null> {
   try {
     const { payload } = await jwtVerify(token, sessionKey());
     const userId = payload.userId as string;
-    const read = () => sql<User[]>`
-      SELECT id, email, artist_name, bio, avatar_color, created_at, email_verified_at
+    const read = () => sql<(User & { sessions_valid_from: Date | null })[]>`
+      SELECT id, email, artist_name, bio, avatar_color, created_at, email_verified_at, sessions_valid_from
       FROM users WHERE id = ${userId}
     `;
     const rows = await read().catch(async (err: { code?: string }) => {
@@ -87,7 +87,13 @@ export async function getCurrentUser(): Promise<User | null> {
       await (await import("./emailTokens")).ensureEmailSchema();
       return read();
     });
-    return rows[0] ?? null;
+    const row = rows[0];
+    if (!row) return null;
+    // Signed in before the password last changed: that session is over.
+    if (row.sessions_valid_from && (payload.iat ?? 0) < Math.floor(new Date(row.sessions_valid_from).getTime() / 1000)) return null;
+    const { sessions_valid_from: _from, ...user } = row;
+    void _from;
+    return user;
   } catch {
     return null;
   }

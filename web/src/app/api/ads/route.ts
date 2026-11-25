@@ -5,6 +5,7 @@ import { adsFor } from "@/lib/billing/store";
 import { adAudioUrl, adImageUrl, isOwnViewer, namesFor, parseTarget, pickCampaign, sharesFor, viewToken } from "@/lib/monetize/store";
 import { adsAllowed, pickPromoted } from "@/lib/monetize/adStore";
 import { pickHouseAd } from "@/lib/monetize/houseStore";
+import { networkFor, networkId } from "@/lib/monetize/network";
 import { AD_SPOTS, FORMATS, type AdKind, type AdSpot, type Format } from "@/lib/monetize/adRules";
 import type { HouseSpot } from "@/lib/monetize/houseAds";
 import type { Placement } from "@/lib/monetize/policy";
@@ -35,7 +36,7 @@ export async function GET(req: NextRequest) {
   const spot = (AD_SPOTS as readonly string[]).includes(spotParam ?? "") ? (spotParam as AdSpot) : null;
   const none = { ad: null, house: null, token: null, supports: [] };
   try {
-    const { features } = await getSettings();
+    const { features, network: networks } = await getSettings();
     // Plus members see and hear no ads (Admin → Settings → Plans).
     if (!(await adsFor(await getCurrentUser().catch(() => null)))) return NextResponse.json({ ...none, off: true }, NO_STORE);
     if (format === "promote") {
@@ -88,17 +89,31 @@ export async function GET(req: NextRequest) {
     const ownSwitch = format === "card" ? features.houseAds : placement === "radio" ? features.houseRadio : features.housePreroll;
     const houseSpot: HouseSpot = placement === "radio" ? "radio" : placement === "remix" ? "remix" : "site";
     const house = ownSwitch && makerAllowsHouse ? await pickHouseAd(houseSpot, lang, format === "card" ? "visual" : "audio") : null;
+    const houseOut = house
+      ? { id: house.id, kind: house.kind, title: house.title, body: house.body, cta: house.cta, href: house.href, tone: house.tone, media: house.media, seconds: house.seconds }
+      : null;
+    const houseToken = house ? viewToken(placement, target, null, Date.now(), format, house.id) : null;
+
+    // An ad network (AdSense, Yektanet…) before ours: it pays. Picture spots only, and not where the
+    // page's maker blocked topics (a network's ads can't be filtered by our topics). Ours stays as the
+    // fallback the page shows if the network has nothing to fill the spot with.
+    const network = features.ads && format === "card" && blockedTopics.length === 0 ? networkFor(networks, lang) : null;
+    if (network) {
+      return NextResponse.json(
+        {
+          ad: null,
+          network,
+          token: viewToken(placement, target, null, Date.now(), format, null, networkId(network)),
+          house: houseOut,
+          houseToken,
+          supports: await namesFor(shares),
+          style,
+        },
+        NO_STORE
+      );
+    }
     if (!house) return NextResponse.json({ ...none, style }, NO_STORE);
-    return NextResponse.json(
-      {
-        ad: null,
-        house: { id: house.id, kind: house.kind, title: house.title, body: house.body, cta: house.cta, href: house.href, tone: house.tone, media: house.media, seconds: house.seconds },
-        token: viewToken(placement, target, null, Date.now(), format, house.id),
-        supports: [],
-        style,
-      },
-      NO_STORE
-    );
+    return NextResponse.json({ ad: null, house: houseOut, token: houseToken, supports: [], style }, NO_STORE);
   } catch {
     // Ads never break a page: nothing, and the page carries on.
     return NextResponse.json(none);

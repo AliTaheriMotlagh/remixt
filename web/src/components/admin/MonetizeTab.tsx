@@ -7,10 +7,10 @@ import { useCallback, useEffect, useState } from "react";
 import { formatMoney, MICROS } from "@/lib/monetize/policy";
 import { TOPICS } from "@/lib/monetize/adRules";
 import { useSettings } from "@/components/SettingsProvider";
-import type { Campaign, monetizeOverview, MonetizeSettings } from "@/lib/monetize/store";
+import type { Campaign, monetizeOverview, MonetizeSettings, NetworkMonth } from "@/lib/monetize/store";
 import type { adReviewQueue } from "@/lib/monetize/adStore";
 
-type Overview = Awaited<ReturnType<typeof monetizeOverview>> & { queue: Awaited<ReturnType<typeof adReviewQueue>>; settings: MonetizeSettings };
+type Overview = Awaited<ReturnType<typeof monetizeOverview>> & { queue: Awaited<ReturnType<typeof adReviewQueue>>; settings: MonetizeSettings; networks: NetworkMonth[] };
 
 const topicName = (id: string) => TOPICS.find((t) => t.id === id)?.en ?? id;
 
@@ -112,6 +112,8 @@ export default function MonetizeTab({ onOpenSettings }: { onOpenSettings?: () =>
         </button>
         .
       </p>
+
+      <NetworkMonths months={data.networks ?? []} act={act} onOpenSettings={onOpenSettings} />
 
       <section>
         <div className="flex items-center justify-between">
@@ -229,6 +231,77 @@ function toForm(c: Campaign): typeof EMPTY {
     lang: c.lang, placements: c.placements, cpm: c.cpm_micros / MICROS, budget: c.budget_micros / MICROS, endsAt: c.ends_at ? c.ends_at.slice(0, 16) : "",
     format: c.format === "audio" ? "audio" : "card", topic: c.topic,
   };
+}
+
+/** Each month's network views, and sharing out what the network paid for it. */
+function NetworkMonths({ months, act, onOpenSettings }: { months: NetworkMonth[]; act: (body: unknown) => Promise<void>; onOpenSettings?: () => void }) {
+  const settings = useSettings();
+  const [amounts, setAmounts] = useState<Record<string, string>>({});
+  const on = settings.network.adsense || settings.network.other;
+  const nameOf = (n: string) => (n === "adsense" ? "Google AdSense" : settings.network.otherName || "Other network");
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  return (
+    <section>
+      <h3 className="font-semibold">Ad networks</h3>
+      <p className="mt-1 text-xs text-muted">
+        {on ? `On: ${[settings.network.adsense && "Google AdSense", settings.network.other && nameOf("other")].filter(Boolean).join(" and ")}. ` : "Off. "}
+        A network fills a picture spot no campaign takes, on pages that aren&apos;t the Studio, upload, library or DJ. It pays Remixt once a month (AdSense
+        around the 21st, for the month before). When it has paid, enter the amount here: it&apos;s split between the pages by their network views, then each
+        page&apos;s part by the usual shares, and members see it on /earnings after the hold.{" "}
+        <button type="button" onClick={onOpenSettings} className="font-semibold text-brand-strong hover:underline">
+          Network settings
+        </button>
+      </p>
+      {months.length === 0 ? (
+        <p className="mt-3 rounded-xl border border-border bg-surface p-3 text-sm text-muted">No network views yet.</p>
+      ) : (
+        <ul className="mt-3 flex flex-col gap-2">
+          {months.map((m) => {
+            const key = `${m.network}|${m.month}`;
+            return (
+              <li key={key} className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-surface p-3 text-sm">
+                <span className="min-w-0 flex-1">
+                  <span className="font-medium">{m.month}</span> <span className="text-muted">· {nameOf(m.network)} · {m.views.toLocaleString()} counted views on {m.pages} pages</span>
+                </span>
+                {m.closed ? (
+                  <span className="text-xs text-success">
+                    {formatMoney(m.closed.micros)} shared {new Date(m.closed.at).toLocaleDateString()}
+                    {m.views ? ` · RPM ${formatMoney(Math.round((m.closed.micros / m.views) * 1000))}` : ""}
+                  </span>
+                ) : m.month >= thisMonth ? (
+                  <span className="text-xs text-muted">Shared after the month ends</span>
+                ) : (
+                  <form
+                    className="flex items-center gap-2"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const amount = Number(amounts[key]);
+                      if (!(amount > 0)) return;
+                      if (!confirm(`Share ${formatMoney(Math.round(amount * MICROS))} from ${nameOf(m.network)} for ${m.month}? This can't be undone.`)) return;
+                      void act({ action: "network-close", network: m.network, month: m.month, amount });
+                    }}
+                  >
+                    <span className="text-xs text-muted">Paid $</span>
+                    <input
+                      inputMode="decimal"
+                      value={amounts[key] ?? ""}
+                      onChange={(e) => setAmounts((a) => ({ ...a, [key]: e.target.value }))}
+                      placeholder="0.00"
+                      className="w-24 rounded-lg border border-border bg-background px-2 py-1 text-sm tabular-nums"
+                      aria-label={`What ${nameOf(m.network)} paid for ${m.month}, in dollars`}
+                    />
+                    <button type="submit" className="rounded-lg bg-brand px-3 py-1 text-xs font-semibold text-white">
+                      Share out
+                    </button>
+                  </form>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
 }
 
 function Box({ label, value, detail }: { label: string; value: string; detail?: string }) {

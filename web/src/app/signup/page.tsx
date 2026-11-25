@@ -104,11 +104,11 @@ export default function SignupPage() {
             <input
               type="password"
               required
-              minLength={6}
+              minLength={8}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="input"
-              placeholder="At least 6 characters"
+              placeholder="At least 8 characters"
               autoComplete="new-password"
               enterKeyHint="go"
             />

@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { passwordProblem } from "@/lib/passwordRules";
 import { NextRequest, NextResponse } from "next/server";
 import { getSettings } from "@/lib/settings/server";
 import { z } from "zod";
@@ -13,7 +14,7 @@ import { sendVerification } from "@/lib/emailTokens";
 
 const schema = z.object({
   email: z.string().email(),
-  password: z.string().min(6, "Password must be at least 6 characters"),
+  password: z.string().min(1).max(200),
   artistName: z.string().min(2).max(40),
 });
 
@@ -27,6 +28,8 @@ export async function POST(req: NextRequest) {
     );
   }
   const { email, password, artistName } = parsed.data;
+  const weak = passwordProblem(password, email);
+  if (weak) return NextResponse.json({ error: weak }, { status: 400 });
   // New accounts per address: enough for a household or a school's shared connection, not for a sign-up bot.
   const settings = await getSettings();
   // The owner can close sign-up (Admin → Settings → Switches); log-in still works.

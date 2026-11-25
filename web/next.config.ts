@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
 import fs from "fs";
 import path from "path";
+import { ISOLATED_ROOTS } from "./src/lib/isolation";
 
 // Hosts that ../share.sh can put in front of the dev server. Without these the
 // dev server treats tunnelled requests as cross-origin and blocks /_next/*.
@@ -30,21 +31,41 @@ const nextConfig = (phase: string): NextConfig => ({
   output: "standalone",
   // Don't advertise the framework in every response.
   poweredByHeader: false,
-  // Cross-origin isolation lets the song splitter use SharedArrayBuffer,
-  // i.e. every CPU core instead of one when there's no WebGPU. The
-  // `credentialless` flavour still lets the page load cross-origin audio
-  // (stems on R2) and the model (Hugging Face) without them opting in.
   async headers() {
+    const isolated = ISOLATED_ROOTS.join("|");
+    // Cross-origin isolation lets the song splitter use SharedArrayBuffer,
+    // i.e. every CPU core instead of one when there's no WebGPU. The
+    // `credentialless` flavour still lets the page load cross-origin audio
+    // (stems on R2) and the model (Hugging Face) without them opting in.
+    // Only on the pages that do the heavy work (lib/isolation.ts): it also
+    // blocks ad networks' iframes, which every other page may carry. Script
+    // files (the splitter's workers) carry it too, so a worker started from
+    // an isolated page is isolated as well.
+    const isolation = [
+      { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+      { key: "Cross-Origin-Embedder-Policy", value: "credentialless" },
+    ];
     return [
       {
         source: "/:path*",
         headers: [
-          { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
-          { key: "Cross-Origin-Embedder-Policy", value: "credentialless" },
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          // Browsers keep to https for two years (ignored over plain http, so local dev is unaffected).
+          { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains" },
+          // The microphone (the vocal booth) and camera (clip photos) only for this site; nothing else.
+          { key: "Permissions-Policy", value: "camera=(self), microphone=(self), geolocation=(), payment=(self), usb=(), interest-cohort=()" },
         ],
       },
+      // No other site may frame Remixt (clickjacking: a hidden "Delete" or "Pay" under a decoy) —
+      // except the pages made to be embedded: /embed/<remix>, a station's /embed and /broadcast.
+      {
+        source: "/:path((?!embed(?:/|$)|radio/[^/]+/(?:embed|broadcast)(?:/|$)).*)",
+        headers: [{ key: "Content-Security-Policy", value: "frame-ancestors 'self'" }],
+      },
+      { source: `/:root(${isolated})`, headers: isolation },
+      { source: `/:root(${isolated})/:rest*`, headers: isolation },
+      { source: "/_next/static/:path*", headers: [{ key: "Cross-Origin-Embedder-Policy", value: "credentialless" }] },
     ];
   },
   // yt-dlp for link import (downloaded into bin/ by scripts/fetch-ytdlp.mjs)

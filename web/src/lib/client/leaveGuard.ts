@@ -26,3 +26,8 @@ export function guardLeaving(reason: string, on: boolean) {
   if (want) window.addEventListener("beforeunload", onBeforeUnload);
   else window.removeEventListener("beforeunload", onBeforeUnload);
 }
+
+/** Whether some work would be lost by leaving the page (a split, an upload, a take being saved). */
+export function workInProgress(): boolean {
+  return holders.size > 0;
+}

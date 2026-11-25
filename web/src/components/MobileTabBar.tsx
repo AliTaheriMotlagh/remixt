@@ -60,6 +60,8 @@ export default function MobileTabBar({ user, isAdmin = false }: { user: User | n
                   <li key={link.href}>
                     <Link
                       href={link.href}
+                      // "#feedback" opens a dialog on this page: the sheet closes for it (a page change closes it anyway).
+                      onClick={() => link.href.startsWith("#") && setMoreOpen(false)}
                       aria-current={active ? "page" : undefined}
                       className={`flex min-h-12 items-center gap-3 rounded-xl px-3 text-[15px] font-medium transition-colors ${
                         active ? "bg-surface-raised text-foreground" : "text-foreground hover:bg-surface-hover"
