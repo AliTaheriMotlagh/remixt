@@ -123,6 +123,8 @@ export default function AnalyticsTab() {
 
       <RightNow />
 
+      <Listening days={days} />
+
       {error && <p className="text-sm text-danger">{error}</p>}
       {!data ? (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -132,6 +134,58 @@ export default function AnalyticsTab() {
         <Report data={data} />
       )}
     </div>
+  );
+}
+
+// ——— listening ———
+
+type ListeningReport = {
+  listening: { listens: number; hours: number; completed: number; skipped: number; listeners: number; bySource: { source: string; listens: number; hours: number }[] };
+  songs: { songs: number; measured: number; keyed: number };
+};
+
+const SOURCE_NAME: Record<string, string> = { radio: "Radio", dj: "DJ decks", preview: "Library previews", remix: "Remix pages", embed: "Embeds" };
+
+/** Songs heard (lib/listens.ts) and how much of the library is measured (lib/trackAnalysis.ts). */
+function Listening({ days }: { days: number }) {
+  const [data, setData] = useState<ListeningReport | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/admin/listening?days=${days}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: ListeningReport | null) => !cancelled && setData(d))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [days]);
+  if (!data) return null;
+  const { listening: l, songs } = data;
+  const share = (n: number) => (l.listens ? `${Math.round((n / l.listens) * 100)}%` : "–");
+  return (
+    <section className="rounded-2xl border border-border bg-surface p-4" aria-labelledby="listening-title">
+      <h3 id="listening-title" className="font-semibold">Listening and songs</h3>
+      <p className="text-xs text-muted">
+        Songs heard for 5 s or more, wherever they played. Measured songs have their tempo, key, beat grid and energy kept for the DJ set planner — new ones as they
+        split, older ones by miners waiting for work and by anyone who opens them on the decks.
+      </p>
+      <dl className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-5">
+        <div><dt className="text-xs text-muted">Listens</dt><dd className="text-lg font-semibold tabular-nums">{nf.format(l.listens)}</dd></div>
+        <div><dt className="text-xs text-muted">Hours heard</dt><dd className="text-lg font-semibold tabular-nums">{nf.format(Math.round(l.hours * 10) / 10)}</dd></div>
+        <div><dt className="text-xs text-muted">Heard to the end</dt><dd className="text-lg font-semibold tabular-nums">{share(l.completed)}</dd></div>
+        <div><dt className="text-xs text-muted">Skipped</dt><dd className="text-lg font-semibold tabular-nums">{share(l.skipped)}</dd></div>
+        <div><dt className="text-xs text-muted">Songs measured</dt><dd className="text-lg font-semibold tabular-nums">{nf.format(songs.measured)} / {nf.format(songs.songs)}</dd></div>
+      </dl>
+      {l.bySource.length > 0 && (
+        <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+          {l.bySource.map((s) => (
+            <li key={s.source}>
+              {SOURCE_NAME[s.source] ?? s.source}: <span className="tabular-nums text-foreground">{nf.format(s.listens)}</span> ({nf.format(Math.round(s.hours * 10) / 10)} h)
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

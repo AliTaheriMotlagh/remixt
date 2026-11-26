@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
-  barOf, glideRatio, isRendered, resolveStyle, styleGains, tempoMatch, transitionSeconds, TRANSITIONS, type TransitionStyle,
+  barOf, glideRatio, isRendered, loudnessGain, quietTail, resolveStyle, styleGains, tempoMatch, transitionSeconds, TRANSITIONS, type TransitionStyle,
 } from "../src/lib/radioTransitions.ts";
 import { HANDOVER_SECONDS, planDecks } from "../src/lib/radioPlan.ts";
 
@@ -23,6 +23,10 @@ describe("auto", () => {
     assert.deepEqual(new Set(far), new Set(["echo", "filter", "rise"]));
     assert.equal(resolveStyle("auto", null, 120), "blend");
     assert.equal(resolveStyle("tapeStop", 90, 140), "tapeStop", "a chosen style is kept");
+    // AutoMix chosen, tempos that can't meet: a glide that can't land used to leave ~110 s of silence.
+    assert.equal(resolveStyle("automix", 82, 106), "bassSwap");
+    assert.equal(resolveStyle("automix", null, 106), "blend");
+    assert.equal(resolveStyle("automix", 120, 124), "automix");
   });
   test("AutoMix's glide: incoming ÷ outgoing tempo, half/double time when closer, none beyond 8%", () => {
     assert.equal(glideRatio(120, 126), 1.05);
@@ -89,5 +93,32 @@ describe("the player's handover", () => {
     assert.equal(planDecks([a, { ...b, cut: true }], 92_100, 1).sound[0].rowId, 2);
     assert.equal(planDecks([a, b], 92_100, 1).sound[0].rowId, 1);
     assert.equal(planDecks([a, b], 96_100, 1).sound[0].rowId, 2);
+  });
+});
+
+describe("cueing a song's end and its loudness", () => {
+  const loud = (n: number) => Array.from({ length: n }, () => 0.5);
+  test("a silent end is cut: the next song comes in where the music stops", () => {
+    // 200 s song; the last 10 s silent in both stems.
+    const peaks = [...loud(950), ...Array(50).fill(0.001)];
+    assert.ok(Math.abs(quietTail([peaks, peaks], 200) - 10) < 0.5);
+  });
+  test("a voice that carries on alone keeps the end (an a cappella outro)", () => {
+    const beat = [...loud(950), ...Array(50).fill(0)];
+    const voice = [...loud(990), ...Array(10).fill(0)];
+    assert.ok(Math.abs(quietTail([beat, voice], 200) - 2) < 0.5);
+  });
+  test("never more than 15 s or a tenth of the song; nothing to cut under a second", () => {
+    assert.equal(quietTail([[...loud(100), ...Array(900).fill(0)]], 600), 15);
+    assert.equal(quietTail([[...loud(999), 0]], 200), 0);
+    assert.equal(quietTail([], 200), 0);
+    assert.equal(quietTail([Array(100).fill(0)], 200), 0, "silent throughout isn't cut");
+  });
+  test("loud songs are brought down, quiet ones up a little, unmeasured left alone", () => {
+    assert.ok(loudnessGain(-8) < 0.6);
+    assert.equal(loudnessGain(-14), 1);
+    assert.ok(loudnessGain(-30) <= 1.26 && loudnessGain(-30) > 1);
+    assert.equal(loudnessGain(null), 1);
+    assert.equal(loudnessGain(-120), 1);
   });
 });

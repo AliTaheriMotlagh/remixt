@@ -19,7 +19,19 @@ function connect(): Sql {
   // Neon's pooled endpoint ("-pooler" in the host) is PgBouncer in
   // transaction mode, where a prepared statement can outlive the connection
   // it was made on — so don't prepare there.
-  const client = postgres(connectionString, { prepare: !/-pooler\./.test(connectionString) });
+  //
+  // Idle connections are closed after 30 s, and none lives past 10 minutes:
+  // Neon suspends an idle database (and its pooler drops idle clients), and
+  // a long-lived server that kept such a connection sent its next query
+  // down a dead socket and waited 20–30 s for the network to give up —
+  // pages "stuck", the radio's feed "no answer", seen in production. A
+  // connection that can't be made in 10 s fails rather than hangs.
+  const client = postgres(connectionString, {
+    prepare: !/-pooler\./.test(connectionString),
+    idle_timeout: 30,
+    max_lifetime: 10 * 60,
+    connect_timeout: 10,
+  });
   // Kept across dev hot reloads (and, harmlessly, for the life of a
   // production server process) so there's one pool, not one per reload.
   global.__remixSql = client;

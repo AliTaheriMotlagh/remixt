@@ -20,15 +20,25 @@ const sql = postgres(DATABASE_URL, { onnotice: () => {} });
 
 const inR2 = new Set<string>();
 let lists = 0;
+const prefixes: string[] = [];
 const server = createServer((req, res) => {
-  // ListObjectsV2 of bucket "bkt": every key, one page.
+  // ListObjectsV2 of bucket "bkt": a thousand keys a page, in key order, under ?prefix — as R2 answers.
   if (req.url?.startsWith("/bkt?")) {
-    lists++;
+    const q = new URL(req.url, "http://x").searchParams;
+    const prefix = q.get("prefix") ?? "";
+    if (!q.get("continuation-token")) {
+      lists++;
+      prefixes.push(prefix);
+    }
+    const keys = [...inR2].filter((k) => k.startsWith(prefix)).sort();
+    const from = Number(q.get("continuation-token") ?? 0);
+    const page = keys.slice(from, from + 1000);
+    const more = from + 1000 < keys.length;
     res.writeHead(200, { "content-type": "application/xml" });
     return res.end(
-      `<?xml version="1.0"?><ListBucketResult>${[...inR2]
+      `<?xml version="1.0"?><ListBucketResult>${page
         .map((k) => `<Contents><Key>${k}</Key><Size>10</Size><LastModified>2026-11-19T00:00:00.000Z</LastModified></Contents>`)
-        .join("")}<IsTruncated>false</IsTruncated></ListBucketResult>`
+        .join("")}<IsTruncated>${more}</IsTruncated>${more ? `<NextContinuationToken>${from + 1000}</NextContinuationToken>` : ""}</ListBucketResult>`
     );
   }
   res.writeHead(404);
@@ -95,6 +105,34 @@ describe("the radio and storage", () => {
     assert.equal((await check.playable([mix])).length, 1);
     await lane("beat", notMoved, 3); // not in R2
     assert.equal((await check.playable([mix])).length, 0);
+  });
+
+  test("songs stay on air while people upload: only stems/ is listed, and a stale listing answers at once", async () => {
+    // 21,000 slices of uploads in progress (and a queued song) sort before stems/: a listing of the whole
+    // bucket stopped at 20,000 keys before reaching the songs, and the radio went silent.
+    for (let i = 0; i < 21_000; i++) inR2.add(`relay/session-${Math.floor(i / 500)}/at-${i}.part`);
+    inR2.add(`queue/${ownerId}/job.mp3`);
+    const fresh = randomUUID();
+    await sql`INSERT INTO tracks (id, owner_id, title, original_filename, status, original_url) VALUES (${fresh}, ${ownerId}, ${tag}, 'x.mp3', 'ready', '')`;
+    for (const kind of ["vocals", "beat"]) {
+      await sql`INSERT INTO stems (id, track_id, kind, file_url) VALUES (${randomUUID()}, ${fresh}, ${kind}, ${`stems/${fresh}/${kind}.mp3`})`;
+      inR2.add(`stems/${fresh}/${kind}.mp3`);
+    }
+    const storage = await import("../src/lib/storage.ts");
+    storage.forgetStoredKeys();
+    const started = Date.now();
+    // Answered from the last listing straight away (the new song isn't in it yet)…
+    assert.deepEqual((await check.playable([song(moved)])).map((i) => i.id), [moved]);
+    assert.ok(Date.now() - started < 1000);
+    // …and on air once the new listing is in.
+    let found: string[] = [];
+    for (let i = 0; i < 50 && !found.length; i++) {
+      found = (await check.playable([song(fresh)])).map((i) => i.id);
+      if (!found.length) await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.deepEqual(found, [fresh]);
+    assert.deepEqual((await check.playable([song(moved), song(notMoved)])).map((i) => i.id), [moved]);
+    assert.ok(prefixes.length > 0 && prefixes.every((p) => p === "stems/"), `listed under ${prefixes.join(", ")}`);
   });
 
   test("the bucket is listed once for many checks, not once per song", async () => {

@@ -356,6 +356,8 @@ async function split(request: Extract<SplitterRequest, { type: "split" }>) {
     post({ type: "progress", jobId, stage: "encoding", value: (i + 1) / outputs.length });
   }
 
+  // Handed over too: at 44.1 kHz it's already the analysis rate, and the page measures the song from it.
+  const beatMono = sampleRate / factor === 11025 ? tempo.slice(0, tempoLength) : undefined;
   post(
     {
       type: "result",
@@ -363,8 +365,9 @@ async function split(request: Extract<SplitterRequest, { type: "split" }>) {
       mp3,
       peaks,
       bpm: estimateTempoDecimated(tempo.subarray(0, tempoLength), sampleRate / factor),
+      beatMono,
     },
-    Object.values(mp3).map((bytes) => bytes!.buffer)
+    [...Object.values(mp3).map((bytes) => bytes!.buffer), ...(beatMono ? [beatMono.buffer] : [])]
   );
 }
 

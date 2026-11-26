@@ -1,5 +1,6 @@
 "use client";
 
+import { needsAnalysis, parseTrackAnalysis, type TrackAnalysis } from "../trackAnalysis";
 import { analyzeStem, beatPhase, refineTempo, type StemAnalysis } from "./analysis";
 import { fetchStem } from "./stemFetch";
 import { fetchStemRows, keptStemRows } from "./stemList";
@@ -29,6 +30,8 @@ export type LibrarySong = {
   credit: string | null;
   /** Its key, when a browser has measured it and shared it (null until then). */
   key: MusicalKey | null;
+  /** Everything measured about it (lib/trackAnalysis.ts, without the curve), once some browser has. */
+  analysis: TrackAnalysis | null;
 };
 
 /** "9:minor" → a key; null for anything else. */
@@ -52,6 +55,7 @@ type StemRow = {
   track_featured?: boolean | null;
   track_credit?: string | null;
   track_key?: string | null;
+  track_analysis?: unknown;
 };
 
 let listing: Promise<LibrarySong[]> | null = null;
@@ -82,8 +86,14 @@ export function listLibrarySongs(fresh = false): Promise<LibrarySong[]> {
           featured: !!row.track_featured,
           credit: row.track_credit ?? null,
           key: parseStoredKey(row.track_key),
+          analysis: null,
         };
         songs.set(row.track_id, song);
+      }
+      // On the beat's row (once per song); checked like anything a browser sent.
+      if (row.track_analysis) {
+        song.analysis = parseTrackAnalysis({ ...(row.track_analysis as object), curve: [] });
+        if (!song.key && song.analysis?.key) song.key = parseStoredKey(song.analysis.key);
       }
       let peaks: number[] = [];
       try {
@@ -136,6 +146,21 @@ export function releaseStem(stemId: string) {
  * visitor's planner and suggestions know it. Kept only the first time (the
  * server ignores it once a key is stored); sent once per song per page.
  */
+/**
+ * Tells the server everything this browser measured about a song (see
+ * lib/trackAnalysis.ts), so nobody has to measure it again. Kept only when
+ * the song has none yet; sent once per song per page.
+ */
+export function shareSongAnalysis(song: LibrarySong, analysis: TrackAnalysis) {
+  if (song.analysis && !needsAnalysis(song.analysis)) return;
+  song.analysis = analysis;
+  void fetch(`/api/tracks/${encodeURIComponent(song.trackId)}/analysis`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(analysis),
+  }).catch(() => {});
+}
+
 export function shareSongKey(song: LibrarySong, key: MusicalKey) {
   if (song.key) return;
   song.key = key;

@@ -17,6 +17,7 @@ import { useStudioStore } from "@/lib/client/studioStore";
 import { resetHistory } from "@/lib/client/studioHistory";
 import type { User } from "@/lib/auth";
 import { setPlayingRemix } from "@/lib/client/mediaSession";
+import { listening } from "@/lib/client/listens";
 
 export default function RemixDetailPlayer({
   remixId,
@@ -67,6 +68,14 @@ export default function RemixDetailPlayer({
       audioEngine.setListening(false);
     };
   }, []);
+
+  // A listen of this remix: as long as it sounds on its page.
+  const isPlaying = useStudioStore((s) => s.isPlaying);
+  const duration = useStudioStore((s) => s.duration);
+  useEffect(() => {
+    listening("remix", { kind: "remix", id: remixId, duration: duration || null }, isPlaying);
+  }, [remixId, isPlaying, duration]);
+  useEffect(() => () => listening("remix", null, false), [remixId]);
 
   // On the lock screen, this remix is by its artist (not the stems'
   // artists), with its cover.

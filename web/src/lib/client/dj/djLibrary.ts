@@ -30,6 +30,8 @@ export type BrowserEntry = {
   layout: StemLayout;
   /** True once the song's audio has been analysed (tempo and key are measured, not stored). */
   analyzed: boolean;
+  /** 1–10, measured from the audio (lib/trackAnalysis.ts); missing or null until some browser has. */
+  energy?: number | null;
 };
 
 export function entryFromTrack(t: TrackInfo): BrowserEntry {

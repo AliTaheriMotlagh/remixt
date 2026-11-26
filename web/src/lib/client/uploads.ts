@@ -679,13 +679,20 @@ class Uploads {
           const queued = await queueLink(source.url, tags, report, keepPrivate);
           name = queued.title;
         } else {
-          const jobId = await queueFile(source.file, tags, report, signal, {
+          const queued = await queueFile(source.file, tags, report, signal, {
             keepPrivate,
             resume: readResume(id),
             onResume: (state) => writeResume(id, state),
           });
-          // Its cover, from the original file (the queue may get a smaller copy without tags).
-          void attachJobCover(jobId, source.file);
+          if (queued.existing) {
+            trackId = queued.existing.id;
+            note = alreadyNote(queued.existing);
+          } else if (queued.alreadyQueued) {
+            note = "Already in your queue — it's split there, once";
+          } else if (queued.jobId) {
+            // Its cover, from the original file (the queue may get a smaller copy without tags).
+            void attachJobCover(queued.jobId, source.file);
+          }
         }
         // A computer in this browser that helps split can take it at once.
         splitHelper.wake();
@@ -700,11 +707,7 @@ class Uploads {
         const { id: madeId, existing } = await uploadSong(file, report, { tags, signal, keepPrivate });
         trackId = madeId;
         if (!existing) void attachTrackCover(madeId, file);
-        if (existing) {
-          note = existing.mine
-            ? `Already in your library as “${existing.title}” — nothing to split`
-            : `Already in the library as “${existing.title}” (added by ${existing.artist_name}) — find it in the Library`;
-        }
+        if (existing) note = alreadyNote(existing);
       }
       signal.throwIfAborted();
       this.finishedCount++;
@@ -801,4 +804,11 @@ export function describeStage(
     default:
       return { label: "Starting", progress: null };
   }
+}
+
+/** Said when a song uploaded is one the library has already (the very same file). */
+function alreadyNote(existing: { title: string; artist_name: string; mine: boolean }) {
+  return existing.mine
+    ? `Already in your library as “${existing.title}” — nothing to split`
+    : `Already in the library as “${existing.title}” (added by ${existing.artist_name}) — find it in the Library`;
 }

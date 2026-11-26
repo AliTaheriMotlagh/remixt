@@ -1,5 +1,6 @@
 "use client";
 
+import { listening } from "./listens";
 import { useSyncExternalStore } from "react";
 import { keepScreenOn } from "./wakeLock";
 import { setNowPlaying } from "./mediaSession";
@@ -131,6 +132,8 @@ export class PreviewPlayer {
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) listener(this.state);
     this.reportNowPlaying();
+    const { current, playing, duration } = this.state;
+    listening("preview", current ? { kind: "stem", id: current.stemId, duration: duration || null } : null, playing);
   }
 
   /** The lock screen / media notification (see mediaSession). */

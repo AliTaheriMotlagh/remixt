@@ -49,11 +49,14 @@ const HIGH_WORDS = ["edm", "house", "techno", "trance", "dance", "club", "drum",
 const LOW_WORDS = ["chill", "ambient", "lounge", "acoustic", "ballad", "lofi", "lo-fi", "piano", "jazz", "classical", "sad", "slow", "sonati", "traditional"];
 
 /**
- * How much a song lifts a room, 1–10: mostly its tempo (half/double time
- * read as the feel between 85 and 170), nudged by words in its genre and
- * tags. A guess, said as one in the UI.
+ * How much a song lifts a room, 1–10: as measured from its audio when some
+ * browser has (lib/trackAnalysis.ts), else a guess — mostly its tempo
+ * (half/double time read as the feel between 85 and 170), nudged by words
+ * in its genre and tags — said as one in the UI.
  */
-export function energyOf(s: Pick<CrateSong, "bpm" | "genre" | "tags">): number | null {
+export function energyOf(s: Pick<CrateSong, "bpm" | "genre" | "tags"> & { energy?: number | null }): number | null {
+  // Measured from the audio: no need to guess.
+  if (s.energy) return Math.max(1, Math.min(10, Math.round(s.energy)));
   const words = `${s.genre} ${(s.tags ?? []).join(" ")}`.toLowerCase();
   let base: number | null = null;
   if (s.bpm) {

@@ -18,6 +18,8 @@
 import { alignedPosition, alignShiftSeconds, beatSeconds, clamp, effBpm, floorToGrid, rateToMatch, xfadeGains } from "./djMath";
 import { autoGainDb, dbToGain, emptyHotCues, faderGain, quantizePos, quantizedJump, resizeLoop, withHotCue } from "./djControls";
 import type { LoadedTrack } from "./djTracks";
+import { isLibraryId, libraryTrackKey } from "./djLibrary";
+import { listening } from "../listens";
 import {
   DEFAULT_TEMPO_RANGE,
   EQ_MAX_DB,
@@ -520,6 +522,12 @@ export class DjEngine {
     if (this.disposed) return;
     this.cached = this.snapshot();
     for (const l of this.listeners) l();
+    // Library songs heard on each deck (demo songs aren't anyone's).
+    for (const [id, deck] of Object.entries(this.cached.decks)) {
+      const track = deck.track;
+      const song = track && isLibraryId(track.id) ? libraryTrackKey(track.id) : null;
+      listening("dj", song ? { kind: "track", id: song, duration: track!.duration } : null, deck.playing, id);
+    }
   }
 
   private later(fn: () => void, ms: number) {

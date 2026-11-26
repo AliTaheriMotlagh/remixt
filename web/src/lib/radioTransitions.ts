@@ -62,6 +62,9 @@ export function glideRatio(outBpm: number | null | undefined, inBpm: number | nu
 
 /** "auto" made concrete for a pair; `turn` (the incoming row's id) takes turns among the far-tempo styles. */
 export function resolveStyle(choice: TransitionChoice, outBpm: number | null | undefined, inBpm: number | null | undefined, turn = 0): TransitionStyle {
+  // AutoMix chosen for the station, but these two tempos can't meet (82 → 106 BPM): a glide that can't
+  // land rendered ~110 s of silence. A bass swap does the same job without bending the tempo.
+  if (choice === "automix" && glideRatio(outBpm, inBpm) === null) return outBpm && outBpm > 0 && inBpm && inBpm > 0 ? "bassSwap" : "blend";
   if (choice !== "auto") return choice;
   if (glideRatio(outBpm, inBpm) !== null) return "automix";
   if (!(outBpm && outBpm > 0)) return "blend";
@@ -122,4 +125,44 @@ export function styleGains(style: TransitionStyle, p: number): { out: number; in
     case "tapeStop":
       return { out: x < 0.85 ? 1 : 0, in: x < 0.85 ? 0 : 1 };
   }
+}
+
+/** Quieter than this (peak amplitude, about −34 dBFS) is silence at a song's end. */
+const QUIET_PEAK = 0.02;
+
+/**
+ * Seconds of silence at the end of a song, from its stems' stored peaks
+ * (each list spread evenly over the song, as the splitter measured them):
+ * where neither the voice nor the beat makes a sound any more. The radio
+ * ends the song there, so the next one comes in where the music ends, not
+ * where the file does — no dead air (as RadioT cues its tracks). At most
+ * 15 s and a tenth of the song; under a second isn't worth it.
+ */
+export function quietTail(peaks: number[][], duration: number): number {
+  const lists = peaks.filter((p) => p.length > 0);
+  if (!lists.length || !(duration > 0)) return 0;
+  const steps = Math.max(...lists.map((p) => p.length));
+  let last = -1;
+  for (let i = steps - 1; i >= 0 && last < 0; i--) {
+    const at = (i + 0.5) / steps;
+    if (lists.some((p) => (p[Math.min(p.length - 1, Math.floor(at * p.length))] ?? 0) >= QUIET_PEAK)) last = i;
+  }
+  if (last < 0) return 0; // silent throughout: not ours to judge
+  const tail = duration * (1 - (last + 1) / steps);
+  return tail < 1 ? 0 : Math.min(tail, 15, duration / 10);
+}
+
+/** The loudness every song is brought towards on the radio (its beat, dBFS), as RadioT gives each piece its gain. */
+export const RADIO_LOUDNESS_DB = -14;
+
+/**
+ * The gain that brings a song's measured beat loudness (lib/trackAnalysis.ts)
+ * towards RADIO_LOUDNESS_DB, so one song isn't much louder than the next:
+ * cut by up to 6 dB, lifted by at most 2 (more could clip its peaks). 1 when
+ * it isn't measured.
+ */
+export function loudnessGain(loudnessDb: number | null | undefined): number {
+  if (typeof loudnessDb !== "number" || !Number.isFinite(loudnessDb) || loudnessDb < -60) return 1;
+  const db = Math.max(-6, Math.min(2, RADIO_LOUDNESS_DB - loudnessDb));
+  return Math.round(10 ** (db / 20) * 1000) / 1000;
 }

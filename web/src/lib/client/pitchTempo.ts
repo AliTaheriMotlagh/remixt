@@ -239,6 +239,7 @@ function renderInWorker(sourceBuffer: AudioBuffer, tempo: number, pitchSemitones
       else reject(new Error(event.data.message));
     };
     worker.onerror = (event) => {
+      event.preventDefault();
       worker.terminate();
       reject(new Error(event.message || "pitch/tempo worker failed"));
     };

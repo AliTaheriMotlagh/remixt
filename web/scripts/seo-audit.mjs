@@ -74,7 +74,9 @@ async function checkPage(url) {
   for (const m of html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)) {
     try {
       const data = JSON.parse(m[1]);
-      for (const item of [data].flat()) if (!item["@context"] || !item["@type"]) fail(path, "JSON-LD item without @context/@type");
+      // One document per script with its context (a list is a "@graph": see lib/jsonLd.ts); every item typed.
+      if (Array.isArray(data) || !data["@context"]) fail(path, "JSON-LD document without @context");
+      for (const item of data["@graph"] ?? [data].flat()) if (!item["@type"]) fail(path, "JSON-LD item without @type");
     } catch (e) {
       fail(path, `JSON-LD doesn't parse: ${e.message}`);
     }

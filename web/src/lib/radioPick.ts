@@ -10,6 +10,8 @@
 export type RadioKind = "track" | "remix";
 
 /** Something a station can play: a library song or a published remix. */
+import { keyFit, type MusicalKey } from "./client/musicKey";
+
 export type RadioItem = {
   kind: RadioKind;
   id: string;
@@ -19,6 +21,8 @@ export type RadioItem = {
   cover: string | null;
   /** Its tempo, when known — for the crossfade into the next song. */
   bpm?: number | null;
+  /** Its key ("9:minor"), when measured — so the next song from the library can be one that mixes with it. */
+  key?: string | null;
 };
 
 export const itemKey = (i: Pick<RadioItem, "kind" | "id">) => `${i.kind}:${i.id}`;
@@ -43,7 +47,34 @@ export type PickInput = {
   recent: string[];
   /** The one playing now (never picked again right away). */
   current?: string | null;
+  /** The one playing now, with its tempo and key: the library's next song is one that follows it well. */
+  currentItem?: RadioItem | null;
 };
+
+/** Songs ahead in the library's rotation the station chooses among for the best follow-on (more would starve some songs). */
+export const FOLLOW_ON_CHOICES = 5;
+
+/**
+ * 0–1: how well `next` follows `prev` on the radio, as a DJ would pick —
+ * keys beside each other on the Camelot wheel, tempos a blend can reach.
+ * Unknown keys and tempos count as middling, so unmeasured songs still play.
+ */
+export function followOn(prev: Pick<RadioItem, "bpm" | "key"> | null | undefined, next: Pick<RadioItem, "bpm" | "key">): number {
+  const a = parseKey(prev?.key);
+  const b = parseKey(next.key);
+  const keyScore = a && b ? { same: 1, relative: 0.95, neighbour: 0.85, far: 0.45, clash: 0.15 }[keyFit(b, a)] : 0.55;
+  let tempoScore = 0.55;
+  if (prev?.bpm && next.bpm && prev.bpm > 0 && next.bpm > 0) {
+    const off = Math.min(...[1, 2, 0.5].map((m) => Math.abs(Math.log((next.bpm! * m) / prev.bpm!))));
+    tempoScore = Math.max(0, 1 - off / Math.log(1.25));
+  }
+  return 0.6 * keyScore + 0.4 * tempoScore;
+}
+
+function parseKey(raw: string | null | undefined): MusicalKey | null {
+  const m = /^(\d{1,2}):(major|minor)$/.exec(raw ?? "");
+  return m && Number(m[1]) <= 11 ? { tonic: Number(m[1]), mode: m[2] as MusicalKey["mode"] } : null;
+}
 
 /** How many of the latest plays a playlist song waits out before it comes round again (fewer when the playlist is short). */
 export function restFor(size: number) {
@@ -92,7 +123,11 @@ export function pickNext(input: PickInput): { item: RadioItem; source: PickSourc
   const exclude = new Set(current ? [current] : []);
   const fromPlaylist = rotation(input.playlist, input.recent, exclude)[0];
   if (fromPlaylist) return { item: fromPlaylist, source: "playlist" };
-  const fromLibrary = rotation(input.library, input.recent, exclude)[0];
+  // From the library: of the next few in rotation, the one that follows this song best (earlier in the rotation wins a tie).
+  const ahead = rotation(input.library, input.recent, exclude).slice(0, FOLLOW_ON_CHOICES);
+  const fromLibrary = input.currentItem
+    ? ahead.reduce<RadioItem | undefined>((best, item) => (!best || followOn(input.currentItem, item) > followOn(input.currentItem, best) + 0.05 ? item : best), undefined)
+    : ahead[0];
   if (fromLibrary) return { item: fromLibrary, source: "library" };
   return null;
 }
@@ -113,7 +148,7 @@ export function voteChoices(input: Omit<PickInput, "votes" | "voting" | "djQueue
   for (const r of rankRequests(input.requests)) add(r);
   for (const p of rotation(input.playlist, input.recent, seen)) add(p);
   for (const l of rotation(input.library, input.recent, seen)) add(l);
-  return out.map(({ kind, id, title, artist, duration, cover, bpm }) => ({ kind, id, title, artist, duration, cover, bpm: bpm ?? null }));
+  return out.map(({ kind, id, title, artist, duration, cover, bpm, key }) => ({ kind, id, title, artist, duration, cover, bpm: bpm ?? null, key: key ?? null }));
 }
 
 /** Where the station is in the song that started at `startsAt` (ms), at `now` (ms): seconds in, clamped to the song. */

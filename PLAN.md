@@ -3,7 +3,7 @@
 The only to-do list: **only what's left**. Finished work lives in git history (`git log`), not here.
 Read this first in a new session, then `git status`. Before a session ends: delete what got done, add what was found.
 
-Last cleaned: 2026-11-25 (everything finished before then was removed).
+Last cleaned: 2026-11-26 (everything finished before then was removed).
 
 ---
 
@@ -66,7 +66,10 @@ Everything below is switched on from **Admin** once the account/key exists. Noth
 
 ## 3. Code still to do
 
-- [ ] **Radio bug:** with AutoMix *forced* on songs too far apart (82 → 106 BPM), ~110 s of silence after the change. Fix idea: forced AutoMix with no reachable glide resolves to bass swap (`resolveStyle`). Rig: `OWNER_ID=… SHORTEN=1 TRANSITION=automix node scripts/radio-check.mjs`.
+- [ ] **After the 2026-11-26 deploy, check on production:** Admin → Analytics → "Listening and songs" fills (listens, songs measured climbing as miners wait for work); the radio keeps playing while someone uploads from a phone; `BASE_URL=https://remixt.app node scripts/seo-audit.mjs` has no 30 s timeouts (the DB idle-timeout fix); Admin → Feedback & problems: no new `@context`, `radius`, `removeChild` or ORT `[object Event]` reports.
+- [ ] Radio cueing, next steps (ideas from RadioT): skip a song's silent *start* too (needs the player to start a file at an offset; today only the silent end is cut), and a peak limiter on the radio's output now that songs get a loudness gain.
+- [ ] Use the stored song analysis further: the energy curve (`tracks.analysis_json.curve`) for "where to mix in/out" marks on the DJ decks and in the set planner; charts by energy/tempo; "more like this" from key + tempo + energy.
+- [ ] `/admin` is slow to show (problem reports): measure which of its queries is slow.
 - [ ] Lighthouse SEO on pages added since the last audit (`/privacy`, `/terms`, `/plus`, the newer tools) and `node scripts/seo-audit.mjs` against production.
 - [ ] Phone screenshots: Admin → Feedback & problems, Admin → Ads & earnings → Ad networks, `/privacy`, `/terms`.
 - [ ] `/earnings` counts network money in the balance but not in "paid views" (network views are paid per month, not per view) — show network views there too.

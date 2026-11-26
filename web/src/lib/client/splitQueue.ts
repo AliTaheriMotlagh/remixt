@@ -4,12 +4,15 @@ import { useSyncExternalStore } from "react";
 import type { MiningStats, Reward, TopMiner } from "@/lib/mining";
 import { previewPlayer } from "./previewPlayer";
 import { encodeMp3Bytes } from "./mp3";
-import { fetchInSlices } from "./stemFetch";
+import { fetchInSlices, fetchStem } from "./stemFetch";
+import { ANALYSIS_RATE } from "./analysis";
+import { measureBeatMono } from "./trackMeasure";
 import { useStudioStore } from "./studioStore";
 import { guardLeaving } from "./leaveGuard";
 import { keepScreenOn } from "./wakeLock";
 import { FinalUploadError, NetworkError, untilVisible, upload, type RelayResume, type UploadTarget } from "./directUpload";
-import { isConstrainedDevice, splitSong, splitter, splitTrackPayload, uploadStems, type UploadStage } from "./splitter";
+import { listenForOtherTabs, otherTabPlaying } from "./audioPresence";
+import { fingerprint, isConstrainedDevice, measureSplit, splitSong, splitter, splitTrackPayload, uploadStems, type AlreadyThere, type UploadStage } from "./splitter";
 
 // The browser side of the split queue (see lib/splitQueue.ts on the
 // server). A phone sends its song to the queue; a computer whose owner has
@@ -156,6 +159,12 @@ function lineTrouble(err: unknown): boolean {
   return err instanceof Error && /HTTP 5\d\d/.test(err.message);
 }
 
+/** Biggest file a phone fingerprints (it's read into memory whole to be hashed). */
+const HASH_MAX_BYTES = 40 * 1024 * 1024;
+
+/** What queueing a file came to: a job in the queue, or the song already in the library. */
+export type Queued = { jobId: string | null; existing: AlreadyThere | null; alreadyQueued: boolean };
+
 /** Sends a song from this device to the queue, for a helper's computer to split. */
 export async function queueFile(
   original: File,
@@ -168,13 +177,18 @@ export async function queueFile(
     keepPrivate = false,
   }: { resume?: QueueResume | null; onResume?: (state: QueueResume | null) => void; keepPrivate?: boolean } = {}
 ) {
+  // The original's fingerprint, as a computer would take it: the same song already in the library (or
+  // already on its way into the queue) isn't sent, queued or split again.
+  onStage({ stage: "checking" });
+  const sourceHash = original.size <= HASH_MAX_BYTES ? await fingerprint(original) : null;
+  signal?.throwIfAborted();
   const file = await shrinkForQueue(original, onStage);
   signal?.throwIfAborted();
   // Only the very same bytes can be carried on — a file shrunk here may not come out the same twice.
   const earlier = file === original && resume?.relay?.size === file.size ? resume : null;
   const done = earlier?.relay ? earlier.relay.sent.reduce((sum, [, bytes]) => sum + bytes, 0) : 0;
   onStage({ stage: "queueing", progress: done / Math.max(1, file.size) });
-  const created = await json<{ id: string; upload: UploadTarget; resumed?: boolean }>(
+  const created = await json<{ id: string; upload: UploadTarget; resumed?: boolean; existing?: AlreadyThere; alreadyQueued?: boolean }>(
     await postRetrying(
       "/api/split-jobs",
       {
@@ -188,12 +202,21 @@ export async function queueFile(
           rightsConfirmed: true,
           ...(keepPrivate ? { private: true } : {}),
           ...(earlier ? { resume: earlier.jobId } : {}),
+          ...(sourceHash ? { sourceHash } : {}),
         }),
       },
       signal
     ),
     "Couldn't add the song to the queue"
   );
+  if (created.existing) {
+    onResume(null);
+    return { jobId: null, existing: created.existing, alreadyQueued: false } satisfies Queued;
+  }
+  if (created.alreadyQueued) {
+    onResume(null);
+    return { jobId: created.id, existing: null, alreadyQueued: true } satisfies Queued;
+  }
   const relay = created.resumed ? (earlier?.relay ?? null) : null;
   onResume({ jobId: created.id, relay });
   try {
@@ -218,7 +241,7 @@ export async function queueFile(
     throw err;
   }
   onResume(null);
-  return created.id;
+  return { jobId: created.id, existing: null, alreadyQueued: false } satisfies Queued;
 }
 
 /** Queues the song behind a link; the server fetches it straight into the queue. */
@@ -444,6 +467,7 @@ class SplitHelper {
     });
     this.wake();
     if (on) {
+      listenForOtherTabs();
       // Have the model loaded before the first song arrives, rather than
       // making its owner wait for it (not on a page playing music).
       if (preload && !this.pageReason) void splitter.load().catch(() => {});
@@ -488,6 +512,8 @@ class SplitHelper {
     if (this.pageReason) return this.pageReason;
     // Splitting uses the whole GPU or every CPU core: it would stutter the audio.
     if (useStudioStore.getState().isPlaying || previewPlayer.getState().playing) return "music is playing";
+    // Another tab (the radio, a remix) would stutter just the same.
+    if (otherTabPlaying()) return "music is playing in another tab";
     if (splitter.busy) return "your own song is splitting first";
     return null;
   }
@@ -523,6 +549,7 @@ class SplitHelper {
           this.set({ stats: claim.stats });
           if (!claim.job) {
             this.set({ status: "waiting", message: null });
+            await this.measureOneWaiting();
             pause = POLL_MS;
             return;
           }
@@ -538,6 +565,57 @@ class SplitHelper {
     } finally {
       this.running = false;
       if (!this.state.enabled) this.set({ status: "off", message: null });
+    }
+  }
+
+  /** Not before this (nothing left to measure, or the server said no). */
+  private measureAgainAt = 0;
+  /** Songs this tab couldn't measure: not tried again this visit. */
+  private measureFailed = new Set<string>();
+
+  /**
+   * Nothing to split: measure one library song nobody has yet — its tempo,
+   * key, beat grid and energy, from its beat stem alone (a few MB, a few
+   * seconds) — and keep it on the server for the DJ set planner and
+   * everyone (see lib/trackAnalysis.ts). This is how songs uploaded before
+   * songs were measured as they split get measured too.
+   */
+  private async measureOneWaiting() {
+    if (Date.now() < this.measureAgainAt || this.pausedFor()) return;
+    try {
+      const res = await fetch("/api/tracks/unanalysed");
+      if (!res.ok) {
+        this.measureAgainAt = Date.now() + 10 * 60_000;
+        return;
+      }
+      const { songs } = (await res.json()) as { songs: { trackId: string; bpm: number | null; beatStemId: string }[] };
+      const song = songs.find((s) => !this.measureFailed.has(s.trackId));
+      if (!song) {
+        this.measureAgainAt = Date.now() + 30 * 60_000;
+        return;
+      }
+      this.measureFailed.add(song.trackId); // until it's kept
+      this.set({ status: "waiting", message: "No songs to split — measuring a library song's tempo and key meanwhile" });
+      const bytes = await fetchStem(song.beatStemId);
+      // Decoded straight to the analysis rate, one channel's worth.
+      const beat = await new OfflineAudioContext(1, 1, ANALYSIS_RATE).decodeAudioData(bytes);
+      const mono = new Float32Array(beat.length);
+      for (let c = 0; c < beat.numberOfChannels; c++) {
+        const data = beat.getChannelData(c);
+        for (let i = 0; i < mono.length; i++) mono[i] += data[i] / beat.numberOfChannels;
+      }
+      const analysis = await measureBeatMono(mono, song.bpm, "miner");
+      if (!analysis) return;
+      const kept = await fetch(`/api/tracks/${encodeURIComponent(song.trackId)}/analysis`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(analysis),
+      });
+      if (kept.ok) this.measureFailed.delete(song.trackId);
+    } catch {
+      // A song that won't download or decode: the next one, next time.
+    } finally {
+      if (this.state.status === "waiting") this.set({ message: null });
     }
   }
 
@@ -580,13 +658,15 @@ class SplitHelper {
       const { result, duration } = await splitSong(file, onStage, { own: false, signal: lost.signal });
       await checkIn();
       stillOurs();
+      const analysis = await measureSplit(result);
+      stillOurs();
 
       onStage({ stage: "saving" });
       const track = await json<{ id: string; uploads: Record<string, UploadTarget> }>(
         await fetch(`/api/split-jobs/${job.id}/track`, {
           method: "POST",
           headers: { ...headers, "Content-Type": "application/json" },
-          body: JSON.stringify(splitTrackPayload(file, result, duration, [])),
+          body: JSON.stringify(splitTrackPayload(file, result, duration, [], analysis)),
         }),
         "Couldn't save the split"
       );

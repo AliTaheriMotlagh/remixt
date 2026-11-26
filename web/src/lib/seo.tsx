@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { SITE_CREATOR, SITE_NAME, absoluteUrl } from "@/lib/site";
+import { jsonLdDocument } from "@/lib/jsonLd";
 
 const DEFAULT_IMAGE = { url: "/opengraph-image", width: 1200, height: 630, alt: `${SITE_NAME} — remix vocals and beats from any song` };
 
@@ -51,7 +52,7 @@ export function JsonLd({ data }: { data: Record<string, unknown> | Record<string
   return (
     <script
       type="application/ld+json"
-      dangerouslySetInnerHTML={{ __html: JSON.stringify(data).replace(/</g, "\\u003c") }}
+      dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLdDocument(data)).replace(/</g, "\\u003c") }}
     />
   );
 }

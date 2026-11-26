@@ -102,7 +102,8 @@ function makeSlot(): Slot {
   const worker = new Worker(new URL("./stretch.worker.ts", import.meta.url), { type: "module" });
   const slot: Slot = { worker, job: null, holding: false };
   worker.onmessage = (event: MessageEvent<StretchFromWorker>) => onMessage(slot, event.data);
-  worker.onerror = () => {
+  worker.onerror = (event) => {
+    event.preventDefault();
     // A worker that fails outright (it couldn't even start) takes its job with it.
     broken = true;
     const job = slot.job;

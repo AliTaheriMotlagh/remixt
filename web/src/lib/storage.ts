@@ -695,12 +695,12 @@ function xmlText(value: string) {
  * listed a thousand at a time (each page is one of the plan's "advanced"
  * operations), so `max` stops a runaway listing.
  */
-export async function listStoredFiles(max = 20000): Promise<StoredFile[]> {
+export async function listStoredFiles(max = 20000, prefix = ""): Promise<StoredFile[]> {
   const out: StoredFile[] = [];
   if (blobToken) {
     let cursor: string | undefined;
     do {
-      const page = await list({ token: blobToken, cursor, limit: 1000 });
+      const page = await list({ token: blobToken, cursor, limit: 1000, ...(prefix ? { prefix } : {}) });
       for (const b of page.blobs) out.push({ key: b.pathname, size: b.size, uploadedAt: new Date(b.uploadedAt) });
       cursor = page.hasMore ? page.cursor : undefined;
     } while (cursor && out.length < max);
@@ -712,6 +712,7 @@ export async function listStoredFiles(max = 20000): Promise<StoredFile[]> {
       const url = new URL(`${r2.endpoint}/${r2.bucket}`);
       url.searchParams.set("list-type", "2");
       url.searchParams.set("max-keys", "1000");
+      if (prefix) url.searchParams.set("prefix", prefix);
       if (token) url.searchParams.set("continuation-token", token);
       const res = await r2.client.fetch(url.toString());
       if (!res.ok) throw new Error(`storage LIST failed (HTTP ${res.status})`);
@@ -734,8 +735,10 @@ export async function listStoredFiles(max = 20000): Promise<StoredFile[]> {
   for (const entry of entries) {
     if (!entry.isFile() || out.length >= max) continue;
     const full = path.join(entry.parentPath, entry.name);
+    const key = path.relative(STORAGE_DIR, full).split(path.sep).join("/");
+    if (prefix && !key.startsWith(prefix)) continue;
     const info = await stat(/* turbopackIgnore: true */ full).catch(() => null);
-    if (info) out.push({ key: path.relative(STORAGE_DIR, full).split(path.sep).join("/"), size: info.size, uploadedAt: info.mtime });
+    if (info) out.push({ key, size: info.size, uploadedAt: info.mtime });
   }
   return out;
 }
@@ -787,7 +790,7 @@ export async function copyFromLegacyBlob(keys: string[], budgetMs: number): Prom
     }
   };
   await Promise.all(Array.from({ length: 4 }, worker));
-  keysSeen = null; // the radio's view of the bucket: new files in it
+  forgetStoredKeys(); // the radio's view of the bucket: new files in it
   return { copied, failed, done };
 }
 
@@ -797,24 +800,54 @@ export async function deleteFromLegacyBlob(keys: string[]): Promise<void> {
   for (let i = 0; i < keys.length; i += 500) await del(keys.slice(i, i + 500), { token: legacyBlobToken });
 }
 
-let keysSeen: { at: number; keys: Promise<Set<string>> } | null = null;
+let keysSeen: { at: number; keys: Promise<Set<string>>; ready: Set<string> | null; loading: boolean } | null = null;
 const KEYS_FRESH_MS = 2 * 60 * 1000;
+/** Where every stem made since R2 lives; the only prefix the radio needs listed. */
+export const STEM_PREFIX = "stems/";
+/** A stem listing that runs away is stopped here (a million stems is ~250k songs). */
+const STEM_KEYS_MAX = 1_000_000;
 
 /**
- * Every key in an R2 bucket, listed at most every two minutes (per server
- * instance): what the radio checks a song against before putting it on
- * air, so it never plays one whose files aren't there (an old song not
- * moved from Blob yet). Null with any other storage, where every file a
- * row names is taken to be there.
+ * Every stem's key in an R2 bucket (under stems/ only), listed at most
+ * every two minutes per server instance: what the radio checks a song
+ * against before putting it on air, so it never plays one whose files
+ * aren't there (an old song not moved from Blob yet). Null with any other
+ * storage, where every file a row names is taken to be there.
+ *
+ * Only stems/ is listed: uploads in progress (relay slices, queued songs,
+ * imports) sort before it, and a whole-bucket listing that stopped at a
+ * cap before reaching stems/ made every song look missing — the radio
+ * went silent while people uploaded. Once a listing has come back, an old
+ * one is answered at once while the next is fetched, so a listener's
+ * request never waits on the bucket.
  */
 export function storedKeys(): Promise<Set<string>> | null {
   if (!r2) return null;
-  if (!keysSeen || Date.now() - keysSeen.at > KEYS_FRESH_MS) {
-    const keys = listStoredFiles().then((files) => new Set(files.map((f) => f.key)));
-    keysSeen = { at: Date.now(), keys };
-    keys.catch(() => (keysSeen = null));
+  // (One listing at a time per server: a stale one asked for again while it's coming isn't asked for twice.)
+  if (!keysSeen || (Date.now() - keysSeen.at > KEYS_FRESH_MS && !keysSeen.loading)) {
+    const previous = keysSeen?.ready ?? null;
+    const keys = listStoredFiles(STEM_KEYS_MAX, STEM_PREFIX).then((files) => new Set(files.map((f) => f.key)));
+    const entry = { at: Date.now(), keys, ready: previous, loading: true };
+    keysSeen = entry;
+    keys.then(
+      (set) => {
+        entry.ready = set;
+        entry.loading = false;
+      },
+      () => {
+        entry.loading = false;
+        // Listing failed: keep answering with the last good one, and ask again in 15 s.
+        if (keysSeen === entry) keysSeen = previous ? { at: Date.now() - KEYS_FRESH_MS + 15_000, keys: Promise.resolve(previous), ready: previous, loading: false } : null;
+      }
+    );
+    if (previous) return Promise.resolve(previous);
   }
-  return keysSeen.keys;
+  return keysSeen.ready ? Promise.resolve(keysSeen.ready) : keysSeen.keys;
+}
+
+/** Forget the radio's view of the bucket (new stems in it): the next check lists it again. */
+export function forgetStoredKeys() {
+  if (keysSeen) keysSeen.at = 0;
 }
 
 /** Deletes many stored files by key: a Blob store takes them a batch per call. */
@@ -830,8 +863,8 @@ export async function deleteObjects(keys: string[]): Promise<void> {
 
 /**
  * Deletes whatever's under `prefix` and older than `maxAgeMs` — imports
- * whose browser never came back for them. R2 can't be listed cheaply
- * from here; give its bucket a lifecycle rule for imports/ instead.
+ * whose browser never came back for them, slices of relayed uploads that
+ * were never joined. R2 is listed under the prefix only.
  */
 export async function sweepOld(prefix: string, maxAgeMs: number): Promise<void> {
   const cutoff = Date.now() - maxAgeMs;
@@ -841,7 +874,13 @@ export async function sweepOld(prefix: string, maxAgeMs: number): Promise<void> 
     if (stale.length) await del(stale, { token: blobToken });
     return;
   }
-  if (r2) return;
+  if (r2) {
+    // Listed by prefix, so this reads only what's under it (relay slices, imports), never the stems.
+    const files = await listStoredFiles(20000, prefix);
+    const stale = files.filter((f) => f.uploadedAt.getTime() < cutoff).map((f) => f.key);
+    await deleteObjects(stale);
+    return;
+  }
   const dir = resolveKey(prefix);
   if (!dir) return;
   const entries = await readdir(/* turbopackIgnore: true */ dir, {

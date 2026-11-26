@@ -16,7 +16,7 @@ const MODEL_CACHE = MODEL_CACHES.beats;
 const RUNTIME_CACHE = MODEL_CACHES.splitter;
 
 export type BeatNetRequest =
-  | { type: "init"; modelUrl: string; wasmUrl: string; ortUrl: string; ortBase: string }
+  | { type: "init"; modelUrl: string; wasmUrl: string; ortUrl: string; ortBase: string; singleThread?: boolean }
   | { type: "track"; id: number; mono: Float32Array };
 
 export type BeatNetResponse =
@@ -63,7 +63,7 @@ async function init(request: Extract<BeatNetRequest, { type: "init" }>) {
   // A few threads when the page is cross-origin isolated: the model is
   // small, and the rest of the cores keep the Studio (and a split) smooth.
   const cores = navigator.hardwareConcurrency || 4;
-  ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.max(1, Math.min(4, cores - 2)) : 1;
+  ort.env.wasm.numThreads = self.crossOriginIsolated && !request.singleThread ? Math.max(1, Math.min(4, cores - 2)) : 1;
   session = await ort.InferenceSession.create(model, { executionProviders: ["wasm"], graphOptimizationLevel: "all" });
   post({ type: "ready" });
 }

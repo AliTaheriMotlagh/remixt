@@ -55,12 +55,12 @@ function drawBars(
   if (!ctx) return;
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, width, height);
-  if (peaks.length === 0) return;
+  if (peaks.length === 0 || width <= 0 || height <= 0) return;
 
   const barCount = Math.min(peaks.length, Math.max(24, Math.floor(width / 3)));
   const step = peaks.length / barCount;
   const barWidth = Math.max(1.5, width / barCount - 1);
-  const radius = Math.min(barWidth / 2, 1.5);
+  const radius = Math.max(0, Math.min(barWidth / 2, 1.5));
   const mid = height / 2;
 
   ctx.fillStyle = color;

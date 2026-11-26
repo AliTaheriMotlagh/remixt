@@ -54,6 +54,8 @@ export type StemWithTrack = StemRow & {
   track_genre?: string | null;
   /** "9:minor": measured by a browser and shared (app/api/tracks/[id]/key). */
   track_key?: string | null;
+  /** On the beat stem's row only (see getLibraryStems): lib/trackAnalysis.ts, without its curve. */
+  track_analysis?: Record<string, unknown> | null;
   /** The song has a cover picture (served by /api/stems/<id>/cover). */
   track_has_cover?: boolean;
 };
@@ -119,7 +121,9 @@ export async function getLibraryStems(viewerId: string | null): Promise<StemWith
            tracks.bpm as track_bpm, users.artist_name, users.id as artist_id, tracks.cover_key IS NOT NULL AS track_has_cover,
            tracks.featured_example AS track_featured, tracks.example_credit AS track_credit,
            tracks.music_key AS track_key, tracks.song_artist AS track_song_artist, tracks.album AS track_album, tracks.release_year AS track_year, tracks.genre AS track_genre,
-           (tracks.visibility <> 'public' OR stems.held_back) AS track_private, tracks.owner_id = ${viewerId ?? ""} AS track_mine
+           (tracks.visibility <> 'public' OR stems.held_back) AS track_private, tracks.owner_id = ${viewerId ?? ""} AS track_mine,
+           -- What's measured about the song (lib/trackAnalysis.ts), once per song (on its beat) and without its curve: the list stays small.
+           CASE WHEN stems.kind = 'beat' THEN tracks.analysis_json - 'curve' END AS track_analysis
     FROM stems
     JOIN tracks ON tracks.id = stems.track_id
     JOIN users ON users.id = tracks.owner_id

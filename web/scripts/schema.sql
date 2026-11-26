@@ -220,6 +220,9 @@ ALTER TABLE tracks ADD COLUMN IF NOT EXISTS release_year INTEGER;
 ALTER TABLE tracks ADD COLUMN IF NOT EXISTS genre TEXT;
 -- The song's key as the first browser to measure it found it ("9:minor").
 ALTER TABLE tracks ADD COLUMN IF NOT EXISTS music_key TEXT;
+-- Everything measured about the song once (tempo, key, beat grid, energy, its shape): lib/trackAnalysis.ts.
+ALTER TABLE tracks ADD COLUMN IF NOT EXISTS analysis_json JSONB;
+CREATE INDEX IF NOT EXISTS idx_tracks_unanalysed ON tracks(created_at DESC) WHERE analysis_json IS NULL AND status = 'ready';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by TEXT REFERENCES users(id) ON DELETE SET NULL;
 
 -- Live sessions: an artist performs a published remix and listeners (guests

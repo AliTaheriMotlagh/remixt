@@ -209,11 +209,11 @@ export default function DjConsole({
             <Toggle pressed={waveMode === "stems"} onClick={() => setWaveMode("stems")} label="Waveform by stems" title="Stems: each stem in its colour" className="min-h-7 px-1.5 text-[10px]">
               Stems
             </Toggle>
-            <button type="button" onClick={() => setZoom((z) => Math.min(ZOOMS.length - 1, z + 1))} aria-label="Zoom out" className="flex size-7 items-center justify-center rounded-md bg-surface-raised hover:bg-surface-hover pointer-coarse:size-9">
+            <button type="button" data-repeat onClick={() => setZoom((z) => Math.min(ZOOMS.length - 1, z + 1))} disabled={zoom >= ZOOMS.length - 1} aria-label="Zoom out" className="flex size-7 items-center justify-center rounded-md bg-surface-raised hover:bg-surface-hover disabled:opacity-40 pointer-coarse:size-9">
               <Minus />
             </button>
             <span className="w-8 text-center font-mono normal-case">{span}s</span>
-            <button type="button" onClick={() => setZoom((z) => Math.max(0, z - 1))} aria-label="Zoom in" className="flex size-7 items-center justify-center rounded-md bg-surface-raised hover:bg-surface-hover pointer-coarse:size-9">
+            <button type="button" data-repeat onClick={() => setZoom((z) => Math.max(0, z - 1))} disabled={zoom <= 0} aria-label="Zoom in" className="flex size-7 items-center justify-center rounded-md bg-surface-raised hover:bg-surface-hover disabled:opacity-40 pointer-coarse:size-9">
               <Plus />
             </button>
           </div>

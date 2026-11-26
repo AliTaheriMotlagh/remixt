@@ -66,9 +66,12 @@ export function groupMessage(message: string): string {
 /** A page path with its ids taken out ("/remixes/abc123" → "/remixes/<id>"). */
 export function groupPath(path: string): string {
   const clean = String(path).split(/[?#]/)[0] || "/";
+  // An API's route names say which one failed (/api/split-jobs/claim): only real ids are grouped
+  // there. A page's long slugs (/tools/remix-maker) are its ids.
+  const api = clean.startsWith("/api/");
   return clean
     .split("/")
-    .map((seg, i) => (i > 1 && (seg.length >= 8 || /\d/.test(seg)) ? "<id>" : seg))
+    .map((seg, i) => (i > 1 && (/\d/.test(seg) || seg.length >= (api ? 20 : 8)) ? "<id>" : seg))
     .join("/")
     .slice(0, 120);
 }
@@ -105,6 +108,22 @@ export function cleanReport(raw: unknown): ProblemReport | null {
     detail: typeof r.detail === "string" ? r.detail.slice(0, 2_000) : undefined,
   };
   return isNoise(report) ? null : report;
+}
+
+/**
+ * Clicks that repeat on purpose, never a sign of something not answering:
+ * a triple-click selecting the text in a field, a checkbox (or its label)
+ * toggled back and forth, a slider, and buttons pressed again and again by
+ * design (zoom, +/−, steppers) — marked data-repeat. `tag` is the clicked
+ * control's (a label's: the control it's for).
+ */
+export function repeatsOnPurpose(target: { tag: string; type?: string | null; repeat?: boolean }): boolean {
+  if (target.repeat) return true;
+  const tag = target.tag.toLowerCase();
+  if (tag === "textarea" || tag === "select") return true;
+  if (tag !== "input") return false;
+  const type = (target.type ?? "text").toLowerCase();
+  return !["button", "submit", "reset", "image", "file"].includes(type);
 }
 
 /** Clicks close together in time and place: three within 0.8 s and 40 px is a rage click. */

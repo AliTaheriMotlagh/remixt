@@ -28,6 +28,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     recording: false,
     // Whoever queued it chose (the helper can't make it public).
     private: !!job.private,
+    // The phone's fingerprint of the file: the same song uploaded again is found, not split again.
+    sourceHash: job.source_hash ?? undefined,
   });
   if ("error" in created) return NextResponse.json({ error: created.error }, { status: 400 });
   // The cover found when it was queued (its file's tags, or its page) is the song's.

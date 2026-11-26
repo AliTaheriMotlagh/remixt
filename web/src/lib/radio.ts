@@ -6,7 +6,7 @@ import { playable } from "./radioPlayable";
 import { storedKeys } from "./storage";
 import { ensureSchema } from "./schema";
 import { coverUrl } from "./cover";
-import { resolveStyle, transitionSeconds, TRANSITIONS, type TransitionChoice, type TransitionStyle } from "./radioTransitions";
+import { loudnessGain, quietTail, resolveStyle, transitionSeconds, TRANSITIONS, type TransitionChoice, type TransitionStyle } from "./radioTransitions";
 import { isAdmin } from "./admin";
 import type { User } from "./auth";
 import {
@@ -323,8 +323,9 @@ export function remixLength(lanes: { offset_seconds: number | null; tempo_ratio:
 /** Public library songs (split, with a vocal), newest first. */
 async function songItems({ ids, search, limit = 200 }: { ids?: string[]; search?: string; limit?: number } = {}): Promise<RadioItem[]> {
   const like = search ? `%${search.replace(/[%_\\]/g, (c) => `\\${c}`)}%` : null;
-  const rows = await sql<{ id: string; title: string; artist: string; duration: number; stem_id: string; bpm: number | null }[]>`
-    SELECT tracks.id, tracks.title, users.artist_name AS artist, tracks.duration, tracks.bpm, stems.id AS stem_id
+  const rows = await sql<{ id: string; title: string; artist: string; duration: number; stem_id: string; bpm: number | null; music_key: string | null; measured_bpm: number | null }[]>`
+    SELECT tracks.id, tracks.title, users.artist_name AS artist, tracks.duration, tracks.bpm, stems.id AS stem_id, tracks.music_key,
+           (tracks.analysis_json->>'bpm')::float AS measured_bpm
     FROM tracks
     JOIN users ON users.id = tracks.owner_id
     JOIN stems ON stems.track_id = tracks.id AND stems.kind = 'vocals'
@@ -334,7 +335,19 @@ async function songItems({ ids, search, limit = 200 }: { ids?: string[]; search?
     ORDER BY tracks.created_at DESC
     LIMIT ${limit}
   `;
-  return playable(rows.map((r) => ({ kind: "track", id: r.id, title: r.title, artist: r.artist, duration: Number(r.duration), cover: `/api/stems/${r.stem_id}/cover`, bpm: r.bpm ? Number(r.bpm) : null })));
+  return playable(
+    rows.map((r) => ({
+      kind: "track",
+      id: r.id,
+      title: r.title,
+      artist: r.artist,
+      duration: Number(r.duration),
+      cover: `/api/stems/${r.stem_id}/cover`,
+      // The measured tempo (refined against the beat) over the split's first guess.
+      bpm: r.measured_bpm ? Number(r.measured_bpm) : r.bpm ? Number(r.bpm) : null,
+      key: r.music_key,
+    }))
+  );
 }
 
 /** Published remixes, newest first, with their lengths. */
@@ -421,9 +434,10 @@ export async function playPayload(kind: RadioKind, id: string) {
     `;
     return { remix, lanes };
   }
-  const stems = await sql<{ stem_id: string; kind: string; peaks_json: string; track_title: string; track_duration: number; track_bpm: number | null; stem_artist_name: string }[]>`
+  const stems = await sql<{ stem_id: string; kind: string; peaks_json: string; track_title: string; track_duration: number; track_bpm: number | null; stem_artist_name: string; loudness_db: number | null }[]>`
     SELECT stems.id AS stem_id, stems.kind, stems.peaks_json, tracks.title AS track_title, tracks.duration AS track_duration,
-           tracks.bpm AS track_bpm, users.artist_name AS stem_artist_name
+           tracks.bpm AS track_bpm, users.artist_name AS stem_artist_name,
+           (tracks.analysis_json->>'loudnessDb')::float AS loudness_db
     FROM stems JOIN tracks ON tracks.id = stems.track_id JOIN users ON users.id = tracks.owner_id
     WHERE tracks.id = ${id} AND tracks.status = 'ready' AND tracks.visibility = 'public'
   `;
@@ -431,11 +445,19 @@ export async function playPayload(kind: RadioKind, id: string) {
   // The vocal with the whole beat; parts (drums, bass, melody) only when there's no whole beat.
   const hasBeat = stems.some((s) => s.kind === "beat");
   const used = stems.filter((s) => s.kind === "vocals" || (hasBeat ? s.kind === "beat" : s.kind !== "vocals"));
+  // Every song at about the same loudness, as measured when it was split (lib/trackAnalysis.ts).
+  const gain = loudnessGain(stems[0].loudness_db);
   return {
     remix: { id: `track-${id}`, title: stems[0].track_title, published: true, project_json: "{}" },
     lanes: used.map((s) => ({
-      ...s,
-      volume: 1,
+      stem_id: s.stem_id,
+      kind: s.kind,
+      peaks_json: s.peaks_json,
+      track_title: s.track_title,
+      track_duration: s.track_duration,
+      track_bpm: s.track_bpm,
+      stem_artist_name: s.stem_artist_name,
+      volume: gain,
       muted: false,
       offset_seconds: 0,
       pitch_semitones: 0,
@@ -599,6 +621,18 @@ async function pickInput(tx: Tx, station: RadioStation, current: string | null, 
   };
 }
 
+/** The peaks of the stems a song plays on the radio (its vocal with the whole beat, else its parts), for quietTail. */
+async function playedPeaks(q: typeof sql | Tx, trackId: string): Promise<number[][]> {
+  const rows = await q<{ kind: string; peaks_json: string | null }[]>`SELECT kind, peaks_json FROM stems WHERE track_id = ${trackId}`;
+  const hasBeat = rows.some((r) => r.kind === "beat");
+  return rows
+    .filter((r) => r.kind === "vocals" || (hasBeat ? r.kind === "beat" : true))
+    .map((r) => {
+      const peaks = parse<unknown>(r.peaks_json, []);
+      return Array.isArray(peaks) ? peaks.filter((x): x is number => typeof x === "number") : [];
+    });
+}
+
 /** The song scheduled last (the one on air, or the next one already announced). */
 async function latestRow(q: typeof sql | Tx, stationId: string) {
   return (await q<QRow[]>`SELECT * FROM radio_queue WHERE station_id = ${stationId} AND status = 'playing' ORDER BY starts_at DESC NULLS LAST, id DESC LIMIT 1`)[0];
@@ -632,7 +666,9 @@ export async function tick(station: RadioStation): Promise<boolean> {
     const cur = await latestRow(tx, st.id);
     if (cur?.ends_at && cur.ends_at.getTime() - NEXT_LEAD_SECONDS * 1000 > Date.now()) return ended.length > 0;
     const input = await pickInput(tx, st, cur ? `${cur.kind}:${cur.item_id}` : null, library);
-    const pick = pickNext(input);
+    // What's on now, with its key (the queue row doesn't keep one): the library's next song follows it well.
+    const currentItem = cur ? (library.find((i) => i.kind === cur.kind && i.id === cur.item_id) ?? itemOf(cur)) : null;
+    const pick = pickNext({ ...input, currentItem });
     if (!pick) {
       await tx`UPDATE radio_stations SET round_id = NULL, choices_json = '[]' WHERE id = ${st.id}`;
       return true;
@@ -644,7 +680,9 @@ export async function tick(station: RadioStation): Promise<boolean> {
     const style = onAir ? resolveStyle(st.settings.transition, cur.bpm ? Number(cur.bpm) : null, pick.item.bpm ?? null, Number(cur.id) + 1) : null;
     const xfade = onAir && style ? transitionSeconds(style, itemOf(cur), pick.item) : 0;
     const startsAt = new Date(endsOut > Date.now() ? Math.max(Date.now(), endsOut - xfade * 1000) : nextStart(endsOut, Date.now()));
-    const endsAt = new Date(startsAt.getTime() + pick.item.duration * 1000);
+    // A song ends where its music does: a silent end isn't played (the next one comes in there).
+    const tail = pick.item.kind === "track" ? quietTail(await playedPeaks(tx, pick.item.id), pick.item.duration) : 0;
+    const endsAt = new Date(startsAt.getTime() + (pick.item.duration - tail) * 1000);
     const votesFor = input.votes.find((v) => itemKey(v.item) === itemKey(pick.item))?.votes ?? 0;
     const requester =
       pick.source === "request"

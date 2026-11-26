@@ -37,6 +37,8 @@ export type SplitResult = {
   mp3: Partial<Record<SplitOutput, Uint8Array>> & { vocals: Uint8Array; beat: Uint8Array };
   peaks: Partial<Record<SplitOutput, number[]>> & { vocals: number[]; beat: number[] };
   bpm: number | null;
+  /** The beat as mono at the analysis rate (11 025 Hz), for measuring the song (see trackMeasure.ts). */
+  beatMono?: Float32Array;
 };
 
 export type SplitterResponse =

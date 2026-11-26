@@ -8,7 +8,9 @@
 // keys and the mission picker can use them. Decoded audio is let go when no
 // deck holds the song any more.
 
-import { analyzeSong, hasParts, listLibrarySongs, loadStem, releaseStem, shareSongKey, type LibrarySong } from "../libraryAudio";
+import { analyzeSong, hasParts, listLibrarySongs, loadStem, parseStoredKey, releaseStem, shareSongAnalysis, shareSongKey, type LibrarySong } from "../libraryAudio";
+import { summarize } from "../trackMeasure";
+import { needsAnalysis } from "../../trackAnalysis";
 import { analyzeStem, beatPhase, refineTempo, trackBeats } from "../analysis";
 import { camelotCode, isMusicalKey, type MusicalKey } from "../musicKey";
 import { peaksOf } from "../demoSongs";
@@ -57,7 +59,7 @@ export function analysisSummary(trackId: string) {
 }
 
 export function libraryEntry(song: LibrarySong): BrowserEntry {
-  const s = analysisSummary(song.trackId);
+  const s = analysisSummary(song.trackId) ?? storedSummary(song);
   return {
     id: libraryTrackId(song.trackId),
     source: "library",
@@ -72,7 +74,17 @@ export function libraryEntry(song: LibrarySong): BrowserEntry {
     duration: s?.duration ?? song.duration,
     layout: hasParts(song) ? "four" : "two",
     analyzed: !!s,
+    // Measured, when some browser has (else the planner guesses from tempo and genre).
+    energy: song.analysis?.energy ?? null,
   };
+}
+
+/** What some browser measured and the server keeps, as this file's summary — null until then. */
+function storedSummary(song: LibrarySong): AnalysisSummary | null {
+  const a = song.analysis;
+  const key = parseStoredKey(a?.key);
+  if (!a || !a.bpm || !key || a.firstBeat === null) return null;
+  return { bpm: a.bpm, key, firstBeat: a.firstBeat, duration: a.duration };
 }
 
 export const DEMO_ENTRIES: BrowserEntry[] = DJ_TRACKS.map(entryFromTrack);
@@ -97,8 +109,9 @@ let measureCtx: OfflineAudioContext | null = null;
  * so nobody has to measure this song again.
  */
 export async function measureLibrarySong(trackId: string): Promise<AnalysisSummary | null> {
-  const known = analysisSummary(trackId);
   const song = await librarySong(trackId);
+  // Already measured, here or by anyone (kept on the server): nothing to download.
+  const known = analysisSummary(trackId) ?? (song ? storedSummary(song) : null);
   if (known) {
     // Measured on the decks earlier (maybe before keys were shared): share it now.
     if (song) shareSongKey(song, known.key);
@@ -119,6 +132,7 @@ export async function measureLibrarySong(trackId: string): Promise<AnalysisSumma
     const summary: AnalysisSummary = { bpm, key: a.key, firstBeat, duration: beat.duration };
     saveSummary(trackId, summary);
     shareSongKey(song, a.key);
+    if (needsAnalysis(song.analysis)) shareSongAnalysis(song, summarize(a, beat.duration, song.bpm, "planner"));
     return summary;
   } finally {
     // Unless a deck holds it, the decoded beat (~85 MB) goes.
@@ -194,6 +208,8 @@ async function buildLibraryTrack(song: LibrarySong, ctx: BaseAudioContext, onSta
   }
   saveSummary(song.trackId, { bpm, key: a.key, firstBeat, duration });
   shareSongKey(song, a.key);
+  // Everything else about it, for the planner and everyone after (the decks' tempo and grid are the better ones).
+  if (needsAnalysis(song.analysis)) shareSongAnalysis(song, { ...summarize(a.beat, beatBuf.duration, bpm, "decks"), bpm, firstBeat });
 
   onStage?.({ stage: "waveform", text: "Drawing the waveform…", progress: 0.85 });
   const bins = Math.ceil(duration * PEAK_RATE);

@@ -5,6 +5,8 @@ import { lineAt, type LyricLine } from "@/lib/lyrics";
 import type { RadioFeed } from "@/lib/radio";
 import type { RadioItem, RadioKind } from "@/lib/radioPick";
 import { visitorId } from "./presence";
+import { announcePlaying } from "./audioPresence";
+import { listening } from "./listens";
 import { pollEvery } from "@/lib/radioPace";
 import { mixEnvelope } from "./lyricsSources";
 import { playPayload, RadioDeck } from "./radioDeck";
@@ -117,6 +119,8 @@ export function setLockScreenWords(on: boolean) {
 
 /** Playing or paused, on the lock screen (the metadata stays, so play there tunes back in). */
 function lockScreenState(state: MediaSessionPlaybackState) {
+  // Mining in another tab waits while the radio plays (see audioPresence).
+  announcePlaying(state === "playing");
   if (typeof navigator !== "undefined" && navigator.mediaSession) navigator.mediaSession.playbackState = state;
 }
 
@@ -305,6 +309,7 @@ export function useRadio(
       deck.current?.dispose();
       deck.current = null;
       lockScreen(null, "", null);
+      listening("radio", null, false);
     },
     []
   );
@@ -313,6 +318,7 @@ export function useRadio(
     deck.current?.stop();
     setTune("off");
     lockScreenState("paused");
+    listening("radio", null, false);
   }, []);
 
   /** The decks, made once: their state goes to the page, their own events move them on. */
@@ -372,6 +378,8 @@ export function useRadio(
       if (ads && row && ready?.rowId === row.rowId && radioBreakDue(d.listenedSinceBreak, audio.current, d.firstBreak) && !d.inBreak) {
         adReady.current = null;
         setAdBreak(ready.ad);
+        // The song before it has ended; the break isn't a song.
+        listening("radio", null, false);
         lockScreen({ ...row, title: ready.ad.title, artist: `Ad · ${ready.ad.advertiser || "Sponsored"}` } as typeof row, feedRef.current?.station.name ?? "Remixt Radio", handlers);
         void d
           .playBreak(ready.url, ready.ad.seconds, audio.current.paidAfter, () => {
@@ -390,6 +398,8 @@ export function useRadio(
       }
       lockScreen(row, feedRef.current?.station.name ?? "Remixt Radio", handlers);
       lockScreenState("playing");
+      // A song heard on the radio (the one before it ends here, as heard so far).
+      listening("radio", row ? { kind: row.kind, id: row.id, duration: row.duration, station: feedRef.current?.station.slug ?? null } : null, !!row);
       // The line sung goes on top of it straight away.
       lockShown.current = "";
       updateLock();

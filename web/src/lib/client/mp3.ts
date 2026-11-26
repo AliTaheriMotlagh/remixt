@@ -73,6 +73,7 @@ export async function encodeMp3Bytes(
         else reject(new Error(event.data.message));
       };
       worker.onerror = (event) => {
+        event.preventDefault();
         finish();
         reject(new Error(event.message || "MP3 worker failed"));
       };
@@ -153,7 +154,10 @@ function workerMp3Stream(sampleRate: number, bitrate: Mp3Bitrate, signal?: Abort
     if ("error" in event.data) fail(new Error(event.data.error));
     else waiting.shift()?.resolve(event.data);
   };
-  worker.onerror = (event) => fail(new Error(event.message || "MP3 worker failed"));
+  worker.onerror = (event) => {
+    event.preventDefault();
+    fail(new Error(event.message || "MP3 worker failed"));
+  };
 
   const send = (message: Mp3StreamMessage, transfer: Transferable[] = []) =>
     failure

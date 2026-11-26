@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { ArrowUpRight, Pause, Play } from "lucide-react";
 import MixWaveform from "./MixWaveform";
 import { audioEngine } from "@/lib/client/audioEngine";
+import { listening } from "@/lib/client/listens";
 import { laneFromApi, projectFromApi, type RemixLaneApi } from "@/lib/client/remixLanes";
 import { useStudioStore } from "@/lib/client/studioStore";
 import RemixtMark from "./RemixtMark";
@@ -68,6 +69,13 @@ export default function EmbedPlayer({
     audioEngine.setListening(true);
     return () => audioEngine.setListening(false);
   }, []);
+
+  // A listen of this remix, on someone else's site.
+  const duration = useStudioStore((s) => s.duration);
+  useEffect(() => {
+    listening("embed", { kind: "remix", id: remixId, duration: duration || null }, isPlaying);
+  }, [remixId, isPlaying, duration]);
+  useEffect(() => () => listening("embed", null, false), [remixId]);
 
   // On the lock screen, this remix is by its artist (not the stems'
   // artists), with its cover.

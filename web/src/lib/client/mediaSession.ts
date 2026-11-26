@@ -1,6 +1,7 @@
 "use client";
 
 import { NOW_PLAYING_ARTWORK } from "@/lib/brand";
+import { announcePlaying } from "./audioPresence";
 
 // What's playing, for the phone's lock screen, Control Center and Dynamic
 // Island, Android's media notification, watches, car screens, and the media
@@ -114,6 +115,8 @@ function setStepping(session: MediaSession) {
 }
 
 function apply() {
+  // Other tabs hold back heavy work (mining) while this one plays.
+  announcePlaying(!!(owners.preview?.playing || owners.mix?.playing));
   const session = mediaSession();
   if (!session) return;
   current = owners.preview ?? owners.mix;

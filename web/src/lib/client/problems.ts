@@ -7,7 +7,7 @@
 // there after 8 s, the server failing a request, a page slow to show.
 // Batched and sent by beacon; never more than a few a minute.
 
-import { groupPath, isNoise, isRage, problemKey, type ProblemReport } from "@/lib/feedback";
+import { groupPath, isNoise, isRage, problemKey, repeatsOnPurpose, type ProblemReport } from "@/lib/feedback";
 import { isPageNavigation } from "@/lib/client/navigation";
 import { visitorId } from "@/lib/client/presence";
 
@@ -20,7 +20,7 @@ let installed = false;
 let timer: ReturnType<typeof setTimeout> | null = null;
 
 /** Paths whose own failures aren't worth reporting (the reports themselves, beacons). */
-const QUIET_API = /^\/api\/(problems|analytics|presence|feedback|ads\/view|version)/;
+const QUIET_API = /^\/api\/(problems|analytics|presence|feedback|ads\/view|version|listens)/;
 
 export function recentProblems(): ProblemReport[] {
   return recent.slice();
@@ -63,6 +63,16 @@ function labelOf(el: Element | null): string {
   return `${tag}${text ? ` “${text.slice(0, 40)}”` : ""}`;
 }
 
+/** A click on something that's clicked again and again by design (see repeatsOnPurpose). */
+function onPurpose(el: Element | null): boolean {
+  if (!el?.closest) return false;
+  if (el.closest("[data-repeat]")) return true;
+  const label = el.closest("label");
+  const control = (label ? (label.control ?? label.querySelector("input, select, textarea")) : el.closest("input, textarea, select")) as HTMLInputElement | null;
+  if (!control) return false;
+  return repeatsOnPurpose({ tag: control.tagName, type: control.getAttribute("type") });
+}
+
 let realFetch: typeof fetch | null = null;
 
 /** Starts watching (once per page load). */
@@ -88,7 +98,7 @@ export function watchProblems() {
     (e) => {
       const now = performance.now();
       clicks = [...clicks.filter((c) => now - c.t < 1_000), { t: now, x: e.clientX, y: e.clientY }];
-      if (isRage(clicks)) {
+      if (isRage(clicks) && !onPurpose(e.target as Element | null)) {
         clicks = [];
         reportProblem({ kind: "rage", message: labelOf(e.target as Element), path: location.pathname });
       }
@@ -104,6 +114,8 @@ export function watchProblems() {
       const from = location.pathname;
       const to = new URL(anchor.href).pathname;
       setTimeout(() => {
+        // A link whose own handler kept the page (opened a panel, a menu) was never going anywhere.
+        if (e.defaultPrevented) return;
         if (location.pathname === from && document.visibilityState === "visible" && navigator.onLine) {
           reportProblem({ kind: "stuck", message: `to ${groupPath(to)}`, path: from, detail: labelOf(anchor) });
         }

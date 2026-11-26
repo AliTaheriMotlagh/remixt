@@ -3,9 +3,10 @@ import { z } from "zod";
 import sql from "./db";
 import { getStemsByTrack } from "./models";
 import { ensureSchema } from "./schema";
-import { createUploadTarget, deleteStemFile, storedObject, type UploadTarget } from "./storage";
+import { createUploadTarget, deleteStemFile, forgetStoredKeys, storedObject, type UploadTarget } from "./storage";
 import { normaliseTags } from "./tags";
 import { STEM_KINDS, type StemKind } from "./stemKinds";
+import { parseTrackAnalysis } from "./trackAnalysis";
 
 // Songs are split in a browser — the uploader's own, or a helper's for a
 // song queued from a phone (see splitQueue.ts) — so a track arrives
@@ -37,6 +38,8 @@ export const splitTrackSchema = z.object({
     .string()
     .regex(/^[0-9a-f]{64}$/)
     .optional(),
+  /** Measured from the beat as it was split (lib/trackAnalysis.ts); checked before it's kept. */
+  analysis: z.unknown().optional(),
 });
 
 export type SplitTrack = z.infer<typeof splitTrackSchema>;
@@ -58,6 +61,8 @@ export async function createTrackForUpload(
     ? { vocals: data.vocalsPeaks }
     : { vocals: data.vocalsPeaks, beat: data.beatPeaks, ...data.partPeaks };
   const kinds = STEM_KINDS.filter((kind) => peaks[kind]);
+  // A take recorded in the booth has no beat to measure.
+  const analysis = data.recording ? null : parseTrackAnalysis(data.analysis);
 
   // The same song from the same person, still unfinished: an earlier try
   // that was interrupted (a reload, a lost answer). This one replaces it.
@@ -74,9 +79,10 @@ export async function createTrackForUpload(
     // song brought into the Studio to sing over.
     await tx`
       INSERT INTO tracks (id, owner_id, title, original_filename, status, duration, bpm, original_url,
-                          tags, rights_confirmed_at, visibility, source_hash)
+                          tags, rights_confirmed_at, visibility, source_hash, analysis_json, music_key)
       VALUES (${trackId}, ${ownerId}, ${data.title}, ${data.filename}, 'processing', ${data.duration}, ${data.bpm}, '',
-              ${tags}, now(), ${data.recording || data.private ? "private" : "public"}, ${data.sourceHash ?? null})
+              ${tags}, now(), ${data.recording || data.private ? "private" : "public"}, ${data.sourceHash ?? null},
+              ${analysis ? tx.json(analysis) : null}, ${analysis?.key ?? null})
     `;
     for (const kind of kinds) {
       await tx`
@@ -111,6 +117,8 @@ export async function finishTrackUpload(trackId: string): Promise<boolean> {
     }
     await tx`UPDATE tracks SET status = 'ready', error = NULL WHERE id = ${trackId}`;
   });
+  // The radio's view of the bucket on this server: list it again, so the new song can be asked for at once.
+  forgetStoredKeys();
   return true;
 }
 

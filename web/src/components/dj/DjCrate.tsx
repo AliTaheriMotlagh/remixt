@@ -67,7 +67,7 @@ function KeyBadge({ song }: { song: Pick<CrateSong, "key"> }) {
 function EnergyBar({ song }: { song: CrateSong }) {
   const e = energyOf(song);
   return (
-    <span className="flex h-1.5 w-12 overflow-hidden rounded-full bg-surface-raised" title={e ? `Energy about ${e}/10 (a guess from tempo and genre)` : "Energy not known"} aria-hidden>
+    <span className="flex h-1.5 w-12 overflow-hidden rounded-full bg-surface-raised" title={e ? (song.energy ? `Energy ${e}/10 (measured)` : `Energy about ${e}/10 (a guess from tempo and genre)`) : "Energy not known"} aria-hidden>
       {e && <span className="rounded-full bg-gradient-to-r from-beat via-drums to-vocals" style={{ width: `${e * 10}%` }} />}
     </span>
   );
@@ -794,7 +794,7 @@ function SongSheet({
     ["Tempo", song.bpm ? `${Math.round(song.bpm * 10) / 10} BPM${song.analyzed ? "" : " (stored, not measured yet)"}` : "Not known yet"],
     ["Key", song.key ? `${keyLabel(song.key)} · ${camelotCode(song.key)}` : song.outside ? "Not known — pick it when adding" : "Not measured yet"],
     ["Mixes with keys", song.key ? friendlyKeys(song.key).join(", ") : "–"],
-    ["Energy", energy ? `${energy}/10 (a guess from tempo and genre)` : "Not known"],
+    ["Energy", energy ? (song.energy ? `${energy}/10 (measured from the audio)` : `${energy}/10 (a guess from tempo and genre)`) : "Not known"],
     ["Length", song.duration ? clock(song.duration) : "Not known"],
     ["Genre", song.genre || "–"],
     ...(song.tags?.length ? [["Tags", song.tags.join(", ")] as [string, string]] : []),

@@ -1,5 +1,7 @@
 "use client";
 
+import { measureBeatMono } from "./trackMeasure";
+import type { TrackAnalysis } from "../trackAnalysis";
 import { linkCovers } from "./songCovers";
 import { useSyncExternalStore } from "react";
 import { upload, type Send, type UploadTarget } from "./directUpload";
@@ -458,9 +460,31 @@ export async function splitSong(
   });
 }
 
+/**
+ * The song measured from the beat the split just made (tempo, key, beat
+ * grid, energy — see lib/trackAnalysis.ts), so it's on the track from the
+ * start. Never holds an upload up: anything wrong, or slower than 20 s,
+ * and it's left for a later browser to measure.
+ */
+export async function measureSplit(result: SplitResult): Promise<TrackAnalysis | null> {
+  if (!result.beatMono) return null;
+  const mono = result.beatMono;
+  // Its memory is only needed here.
+  result.beatMono = undefined;
+  try {
+    return await Promise.race([
+      measureBeatMono(mono, result.bpm, "split"),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 20_000)),
+    ]);
+  } catch {
+    return null;
+  }
+}
+
 /** What POST /api/tracks (or a split-queue job's /track) needs to know about a split song. */
-export function splitTrackPayload(file: { name: string }, result: SplitResult, duration: number, tags: string[]) {
+export function splitTrackPayload(file: { name: string }, result: SplitResult, duration: number, tags: string[], analysis: TrackAnalysis | null = null) {
   return {
+    ...(analysis ? { analysis } : {}),
     title: file.name.replace(/\.[^/.]+$/, "").slice(0, 200) || "Untitled",
     filename: file.name,
     duration,
@@ -618,6 +642,8 @@ export async function uploadSong(
 
   const { result, duration } = await splitSong(file, onStage, { signal });
   signal?.throwIfAborted();
+  const analysis = await measureSplit(result);
+  signal?.throwIfAborted();
 
   // Sent again if it doesn't arrive: a second, unfinished copy of the
   // track (its answer lost on the way) is dropped by the server, by the
@@ -629,7 +655,7 @@ export async function uploadSong(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        ...splitTrackPayload(file, result, duration, tags),
+        ...splitTrackPayload(file, result, duration, tags, analysis),
         ...(sourceHash ? { sourceHash } : {}),
         ...(keepPrivate ? { private: true } : {}),
         // The upload form doesn't start without the box ticked.

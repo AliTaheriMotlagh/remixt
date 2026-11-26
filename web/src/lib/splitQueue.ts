@@ -54,6 +54,8 @@ export type SplitJob = {
   cover_key?: string | null;
   /** Kept to its owner once split. */
   private?: boolean;
+  /** SHA-256 of the song's file, when the phone could work it out. */
+  source_hash?: string | null;
   heartbeat_at: Date | null;
   progress: number;
   stage: string | null;
@@ -100,6 +102,9 @@ export function ensureSplitQueueSchema(): Promise<void> {
     await sql`ALTER TABLE split_jobs ADD COLUMN IF NOT EXISTS cover_key TEXT`;
     // Kept to its owner when split (see lib/schema.ts ensureMakingTogether).
     await sql`ALTER TABLE split_jobs ADD COLUMN IF NOT EXISTS private BOOLEAN NOT NULL DEFAULT false`;
+    // SHA-256 of the song's file, as the phone worked it out: the same song isn't queued twice, and the track it becomes keeps it (see /api/tracks/lookup).
+    await sql`ALTER TABLE split_jobs ADD COLUMN IF NOT EXISTS source_hash TEXT`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_split_jobs_hash ON split_jobs(owner_id, source_hash) WHERE source_hash IS NOT NULL`;
     // Helpers' tabs that have asked for work lately — "rigs online".
     await sql`
       CREATE TABLE IF NOT EXISTS split_rigs (
@@ -126,7 +131,7 @@ export function sourceExtension(filename: string): string | null {
 
 export async function createJob(
   ownerId: string,
-  { title, filename, tags, ext, status = "uploading", keepPrivate = false }: {
+  { title, filename, tags, ext, status = "uploading", keepPrivate = false, sourceHash = null }: {
     title: string;
     filename: string;
     tags: string[];
@@ -134,14 +139,27 @@ export async function createJob(
     status?: "uploading" | "queued";
     /** Kept to its owner once split. */
     keepPrivate?: boolean;
+    /** SHA-256 of the file (see source_hash). */
+    sourceHash?: string | null;
   }
 ): Promise<SplitJob> {
   await ensureSplitQueueSchema();
   const id = randomUUID();
   const [job] = await sql<SplitJob[]>`
-    INSERT INTO split_jobs (id, owner_id, title, filename, source_key, tags, status, private)
-    VALUES (${id}, ${ownerId}, ${title}, ${filename}, ${`queue/${ownerId}/${id}.${ext}`}, ${normaliseTags(tags)}, ${status}, ${keepPrivate})
+    INSERT INTO split_jobs (id, owner_id, title, filename, source_key, tags, status, private, source_hash)
+    VALUES (${id}, ${ownerId}, ${title}, ${filename}, ${`queue/${ownerId}/${id}.${ext}`}, ${normaliseTags(tags)}, ${status}, ${keepPrivate}, ${sourceHash})
     RETURNING *
+  `;
+  return job;
+}
+
+/** This owner's song with this fingerprint that's still on its way (uploading, waiting, being split, or failed), if any. */
+export async function openJobWithHash(ownerId: string, hash: string): Promise<SplitJob | undefined> {
+  await ensureSplitQueueSchema();
+  const [job] = await sql<SplitJob[]>`
+    SELECT * FROM split_jobs
+    WHERE owner_id = ${ownerId} AND source_hash = ${hash} AND status IN ('uploading', 'queued', 'working', 'failed')
+    ORDER BY created_at DESC LIMIT 1
   `;
   return job;
 }

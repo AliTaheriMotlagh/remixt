@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Play } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -62,10 +62,16 @@ export default function RemixComments({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
+  const box = useRef<HTMLTextAreaElement>(null);
 
   async function post() {
     const body = draft.trim();
-    if (!body) return;
+    if (!body) {
+      // Clickable while empty (a greyed-out button swallowed the click and said nothing): show where to write.
+      setError("Write your comment first");
+      box.current?.focus();
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -100,8 +106,12 @@ export default function RemixComments({
       {userId ? (
         <div className="mt-3 flex flex-col gap-2">
           <textarea
+            ref={box}
             value={draft}
-            onChange={(e) => setDraft(e.target.value.slice(0, MAX))}
+            onChange={(e) => {
+              setDraft(e.target.value.slice(0, MAX));
+              if (error) setError(null);
+            }}
             rows={2}
             placeholder="Say something about this remix…"
             className="input resize-y text-sm"
@@ -112,8 +122,9 @@ export default function RemixComments({
               // Keeps the keyboard up, so the tab bar doesn't jump back under the tap (see LiveChat).
               onPointerDown={(e) => e.preventDefault()}
               onMouseDown={(e) => e.preventDefault()}
-              disabled={busy || !draft.trim()}
-              className="rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-strong disabled:opacity-50 pointer-coarse:px-4 pointer-coarse:py-2.5 pointer-coarse:text-sm"
+              disabled={busy}
+              aria-disabled={!draft.trim()}
+              className="rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-strong disabled:opacity-50 aria-disabled:opacity-50 pointer-coarse:px-4 pointer-coarse:py-2.5 pointer-coarse:text-sm"
             >
               {busy ? "Posting…" : "Comment"}
             </button>

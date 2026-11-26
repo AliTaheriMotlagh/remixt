@@ -182,7 +182,8 @@ export function Visualizer({
       ctx.fillStyle = grad;
       const gap = Math.max(1, (w / bars) * 0.28);
       const bw = w / bars - gap;
-      for (let i = 0; i < bars; i++) {
+      // Hidden (no width yet, a closed panel): a bar would have a negative width, and roundRect throws on its radius.
+      for (let i = 0; i < bars && bw > 0 && h > 0; i++) {
         let target: number;
         if (given) target = given[i] ?? 0;
         else if (data) {
@@ -199,7 +200,7 @@ export function Visualizer({
         const x = i * (bw + gap) + gap / 2;
         ctx.globalAlpha = 0.35 + shown[i] * 0.65;
         ctx.beginPath();
-        ctx.roundRect(x, (h - bh) / 2, bw, bh, bw / 2);
+        ctx.roundRect(x, (h - bh) / 2, bw, bh, Math.max(0, Math.min(bw, bh) / 2));
         ctx.fill();
       }
       if (!still || data || given) raf = requestAnimationFrame(draw);

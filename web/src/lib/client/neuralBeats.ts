@@ -79,49 +79,71 @@ const pending = new Map<number, { resolve: (beats: NeuralBeats) => void; reject:
 function startWorker(): Promise<Worker> {
   if (ready) return ready;
   ready = new Promise<Worker>((resolve, reject) => {
-    const w = new Worker(new URL("./beatNet.worker.ts", import.meta.url), { type: "module" });
-    useBeatModel.setState({ status: "loading", error: null });
-    w.onmessage = (event: MessageEvent<BeatNetResponse>) => {
-      const message = event.data;
-      if (message.type === "download") {
-        useBeatModel.setState({ loaded: message.loaded, total: message.total, fromCache: message.fromCache });
-      } else if (message.type === "ready") {
-        worker = w;
-        if (useBeatModel.getState().status !== "off") useBeatModel.setState({ status: "ready" });
-        resolve(w);
-      } else if (message.type === "result") {
-        pending.get(message.id)?.resolve({ beats: message.beats, downbeats: message.downbeats });
-        pending.delete(message.id);
-      } else if (message.type === "error") {
-        if (message.id === undefined) {
-          // The model couldn't load: forget this worker so a later try starts afresh.
-          useBeatModel.setState({ status: "failed", error: message.message });
-          w.terminate();
-          ready = null;
-          reject(new Error(message.message));
-          for (const [id, p] of pending) {
-            p.reject(new Error(message.message));
-            pending.delete(id);
-          }
-        } else {
-          pending.get(message.id)?.reject(new Error(message.message));
+    // Threads first; if one of ONNX Runtime's thread workers can't start, once more on one core.
+    let singleThread = false;
+    let started = false;
+    const spawn = () => {
+      const w = new Worker(new URL("./beatNet.worker.ts", import.meta.url), { type: "module" });
+      useBeatModel.setState({ status: "loading", error: null });
+      w.onmessage = (event: MessageEvent<BeatNetResponse>) => {
+        const message = event.data;
+        if (message.type === "download") {
+          useBeatModel.setState({ loaded: message.loaded, total: message.total, fromCache: message.fromCache });
+        } else if (message.type === "ready") {
+          started = true;
+          worker = w;
+          if (useBeatModel.getState().status !== "off") useBeatModel.setState({ status: "ready" });
+          resolve(w);
+        } else if (message.type === "result") {
+          pending.get(message.id)?.resolve({ beats: message.beats, downbeats: message.downbeats });
           pending.delete(message.id);
+        } else if (message.type === "error") {
+          if (message.id === undefined) {
+            // The model couldn't load: forget this worker so a later try starts afresh.
+            useBeatModel.setState({ status: "failed", error: message.message });
+            w.terminate();
+            ready = null;
+            reject(new Error(message.message));
+            for (const [id, p] of pending) {
+              p.reject(new Error(message.message));
+              pending.delete(id);
+            }
+          } else {
+            pending.get(message.id)?.reject(new Error(message.message));
+            pending.delete(message.id);
+          }
         }
-      }
+      };
+      w.onerror = (event) => {
+        // Handled here: left alone, a worker's error is raised again on the page ("Uncaught [object Event]").
+        event.preventDefault();
+        w.terminate();
+        if (!started && !singleThread) {
+          singleThread = true;
+          spawn();
+          return;
+        }
+        if (worker === w) worker = null;
+        const error = new Error(event.message || "beat worker failed");
+        useBeatModel.setState({ status: "failed", error: event.message || "The beat model's worker failed to start" });
+        ready = null;
+        reject(error);
+        for (const [id, p] of pending) {
+          p.reject(error);
+          pending.delete(id);
+        }
+      };
+      const ortBase = new URL(ORT_BASE, window.location.href).href;
+      w.postMessage({
+        type: "init",
+        modelUrl: BEAT_NET.modelUrl,
+        wasmUrl: `${ortBase}ort-wasm-simd-threaded.jsep.wasm`,
+        ortUrl: `${ortBase}ort.min.mjs`,
+        ortBase,
+        singleThread,
+      } satisfies BeatNetRequest);
     };
-    w.onerror = (event) => {
-      useBeatModel.setState({ status: "failed", error: event.message || "The beat model's worker failed to start" });
-      ready = null;
-      reject(new Error(event.message || "beat worker failed"));
-    };
-    const ortBase = new URL(ORT_BASE, window.location.href).href;
-    w.postMessage({
-      type: "init",
-      modelUrl: BEAT_NET.modelUrl,
-      wasmUrl: `${ortBase}ort-wasm-simd-threaded.jsep.wasm`,
-      ortUrl: `${ortBase}ort.min.mjs`,
-      ortBase,
-    } satisfies BeatNetRequest);
+    spawn();
   });
   return ready;
 }

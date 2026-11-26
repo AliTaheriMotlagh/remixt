@@ -1,7 +1,7 @@
 import type { TransactionSql } from "postgres";
 import sql from "./db";
 import type { RadioItem } from "./radioPick";
-import { keyOfFileUrl, storedKeys } from "./storage";
+import { keyOfFileUrl, STEM_PREFIX, storedKeys } from "./storage";
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- what sql.begin hands its callback
 type Tx = TransactionSql<{}>;
@@ -39,7 +39,12 @@ export async function playable(items: RadioItem[], q: typeof sql | Tx = sql): Pr
         files.set(`${kind}:${r.owner}`, list);
       }
     }
-    const there = (f: { file_url: string }) => /^https?:\/\//.test(f.file_url) || keys.has(keyOfFileUrl(f.file_url));
+    // Only stems/ is listed (see storedKeys): a key anywhere else is taken to be there.
+    const there = (f: { file_url: string }) => {
+      if (/^https?:\/\//.test(f.file_url)) return true;
+      const key = keyOfFileUrl(f.file_url);
+      return !key.startsWith(STEM_PREFIX) || keys.has(key);
+    };
     return items.filter((item) => {
       let list = files.get(`${item.kind}:${item.id}`) ?? [];
       if (item.kind === "track") {

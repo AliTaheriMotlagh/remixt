@@ -12,6 +12,8 @@ import { usePathname } from "next/navigation";
 import { MessageSquareHeart, X } from "lucide-react";
 import { FEEDBACK_KINDS, FEEDBACK_TEXT, type FeedbackKind } from "@/lib/feedback";
 import { recentProblems, watchProblems } from "@/lib/client/problems";
+// Installed as the app loads, before React touches the page (see domGuard.ts).
+import "@/lib/client/domGuard";
 import { visitorId } from "@/lib/client/presence";
 import { isBareView, showsFooter } from "@/lib/bareView";
 

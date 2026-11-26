@@ -26,6 +26,9 @@ export function ensureSchema(): Promise<void> {
     await sql`ALTER TABLE tracks ADD COLUMN IF NOT EXISTS genre TEXT`;
     // The song's key as the first browser to measure it found it ("9:minor"), for everyone's suggestions.
     await sql`ALTER TABLE tracks ADD COLUMN IF NOT EXISTS music_key TEXT`;
+    // Everything measured about the song once, by the first browser with its audio (lib/trackAnalysis.ts).
+    await sql`ALTER TABLE tracks ADD COLUMN IF NOT EXISTS analysis_json JSONB`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_tracks_unanalysed ON tracks(created_at DESC) WHERE analysis_json IS NULL AND status = 'ready'`;
     // What one browser worked out from a stem, for every other browser (see lib/stemResults.ts).
     await sql`
       CREATE TABLE IF NOT EXISTS stem_results (
