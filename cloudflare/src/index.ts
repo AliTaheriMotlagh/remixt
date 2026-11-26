@@ -108,8 +108,11 @@ async function pageFromEdgeCache(request: Request, ctx: ExecutionContext, versio
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
-    if (url.hostname === "www.remixt.app") {
+    // One address per page: https://remixt.app/… Plain http and www both answer with a permanent redirect,
+    // so search engines don't keep http:// copies ("Alternate page with proper canonical tag").
+    if (url.hostname === "www.remixt.app" || url.protocol === "http:") {
       url.hostname = "remixt.app";
+      url.protocol = "https:";
       return Response.redirect(url.toString(), 301);
     }
     // The visitor's address for the app's rate limits (sign-up, log-in, ads).
