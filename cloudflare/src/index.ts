@@ -80,7 +80,10 @@ async function pageFromEdgeCache(request: Request, ctx: ExecutionContext, versio
   const key = new Request(keyUrl.toString(), { method: "GET" });
   const hit = await cache.match(key);
   if (hit) {
-    const served = new Response(request.method === "HEAD" ? null : hit.body, hit);
+    // Read whole and sent with its length. Kept as the stream the app rendered (no length), about one
+    // answer in fifteen stalled half-way through for 30 s and more — pages "stuck", crawlers timing out.
+    const body = request.method === "HEAD" ? null : await hit.arrayBuffer();
+    const served = new Response(body, { status: hit.status, headers: hit.headers });
     served.headers.set("x-edge-cache", "HIT");
     served.headers.set("cache-control", "public, max-age=0, must-revalidate");
     return served;
@@ -88,9 +91,16 @@ async function pageFromEdgeCache(request: Request, ctx: ExecutionContext, versio
   const res = await origin();
   const type = res.headers.get("content-type") ?? "";
   if (request.method === "GET" && res.status === 200 && !res.headers.has("set-cookie") && /text\/html|xml|text\/plain/.test(type)) {
-    const copy = new Response(res.clone().body, res);
-    copy.headers.set("cache-control", `public, s-maxage=${PAGE_TTL}, max-age=${PAGE_TTL}`);
-    ctx.waitUntil(cache.put(key, copy));
+    const clone = res.clone();
+    ctx.waitUntil(
+      (async () => {
+        // Stored as bytes with a known length (see above), not as a stream.
+        const headers = new Headers(clone.headers);
+        for (const h of ["content-length", "content-encoding", "transfer-encoding"]) headers.delete(h);
+        headers.set("cache-control", `public, s-maxage=${PAGE_TTL}, max-age=${PAGE_TTL}`);
+        await cache.put(key, new Response(await clone.arrayBuffer(), { status: 200, headers }));
+      })().catch(() => {})
+    );
   }
   return res;
 }
